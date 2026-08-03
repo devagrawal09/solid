@@ -2,7 +2,7 @@
  * @jsxImportSource @solidjs/web
  */
 import { describe, expect, it } from "vitest";
-import { children, createMemo, merge } from "solid-js";
+import { children, createMemo, createProjection, merge } from "solid-js";
 import { Loading } from "@solidjs/web";
 
 const asyncValue = <T,>(value: T, ms = 10): Promise<T> =>
@@ -53,6 +53,65 @@ describe("server components authored with Solid JSX", () => {
     const html = chunks.find(c => c.type === "html").html;
     expect(html).toContain("<!--slot:comment#0:start--><!--slot:comment#0:end-->");
     expect(html).toContain("<!--slot:comment#1:start--><!--slot:comment#1:end-->");
+  });
+
+  it("streams a createProjection slot arg as one snapshot followed by patch batches", async () => {
+    const ServerComp = (props: any) => {
+      const state = createProjection(
+        async function* (draft: { items: string[] }) {
+          draft.items.push("First");
+          yield;
+          draft.items.push("Second");
+          yield;
+        },
+        { items: [] }
+      );
+      return <props.content state={state} />;
+    };
+
+    const chunks = await collect(
+      renderServerComponent(ServerComp, { frame: { id: "projection-slot" } })
+    );
+    expect(chunks.filter(c => c.type === "error")).toEqual([]);
+
+    const slot = chunks.find(c => c.type === "slot");
+    const table = createJSONDataTable();
+    for (const chunk of chunks.filter(c => c.type === "data")) table.apply(chunk);
+
+    const transport = table.resolve(slot.args.state);
+    expect(transport.type).toBe("solid-async-reactive");
+    expect(transport.kind).toBe("projection");
+    const values: any[] = [];
+    for await (const value of transport.source) values.push(value);
+    expect(values[0]).toEqual({ items: ["First"] });
+    expect(values[1]).toEqual([
+      [["items", "1"], "Second"],
+      [["items", "length"], 2]
+    ]);
+  });
+
+  it("streams every async-generator memo value passed to a slot", async () => {
+    const ServerComp = (props: any) => {
+      const value = createMemo(async function* () {
+        yield "First";
+        yield "Second";
+      });
+      return <props.content value={value} />;
+    };
+
+    const chunks = await collect(renderServerComponent(ServerComp, { frame: { id: "memo-slot" } }));
+    expect(chunks.filter(c => c.type === "error")).toEqual([]);
+
+    const slot = chunks.find(c => c.type === "slot");
+    const table = createJSONDataTable();
+    for (const chunk of chunks.filter(c => c.type === "data")) table.apply(chunk);
+
+    const transport = table.resolve(slot.args.value);
+    expect(transport.type).toBe("solid-async-reactive");
+    expect(transport.kind).toBe("memo");
+    const values: any[] = [];
+    for await (const value of transport.source) values.push(value);
+    expect(values).toEqual(["First", "Second"]);
   });
 
   it("resolves slot ranges through merge() — props win, defaults never mask positions", async () => {
