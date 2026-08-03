@@ -75,6 +75,126 @@ describe("server components through dynamic", () => {
   beforeEach(() => installServerComponents(makeHost()));
   afterEach(() => vi.unstubAllGlobals());
 
+  test("adapts streamed projection patches and memo yields into stable reactive slot values", async () => {
+    function controlledSource(initial: any) {
+      let first = true;
+      let pending: ((value: IteratorResult<any>) => void) | undefined;
+      let returned = false;
+      const iterator = {
+        next() {
+          if (first) {
+            first = false;
+            return Promise.resolve({ done: false as const, value: initial });
+          }
+          return new Promise<IteratorResult<any>>(resolve => (pending = resolve));
+        },
+        return() {
+          returned = true;
+          pending?.({ done: true, value: undefined });
+          return Promise.resolve({ done: true as const, value: undefined });
+        }
+      };
+      return {
+        source: { [Symbol.asyncIterator]: () => iterator },
+        push(value: any) {
+          const resolve = pending!;
+          pending = undefined;
+          resolve({ done: false, value });
+        },
+        returned: () => returned
+      };
+    }
+
+    const projection = controlledSource({ items: ["First"] });
+    const memo = controlledSource("one");
+    const transports: Record<string, any> = {
+      projection: {
+        type: "solid-async-reactive",
+        kind: "projection",
+        source: projection.source
+      },
+      memo: { type: "solid-async-reactive", kind: "memo", source: memo.source }
+    };
+    installServerComponents(
+      createFrameHost({ resolve: (ref: { $ref: string }) => transports[ref.$ref] })
+    );
+    vi.stubGlobal("fetch", async () =>
+      frameResponse("reactive", [
+        { type: "start", id: "reactive", version: 1 },
+        {
+          type: "slot",
+          id: "reactive",
+          version: 1,
+          key: "content#0",
+          args: { state: { $ref: "projection" }, value: { $ref: "memo" } }
+        },
+        {
+          type: "html",
+          id: "reactive",
+          version: 1,
+          html: "<!--slot:content#0:start--><!--slot:content#0:end-->"
+        },
+        { type: "complete", id: "reactive", version: 1 }
+      ])
+    );
+
+    const getReactive = createServerReference("reactive/get");
+    const Reactive = dynamic(() => getReactive() as any);
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    let mounts = 0;
+    let stateIdentity: any;
+    let memoIdentity: any;
+    let div!: HTMLDivElement;
+    const dispose = createRoot(d => {
+      <div ref={div}>
+        <Loading fallback={<span>...</span>}>
+          <Reactive
+            content={(props: any) => {
+              mounts++;
+              stateIdentity = props.state;
+              memoIdentity = props.value;
+              return (
+                <p>
+                  {props.state.items?.join(",")}|{props.value()}
+                </p>
+              );
+            }}
+          />
+        </Loading>
+      </div>;
+      container.appendChild(div);
+      return d;
+    });
+
+    flush();
+    await settle();
+    flush();
+    await settle();
+    expect(container.textContent).toBe("First|one");
+    const initialState = stateIdentity;
+    const initialMemo = memoIdentity;
+
+    projection.push([
+      [["items", "1"], "Second"],
+      [["items", "length"], 2]
+    ]);
+    memo.push("two");
+    await settle();
+    flush();
+    expect(container.textContent).toBe("First,Second|two");
+    expect(mounts).toBe(1);
+    expect(stateIdentity).toBe(initialState);
+    expect(memoIdentity).toBe(initialMemo);
+
+    dispose();
+    flush();
+    await settle();
+    expect(projection.returned()).toBe(true);
+    expect(memo.returned()).toBe(true);
+    container.remove();
+  });
+
   test("mounts, fills slot ranges from props, morphs on re-fetch without remounting", async () => {
     const [story, setStory] = createSignal(1);
     const [tick, setTick] = createSignal(0);

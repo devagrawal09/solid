@@ -437,6 +437,25 @@ interface ServerComputation<T = any> {
   errored: boolean;
   computed: boolean;
   disposed: boolean;
+  transport?: AsyncReactiveTransport;
+}
+
+const ASYNC_REACTIVE_TRANSPORT = Symbol.for("solid.async-reactive-transport");
+
+type AsyncReactiveTransport = {
+  kind: "memo" | "projection";
+  source: AsyncIterable<any>;
+};
+
+function attachAsyncReactiveTransport<T extends object>(
+  value: T,
+  transport: AsyncReactiveTransport
+): T {
+  Object.defineProperty(value, ASYNC_REACTIVE_TRANSPORT, {
+    configurable: true,
+    value: transport
+  });
+  return value;
 }
 
 type SsrSourceMode = "server" | "hybrid" | "client";
@@ -694,6 +713,10 @@ export function createMemo<T>(
     }
     return comp.value;
   }) as SourceAccessor<T | undefined>;
+  Object.defineProperty(read, ASYNC_REACTIVE_TRANSPORT, {
+    configurable: true,
+    get: () => comp.transport
+  });
   (read as any)[$REFRESH] = comp;
   return read;
 }
@@ -1012,26 +1035,29 @@ function processResult<T>(
         () => comp.disposed
       );
 
-      if (ctx?.async && ctx.serialize && id && !noHydrate) {
-        let tappedFirst = true;
-        const tapped = {
-          [Symbol.asyncIterator]: () => ({
-            next() {
-              if (tappedFirst) {
-                tappedFirst = false;
-                return deferred.promise.then(() =>
-                  firstResult?.done
-                    ? ({ done: true as const, value: undefined } as IteratorResult<T>)
-                    : (firstResult as IteratorResult<T>)
-                );
-              }
-              return iter.next().then((r: IteratorResult<T>) => r);
-            },
-            return(value?: any) {
-              return iter.return?.(value);
+      let tappedFirst = true;
+      const tapped = {
+        [Symbol.asyncIterator]: () => ({
+          next() {
+            if (tappedFirst) {
+              tappedFirst = false;
+              return deferred.promise.then(() =>
+                firstResult?.done
+                  ? ({ done: true as const, value: undefined } as IteratorResult<T>)
+                  : (firstResult as IteratorResult<T>)
+              );
             }
-          })
-        };
+            return iter.next().then((r: IteratorResult<T>) => r);
+          },
+          return(value?: any) {
+            return iter.return
+              ? iter.return(value)
+              : Promise.resolve({ done: true as const, value });
+          }
+        })
+      };
+      comp.transport = { kind: "memo", source: tapped };
+      if (ctx?.async && ctx.serialize && id && !noHydrate) {
         ctx.serialize(id, tapped, deferStream);
       }
       comp.error = new NotReadyError(deferred.promise);
@@ -1415,37 +1441,40 @@ export function createProjection<T extends object>(
         () => disposed
       );
 
-      if (ctx?.async && !getContext(NoHydrateContext) && owner.id) {
-        let tappedFirst = true;
-        const tapped = {
-          [Symbol.asyncIterator]: () => ({
-            next() {
-              if (tappedFirst) {
-                tappedFirst = false;
-                return deferred.promise.then(() => {
-                  if (firstResult?.done) return { done: true as const, value: undefined };
-                  return { done: false as const, value: JSON.parse(JSON.stringify(state)) };
-                });
-              }
-              return iter.next().then((r: IteratorResult<void | T>) => {
-                if (disposed) return { done: true as const, value: undefined };
-                if (!r.done) {
-                  // Apply the replacement through the patch-recording draft
-                  // BEFORE draining: its sets/deletes must ride in THIS batch,
-                  // not sit unsent behind an already-emitted empty one (#2948).
-                  if (r.value !== undefined && r.value !== draft) {
-                    replaceState(draft, r.value as T);
-                  }
-                  return { done: false as const, value: patches.splice(0) };
-                }
-                return { done: true as const, value: undefined };
+      let tappedFirst = true;
+      const tapped = {
+        [Symbol.asyncIterator]: () => ({
+          next() {
+            if (tappedFirst) {
+              tappedFirst = false;
+              return deferred.promise.then(() => {
+                if (firstResult?.done) return { done: true as const, value: undefined };
+                return { done: false as const, value: JSON.parse(JSON.stringify(state)) };
               });
-            },
-            return(value?: any) {
-              return iter.return?.(value);
             }
-          })
-        };
+            return iter.next().then((r: IteratorResult<void | T>) => {
+              if (disposed) return { done: true as const, value: undefined };
+              if (!r.done) {
+                // Apply the replacement through the patch-recording draft
+                // BEFORE draining: its sets/deletes must ride in THIS batch,
+                // not sit unsent behind an already-emitted empty one (#2948).
+                if (r.value !== undefined && r.value !== draft) {
+                  replaceState(draft, r.value as T);
+                }
+                return { done: false as const, value: patches.splice(0) };
+              }
+              return { done: true as const, value: undefined };
+            });
+          },
+          return(value?: any) {
+            return iter.return
+              ? iter.return(value)
+              : Promise.resolve({ done: true as const, value });
+          }
+        })
+      };
+      attachAsyncReactiveTransport(pending as object, { kind: "projection", source: tapped });
+      if (ctx?.async && !getContext(NoHydrateContext) && owner.id) {
         ctx.serialize(owner.id, tapped, options?.deferStream);
       }
       return pending;

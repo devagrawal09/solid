@@ -16,6 +16,7 @@ import {
   createMemo,
   createOwner,
   createSignal,
+  createStore,
   getOwner,
   onCleanup,
   runWithOwner,
@@ -177,9 +178,157 @@ function claimRender(prefix: string, existing: Node[], render: () => any) {
  * effects over e.g. `props.title` fire on the change — the same "new props
  * into the same instance" semantic compiled components already have.
  */
-function liveSlotProps(initial: Record<string, any>, ctx: any) {
-  const [args, setArgs] = createSignal(initial);
-  ctx.onUpdate((next: Record<string, any>) => setArgs(() => next));
+type AsyncSlotTransport = {
+  type: "solid-async-reactive";
+  kind: "memo" | "projection";
+  source: AsyncIterable<any>;
+};
+
+type AsyncSlotAdapter = {
+  kind: AsyncSlotTransport["kind"];
+  value: any;
+  replace(source: AsyncIterable<any>): void;
+  dispose(): void;
+};
+
+function applyProjectionPatches(target: any, patches: any[]) {
+  for (const patch of patches) {
+    const path = patch[0];
+    let current = target;
+    for (let i = 0; i < path.length - 1; i++) current = current[path[i]];
+    const key = path[path.length - 1];
+    if (patch.length === 1) {
+      Array.isArray(current) ? current.splice(Number(key), 1) : delete current[key];
+    } else if (patch.length === 3) {
+      current.splice(Number(key), 0, patch[1]);
+    } else {
+      current[key] = patch[1];
+    }
+  }
+}
+
+function projectionSlotAdapter(source: AsyncIterable<any>): AsyncSlotAdapter {
+  const [state, setState] = createStore<Record<string, any>>({});
+  let iterator: AsyncIterator<any> | undefined;
+  let generation = 0;
+  let disposed = false;
+  const replace = (next: AsyncIterable<any>) => {
+    const run = ++generation;
+    iterator?.return?.();
+    const current = (iterator = next[Symbol.asyncIterator]());
+    void (async () => {
+      let initial = true;
+      try {
+        while (!disposed && run === generation) {
+          const result = await current.next();
+          if (result.done || disposed || run !== generation) return;
+          if (initial) {
+            initial = false;
+            setState(() => result.value);
+          } else {
+            setState((draft: Record<string, any>) => applyProjectionPatches(draft, result.value));
+          }
+        }
+      } catch {
+        // The producer carries stream errors on the frame; a replaced or
+        // disposed iterator can also reject while its return is in flight.
+      }
+    })();
+  };
+  const adapter: AsyncSlotAdapter = {
+    kind: "projection",
+    value: state,
+    replace,
+    dispose() {
+      disposed = true;
+      generation++;
+      iterator?.return?.();
+    }
+  };
+  replace(source);
+  return adapter;
+}
+
+function memoSlotAdapter(source: AsyncIterable<any>): AsyncSlotAdapter {
+  const [value, setValue] = createSignal<any>();
+  let iterator: AsyncIterator<any> | undefined;
+  let generation = 0;
+  let disposed = false;
+  const replace = (next: AsyncIterable<any>) => {
+    const run = ++generation;
+    iterator?.return?.();
+    const current = (iterator = next[Symbol.asyncIterator]());
+    void (async () => {
+      try {
+        while (!disposed && run === generation) {
+          const result = await current.next();
+          if (result.done || disposed || run !== generation) return;
+          setValue(() => result.value);
+        }
+      } catch {
+        // See projectionSlotAdapter: stream-level errors use the frame path.
+      }
+    })();
+  };
+  const adapter: AsyncSlotAdapter = {
+    kind: "memo",
+    value,
+    replace,
+    dispose() {
+      disposed = true;
+      generation++;
+      iterator?.return?.();
+    }
+  };
+  replace(source);
+  return adapter;
+}
+
+function asyncSlotProps(ctx: any) {
+  const adapters = new Map<string, { transport: AsyncSlotTransport; adapter: AsyncSlotAdapter }>();
+  ctx.onCleanup(() => {
+    for (const entry of adapters.values()) entry.adapter.dispose();
+    adapters.clear();
+  });
+  return (args: Record<string, any>) => {
+    const next: Record<string, any> = {};
+    for (const key of Object.keys(args)) {
+      const transport = args[key] as AsyncSlotTransport;
+      if (
+        !transport ||
+        transport.type !== "solid-async-reactive" ||
+        (transport.kind !== "memo" && transport.kind !== "projection") ||
+        typeof transport.source?.[Symbol.asyncIterator] !== "function"
+      ) {
+        next[key] = args[key];
+        continue;
+      }
+      let entry = adapters.get(key);
+      if (!entry || entry.adapter.kind !== transport.kind) {
+        entry?.adapter.dispose();
+        const adapter =
+          transport.kind === "projection"
+            ? projectionSlotAdapter(transport.source)
+            : memoSlotAdapter(transport.source);
+        entry = { transport, adapter };
+        adapters.set(key, entry);
+      } else if (entry.transport !== transport) {
+        entry.transport = transport;
+        entry.adapter.replace(transport.source);
+      }
+      next[key] = entry.adapter.value;
+    }
+    return next;
+  };
+}
+
+function liveSlotProps(
+  initial: Record<string, any>,
+  ctx: any,
+  adapt: (args: Record<string, any>) => Record<string, any>
+) {
+  const [args, setArgs] = createSignal(adapt(initial));
+  ctx.onUpdate((next: Record<string, any>) => setArgs(() => adapt(next)));
   return new Proxy(
     {},
     {
@@ -250,7 +399,8 @@ function slotsFor(props: Record<string, any>) {
               // Render-prop calls get LIVE props (see liveSlotProps): the
               // frame updates them in place on an args change rather than
               // re-calling, so occurrence state survives entity morphs.
-              return v(ctx.onUpdate ? liveSlotProps(slotProps, ctx) : slotProps);
+              const adapt = asyncSlotProps(ctx);
+              return v(ctx.onUpdate ? liveSlotProps(slotProps, ctx, adapt) : adapt(slotProps));
             }
             return v;
           };
