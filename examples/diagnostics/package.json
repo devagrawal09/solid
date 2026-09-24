@@ -1,0 +1,29 @@
+{
+  "name": "diagnostics-example",
+  "description": "Four reactive defects a compiler cannot see, each caught by Solid 2.0's runtime diagnostics and attribution channels: a relayed-state tear, an unstable memo that over-runs an effect, an accidental async waterfall, and an action whose interleaved writes lose an update behind a silent hold",
+  "version": "0.0.0",
+  "private": true,
+  "author": "Ryan Carniato",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "build:observe": "vite build --mode observe",
+    "dev": "vite",
+    "start": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "solid-js": "workspace:*",
+    "@solidjs/web": "workspace:*"
+  },
+  "devDependencies": {
+    "@solidjs/diagnostics": "workspace:*",
+    "@solidjs/vite-plugin": "3.0.0-next.35",
+    "jsdom": "^25.0.1",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.0",
+    "vitest": "^4.1.6"
+  }
+}

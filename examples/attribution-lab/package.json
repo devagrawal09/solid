@@ -1,0 +1,29 @@
+{
+  "name": "attribution-lab-example",
+  "description": "Four reactivity defects a compiler cannot see — an effect that writes its own source, a relayed-state tear, an accidental async waterfall, and an action that escapes its transaction after `await` — each shown broken and fixed, with Solid 2.0's diagnostics and attribution channels rendered as the evidence",
+  "version": "0.0.0",
+  "private": true,
+  "author": "Ryan Carniato",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "start": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@solidjs/web": "workspace:*",
+    "solid-js": "workspace:*"
+  },
+  "devDependencies": {
+    "@solidjs/diagnostics": "workspace:*",
+    "@solidjs/vite-plugin": "3.0.0-next.35",
+    "@types/node": "^25.6.0",
+    "jsdom": "^25.0.1",
+    "typescript": "^6.0.2",
+    "vite": "^7.0.0",
+    "vitest": "^4.1.6"
+  }
+}
