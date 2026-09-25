@@ -80,6 +80,16 @@ describe("solid-tsc typed summaries", () => {
     expect(reset.failures).toBe("never");
   });
 
+  it("refines completeness with types: accessor operands are exact reads", () => {
+    const [add, reset] = app.types.blocks;
+    // `yield* title` is an accessor read once typed; `attempt(() => formatTitle(…))`
+    // still calls code the summary does not describe.
+    expect(app.behavior.blocks[0].body.completenessReasons).toContain("valueOperand");
+    expect(add.completenessReasons).toEqual(["externalCalls", "attempt"]);
+    expect(add.completeness).toBe("bounded");
+    expect(reset).toMatchObject({ completeness: "exact", completenessReasons: [] });
+  });
+
   it("records capture types with validated brands", () => {
     const brands = Object.fromEntries(app.types.blocks[0].captures.map(c => [c.name, c.brands]));
     expect(brands.title).toEqual(["accessor"]);

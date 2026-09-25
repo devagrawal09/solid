@@ -341,7 +341,29 @@ function blockFacts(context, block) {
   facts.consistent = facts.mismatches.length === 0;
   facts.captures = (block.body?.captures ?? []).map(capture => captureFacts(context, capture));
   facts.paths = (block.body?.ops.paths ?? []).map(read => pathFacts(context, read));
+  Object.assign(facts, typedCompleteness(block, facts));
   return facts;
+}
+
+/**
+ * Completeness with types: the compiler marks `yield* x` over a binding as
+ * `valueOperand` (bounded) because only the type says whether `x` is a
+ * signal accessor (a read) or something else. When every such operand is a
+ * branded accessor, that reason is discharged.
+ */
+export function typedCompleteness(block, facts) {
+  const body = block.body;
+  if (!body) return { completeness: "unknown", completenessReasons: ["opaqueBody"] };
+  if (body.completeness === "unknown") {
+    return { completeness: "unknown", completenessReasons: body.completenessReasons };
+  }
+  const brands = new Map(facts.captures.map(capture => [capture.name, capture.brands]));
+  const reasons = body.completenessReasons.filter(
+    reason =>
+      reason !== "valueOperand" ||
+      !body.ops.values.every(value => brands.get(value.name)?.includes("accessor"))
+  );
+  return { completeness: reasons.length ? "bounded" : "exact", completenessReasons: reasons };
 }
 
 /** `Block<V, R, T, F, W, I>` type arguments, when the type is a Block reference. */
