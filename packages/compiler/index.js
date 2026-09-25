@@ -23,6 +23,7 @@ function transform(code, options) {
     output.css = result.css;
     output.cssHash = result.cssHash ?? null;
   }
+  if (result.storeSummary != null) output.storeSummary = JSON.parse(result.storeSummary);
   return output;
 }
 
@@ -292,7 +293,8 @@ const nativeOptionKeys = new Set([
   "builtIns",
   "renderers",
   "generators",
-  "hostFusion"
+  "hostFusion",
+  "storeHandles"
 ]);
 
 function validateOptions(code, options) {
@@ -328,6 +330,10 @@ function validateOptions(code, options) {
       nativeOptions.wrapConditionals = value;
       continue;
     }
+    if (key === "storeLinkFacts") {
+      nativeOptions.storeLinkFacts = flattenStoreLinkFacts(value);
+      continue;
+    }
     if (key === "validate") {
       if (typeof value !== "boolean") {
         throw new TypeError("@solidjs/compiler `validate` option must be boolean");
@@ -343,6 +349,28 @@ function validateOptions(code, options) {
     throw new Error(`@solidjs/compiler received unknown option \`${key}\``);
   }
   return nativeOptions;
+}
+
+// Linker facts for `storeHandles` (Track B slice 2): `{ borrowed: { [import
+// source]: { [exported component]: string[] /* verified Borrowed props */ } } }`,
+// flattened to `source\0export\0prop` strings for the native side.
+function flattenStoreLinkFacts(facts) {
+  if (facts == null) return [];
+  if (typeof facts !== "object" || Array.isArray(facts)) {
+    throw new TypeError("@solidjs/compiler `storeLinkFacts` option must be an object");
+  }
+  const out = [];
+  for (const [source, exports] of Object.entries(facts.borrowed ?? {})) {
+    for (const [name, props] of Object.entries(exports ?? {})) {
+      if (!Array.isArray(props)) {
+        throw new TypeError(
+          "@solidjs/compiler `storeLinkFacts.borrowed[source][export]` must be an array of prop names"
+        );
+      }
+      for (const prop of props) out.push(`${source}\0${name}\0${prop}`);
+    }
+  }
+  return out;
 }
 
 function validateRenderers(renderers) {

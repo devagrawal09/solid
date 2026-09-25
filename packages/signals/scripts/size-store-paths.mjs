@@ -18,7 +18,8 @@
  *     [--repo <checkout>] [--json out.json] [--handles]
  * `--repo` points at another checkout (e.g. a base worktree) whose
  * `packages/signals/dist/prod` and `packages/compiler` build are used;
- * `--handles` compiles with the stage-2 `storeHandles` option.
+ * `--handles` compiles with the stage-2 `storeHandles` option; `--dist`
+ * points the bundle at another signals `dist/prod/index.js`.
  */
 import { build } from "esbuild";
 import { createRequire } from "node:module";
@@ -39,7 +40,8 @@ const label = opt("label", "current");
 const handles = args.includes("--handles");
 const require = createRequire(import.meta.url);
 const compiler = require(join(repo, "packages/compiler"));
-const runtime = join(repo, "packages/signals/dist/prod/index.js");
+// `--dist` overrides the runtime build (e.g. a snapshot of an earlier stage).
+const runtime = opt("dist", join(repo, "packages/signals/dist/prod/index.js"));
 
 // A representative strict module: one store, reads of every shape.
 export const STRICT_APP = `

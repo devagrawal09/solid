@@ -534,44 +534,96 @@ function checkTokens(tokens: TokenTarget[]): void {
 //
 // A path read walks `root[k0][k1]…` with the strict guard lowered. The store
 // module records every child target it serves and exposes the latest through
-// `storeServed`; a hop whose value is that child's proxy (a proxy has one
-// target, so the identity is exact) runs the store's `get` trap on the
-// target as a plain call (`storeGet`) instead of through the Proxy. So a
-// compiled `yield* store.a.b.c` pays one Proxy [[Get]] — the root's first
-// key — and allocates nothing.
+// `storeServed`; a hop whose value is that child — its proxy (a proxy has one
+// target, so the identity is exact) or the target itself (only a handle-mode
+// read hands a target out) — runs the store's `get` trap on the target as a
+// plain call in handle mode (`storeGet`), which hands the next child back as
+// its target. So a compiled `yield* store.a.b.c` pays one Proxy [[Get]] (the
+// root's first key; none from a handle root), allocates nothing, and never
+// materializes a child proxy unless the walk ends on that child
+// (`handleValue`) or a getter needs a receiver.
 //
-// Anything else — the root, a props object, a raw or raw-marked object, a
-// foreign proxy (merge/omit, the SSR pending store), a primitive — takes the
-// ordinary `value[key]`, exactly the access a proxy walk makes; when that is
-// itself a store trap, the child it serves is resolved for the next hop.
+// Anything else — a proxy root, a props object, a raw or raw-marked object,
+// a foreign proxy (merge/omit, the SSR pending store), a primitive — takes
+// the ordinary `value[key]`, exactly the access a proxy walk makes; when that
+// is itself a store trap, the child it serves is resolved for the next hop.
 // Numeric keys are coerced as a Proxy coerces them (ToPropertyKey of a number
 // is its string); any other key type goes through the proxy. Only the readers
 // reference `hop`; a store-only app keeps just the setter below.
 
-/** Structural view of the store target a hop needs (store/next/target.ts). */
+/** Structural view of a store target the walk touches (store/next/target.ts). */
 interface ServedTarget {
   px: any;
 }
-type StoreGet = (target: any, key: PropertyKey, receiver: any) => any;
-let storeGet: StoreGet | null = null;
-let storeServed: () => ServedTarget | null = () => null;
+interface StoreHooks {
+  /** The `get` trap; called with `handleReceiver` it is a handle-mode read
+   * (a wrapped child comes back as its target). */
+  get(target: ServedTarget, key: PropertyKey, receiver: any): any;
+  /** The receiver that selects handle mode. */
+  handleReceiver: object;
+  /** The child target most recently served, or null. */
+  served(): ServedTarget | null;
+  /** A target's compatibility proxy, materialized on first need. */
+  proxy(target: ServedTarget): any;
+}
+// Unpacked into module variables: the hot hop calls them directly.
+let storeGet: StoreHooks["get"] = plainGet;
+let handleReceiver: object | undefined;
+let storeServed: StoreHooks["served"] = noneServed;
+let storeProxyOf: StoreHooks["proxy"] = plainGet as any;
+let storeHooks: StoreHooks | null = null;
 
-/**
- * @internal The store module installs its `get` trap, callable directly,
- * and the getter of the child target it most recently served.
- */
-export function setStoreGet(get: StoreGet, served: () => ServedTarget | null): void {
-  storeGet = get;
-  storeServed = served;
+function plainGet(value: any, key?: any): any {
+  return value[key];
+}
+function noneServed(): null {
+  return null;
 }
 
+/** @internal Installed once by the store module. */
+export function setStoreHooks(hooks: StoreHooks): void {
+  storeHooks = hooks;
+  storeGet = hooks.get;
+  handleReceiver = hooks.handleReceiver;
+  storeServed = hooks.served;
+  storeProxyOf = hooks.proxy;
+}
+
+/** A hop of a walk from a proxy (or any non-handle) root — the stage-1
+ * readers: children come back as PROXIES (they already have them), so the
+ * walk never hands a target out. */
 function hop(value: any, key: any): any {
   const t = storeServed();
-  if (t !== null && value === t.px) {
-    if (typeof key === "string") return storeGet!(t, key, value);
-    if (typeof key === "number") return storeGet!(t, "" + key, value);
+  if (t !== null && value !== null && (value === t.px || value === t)) {
+    // (`value === t` never happens in compiled code — handles only reach the
+    // handle readers — but a target must never leak: read it as its proxy.)
+    const receiver = value === t ? storeProxyOf(t) : value;
+    if (typeof key === "string") return storeGet(t, key, receiver);
+    if (typeof key === "number") return storeGet(t, "" + key, receiver);
   }
   return value[key];
+}
+
+/** A hop of a walk from a HANDLE: children come back as targets (no proxy
+ * is materialized); `handleValue` converts the walk's final value. */
+function hhop(value: any, key: any): any {
+  const t = storeServed();
+  if (t !== null && (value === t || (value !== null && value === t.px))) return handleHop(t, key);
+  return value[key];
+}
+
+/** One hop off a store target (a served child or a handle root). */
+function handleHop(t: ServedTarget, key: any): any {
+  if (typeof key === "string") return storeGet(t, key, handleReceiver);
+  if (typeof key === "number") return storeGet(t, "" + key, handleReceiver);
+  return storeProxyOf(t)[key];
+}
+
+/** The public value a finished walk hands out: a child target the last hop
+ * served becomes its proxy (materialized here if the walk created it). */
+function handleValue(value: any): any {
+  const t = storeServed();
+  return t !== null && value === t ? storeProxyOf(t) : value;
 }
 
 /** The proxy walk: what the runtime driver's path tokens and `readPath`
@@ -584,11 +636,20 @@ function walk(root: unknown, path: readonly PathKey[]): unknown {
   return value;
 }
 
-/** The handle walk (`readPathN`). */
-function walkHandles(root: unknown, path: readonly PathKey[]): unknown {
+/** A walk from a proxy (or any non-handle) root: `readPathN`. Such a walk
+ * never produces a target (children come back as proxies), so it needs no
+ * `handleValue`. */
+function walkProxies(root: unknown, path: readonly PathKey[]): unknown {
   let value: any = root;
   for (let i = 0, n = path.length; i < n; i++) value = hop(value, path[i]);
   return value;
+}
+
+/** A walk that may run in handle mode, from `start` in `path`. */
+function walkHandles(root: unknown, path: readonly PathKey[], start = 0): unknown {
+  let value: any = root;
+  for (let i = start, n = path.length; i < n; i++) value = hhop(value, path[i]);
+  return handleValue(value);
 }
 
 /**
@@ -747,13 +808,217 @@ export function readPathN<R, const P extends readonly PathKey[]>(
 ): PathResult<R, P>;
 export function readPathN(root: any, keys: readonly PathKey[]): any {
   if (tokensCreated && isToken(root)) return perform(readPath(root, keys));
-  if (!blockGuard) return readThrough(walkHandles(root, keys));
+  if (!blockGuard) return readThrough(walkProxies(root, keys));
   const prev = setBlockGuard(false);
   try {
-    return readThrough(walkHandles(root, keys));
+    return readThrough(walkProxies(root, keys));
   } finally {
     setBlockGuard(prev);
   }
+}
+
+// --- store handles (Track B slice 2, stage 2) ----------------------------------------
+//
+// A store HANDLE is the store's internal target (or, for a root that is not
+// a store — a raw-marked value — a `PlainHandle`). Compiled code holds one
+// where the compiler proved the store's uses are path reads it lowers and
+// compiled consumers (see documentation/plans/track-b-slice-2-proxy-free-
+// stores.md): `createStoreHandle` creates the store without its proxy,
+// `readHandleK` walks from it with no Proxy [[Get]] at all, and every other
+// use goes through `storeProxy`, which materializes the compatibility proxy
+// on first escape. Handles are opaque to user code (`StoreHandle<T>`).
+
+declare const STORE_HANDLE: unique symbol;
+/** An opaque compiled-code reference to a store (see `createStoreHandle`). */
+export interface StoreHandle<T> {
+  readonly [STORE_HANDLE]: T;
+}
+/**
+ * Typed escape contract for a component prop: the component only reads
+ * typed paths from it (`yield* props.todo.title`) and never lets it escape.
+ * The type is `T` itself (callers pass stores as usual); the compiler
+ * verifies the contract in the component's body and, where it holds, lets
+ * compiled callers pass a store handle instead of a proxy. A violated
+ * contract deoptimizes to ordinary proxies and is reported in the module's
+ * store summary.
+ */
+export type Borrowed<T> = T;
+
+/** Every handle handed out: the `Borrowed` prop readers must tell a handle
+ * from any other value without touching it (a proxy's traps are observable). */
+const handles = new WeakSet<object>();
+
+/** @internal Record a handle (store module / child handles). */
+export function markHandle<H extends object>(handle: H): H {
+  handles.add(handle);
+  return handle;
+}
+
+function isHandle(value: unknown): value is ServedTarget {
+  return value !== null && typeof value === "object" && handles.has(value);
+}
+
+/** A handle is a store target unless it wraps a non-store root (`{ v }`, no `px`). */
+function plainValueOf(handle: any): any {
+  return handle.px === undefined ? handle.v : handle;
+}
+
+/** `yield* store[k0]` from a handle root, lowered. */
+export function readHandle1<T, const K0 extends PathKey>(
+  handle: StoreHandle<T>,
+  k0: K0
+): PathResult<T, [K0]>;
+export function readHandle1(handle: any, k0: PathKey): any {
+  if (handle.px === undefined) return readPath1(handle.v, k0);
+  if (!blockGuard) return readThrough(handleValue(handleHop(handle, k0)));
+  const prev = setBlockGuard(false);
+  try {
+    return readThrough(handleValue(handleHop(handle, k0)));
+  } finally {
+    setBlockGuard(prev);
+  }
+}
+
+/** `yield* store[k0][k1]` from a handle root, lowered. */
+export function readHandle2<T, const K0 extends PathKey, const K1 extends PathKey>(
+  handle: StoreHandle<T>,
+  k0: K0,
+  k1: K1
+): PathResult<T, [K0, K1]>;
+export function readHandle2(handle: any, k0: PathKey, k1: PathKey): any {
+  if (handle.px === undefined) return readPath2(handle.v, k0, k1);
+  if (!blockGuard) return readThrough(handleValue(hhop(handleHop(handle, k0), k1)));
+  const prev = setBlockGuard(false);
+  try {
+    return readThrough(handleValue(hhop(handleHop(handle, k0), k1)));
+  } finally {
+    setBlockGuard(prev);
+  }
+}
+
+/** `yield* store[k0][k1][k2]` from a handle root, lowered. */
+export function readHandle3<
+  T,
+  const K0 extends PathKey,
+  const K1 extends PathKey,
+  const K2 extends PathKey
+>(handle: StoreHandle<T>, k0: K0, k1: K1, k2: K2): PathResult<T, [K0, K1, K2]>;
+export function readHandle3(handle: any, k0: PathKey, k1: PathKey, k2: PathKey): any {
+  if (handle.px === undefined) return readPath3(handle.v, k0, k1, k2);
+  if (!blockGuard) return readThrough(handleValue(hhop(hhop(handleHop(handle, k0), k1), k2)));
+  const prev = setBlockGuard(false);
+  try {
+    return readThrough(handleValue(hhop(hhop(handleHop(handle, k0), k1), k2)));
+  } finally {
+    setBlockGuard(prev);
+  }
+}
+
+/** `yield* store[k0][k1][k2][k3]` from a handle root, lowered. */
+export function readHandle4<
+  T,
+  const K0 extends PathKey,
+  const K1 extends PathKey,
+  const K2 extends PathKey,
+  const K3 extends PathKey
+>(handle: StoreHandle<T>, k0: K0, k1: K1, k2: K2, k3: K3): PathResult<T, [K0, K1, K2, K3]>;
+export function readHandle4(handle: any, k0: PathKey, k1: PathKey, k2: PathKey, k3: PathKey): any {
+  if (handle.px === undefined) return readPath4(handle.v, k0, k1, k2, k3);
+  if (!blockGuard)
+    return readThrough(handleValue(hhop(hhop(hhop(handleHop(handle, k0), k1), k2), k3)));
+  const prev = setBlockGuard(false);
+  try {
+    return readThrough(handleValue(hhop(hhop(hhop(handleHop(handle, k0), k1), k2), k3)));
+  } finally {
+    setBlockGuard(prev);
+  }
+}
+
+/** `yield* store[k0]…[kn]` from a handle root, lowered (keys never retained). */
+export function readHandleN<T, const P extends readonly PathKey[]>(
+  handle: StoreHandle<T>,
+  keys: P
+): PathResult<T, P>;
+export function readHandleN(handle: any, keys: readonly PathKey[]): any {
+  if (handle.px === undefined) return readPathN(handle.v, keys);
+  if (keys.length === 0) return storeHandleProxy(handle);
+  if (!blockGuard) return readThrough(walkHandles(handleHop(handle, keys[0]), keys, 1));
+  const prev = setBlockGuard(false);
+  try {
+    return readThrough(walkHandles(handleHop(handle, keys[0]), keys, 1));
+  } finally {
+    setBlockGuard(prev);
+  }
+}
+
+/**
+ * A child HANDLE — what a compiled caller passes to a verified `Borrowed`
+ * prop for `<Row todo={store.rows[i]} />`: the same tracked walk as the
+ * member chain, ending on the child's target instead of its proxy (no read
+ * through; a value that is not a store child is returned as is).
+ */
+export function readHandleChild<T, const P extends readonly PathKey[]>(
+  handle: StoreHandle<T>,
+  keys: P
+): StoreHandle<PathValue<T, P>>;
+export function readHandleChild(handle: any, keys: readonly PathKey[]): any {
+  if (handle.px === undefined) return proxyWalk(handle.v, keys);
+  const prev = setBlockGuard(false);
+  try {
+    let value: any = keys.length ? handleHop(handle, keys[0]) : handle;
+    for (let i = 1; i < keys.length; i++) value = hhop(value, keys[i]);
+    const t = storeServed();
+    return t !== null && value === t ? markHandle(value) : value;
+  } finally {
+    setBlockGuard(prev);
+  }
+}
+
+function proxyWalk(root: any, keys: readonly PathKey[]): any {
+  const prev = setBlockGuard(false);
+  try {
+    return handleValue(walkHandlesRaw(root, keys));
+  } finally {
+    setBlockGuard(prev);
+  }
+}
+
+function walkHandlesRaw(root: any, keys: readonly PathKey[]): any {
+  let value = root;
+  for (let i = 0; i < keys.length; i++) value = hhop(value, keys[i]);
+  return value;
+}
+
+/**
+ * `yield* props.todo.a.b` where `todo` is a verified `Borrowed` prop,
+ * lowered: `props.todo` is read as usual (the tracked getter), then walked as
+ * a handle when a compiled caller passed one, else exactly as `readPathN`
+ * walks any value (an uncompiled caller's proxy, a plain object). `keys[0]`
+ * is the prop name.
+ */
+export function readBorrowed<R, const P extends readonly PathKey[]>(
+  props: R,
+  keys: P
+): PathResult<R, P>;
+export function readBorrowed(props: any, keys: readonly PathKey[]): any {
+  const prev = setBlockGuard(false);
+  try {
+    let value: any = props[keys[0]];
+    if (isHandle(value)) {
+      const root = plainValueOf(value);
+      if (keys.length === 1) return readThrough(root === value ? storeProxyOf(value) : root);
+      value = root === value ? handleHop(value, keys[1]) : hhop(root, keys[1]);
+      return readThrough(walkHandles(value, keys, 2));
+    }
+    return readThrough(walkHandles(value, keys, 1));
+  } finally {
+    setBlockGuard(prev);
+  }
+}
+
+/** The proxy (or plain value) behind a handle. */
+function storeHandleProxy(handle: any): any {
+  return handle.px === undefined ? handle.v : storeProxyOf(handle);
 }
 
 function isToken(value: unknown): boolean {

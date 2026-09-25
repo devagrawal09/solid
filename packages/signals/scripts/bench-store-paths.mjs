@@ -13,13 +13,17 @@
  *   fused    stage-1 lowering under host fusion: plain memo, `readPathK(store, ...)`
  *   generic  `readPathN(store, HOISTED_KEYS)` in a plain memo (fixed arity vs generic)
  *   inline   `readPathN(store, [...])` with a per-read key array
- *   rooted   stage-2 handle root: `readHandleK(handle, ...)` (0 traps; see stage 2)
+ *   rooted   stage-2 handle root: `readHandleK(storeHandle(store), ...)` (0 traps)
+ *   noescape stage-2 no-escape store: `createStoreHandle` + `readHandleK` (no proxy
+ *            is ever created in a production build)
  *
  * Workloads (each "op" = one flush that re-runs the reading computation(s)):
  *   shallow  1 memo × 1000 reads of `store.v` (1 key)
  *   deep     1 memo × 1000 reads of `store.a.b.c.d` (4 keys)
  *   dynamic  1 memo × 1000 reads of `store.items[i].name`, i = 0..999 (3 keys, dynamic)
  *   list     1000 row memos, each `row.title` + `row.meta.done` (rows = child proxies)
+ *   mount    create a 1000-row store + one reader per row, run, dispose (ns per row)
+ *   update   1000 row readers; one leaf written per op, flush (ns per op, sparse)
  *
  * Modes:
  *   node scripts/bench-store-paths.mjs [--samples 21] [--ops 200] [--json out.json]
@@ -55,6 +59,9 @@ const {
   readPathN
 } = S;
 const storeHandle = S.storeHandle;
+const createStoreHandle = S.createStoreHandle;
+const readHandleChild = S.readHandleChild;
+const readHandle2 = S.readHandle2;
 const readHandle1 = S.readHandle1;
 const readHandle3 = S.readHandle3;
 const readHandle4 = S.readHandle4;
@@ -241,15 +248,109 @@ function rowCompute(variant, row, rowHandle) {
       return () => readPath1(row, "title").length + (readPath2(row, "meta", "done") ? 1 : 0);
     case "rooted":
       return () =>
-        readHandle1(rowHandle, "title").length + (S.readHandle2(rowHandle, "meta", "done") ? 1 : 0);
+        readHandle1(rowHandle, "title").length + (readHandle2(rowHandle, "meta", "done") ? 1 : 0);
     default:
       return null;
   }
 }
 
+function rows() {
+  return Array.from({ length: R }, (_, i) => ({ id: i, title: `row ${i}`, meta: { done: false } }));
+}
+
+/** A store for `variant`: [proxy-or-null, handle-or-null, setter]. The
+ * no-escape variant never creates a proxy (production build). */
+function variantStore(variant, init) {
+  if (variant === "noescape") {
+    const [h, set] = createStoreHandle(init);
+    return [null, h, set];
+  }
+  const [store, set] = createStore(init);
+  return [store, variant === "rooted" ? storeHandle(store) : null, set];
+}
+
+/** A row reader for the mount/update workloads. */
+function rowReader(variant, store, handle, i) {
+  switch (variant) {
+    case "proxy":
+      return () => store.rows[i].title.length + (store.rows[i].meta.done ? 1 : 0);
+    case "rewalk":
+      return $(function () {
+        return (
+          perform(readPath(store, ["rows", i, "title"])).length +
+          (perform(readPath(store, ["rows", i, "meta", "done"])) ? 1 : 0)
+        );
+      });
+    case "handle":
+      return () =>
+        readPath3(store, "rows", i, "title").length +
+        (readPath4(store, "rows", i, "meta", "done") ? 1 : 0);
+    case "rooted":
+    case "noescape":
+      return () =>
+        readHandle3(handle, "rows", i, "title").length +
+        (readHandle4(handle, "rows", i, "meta", "done") ? 1 : 0);
+  }
+  return null;
+}
+
 /** Build one benchmark instance: returns { op, dispose, check } or null. */
 function setup(variant, workload) {
-  if (variant === "rooted" && !HAS_ROOTED) return null;
+  if ((variant === "rooted" || variant === "noescape") && !HAS_ROOTED) return null;
+  if (workload === "mount" || workload === "update") {
+    if (!["proxy", "rewalk", "handle", "rooted", "noescape"].includes(variant)) return null;
+    if (variant !== "proxy" && variant !== "rewalk" && typeof readPath1 !== "function") return null;
+  }
+  if (workload === "mount") {
+    // Create a store of R rows, a reader per row, run them once, dispose:
+    // creation + first reads, where omitted child proxies show.
+    let sink = 0;
+    let last = 0;
+    return {
+      op() {
+        createRoot(dispose => {
+          const [store, handle] = variantStore(variant, { rows: rows() });
+          const memos = [];
+          for (let i = 0; i < R; i++) memos.push(createMemo(rowReader(variant, store, handle, i)));
+          flush();
+          for (let i = 0; i < R; i++) sink += memos[i]();
+          last = memos[7]();
+          dispose();
+        });
+        return sink;
+      },
+      dispose() {},
+      check: () => last
+    };
+  }
+  if (workload === "update") {
+    // Sparse path updates: R row readers, one leaf written per op.
+    let dispose;
+    let op;
+    let check;
+    createRoot(d => {
+      dispose = d;
+      const [store, handle, set] = variantStore(variant, { rows: rows() });
+      const memos = [];
+      for (let i = 0; i < R; i++) memos.push(createMemo(rowReader(variant, store, handle, i)));
+      flush();
+      let n = 0;
+      let sink = 0;
+      op = () => {
+        const k = (n * 7919) % R;
+        n++;
+        set(s => {
+          s.rows[k].title = n & 1 ? `r${k}!` : `row ${k}`;
+        });
+        flush();
+        sink += memos[k]();
+        return sink;
+      };
+      check = () => memos[3]();
+    });
+    return { op, dispose, check };
+  }
+
   // A build without the readers (a base checkout via --dist) runs the
   // variants it has.
   if (variant !== "proxy" && variant !== "rewalk" && typeof readPath1 !== "function") return null;
@@ -270,7 +371,7 @@ function setup(variant, workload) {
       const memos = [];
       for (let i = 0; i < R; i++) {
         const row = store.rows[i];
-        const rowHandle = HAS_ROOTED ? S.readHandleChild(rootHandle, "rows", i) : null;
+        const rowHandle = HAS_ROOTED ? readHandleChild(rootHandle, ["rows", i]) : null;
         const fn = rowCompute(variant, row, rowHandle);
         if (fn === null) return;
         memos.push(createMemo(fn));
@@ -289,14 +390,21 @@ function setup(variant, workload) {
       check = () => memos[3]();
       return;
     }
-    const [store, setStore] = createStore({
+    const init = {
       v: 1,
       a: { b: { c: { d: 1 } } },
       items: Array.from({ length: R }, (_, i) => ({ id: i, name: i }))
-    });
-    const handle = HAS_ROOTED ? storeHandle(store) : null;
+    };
+    let store;
+    let handle = null;
+    if (variant === "noescape") {
+      [handle] = createStoreHandle(init);
+    } else {
+      [store] = createStore(init);
+      if (HAS_ROOTED) handle = storeHandle(store);
+    }
     const [tick, setTick] = createSignal(0);
-    const reads = readLoop(variant, store, handle, workload);
+    const reads = readLoop(variant === "noescape" ? "rooted" : variant, store, handle, workload);
     if (reads === null) return;
     const m = createMemo(
       variant === "rewalk" || variant === "handle"
@@ -318,7 +426,6 @@ function setup(variant, workload) {
       return sink;
     };
     check = () => m();
-    void setStore;
   });
   if (!op) {
     dispose();
@@ -327,8 +434,10 @@ function setup(variant, workload) {
   return { op, dispose, check };
 }
 
-const VARIANTS = ["proxy", "rewalk", "handle", "fused", "generic", "inline", "rooted"];
-const WORKLOADS = ["shallow", "deep", "dynamic", "list"];
+const VARIANTS = ["proxy", "rewalk", "handle", "fused", "generic", "inline", "rooted", "noescape"];
+const WORKLOADS = ["shallow", "deep", "dynamic", "list", "mount", "update"];
+/** Reads per op, for per-read normalization (update: per op). */
+const PER_OP = { update: 1 };
 
 function quantile(sorted, q) {
   const pos = (sorted.length - 1) * q;
@@ -364,7 +473,7 @@ function timing() {
         for (let i = 0; i < OPS; i++) inst.op();
         const t1 = process.hrtime.bigint();
         // ns per read (list: per row recompute, 2 path reads each)
-        samples[v].push(Number(t1 - t0) / OPS / R);
+        samples[v].push(Number(t1 - t0) / OPS / (PER_OP[workload] ?? R));
       }
     }
     results[workload] = {};
@@ -455,7 +564,7 @@ async function allocationChild() {
         const before = process.memoryUsage().heapUsed;
         for (let i = 0; i < WINDOW; i++) inst.op();
         const after = process.memoryUsage().heapUsed;
-        const bytesPerRead = (after - before) / WINDOW / R;
+        const bytesPerRead = (after - before) / WINDOW / (PER_OP[workload] ?? R);
         writeSync(1, `@@END ${JSON.stringify({ workload, variant, rep, bytesPerRead })}\n`);
       }
       inst.dispose();

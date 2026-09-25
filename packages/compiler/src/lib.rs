@@ -31,6 +31,7 @@ mod node_adapter;
 mod refresh;
 mod shared;
 mod ssr;
+mod store_handles;
 #[cfg(feature = "tsrx")]
 mod tsrx;
 mod universal;

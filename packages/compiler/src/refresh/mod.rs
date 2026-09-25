@@ -113,6 +113,7 @@ pub fn transform_refresh(
         // Skipped modules (`@refresh skip`) and modules with nothing to
         // register come back untouched.
         return Ok(TransformResult {
+            store_summary: None,
             code,
             map: None,
             css: None,
@@ -130,6 +131,7 @@ pub fn transform_refresh(
         .build(&program);
 
     Ok(TransformResult {
+        store_summary: None,
         code: build.code,
         map: build.map.map(|map| map.to_json_string()),
         css: None,

@@ -267,6 +267,7 @@ pub fn transform(code: String, options: Option<TransformOptions>) -> Result<Tran
         map: output.source_map,
         css: output.css,
         css_hash: output.css_hash,
+        store_summary: output.store_summary,
     })
 }
 
@@ -325,6 +326,20 @@ fn core_options(options: TransformOptions) -> Result<CompileOptions> {
             .collect(),
         generators: options.generators.unwrap_or(true),
         host_fusion: options.host_fusion.unwrap_or(false),
+        store_handles: options.store_handles.unwrap_or(false),
+        store_link_facts: options
+            .store_link_facts
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|fact| {
+                let mut parts = fact.split('\0');
+                Some((
+                    parts.next()?.to_string(),
+                    parts.next()?.to_string(),
+                    parts.next()?.to_string(),
+                ))
+            })
+            .collect(),
     })
 }
 
@@ -362,6 +377,7 @@ fn legacy_preflight(
             map: None,
             css: None,
             css_hash: None,
+            store_summary: None,
         });
     }
     Err(Error::from_reason(validation_error))

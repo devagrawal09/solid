@@ -19,6 +19,12 @@ import {
   readPath3,
   readPath4,
   readPathN,
+  readHandle2 as readHandleAt2,
+  readHandleChild,
+  createStoreHandle,
+  storeProxy,
+  type Borrowed,
+  type StoreHandle,
   readProp,
   readStore,
   wait,
@@ -317,6 +323,26 @@ type _handleReadThrough = Expect<
 const [filterAccessor] = createSignal<"all" | "done">("all");
 const holder = { filter: filterAccessor };
 const readHandleThrough = () => readPath1(holder, "filter");
+// Stage 2 handles: typed like the store they stand for.
+const [handleStore] = createStoreHandle({
+  user: { name: "Ada" },
+  rows: [{ title: "a", meta: { done: false } }]
+});
+const handleRow = readHandleChild(handleStore, ["rows", 0]);
+const handleName = () => readHandleAt2(handleStore, "user", "name");
+const handleDone = () => readHandleAt2(handleRow, "meta", "done");
+const handleProxy = () => storeProxy(handleStore).user;
+type _handles = [
+  Expect<Equal<ReturnType<typeof handleName>, string>>,
+  Expect<Equal<ReturnType<typeof handleDone>, boolean>>,
+  Expect<Equal<typeof handleRow, StoreHandle<{ title: string; meta: { done: boolean } }>>>,
+  Expect<Equal<ReturnType<typeof handleProxy>, { name: string }>>
+];
+// @ts-expect-error — a handle is opaque: not the store's value
+handleStore.user;
+// `Borrowed<T>` is `T`: callers pass stores (or plain values) as usual.
+declare function BorrowingRow(props: { todo: Borrowed<{ title: string }> }): unknown;
+BorrowingRow({ todo: { title: "x" } });
 declare const props: { count: number; user: { name: string } };
 const propPaths = $(function* () {
   return `${yield* readProp(props, ["count"])}:${yield* readProp(props, ["user", "name"])}`;

@@ -115,6 +115,14 @@ pub struct CompileOptions {
     /// hand-written Solid accessors. Requires `generators: true`. Default
     /// `false`.
     pub host_fusion: bool,
+    /// Experimental (Track B slice 2, stage 2): hold module-local stores whose
+    /// uses are lowered path reads as proxy-free handles, verify `Borrowed`
+    /// prop contracts, and emit the module's store summary. Default `false`.
+    /// Requires `generators: true`.
+    pub store_handles: bool,
+    /// Linker facts for `store_handles`: `(import source, exported
+    /// component, verified Borrowed prop)` triples.
+    pub store_link_facts: Vec<crate::store_handles::LinkFact>,
 }
 
 impl Default for CompileOptions {
@@ -147,6 +155,8 @@ impl Default for CompileOptions {
             renderers: Vec::new(),
             generators: true,
             host_fusion: false,
+            store_handles: false,
+            store_link_facts: Vec::new(),
         }
     }
 }
@@ -160,6 +170,8 @@ pub struct CompileOutput {
     pub css: Option<String>,
     /// Space-separated TSRX scope hashes, matching `@tsrx/core`.
     pub css_hash: Option<String>,
+    /// The module's store summary (JSON) when `store_handles` ran.
+    pub store_summary: Option<String>,
 }
 
 /// Compile one JavaScript or TypeScript module containing JSX.
@@ -252,6 +264,7 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
             source_map: None,
             css,
             css_hash,
+            store_summary: None,
         });
     }
 
@@ -271,6 +284,23 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
         crate::generators::transform_generators(&allocator, &mut program, source)
             .map_err(CompileError::transform)?;
     }
+
+    // Experimental (Track B slice 2, stage 2): store handles and the
+    // module's store summary, over the stage-1 path readers.
+    let store_summary = if options.store_handles && options.generators {
+        Some(
+            crate::store_handles::transform_store_handles(
+                &allocator,
+                &mut program,
+                source,
+                options.filename.as_deref(),
+                &options.store_link_facts,
+            )
+            .map_err(CompileError::transform)?,
+        )
+    } else {
+        None
+    };
 
     // Experimental: fuse `$()` blocks with their statically known host
     // (`createMemo($(fn))` → `createMemo(fn)` with direct accessor calls).
@@ -395,6 +425,7 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
         source_map,
         css,
         css_hash,
+        store_summary,
     })
 }
 

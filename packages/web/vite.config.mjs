@@ -26,7 +26,14 @@ export default defineConfig({
     environment: "jsdom",
     pool: "threads",
     globals: true,
-    exclude: ["**/node_modules/**", "wip_tests/**", "test/server/**", "test/hydration/**"],
+    exclude: [
+      "**/node_modules/**",
+      "wip_tests/**",
+      "test/server/**",
+      "test/hydration/**",
+      // compiled with `storeHandles` (vite.config.store-handles*.mjs)
+      "test/store-handles/**"
+    ],
     // Bench mode reads `benchmark.exclude` separately from `test.exclude`.
     // Without this, `pnpm bench` would pick up the SSR Tier-1 benches under
     // the jsdom env + client-build aliases, which silently produces wrong

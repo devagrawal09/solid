@@ -71,6 +71,12 @@ pub struct TransformOptions {
     /// consumed by a statically known host (`createMemo`, `createEffect`, …).
     /// Default `false`. Requires `generators: true`.
     pub host_fusion: Option<bool>,
+    /// Experimental: proxy-free store handles and the module store summary
+    /// (Track B slice 2, stage 2). Default `false`.
+    pub store_handles: Option<bool>,
+    /// Linker facts for `store_handles`, flattened by the JS wrapper to
+    /// `source\0export\0prop` strings.
+    pub store_link_facts: Option<Vec<String>>,
 }
 
 #[napi(object)]
@@ -81,6 +87,8 @@ pub struct TransformResult {
     pub css: Option<String>,
     /// Space-separated TSRX scope hashes. Absent when no stylesheet was emitted.
     pub css_hash: Option<String>,
+    /// The module's store summary (JSON) when `storeHandles` is on.
+    pub store_summary: Option<String>,
 }
 
 pub(crate) fn source_type_for_filename(filename: Option<&str>) -> Result<SourceType> {
