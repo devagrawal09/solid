@@ -325,6 +325,7 @@ fn core_options(options: TransformOptions) -> Result<CompileOptions> {
             .collect(),
         generators: options.generators.unwrap_or(true),
         host_fusion: options.host_fusion.unwrap_or(false),
+        block_proofs: options.block_proofs.unwrap_or(false),
     })
 }
 

@@ -109,6 +109,28 @@ export const BLOCK: unique symbol = Symbol("block");
 const BODY: unique symbol = Symbol("block-body");
 /** The owner in scope when the block was created (its defining component). */
 const OWNER: unique symbol = Symbol("block-owner");
+/** Compiler-emitted metadata flags (`$(body, flags)`). */
+const FLAGS: unique symbol = Symbol("block-flags");
+
+/**
+ * Block metadata flags. Each is a proof the compiler established about the
+ * lowered body from local facts (see the compiler's `block_proofs`); the
+ * runtime trusts a flag in production and verifies it in development.
+ */
+/** The body is in call form and its result is a plain value: never a
+ * generator, a thenable or an async iterable. `$` skips its result-shape
+ * probes; a reactive host may run the block on the `sync: true` path. */
+export const BLOCK_SYNC = 1;
+/** The body never raises a reactive status: no `raise` / `attempt`, no read
+ * of a source that can be pending or errored, no unknown call. A reactive
+ * host may run the block on the status-free path (`noThrow: true`). */
+export const BLOCK_NOTHROW = 2;
+
+/** The metadata flags a block was created with (0 for an unannotated block,
+ * or for a value that is not a block). */
+export function blockFlags(value: unknown): number {
+  return typeof value === "function" ? ((value as any)[FLAGS] ?? 0) : 0;
+}
 /** Phantom metadata slot — never present at runtime. */
 export declare const META: unique symbol;
 
@@ -792,10 +814,21 @@ function hasErrorBoundary(owner: Owner): boolean {
 // `Input` is inferred from the body's parameter only (`NoInfer` keeps the
 // host's contextual compute type from pinning it), so a parameterless body
 // stays usable by every host.
+//
+// `flags` is compiler-emitted block metadata (a bitfield; see BLOCK_SYNC /
+// BLOCK_NOTHROW). The runtime never guesses a flag: absent metadata is the
+// unoptimized block. A claimed proof is verified in dev builds.
 export function $<Input, Y extends Op, R>(
-  body: (input: Input) => Generator<Y, R, any>
+  body: (input: Input) => Generator<Y, R, any>,
+  flags?: number
 ): Block<R, ReadsOf<Y>, TasksOf<Y>, FailuresOf<Y>, WritesOf<Y>, NoInfer<Input>>;
-export function $(body: (input: any) => any): AnyBlock {
+export function $(body: (input: any) => any, flags: number = 0): AnyBlock {
+  // BLOCK_SYNC: the compiler lowered the body to call form and proved its
+  // result is a plain value (never a generator, thenable or async iterable),
+  // so the result-shape probes — an untracked, guard-lowered walk of the
+  // result's prototype chain on every run — are skipped. Dev builds keep
+  // the probes as a verification of the claim.
+  const sync = (flags & BLOCK_SYNC) !== 0;
   // Zero-arity on purpose: renderers and `flatten` unwrap a function child
   // only when `fn.length === 0` (an accessor), so a block returned from a
   // component must look like one. The input still arrives as the first
@@ -810,8 +843,14 @@ export function $(body: (input: any) => any): AnyBlock {
     const tokens: TokenTarget[] = (liveTokens = []);
     try {
       const result = body(args[0]);
-      if (isAsyncIterator(result)) throw asyncGeneratorError();
-      const value = isSyncIterator(result) ? drive(result, host) : result;
+      let value: unknown;
+      if (sync) {
+        if (__DEV__) verifySyncBlockResult(result);
+        value = result;
+      } else {
+        if (isAsyncIterator(result)) throw asyncGeneratorError();
+        value = isSyncIterator(result) ? drive(result, host) : result;
+      }
       checkTokens(tokens);
       return value;
     } finally {
@@ -822,6 +861,7 @@ export function $(body: (input: any) => any): AnyBlock {
   } as unknown as AnyBlock;
   (block as any)[BLOCK] = true;
   (block as any)[BODY] = body;
+  (block as any)[FLAGS] = flags;
   (block as any)[OWNER] = getOwner();
   (block as any)[Symbol.iterator] = function* () {
     return yield* blockGenerator(block, undefined);
@@ -1070,6 +1110,22 @@ function isThenableValue(value: unknown): boolean {
     typeof value === "object" &&
     probe(() => typeof (value as any).then === "function")
   );
+}
+
+/**
+ * Dev verification of BLOCK_SYNC: the probes production skips, run as a
+ * check. A generator result means the compiler flagged a body it did not
+ * lower; a thenable / async iterable result means the sync proof was wrong.
+ */
+function verifySyncBlockResult(result: unknown): void {
+  if (result === null || typeof result !== "object") return;
+  if (isAsyncIterator(result) || isSyncIterator(result) || isThenableValue(result)) {
+    throw new TypeError(
+      "[BLOCK_SYNC_VIOLATED] A `$` block flagged BLOCK_SYNC by the compiler produced a generator, " +
+        "Promise or async iterable. The compiler's synchrony proof was wrong for this block; " +
+        "production would hand the object to the host as a plain value"
+    );
+  }
 }
 
 function asyncGeneratorError(): TypeError {

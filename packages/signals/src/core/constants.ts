@@ -146,6 +146,20 @@ export const CONFIG_OVERRIDE_SUPERSEDED = 1 << 19;
  * enters pending fresh (a new flight from a settled state). */
 export const CONFIG_INPUTS_PUBLISHED = 1 << 21;
 
+/** Non-throwing computation (`noThrow: true`): the compute is proven never to
+ * raise a reactive status — no `raise`/`attempt`, no read of a source that can
+ * be pending or errored, no unknown call. Together with CONFIG_SYNC it selects
+ * the status-free recompute path (`recomputeStatusFree`), which carries only
+ * the value channel: no async-shape probe, no pending/error capture, no
+ * status clear, no settle sweeps. A throw that reaches the fast path anyway
+ * (the proof was wrong) is routed through the ordinary status channel and
+ * clears this bit — the node deoptimizes to the full path for good, and dev
+ * builds report `[NOTHROW_NODE_THREW]`. Emitted by the compiler for proven
+ * `$` blocks; ordinary code may set it deliberately. */
+export const CONFIG_NOTHROW = 1 << 22;
+/** Both proofs: the status-free fast path is eligible. */
+export const CONFIG_STATUS_FREE = CONFIG_SYNC | CONFIG_NOTHROW;
+
 export const STATUS_NONE = 0;
 export const STATUS_PENDING = 1 << 0;
 export const STATUS_ERROR = 1 << 1;

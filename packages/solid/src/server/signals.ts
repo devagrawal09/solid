@@ -44,10 +44,28 @@ export {
   write,
   call,
   perform,
+  blockFlags,
+  BLOCK_SYNC,
+  BLOCK_NOTHROW,
   isBlock,
   renderBlock,
   dispatchBlock
 } from "@solidjs/signals";
+
+/**
+ * Host options the compiler passes for a `$` block proven synchronous and
+ * non-throwing (Track A stage 1). On the server `sync` selects the pull-based
+ * `createSyncMemo` path (no async-shape probe, no processResult scaffolding);
+ * `noThrow` has no server meaning — the server runtime keeps no status
+ * channels to erase — and is ignored. Defined here rather than re-exported so
+ * the server graph never loads the client's status-free recompute module.
+ */
+export const statusFree: { readonly sync: true; readonly noThrow: true } = Object.freeze({
+  sync: true,
+  noThrow: true
+} as const);
+/** Host options for a block proven synchronous only (see `statusFree`). */
+export const syncOnly: { readonly sync: true } = Object.freeze({ sync: true } as const);
 
 // === Type re-exports ===
 

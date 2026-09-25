@@ -292,7 +292,8 @@ const nativeOptionKeys = new Set([
   "builtIns",
   "renderers",
   "generators",
-  "hostFusion"
+  "hostFusion",
+  "blockProofs"
 ]);
 
 function validateOptions(code, options) {

@@ -1075,16 +1075,32 @@ function hydrateSignalLike(coreFn: Function, fn: any, options?: any) {
   return coreFn((prev: any) => readSerializedOrCompute(fn, prev, options), options);
 }
 
+/**
+ * Track A (status-free fast path): the compiler's `sync` / `noThrow` proofs
+ * are facts about the COMPUTE. A node that adopts a serialized server value
+ * instead can be handed a thenable (async adoption, readHydratedValue), which
+ * the proofs never covered — so a proven node with serialized data waiting
+ * for it runs the full status-aware path. Nodes with nothing serialized run
+ * their compute and keep the fast path.
+ */
+function withoutFastPathIfSerialized(options: any): any {
+  if (options == null || !options.noThrow) return options;
+  const owner = getOwner();
+  return owner && sharedConfig.has!(peekNextChildId(owner))
+    ? { ...options, sync: false, noThrow: false }
+    : options;
+}
+
 function hydratedCreateMemo(compute: any, options?: any) {
   if (!sharedConfig.hydrating || options?.transparent) {
     return coreMemo(compute, options);
   }
-  return hydrateSignalLike(coreMemo, compute, options);
+  return hydrateSignalLike(coreMemo, compute, withoutFastPathIfSerialized(options));
 }
 
 function hydratedCreateSignal(fn?: any, second?: any) {
   if (typeof fn !== "function" || !sharedConfig.hydrating) return coreSignal(fn, second);
-  return hydrateSignalLike(coreSignal, fn, second);
+  return hydrateSignalLike(coreSignal, fn, withoutFastPathIfSerialized(second));
 }
 
 function hydratedCreateErrorBoundary<T, U>(
@@ -1208,11 +1224,11 @@ function hydratedEffect(coreFn: Function, compute: any, effectFn: any, options?:
 }
 
 function hydratedCreateRenderEffect(compute: any, effectFn: any, options?: any) {
-  return hydratedEffect(coreRenderEffect, compute, effectFn, options);
+  return hydratedEffect(coreRenderEffect, compute, effectFn, withoutFastPathIfSerialized(options));
 }
 
 function hydratedCreateEffect(compute: any, effectFn: any, options?: any) {
-  return hydratedEffect(coreEffect, compute, effectFn, options);
+  return hydratedEffect(coreEffect, compute, effectFn, withoutFastPathIfSerialized(options));
 }
 
 // --- Public API ---

@@ -42,6 +42,13 @@ export interface NodeOptions<T> {
   lazy?: boolean;
   sync?: boolean;
   /**
+   * Asserts the compute never raises a reactive status: no thrown error, no
+   * read of a pending or errored source. With `sync` it selects the
+   * status-free recompute path (CONFIG_NOTHROW). A throw that arrives anyway
+   * is routed normally and deoptimizes the node for good.
+   */
+  noThrow?: boolean;
+  /**
    * Commit #0. When present (checked with `in`, so an explicit `undefined`
    * counts), the node is born committed with this value instead of
    * STATUS_UNINITIALIZED: reads serve it everywhere, nothing suspends to

@@ -115,6 +115,13 @@ pub struct CompileOptions {
     /// hand-written Solid accessors. Requires `generators: true`. Default
     /// `false`.
     pub host_fusion: bool,
+    /// Experimental (Track A, stage 1): prove lowered `$` blocks synchronous
+    /// and / or non-throwing from local facts (and, in TypeScript modules,
+    /// declared primitive signal types), and emit the proofs as block
+    /// metadata (`$(fn, flags)`) and reactive-host options
+    /// (`createMemo(…, statusFree)`). Requires `generators: true`. Default
+    /// `false`. See `block_proofs.rs`.
+    pub block_proofs: bool,
 }
 
 impl Default for CompileOptions {
@@ -147,6 +154,7 @@ impl Default for CompileOptions {
             renderers: Vec::new(),
             generators: true,
             host_fusion: false,
+            block_proofs: false,
         }
     }
 }
@@ -268,7 +276,13 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
     // Before JSX lowering: `yield*` reads inside JSX expression containers
     // must be ordinary calls by the time the JSX transform classifies them.
     if options.generators {
-        crate::generators::transform_generators(&allocator, &mut program, source)
+        let proofs = options
+            .block_proofs
+            .then(|| crate::generators::ProofConfig {
+                typed: source_type.is_typescript(),
+                jsx_plain: matches!(options.generate, Generate::Dom | Generate::Ssr),
+            });
+        crate::generators::transform_generators(&allocator, &mut program, source, proofs)
             .map_err(CompileError::transform)?;
     }
 

@@ -27,6 +27,8 @@ import {
   CONFIG_OVERRIDE_SUPERSEDED,
   CONFIG_OWNED_WRITE,
   CONFIG_SLOT_NODE,
+  CONFIG_NOTHROW,
+  CONFIG_STATUS_FREE,
   CONFIG_SYNC,
   CONFIG_TRANSPARENT,
   defaultContext,
@@ -150,6 +152,18 @@ export function setLatestReadActive(v: boolean): void {
 export function setContextInternal(v: Owner | null): void {
   context = v;
 }
+/** @internal status-free glue: swap `tracking`, returning the previous value. */
+export function swapTracking(v: boolean): boolean {
+  const prev = tracking;
+  tracking = v;
+  return prev;
+}
+/** @internal status-free glue: swap `stale`, returning the previous value. */
+export function swapStale(v: boolean): boolean {
+  const prev = stale;
+  stale = v;
+  return prev;
+}
 export let stale = false;
 export let pendingCheckActive = false;
 export let latestReadActive = false;
@@ -219,6 +233,15 @@ export function clearSnapshots(): void {
 }
 
 export function recompute(el: Computed<any>, create: boolean = false): void {
+  // Status-free path (Track A stage 1): both proofs present and the path is
+  // installed (status-free.ts, pulled in by compiled `$` output). The hook
+  // declines outside the plain world; then the full path below runs.
+  if (
+    (el._config & CONFIG_STATUS_FREE) === CONFIG_STATUS_FREE &&
+    GlobalQueue._recomputeStatusFree !== null &&
+    GlobalQueue._recomputeStatusFree(el, create)
+  )
+    return;
   // §12d: any recompute can clean a marked subscriber — invalidate skips.
   bumpNotifyEpoch();
   const isEffect = (el as any)._type;
@@ -732,6 +755,7 @@ export function computed<T>(
           (options?.ownedWrite ? CONFIG_OWNED_WRITE : 0) |
           (!context || options?.lazy ? CONFIG_AUTO_DISPOSE : 0) |
           (options?.sync ? CONFIG_SYNC : 0) |
+          (options?.noThrow ? CONFIG_NOTHROW : 0) |
           (options?._noSnapshot ? CONFIG_NO_SNAPSHOT : 0) |
           (snapshotCaptureActive && ownerInSnapshotScope(context) ? CONFIG_IN_SNAPSHOT_SCOPE : 0),
         _equals: options?.equals ?? isEqual,
@@ -770,6 +794,7 @@ export function computed<T>(
           (options?.ownedWrite ? CONFIG_OWNED_WRITE : 0) |
           (!context || options?.lazy ? CONFIG_AUTO_DISPOSE : 0) |
           (options?.sync ? CONFIG_SYNC : 0) |
+          (options?.noThrow ? CONFIG_NOTHROW : 0) |
           (options?._noSnapshot ? CONFIG_NO_SNAPSHOT : 0) |
           (snapshotCaptureActive && ownerInSnapshotScope(context) ? CONFIG_IN_SNAPSHOT_SCOPE : 0),
         _equals: options?.equals ?? isEqual,
@@ -867,6 +892,7 @@ export function createEffectNode<T>(
           (transparent ? CONFIG_TRANSPARENT : 0) |
           (options?.ownedWrite ? CONFIG_OWNED_WRITE : 0) |
           (options?.sync ? CONFIG_SYNC : 0) |
+          (options?.noThrow ? CONFIG_NOTHROW : 0) |
           (options?._extraConfig ?? 0) |
           (snapshotCaptureActive && ownerInSnapshotScope(context) ? CONFIG_IN_SNAPSHOT_SCOPE : 0),
         _equals: false as unknown as Computed<T>["_equals"],
@@ -911,6 +937,7 @@ export function createEffectNode<T>(
           (transparent ? CONFIG_TRANSPARENT : 0) |
           (options?.ownedWrite ? CONFIG_OWNED_WRITE : 0) |
           (options?.sync ? CONFIG_SYNC : 0) |
+          (options?.noThrow ? CONFIG_NOTHROW : 0) |
           (options?._extraConfig ?? 0) |
           (snapshotCaptureActive && ownerInSnapshotScope(context) ? CONFIG_IN_SNAPSHOT_SCOPE : 0),
         _equals: false as unknown as Computed<T>["_equals"],
