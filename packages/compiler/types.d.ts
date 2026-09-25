@@ -55,6 +55,11 @@ export interface TransformOptions {
    * consumed by a statically known host (`createMemo`, `createEffect`, …),
    * producing output identical to hand-written Solid. Requires `generators:
    * true`. Default `false`.
+   *
+   * Strict `$(fn)` markers (a non-generator callback) are always compiled
+   * when `generators` is on: the marker is erased for its statically known
+   * host and the graph lands in `TransformResult.strictBlocks`, or the
+   * transform fails with a `[STRICT_…]` diagnostic.
    */
   hostFusion?: boolean;
 }
@@ -72,6 +77,13 @@ export interface TransformResult {
   css?: string | null;
   /** Space-separated TSRX scope hashes. */
   cssHash?: string | null;
+  /**
+   * The graph summary of every strict `$(fn)` callback the module compiled
+   * (see `analyzeStrictBlocks`). Absent when the module has none. A marked
+   * callback that cannot be compiled fails the transform with a
+   * `[STRICT_…]` error instead.
+   */
+  strictBlocks?: StrictAnalysis;
 }
 
 export function transform(code: string, options?: TransformOptions | null): TransformResult;
@@ -83,6 +95,118 @@ export function transformAsync(
 export interface ProjectTsrxForTypecheckOptions {
   filename?: string;
 }
+
+/** A source location: UTF-16 offsets plus 1-based line and column. */
+export interface StrictSite {
+  start: number;
+  end: number;
+  line: number;
+  column: number;
+}
+export interface StrictDiagnostic {
+  /** `STRICT_HOST_UNKNOWN`, `STRICT_CAPABILITY_ESCAPE`, `STRICT_READ_AFTER_AWAIT`, … */
+  code: string;
+  /** What the unsupported edge is and how to fix it. */
+  message: string;
+  site: StrictSite;
+}
+/** `exact`: every normal run performs it; `bounded`: a possible read. */
+export type StrictCertainty = "exact" | "bounded";
+export interface StrictRead {
+  kind: "signal" | "store" | "prop";
+  root: string;
+  path: string[];
+  /** `path`: the path's value; `structural`: a method called on the path. */
+  access: "path" | "structural";
+  certainty: StrictCertainty;
+  /** False in event hosts, inside `untrack`, and after the first `await`. */
+  tracked: boolean;
+  afterAwait: boolean;
+  site: StrictSite;
+}
+export interface StrictWrite {
+  kind: "signal" | "store";
+  target: string;
+  certainty: StrictCertainty;
+  afterAwait: boolean;
+  site: StrictSite;
+}
+export interface StrictCreation {
+  factory: string;
+  /** The callback handed to the factory is itself a marked callback. */
+  marked: boolean;
+  certainty: StrictCertainty;
+  afterAwait: boolean;
+  site: StrictSite;
+}
+/** A call the compiler has no summary for (allowed with plain arguments). */
+export interface StrictCall {
+  callee: string;
+  certainty: StrictCertainty;
+  afterAwait: boolean;
+  site: StrictSite;
+}
+/** A use of an unsummarized binding (an import, a context value, …). */
+export interface StrictOpaque {
+  name: string;
+  site: StrictSite;
+}
+/** A capability that left the callback; always paired with a diagnostic. */
+export interface StrictEscape {
+  kind: string;
+  name: string;
+  site: StrictSite;
+}
+export interface StrictHost {
+  /** `unknown` when host resolution failed (see `diagnostics`). */
+  kind: "memo" | "signal" | "effect" | "render-effect" | "event" | "unknown";
+  factory: string | null;
+  events: string[];
+  /** Every site that consumes the callback. */
+  sites: StrictSite[];
+}
+export interface StrictBlockSummary {
+  /** `<filename>#<index>` in source order. */
+  id: string;
+  host: StrictHost;
+  /** The `$(…)` call. */
+  marker: StrictSite;
+  /** The callback expression. */
+  callback: StrictSite;
+  async: boolean;
+  awaits: StrictSite[];
+  reads: StrictRead[];
+  writes: StrictWrite[];
+  creations: StrictCreation[];
+  calls: StrictCall[];
+  opaque: StrictOpaque[];
+  escapes: StrictEscape[];
+  /**
+   * `exact`: the listed reads are all the callback's reads and every run
+   * performs them; `bounded`: the listed reads cover every read through a
+   * known root, but some are conditional and/or unsummarized `calls` /
+   * `opaque` accesses may read more (runtime tracking stays authoritative);
+   * `unknown`: refused (see `diagnostics`).
+   */
+  completeness: "exact" | "bounded" | "unknown";
+  diagnostics: StrictDiagnostic[];
+}
+export interface StrictAnalysis {
+  version: 1;
+  blocks: StrictBlockSummary[];
+  /** Every diagnostic, in source order. */
+  diagnostics: StrictDiagnostic[];
+}
+/**
+ * Analyze the strict (non-generator) `$(fn)` callbacks of a module without
+ * rewriting it: the graph summary `solid-tsc` reports alongside TypeScript
+ * diagnostics and an editor language service can consume. Diagnostics are
+ * returned, not thrown; `transform()` throws the first one.
+ */
+export function analyzeStrictBlocks(
+  code: string,
+  options?: { filename?: string } | null
+): StrictAnalysis;
 
 export interface TsrxTypecheckEmbeddedRegion {
   kind: "css" | "script";

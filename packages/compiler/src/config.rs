@@ -81,6 +81,9 @@ pub struct TransformResult {
     pub css: Option<String>,
     /// Space-separated TSRX scope hashes. Absent when no stylesheet was emitted.
     pub css_hash: Option<String>,
+    /// JSON summary of the strict `$(fn)` callbacks the module compiled
+    /// (`{ version, blocks, diagnostics }`). Absent when there were none.
+    pub strict_blocks: Option<String>,
 }
 
 pub(crate) fn source_type_for_filename(filename: Option<&str>) -> Result<SourceType> {

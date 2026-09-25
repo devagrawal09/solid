@@ -2,7 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { check, formatDiagnostics, mapToSource, run } from "../src/index.js";
+import {
+  analyzeStrictFile,
+  check,
+  formatDiagnostics,
+  mapToSource,
+  run,
+  shouldAnalyzeStrict
+} from "../src/index.js";
 
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const project = name => path.join(fixtures, name, "tsconfig.json");
@@ -39,12 +46,11 @@ describe("solid-tsc", () => {
       )
     );
     // Refused forms keep TypeScript's own diagnosis of the authored code: a
-    // string operand makes the block yield strings (reported at the block),
-    // a number operand is not iterable (reported at the operand).
+    // string operand makes the block yield strings, so no `$` overload (block
+    // or strict callback) accepts it (reported at the block); a number operand
+    // is not iterable (reported at the operand).
     expect(lines).toContainEqual(
-      expect.stringMatching(
-        /^src\/bad\.tsx\(15,26\): error TS2345: Argument of type '\(\) => Generator<string/
-      )
+      expect.stringMatching(/^src\/bad\.tsx\(15,26\): error TS2769: No overload matches this call/)
     );
     expect(lines).toContainEqual(expect.stringMatching(/^src\/bad\.tsx\(24,17\): error TS2488/));
     expect(result.diagnostics).toHaveLength(4);
@@ -76,6 +82,104 @@ describe("solid-tsc", () => {
     expect(mapToSource(edits, 50)).toBe(20); // after the import: shifted by 30
     expect(mapToSource(edits, 100)).toBe(60); // inside the rewrite: the operand
     expect(mapToSource(edits, 130)).toBe(85); // after both: shifted by 30 + 15
+  });
+
+  it("accepts strict markers as ordinary TypeScript and reports their graph", () => {
+    const result = check({ project: project("strict") });
+    expect(messages(result, fixtures)).toBe("");
+    expect(result.diagnostics).toHaveLength(0);
+    // No `yield*`: nothing is projected; the strict analysis still runs.
+    expect([...result.projections.keys()]).toEqual([]);
+    const [[file, blocks]] = [...result.strictBlocks.entries()];
+    expect(path.basename(file)).toBe("app.tsx");
+    expect(blocks.map(block => [block.host.kind, block.completeness])).toEqual([
+      ["memo", "exact"],
+      ["memo", "bounded"],
+      ["effect", "exact"],
+      ["memo", "exact"],
+      ["event", "bounded"],
+      ["event", "exact"]
+    ]);
+    const [, user, , label, increment] = blocks;
+    expect(user.async).toBe(true);
+    expect(user.reads.map(read => [read.kind, read.path.join("."), read.afterAwait])).toEqual([
+      ["store", "user.name", false],
+      ["store", "items.length", false]
+    ]);
+    expect(label.reads.map(read => [read.kind, read.root, read.path.join(".")])).toEqual([
+      ["prop", "props", "selected.name"],
+      ["prop", "props", "step"],
+      ["signal", "count", ""]
+    ]);
+    expect(increment.writes.map(write => write.target)).toEqual(["setCount", "setStore"]);
+    expect(increment.host.events).toEqual(["click"]);
+  });
+
+  it("reports strict diagnostics next to TypeScript's, at authored positions", () => {
+    const result = check({ project: project("strict-error") });
+    const lines = messages(result, path.join(fixtures, "strict-error")).split("\n");
+    // TypeScript's own error inside a strict callback keeps its column.
+    expect(lines).toContainEqual(
+      expect.stringMatching(
+        /^src\/bad\.tsx\(9,11\): error TS2322: Type 'number' is not assignable to type 'string'/
+      )
+    );
+    // The compiler's strict diagnostics: code, edge, fix, position.
+    expect(lines).toContainEqual(
+      expect.stringMatching(
+        /^src\/bad\.tsx\(15,52\): error SOLID90003: \[STRICT_CAPABILITY_ESCAPE\] `count` is an accessor and is passed to `register`.*read its value with `count\(\)`/
+      )
+    );
+    expect(lines).toContainEqual(
+      expect.stringMatching(
+        /^src\/bad\.tsx\(20,5\): error SOLID90005: \[STRICT_WRITE_IN_REACTIVE_HOST\] `setCount` is written inside a `memo` host/
+      )
+    );
+    expect(lines).toContainEqual(
+      expect.stringMatching(
+        /^src\/bad\.tsx\(26,16\): error SOLID90001: \[STRICT_HOST_UNKNOWN\] `lonely` is never consumed/
+      )
+    );
+    expect(result.diagnostics).toHaveLength(4);
+    // Every summary is still reported (refused blocks are `unknown`).
+    const [[, blocks]] = [...result.strictBlocks.entries()];
+    expect(blocks.map(block => block.completeness)).toEqual([
+      "exact",
+      "unknown",
+      "unknown",
+      "unknown"
+    ]);
+    expect(run(["-p", project("strict-error")], { log: () => {}, cwd: fixtures })).toBe(1);
+  });
+
+  it("exposes the per-file analysis an editor language service consumes", () => {
+    const text =
+      'import { $, createMemo, createSignal } from "solid-js";\nconst [count] = createSignal(1);\nexport const m = createMemo($(() => count()));\nconst bad = $(() => count());\n';
+    expect(shouldAnalyzeStrict(text)).toBe(true);
+    expect(
+      shouldAnalyzeStrict(
+        'import { createMemo } from "solid-js";\nconst m = createMemo(() => 1);\n'
+      )
+    ).toBe(false);
+    const { blocks, diagnostics } = analyzeStrictFile("/virtual/app.tsx", text);
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0].reads[0]).toEqual(
+      expect.objectContaining({ kind: "signal", root: "count", tracked: true, certainty: "exact" })
+    );
+    // Sites are authored UTF-16 offsets: usable directly by a language service.
+    expect(text.slice(blocks[0].marker.start, blocks[0].marker.end)).toBe("$(() => count())");
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toEqual(
+      expect.objectContaining({
+        code: 90001,
+        source: "solid-strict",
+        start: text.indexOf("$(() => count());\n")
+      })
+    );
+    expect(diagnostics[0].file.getLineAndCharacterOfPosition(diagnostics[0].start)).toEqual({
+      line: 3,
+      character: 12
+    });
   });
 
   it("runs as a tsc-shaped CLI", () => {

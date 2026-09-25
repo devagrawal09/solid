@@ -1,0 +1,7 @@
+---
+"@solidjs/signals": minor
+"solid-js": minor
+"@solidjs/compiler": minor
+---
+
+Add strict, generator-free `$(fn)` callbacks (experimental). `$` with an ordinary arrow or function expression — `createMemo($(() => count() * 2))`, `createEffect($(() => count()), log)`, `createSignal($(() => …))`, `<button onClick={$(() => setCount(v => v + 1))} />`, or a `const` used only in those positions — is a compilation marker: the compiler resolves the statically known host, analyzes the body (accessor calls are reads, known setters are writes, known factories are owned creations, `await` is an ordinary suspension whose preceding reads are the parent's dependencies), records the graph in `TransformResult.strictBlocks` / `analyzeStrictBlocks()` with `exact` / `bounded` / `unknown` completeness, and erases the marker so the host receives the plain callback. Escaped capabilities (an accessor, setter, store, props, or a closure capturing one passed to unsummarized code), writes in reactive hosts, reactive reads after `await`, creation after `await`, `useContext`, ambiguous or unknown hosts fail the build with a source-located `[STRICT_…]` diagnostic. `$(fn)` types as `StrictCallback<Input, R>`; dev builds refuse an uncompiled marker (`[STRICT_NOT_COMPILED]`). `solid-tsc` reports the strict diagnostics next to TypeScript's and exposes `analyzeStrictFile` for editor tooling. Generator blocks are unchanged.

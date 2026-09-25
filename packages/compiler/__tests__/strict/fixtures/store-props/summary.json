@@ -1,0 +1,191 @@
+{
+  "version": 1,
+  "blocks": [
+    {
+      "id": "src/store-props.tsx#0",
+      "host": {
+        "kind": "memo",
+        "factory": "createMemo",
+        "events": [],
+        "sites": [
+          {
+            "start": 513,
+            "end": 1000,
+            "line": 18,
+            "column": 5
+          }
+        ]
+      },
+      "marker": {
+        "start": 513,
+        "end": 1000,
+        "line": 18,
+        "column": 5
+      },
+      "callback": {
+        "start": 515,
+        "end": 999,
+        "line": 18,
+        "column": 7
+      },
+      "async": false,
+      "awaits": [],
+      "reads": [
+        {
+          "kind": "store",
+          "root": "store",
+          "path": [
+            "user",
+            "name"
+          ],
+          "access": "path",
+          "certainty": "exact",
+          "tracked": true,
+          "afterAwait": false,
+          "site": {
+            "start": 542,
+            "end": 551,
+            "line": 19,
+            "column": 20
+          }
+        },
+        {
+          "kind": "store",
+          "root": "store",
+          "path": [
+            "items",
+            "[…]"
+          ],
+          "access": "path",
+          "certainty": "exact",
+          "tracked": true,
+          "afterAwait": false,
+          "site": {
+            "start": 575,
+            "end": 595,
+            "line": 20,
+            "column": 23
+          }
+        },
+        {
+          "kind": "signal",
+          "root": "index",
+          "path": [],
+          "access": "path",
+          "certainty": "exact",
+          "tracked": true,
+          "afterAwait": false,
+          "site": {
+            "start": 587,
+            "end": 594,
+            "line": 20,
+            "column": 35
+          }
+        },
+        {
+          "kind": "prop",
+          "root": "props",
+          "path": [
+            "filter"
+          ],
+          "access": "path",
+          "certainty": "exact",
+          "tracked": true,
+          "afterAwait": false,
+          "site": {
+            "start": 801,
+            "end": 813,
+            "line": 24,
+            "column": 22
+          }
+        },
+        {
+          "kind": "store",
+          "root": "store",
+          "path": [
+            "items",
+            "filter"
+          ],
+          "access": "structural",
+          "certainty": "exact",
+          "tracked": true,
+          "afterAwait": false,
+          "site": {
+            "start": 834,
+            "end": 852,
+            "line": 25,
+            "column": 20
+          }
+        },
+        {
+          "kind": "store",
+          "root": "store",
+          "path": [
+            "items",
+            "[…]",
+            "name"
+          ],
+          "access": "path",
+          "certainty": "bounded",
+          "tracked": true,
+          "afterAwait": false,
+          "site": {
+            "start": 929,
+            "end": 942,
+            "line": 26,
+            "column": 26
+          }
+        },
+        {
+          "kind": "prop",
+          "root": "props",
+          "path": [
+            "selected",
+            "id"
+          ],
+          "access": "path",
+          "certainty": "exact",
+          "tracked": true,
+          "afterAwait": false,
+          "site": {
+            "start": 978,
+            "end": 989,
+            "line": 26,
+            "column": 75
+          }
+        }
+      ],
+      "writes": [],
+      "creations": [],
+      "calls": [
+        {
+          "callee": "store.items.filter",
+          "certainty": "exact",
+          "afterAwait": false,
+          "site": {
+            "start": 834,
+            "end": 902,
+            "line": 25,
+            "column": 20
+          }
+        },
+        {
+          "callee": "item.name.includes",
+          "certainty": "bounded",
+          "afterAwait": false,
+          "site": {
+            "start": 875,
+            "end": 901,
+            "line": 25,
+            "column": 61
+          }
+        }
+      ],
+      "opaque": [],
+      "escapes": [],
+      "completeness": "bounded",
+      "diagnostics": []
+    }
+  ],
+  "diagnostics": []
+}

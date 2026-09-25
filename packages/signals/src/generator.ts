@@ -111,6 +111,8 @@ const BODY: unique symbol = Symbol("block-body");
 const OWNER: unique symbol = Symbol("block-owner");
 /** Phantom metadata slot — never present at runtime. */
 export declare const META: unique symbol;
+/** Phantom brand of a strict (non-generator) marked callback — never present at runtime. */
+export declare const STRICT: unique symbol;
 
 export type ErrorClass<E> = abstract new (...args: any[]) => E;
 export type AnySetter = (value: any) => any;
@@ -753,11 +755,28 @@ function hasErrorBoundary(owner: Owner): boolean {
 // --- $ ---------------------------------------------------------------------------------
 
 /**
+ * A strict marked callback: `$(fn)` with an ordinary (non-generator) arrow or
+ * function expression. The marker is a *compile-time* request — the
+ * compiler analyzes `fn` for the host that consumes it (`createMemo`,
+ * `createSignal(fn)`, `createEffect` / `createRenderEffect` compute, a DOM
+ * `on*` attribute), records its graph in a sidecar summary, and erases the
+ * marker, so the host receives the ordinary callback. The brand only marks
+ * the request: stock TypeScript cannot see the callback's reads, writes or
+ * escapes, so the graph lives in the compiler / `solid-tsc` summary, never
+ * in this type. Uncompiled, dev builds refuse the marker (`[STRICT_NOT_COMPILED]`).
+ */
+export type StrictCallback<Input, R> = ((input: Input) => R) & { readonly [STRICT]: true };
+
+/**
  * Build a typed block from a generator body. See the module comment for the
  * contract. The compiler lowers `$(function* () { … yield* x … })` to
  * `$(function () { … perform(x) … })` — a body in call form that `$` runs
  * under the same strict scope and host checks — so compiled output has no
  * generator cost.
+ *
+ * With a non-generator callback, `$` is the strict compilation marker
+ * (`StrictCallback`): compiled away by `@solidjs/compiler`; refused at
+ * runtime in dev when it was not compiled.
  */
 // `Input` is inferred from the body's parameter only (`NoInfer` keeps the
 // host's contextual compute type from pinning it), so a parameterless body
@@ -765,7 +784,25 @@ function hasErrorBoundary(owner: Owner): boolean {
 export function $<Input, Y extends Op, R>(
   body: (input: Input) => Generator<Y, R, any>
 ): Block<R, ReadsOf<Y>, TasksOf<Y>, FailuresOf<Y>, WritesOf<Y>, NoInfer<Input>>;
-export function $(body: (input: any) => any): AnyBlock {
+// The marker form. A generator body that is not a block (a bare `yield`, an
+// async generator) is not a strict callback either: the parameter type
+// collapses to `never` so the argument is refused. `NoInfer` keeps the
+// host's contextual compute type from pinning `Input` (as above), so the
+// event parameter of a handler is annotated at the callback.
+export function $<Input, R>(
+  body: ((input: Input) => R) &
+    ([R] extends [Generator<any, any, any> | AsyncGenerator<any, any, any>] ? never : unknown)
+): StrictCallback<NoInfer<Input>, R>;
+export function $(body: (input: any) => any): AnyBlock | StrictCallback<any, any> {
+  if (__DEV__ && typeof body === "function" && (body as any).prototype === undefined) {
+    // Arrow functions and async functions have no `prototype`; generator
+    // functions and the compiler's lowered `function` bodies do. A marker
+    // reaching the runtime was not compiled: it must never run under the
+    // generator driver or as a plain block, so fail loudly.
+    throw new TypeError(
+      "[STRICT_NOT_COMPILED] `$` received a plain (arrow or async) callback at runtime. A non-generator callback is a strict compilation marker: @solidjs/compiler analyzes it for its host and erases the marker. Compile the module with the Solid compiler (`generators` on), or write a generator block (`$(function* () { … })`)"
+    );
+  }
   // Zero-arity on purpose: renderers and `flatten` unwrap a function child
   // only when `fn.length === 0` (an accessor), so a block returned from a
   // component must look like one. The input still arrives as the first

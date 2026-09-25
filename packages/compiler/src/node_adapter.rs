@@ -73,6 +73,26 @@ pub fn project_blocks_for_typecheck(
     })
 }
 
+#[napi(object)]
+#[derive(Default)]
+pub struct AnalyzeStrictBlocksOptions {
+    pub filename: Option<String>,
+}
+
+/// Strict `$(fn)` callback analysis without rewriting: the JSON summary
+/// (`{ version, blocks, diagnostics }`) `solid-tsc` and editor tooling
+/// consume. Diagnostics are reported, not thrown; a parse error is thrown.
+#[napi]
+pub fn analyze_strict_blocks(
+    code: String,
+    options: Option<AnalyzeStrictBlocksOptions>,
+) -> Result<String> {
+    let options = options.unwrap_or_default();
+    crate::strict::analyze_strict_blocks(&code, options.filename.as_deref())
+        .map(|analysis| analysis.to_json())
+        .map_err(|error| Error::from_reason(error.to_string()))
+}
+
 #[cfg(feature = "tsrx")]
 #[napi(object)]
 pub struct TsrxTypecheckEmbeddedRegion {
@@ -267,6 +287,7 @@ pub fn transform(code: String, options: Option<TransformOptions>) -> Result<Tran
         map: output.source_map,
         css: output.css,
         css_hash: output.css_hash,
+        strict_blocks: output.strict_blocks,
     })
 }
 
@@ -362,6 +383,7 @@ fn legacy_preflight(
             map: None,
             css: None,
             css_hash: None,
+            strict_blocks: None,
         });
     }
     Err(Error::from_reason(validation_error))

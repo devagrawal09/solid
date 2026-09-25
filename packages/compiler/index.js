@@ -16,6 +16,11 @@ function transform(code, options) {
     code: result.code,
     map: result.map ?? null
   };
+  // Sidecar: the strict `$(fn)` callback graph (absent when the module has
+  // no marked callback). The native side serializes it as JSON.
+  if (result.strictBlocks != null) {
+    output.strictBlocks = JSON.parse(result.strictBlocks);
+  }
   // Preserve the established JSX result shape. Native TSRX transforms always
   // return a CSS string (including `""` when no styles are present), which
   // makes the sidecar fields a route-specific extension.
@@ -28,6 +33,14 @@ function transform(code, options) {
 
 function transformAsync(code, options) {
   return Promise.resolve().then(() => transform(code, options));
+}
+
+function analyzeStrictBlocks(code, options) {
+  if (typeof code !== "string") {
+    throw new TypeError("@solidjs/compiler analyzeStrictBlocks() expects source code as a string");
+  }
+  const nativeOptions = validateTypecheckProjectionOptions(options);
+  return JSON.parse(native.analyzeStrictBlocks(code, nativeOptions));
 }
 
 function projectBlocksForTypecheck(code, options) {
@@ -471,6 +484,7 @@ module.exports = {
   transformAsync,
   projectTsrxForTypecheck,
   projectBlocksForTypecheck,
+  analyzeStrictBlocks,
   transformDirectives,
   transformDirectivesAsync,
   transformLazy,

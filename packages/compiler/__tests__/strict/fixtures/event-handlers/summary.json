@@ -1,0 +1,326 @@
+{
+  "version": 1,
+  "blocks": [
+    {
+      "id": "src/event-handlers.tsx#0",
+      "host": {
+        "kind": "event",
+        "factory": null,
+        "events": [
+          "click"
+        ],
+        "sites": [
+          {
+            "start": 1103,
+            "end": 1112,
+            "line": 32,
+            "column": 38
+          },
+          {
+            "start": 1218,
+            "end": 1227,
+            "line": 35,
+            "column": 38
+          }
+        ]
+      },
+      "marker": {
+        "start": 403,
+        "end": 440,
+        "line": 9,
+        "column": 21
+      },
+      "callback": {
+        "start": 405,
+        "end": 439,
+        "line": 9,
+        "column": 23
+      },
+      "async": false,
+      "awaits": [],
+      "reads": [],
+      "writes": [
+        {
+          "kind": "signal",
+          "target": "setCount",
+          "certainty": "exact",
+          "afterAwait": false,
+          "site": {
+            "start": 411,
+            "end": 439,
+            "line": 9,
+            "column": 29
+          }
+        }
+      ],
+      "creations": [],
+      "calls": [],
+      "opaque": [],
+      "escapes": [],
+      "completeness": "exact",
+      "diagnostics": []
+    },
+    {
+      "id": "src/event-handlers.tsx#1",
+      "host": {
+        "kind": "event",
+        "factory": null,
+        "events": [
+          "submit"
+        ],
+        "sites": [
+          {
+            "start": 830,
+            "end": 834,
+            "line": 23,
+            "column": 21
+          }
+        ]
+      },
+      "marker": {
+        "start": 533,
+        "end": 796,
+        "line": 12,
+        "column": 16
+      },
+      "callback": {
+        "start": 535,
+        "end": 795,
+        "line": 12,
+        "column": 18
+      },
+      "async": true,
+      "awaits": [
+        {
+          "start": 678,
+          "end": 707,
+          "line": 15,
+          "column": 16
+        }
+      ],
+      "reads": [
+        {
+          "kind": "store",
+          "root": "store",
+          "path": [
+            "draft"
+          ],
+          "access": "path",
+          "certainty": "exact",
+          "tracked": false,
+          "afterAwait": false,
+          "site": {
+            "start": 650,
+            "end": 661,
+            "line": 14,
+            "column": 19
+          }
+        },
+        {
+          "kind": "signal",
+          "root": "count",
+          "path": [],
+          "access": "path",
+          "certainty": "exact",
+          "tracked": false,
+          "afterAwait": false,
+          "site": {
+            "start": 699,
+            "end": 706,
+            "line": 15,
+            "column": 37
+          }
+        },
+        {
+          "kind": "prop",
+          "root": "props",
+          "path": [
+            "onSaved"
+          ],
+          "access": "structural",
+          "certainty": "exact",
+          "tracked": false,
+          "afterAwait": true,
+          "site": {
+            "start": 773,
+            "end": 786,
+            "line": 19,
+            "column": 5
+          }
+        }
+      ],
+      "writes": [
+        {
+          "kind": "store",
+          "target": "setStore",
+          "certainty": "exact",
+          "afterAwait": true,
+          "site": {
+            "start": 713,
+            "end": 767,
+            "line": 16,
+            "column": 5
+          }
+        }
+      ],
+      "creations": [],
+      "calls": [
+        {
+          "callee": "event.preventDefault",
+          "certainty": "exact",
+          "afterAwait": false,
+          "site": {
+            "start": 608,
+            "end": 630,
+            "line": 13,
+            "column": 5
+          }
+        },
+        {
+          "callee": "persist",
+          "certainty": "exact",
+          "afterAwait": false,
+          "site": {
+            "start": 684,
+            "end": 707,
+            "line": 15,
+            "column": 22
+          }
+        },
+        {
+          "callee": "state.saved.push",
+          "certainty": "bounded",
+          "afterAwait": false,
+          "site": {
+            "start": 739,
+            "end": 759,
+            "line": 17,
+            "column": 7
+          }
+        },
+        {
+          "callee": "props.onSaved",
+          "certainty": "exact",
+          "afterAwait": true,
+          "site": {
+            "start": 773,
+            "end": 790,
+            "line": 19,
+            "column": 5
+          }
+        }
+      ],
+      "opaque": [],
+      "escapes": [],
+      "completeness": "bounded",
+      "diagnostics": []
+    },
+    {
+      "id": "src/event-handlers.tsx#2",
+      "host": {
+        "kind": "event",
+        "factory": null,
+        "events": [
+          "input"
+        ],
+        "sites": [
+          {
+            "start": 895,
+            "end": 1055,
+            "line": 26,
+            "column": 18
+          }
+        ]
+      },
+      "marker": {
+        "start": 895,
+        "end": 1055,
+        "line": 26,
+        "column": 18
+      },
+      "callback": {
+        "start": 897,
+        "end": 1045,
+        "line": 26,
+        "column": 20
+      },
+      "async": false,
+      "awaits": [],
+      "reads": [],
+      "writes": [
+        {
+          "kind": "store",
+          "target": "setStore",
+          "certainty": "exact",
+          "afterAwait": false,
+          "site": {
+            "start": 964,
+            "end": 1045,
+            "line": 27,
+            "column": 11
+          }
+        }
+      ],
+      "creations": [],
+      "calls": [],
+      "opaque": [],
+      "escapes": [],
+      "completeness": "exact",
+      "diagnostics": []
+    },
+    {
+      "id": "src/event-handlers.tsx#3",
+      "host": {
+        "kind": "event",
+        "factory": null,
+        "events": [
+          "reset"
+        ],
+        "sites": [
+          {
+            "start": 1124,
+            "end": 1144,
+            "line": 32,
+            "column": 59
+          }
+        ]
+      },
+      "marker": {
+        "start": 1124,
+        "end": 1144,
+        "line": 32,
+        "column": 59
+      },
+      "callback": {
+        "start": 1126,
+        "end": 1143,
+        "line": 32,
+        "column": 61
+      },
+      "async": false,
+      "awaits": [],
+      "reads": [],
+      "writes": [
+        {
+          "kind": "signal",
+          "target": "setCount",
+          "certainty": "exact",
+          "afterAwait": false,
+          "site": {
+            "start": 1132,
+            "end": 1143,
+            "line": 32,
+            "column": 67
+          }
+        }
+      ],
+      "creations": [],
+      "calls": [],
+      "opaque": [],
+      "escapes": [],
+      "completeness": "exact",
+      "diagnostics": []
+    }
+  ],
+  "diagnostics": []
+}

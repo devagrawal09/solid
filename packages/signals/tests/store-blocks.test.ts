@@ -232,7 +232,9 @@ describe("readStore in reactive blocks", () => {
         })
       );
       const lowered = createMemo(
-        $((() => perform(readStore(store, s => s.items))) as any) as any
+        $(function () {
+          return perform(readStore(store, s => s.items));
+        } as any) as any
       ) as typeof generator;
       return [generator, lowered] as const;
     });

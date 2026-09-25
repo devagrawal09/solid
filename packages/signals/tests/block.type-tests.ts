@@ -35,8 +35,10 @@ import {
   type PropRead,
   type Refreshable,
   type Store,
+  type SourceAccessor,
   type StoreRead,
-  type StoreSetter
+  type StoreSetter,
+  type StrictCallback
 } from "../src/index.js";
 
 type Expect<T extends true> = T;
@@ -543,8 +545,25 @@ $(function* () {
 $(async function* () {
   return 1;
 });
-// @ts-expect-error — a plain function is not a block source (call form is compiler output)
-$(() => count());
+// A plain callback is the strict compilation marker: a branded callback the
+// host receives unchanged once the compiler erases the marker. The brand
+// records the request only; the graph is the compiler's summary.
+const strictMemo = createMemo($(() => count() * 2));
+const strictAsync = createMemo($(async () => count()));
+const strictEvent = $((event: MouseEvent) => event.button);
+type _strict = [
+  Expect<Equal<typeof strictMemo, SourceAccessor<number>>>,
+  Expect<Equal<typeof strictAsync, SourceAccessor<number>>>,
+  Expect<Equal<typeof strictEvent, StrictCallback<MouseEvent, number>>>
+];
+createEffect(
+  $(() => count()),
+  value => {
+    const _n: number = value;
+  }
+);
+// A strict callback is not a block: it carries no effect metadata.
+type _notABlock = Expect<Equal<BlockReads<typeof strictEvent>, never>>;
 // @ts-expect-error — raise never returns: the value must come from another path
 const _unreachable: never = $(function* () {
   yield* raise(new NotFound());

@@ -107,6 +107,7 @@ export type {
   JsxBlock,
   JsxBlockShape,
   EventBlock,
+  StrictCallback,
   ErrorClass,
   AnySetter,
   Op,

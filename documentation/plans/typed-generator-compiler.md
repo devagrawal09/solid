@@ -20,6 +20,10 @@ Current exploration work:
 
 ## Recent Changes
 
+### 2026-09-25 (strict-solid-tsx)
+
+- Added the first generator-free strict slice: `$(fn)` with an ordinary callback is a compilation marker that is analyzed for its statically known host (`createMemo`, `createSignal(fn)`, `createEffect` / `createRenderEffect` compute, DOM `on*` attributes) and erased, with a sidecar graph summary and `[STRICT_…]` diagnostics. See [strict-solid-tsx.md](./strict-solid-tsx.md). Generator blocks are unchanged.
+
 ### 2026-09-25
 
 - Published the semantic conformance harness at `fe6bd41f`: 15 scenarios across 12 modes, 109 focused tests, structured traces, explicit intentional differences, pinned known defects, and mutation tests for cleanup, subscriptions, duplicate writes, stale commits, owner routing, and hydration IDs.

@@ -160,6 +160,9 @@ pub struct CompileOutput {
     pub css: Option<String>,
     /// Space-separated TSRX scope hashes, matching `@tsrx/core`.
     pub css_hash: Option<String>,
+    /// The strict-callback graph summary (JSON, see `strict.rs`) when the
+    /// module compiled at least one marked `$(fn)` callback; `None` otherwise.
+    pub strict_blocks: Option<String>,
 }
 
 /// Compile one JavaScript or TypeScript module containing JSX.
@@ -252,6 +255,7 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
             source_map: None,
             css,
             css_hash,
+            strict_blocks: None,
         });
     }
 
@@ -267,7 +271,18 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
 
     // Before JSX lowering: `yield*` reads inside JSX expression containers
     // must be ordinary calls by the time the JSX transform classifies them.
+    // Strict (non-generator) `$(fn)` markers go first, so the generator pass
+    // only ever sees authored generator blocks.
+    let mut strict_blocks = None;
     if options.generators {
+        strict_blocks = crate::strict::transform_strict_blocks(
+            &allocator,
+            &mut program,
+            source,
+            options.filename.as_deref(),
+        )
+        .map_err(CompileError::transform)?
+        .map(|analysis| analysis.to_json());
         crate::generators::transform_generators(&allocator, &mut program, source)
             .map_err(CompileError::transform)?;
     }
@@ -395,6 +410,7 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
         source_map,
         css,
         css_hash,
+        strict_blocks,
     })
 }
 
