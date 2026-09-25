@@ -2397,8 +2397,33 @@ fn statement_has_effects(statement: &Statement<'_>) -> bool {
     }
 }
 
+/// Built-in constructors whose subclassing runs no user code (`class E
+/// extends Error {}` reads the global and its `prototype`).
+const INERT_SUPERCLASSES: &[&str] = &[
+    "Error",
+    "TypeError",
+    "RangeError",
+    "SyntaxError",
+    "ReferenceError",
+    "EvalError",
+    "URIError",
+    "AggregateError",
+    "Object",
+    "Array",
+    "Map",
+    "Set",
+    "WeakMap",
+    "WeakSet",
+    "Promise",
+    "EventTarget",
+];
+
 fn class_has_effects(class: &Class<'_>) -> bool {
-    class.heritage.is_some()
+    let heritage_effect = class.heritage.as_ref().is_some_and(|heritage| {
+        !matches!(&heritage.expression, Expression::Identifier(id)
+            if INERT_SUPERCLASSES.contains(&id.name.as_str()))
+    });
+    heritage_effect
         || class.body.body.iter().any(|element| {
             matches!(
                 element,
