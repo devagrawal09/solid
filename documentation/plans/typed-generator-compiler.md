@@ -2,7 +2,7 @@
 
 ## Exploration Status
 
-Status as of 2026-09-25: the design remains an experimental, uncommitted branch, but the end-to-end prototype now covers typed blocks, host enforcement, direct typed store/prop paths, compiler lowering, projected TypeScript checking, block-derived signals/stores, DOM event dispatch, and a converted TodoMVC example.
+Status as of 2026-09-25: the design remains experimental, but the baseline and optimization prototypes are now published on the fork. The end-to-end baseline covers typed blocks, host enforcement, direct typed store/prop paths, compiler lowering, projected TypeScript checking, block-derived signals/stores, DOM event dispatch, and a converted TodoMVC example. Tracks A-E and the semantic conformance harness have pushed results; independent review classifies C, D, and E as fix-first rather than integration-ready.
 
 The production proposal has two modes only:
 
@@ -13,14 +13,25 @@ Current exploration work:
 
 - Direct path implementation is complete and verified: `yield* store.user.name`, indexed store paths, and `yield* props.count` carry root/path metadata.
 - `solid-tsc` provides pre-typecheck source projection, mapped diagnostics, and declaration emit because stock TypeScript cannot type the authored direct-path syntax by itself.
-- Runtime-size and app-code partitioning investigations are complete; their recommendations remain proposals, not implemented production optimizations.
+- Runtime-size and app-code partitioning prototypes are complete on Tracks A-E. Their measurements and decisions are recorded below, but none is accepted into the baseline yet.
 - The read-only strict-mode SSR/hydration investigation is complete. It found that current serialization is primarily async-result data, current hydration re-executes the full component tree, and JSX blocks currently have a hydration-id parity defect that must be fixed before strict SSR can be considered viable.
-- Required performance measurements are documented below; optimized mode is not ready to become the default until reproducible baselines exist.
+- `packages/web/test/conformance/` now compares handwritten, runtime-generator, compiler-lowered, and host-fused behavior across client, SSR, and hydration traces. It pins the dynamic-index fusion, JSX hydration-key, and server accessor-iterator defects.
+- Required performance measurements are documented below; optimized mode is not ready to become the default until review blockers are fixed and measurements reproduce on an integrated graph.
 
 ## Recent Changes
 
 ### 2026-09-25
 
+- Published the semantic conformance harness at `fe6bd41f`: 15 scenarios across 12 modes, 109 focused tests, structured traces, explicit intentional differences, pinned known defects, and mutation tests for cleanup, subscriptions, duplicate writes, stale commits, owner routing, and hydration IDs.
+- Completed Tracks A-E. Track A keeps the async-free core experiment but iterates on the local status-free path; Track B keeps allocation-free paths and handle stores as an opt-in while iterating on compatibility cost; Tracks C-E require fixes before integration.
+- Independently reviewed C, D, and E together. Track C changes module evaluation and event behavior in several cases; Track D's ID-parity fix held but replay/inert-region lowering has SSR and hydration correctness failures; Track E's universal refactor is conservative but selected production entries need validation, schema/version checks, and safer code generation.
+- Confirmed that Solid server components couple server and client through server-function IDs, SSR slot scopes, claims, serialized arguments/promises/store traces, and live holes. Whole-graph optimizations therefore need a coordinated cross-environment boundary graph, not two unrelated reachability results.
+- Deferred Wasm lowering. The only plausible initial subset is an exact, synchronous, non-throwing, numeric/boolean client leaf behind a JavaScript tracking shim; typical `$` bodies are too small, and server components already move suitable work off the client.
+- Defined a proposed generator-free Strict Solid TSX frontend: non-generator `$(() => {})` marks one function for mandatory strict compilation while its statically known consumer determines the host; `"use solid strict"` is the proposed component/module-wide form. This is design work, not implemented behavior.
+- Chose a shared compiler graph plus `solid-tsc`/language-server projection instead of attempting to encode complete effect graphs in public TypeScript generics. Detailed facts belong in versioned sidecar summaries; declarations carry only small public capability contracts.
+- Classified graph completeness as `exact | bounded | unknown`. Conditional or data-dependent reads may be bounded without being safe for static subscription replacement; unknown edges retain general behavior in compat and are rejected when strict compilation needs a complete proof.
+- Deferred the proposed component/setup `$()` host, yielded reactive creation, direct `yield* Context`, and provider-dominance checking. Ordinary `useContext` during setup remains the current model, and event hosts must capture setup-resolved values rather than introducing event-time context.
+- Corrected the async ownership rule: owned reactive creation after suspension is not inherently invalid. It is safe only when the driver restores the captured owner, stale flights cannot resume, and disposal/commit timing remains equivalent. Parent reactive reads after suspension remain invalid.
 - Added metadata-preserving block overloads for computed `createSignal`, `createStore`, `createProjection`, and `createOptimisticStore`.
 - Added direct typed property reads for stores and props with `StoreRead<Root, Path>`, `PropRead<Root, Path>`, `PathValue`, and `PathResult`.
 - Added runtime store path tokens, strict unread/direct-use diagnostics, and exact tracked re-walks through the existing store proxy.
@@ -94,14 +105,82 @@ Strict optimization includes both TypeScript and bundler/linker phases:
 
 Missing, incompatible, or escaped metadata becomes `unknown` and conservatively retains hot code, data, hydration, and general runtime capabilities. Published strict-compatible libraries must ship linkable summaries alongside declarations and JavaScript.
 
+### Optimization Prototype Slices
+
+The eight measured optimization slices are:
+
+1. **Synchronous status-free fast paths.** Skip async shape probes and erase pending/error channels for computations proven synchronous and non-throwing, with development verification. This begins with local compiler facts and gains cross-module precision from typed summaries.
+2. **Proxy-free strict stores.** Stage 1 lowers typed paths to allocation-free internal store-handle reads. Stage 2 uses TypeScript escape contracts and linker analysis to keep store handles across compiled modules, lazily materialize a compatibility proxy only at unknown boundaries, and omit proxy creation/runtime entirely when a store never escapes compiled operations. Structural reads, getters, identity, aliases, pending/optimistic views, writes, and tracking must remain equivalent or deoptimize.
+3. **Cold event-domain extraction.** Use linker hot/cold/shared reachability to move event-only blocks and their cold transitive dependencies into clustered interaction chunks with measured prefetch policies.
+4. **Async-free reactive core.** Aggregate synchronous capability proofs over a complete server or client graph, then remove Promise/async-iterator handling, pending-source tracking and propagation, cancellation, async transitions, `NotReadyError`, and related helpers. This applies independently of whether the graph hydrates.
+5. **Server-authoritative replay elimination.** Use source-authority, setter-escape, and server/client analysis to adopt proven server values and rendered branches without rerunning their fetches, projections, sorting, formatting, or binding setup on the client; retain hydration only for independently live descendants.
+6. **Inert-region hydration elimination.** When coordinated server/client analysis proves a rendered region has no client-live reads, writes, events, refs, directives, context, boundaries, cleanup, or interactive descendants, emit plain server HTML and omit its client component code, hydration keys, owner creation, and DOM claiming.
+7. **Capability-selected hydration runtime.** Generate a client hydration/bootstrap entry containing only the adapters and protocols required by the final client manifest, such as stream ledgers, loading/error marker adoption, store hydration adapters, lazy asset maps, delegated event types, and SSR-source adoption policies. This slice does not remove the underlying reactive implementations of those features.
+8. **Resumable event blocks.** Combine event chunking, addressable captures, registered actions, stable store/root paths, error-boundary coordinates, and server/client event manifests to run handlers without hydrating their creating components.
+
+Generator lowering, host fusion/block erasure to handwritten-equivalent Solid, and exclusion of the runtime generator fallback are strict-mode correctness and code-generation parity requirements, not optimization slices. Compat may retain block abstractions and fallback support where needed; strict must reject unsupported blocks and introduce no measurable overhead for qualifying code. Their transform cost, runtime parity, allocations, and compatibility bundle cost remain required acceptance measurements.
+
+### Published Prototype Results
+
+All optimization tracks have published reviewable branches from baseline `1fc0b873`. These remain experiments, not accepted baseline changes.
+
+| Track       | Head       | Scope                                                      | Current decision                                                           |
+| ----------- | ---------- | ---------------------------------------------------------- | -------------------------------------------------------------------------- |
+| A           | `0f97a4f4` | Synchronous status-free paths and async-free core          | Stage 1 **ITERATE**; Stage 2 **KEEP as experimental**                      |
+| B           | `6fb67597` | Proxy-free strict stores                                   | **KEEP as experimental opt-in; iterate on compatibility cost**             |
+| C           | `95389304` | Summaries, linker, and cold event extraction               | **FIX FIRST**                                                              |
+| D           | `f855369a` | Hydration-ID parity, replay elimination, and inert regions | ID parity held; slices 5-6 **FIX FIRST**, with slice 6 rejected as written |
+| E           | `44abd1eb` | Capability-selected hydration runtime                      | **FIX FIRST**                                                              |
+| Conformance | `fe6bd41f` | Cross-mode semantic oracle                                 | Keep and extend                                                            |
+
+Track A's local status-free hook fired on none of 14 real blocks, made updates slower, and cost 374 B gzip; the shape needs another iteration. Its complete-graph async-free runtime reduced the measured client gzip by 12.3%, server gzip by 18.1%, and update instruction counts by 12-19%, while refusing graphs that touch async capabilities.
+
+Track B's fixed-arity handle paths removed per-read allocations and measured at 0.66-0.76x handwritten proxy-read time for representative dynamic/four-key paths. Handle-rooted Stage 2 reads measured at 0.62-0.69x handwritten, with lower mount allocation and update time, but adds compatibility/runtime bytes and a 37% transform-time increase on the store-dense opt-in benchmark. Unknown uses must still materialize the lazy compatibility proxy.
+
+Track C, D, and E were reviewed independently and in a combined worktree. Their focused suites passed, but semantic repros prevent acceptance:
+
+- Track C can delay imported top-level effects and moved initializers, corrupt guards through text replacement, drop a first event while its chunk loads, reorder handlers, collapse queued input snapshots, and move or leak `"use server"` code unless server directives are pinned.
+- Track D's hydration-ID parity commit held. Replay sealing still needs serializability and purity proofs and can hoist before local declarations. Inert-region objects escape fragment-child sites and can reach DOM insertion as non-Nodes, crashing SSR or halting client reactivity.
+- Track E's universal installer split is conservative, but selected production entries can fail silently outside error boundaries. Generated comments need line-terminator escaping, input envelopes need schema/version validation, D's sealed values need an explicit capability, and the universal path adds about 720 B before selection pays it back.
+- C and E currently use different manifest conventions. The shared contract must define one versioned envelope rather than relying on E's conservative fallback as the permanent integration.
+
+The generator-free frontend remains an active cloud prototype, but `experiment/strict-solid-tsx` still points at baseline `1fc0b873`; no implementation commit is published yet. The separate local host-fusion baseline measured 7.3% less unminified output for the memo/effect fixture and 17.9% for the direct-path fixture.
+
+### Semantic Conformance Harness
+
+`packages/web/test/conformance/` runs 15 scenarios across 12 modes and three environments. It uses the actual compiler transform, controlled async settlement, structured traces, committed handwritten references, exact intentional-difference declarations, and known-defect expectations that fail when a defect unexpectedly disappears. Its mutation tests prove detection of missing cleanup, unconditional branch reads, duplicate event writes, stale async commits, owner mismatch, and hydration-ID mismatch.
+
+Current pinned defects are:
+
+- Dynamic-index host fusion can emit invalid `store.items[].name` syntax.
+- A component returning a `$` JSX block can allocate its hydration keys after sibling components, producing a tag mismatch and halting hydration.
+- The server signal iterator yields a bare accessor rather than a read operation, so an uncompiled server `$` block fails; blocks containing `wait` cannot currently compile away and therefore cannot render asynchronously on the server.
+
+The harness also records that handwritten Solid reruns an async memo fetch during hydration and discards the restarted result. Server-authoritative replay elimination is therefore a new behavior requiring an explicit proof, not a description of current hydration.
+
+### Server Components And Wasm
+
+Solid server components do not form unrelated server and client graphs. The linker must preserve and join at least these boundary edges: file-path-derived server-function IDs, server-rendered client slots and their `sc-*` hydration scopes, event claims in server markup, serialized slot arguments/promises/store traces, and live-hole reruns while a response remains open. Environment-specific reachability remains useful, but whole-graph optimization decisions require a coordinated boundary table.
+
+The current server `$` export also reuses a driver whose owner helpers come from the client reactive core. Before async continuation ownership can be claimed on the server, the driver needs an environment-correct owner interface and stale-flight tests under live-hole reruns. Summary schemas must identify server directives/actions, client slots, claims, frame/occurrence coordinates, serialization obligations, environment availability, and cross-environment authority.
+
+Wasm is deferred rather than added as a ninth optimization slice. A future opt-in experiment may consider exact, synchronous, non-throwing numeric/boolean client leaves: JavaScript performs tracked reads and result publication while Wasm receives only scalar inputs. Conditional reads, stores/proxies, custom equality, owned creation, async, errors, strings, and objects remain outside that subset. There is no current server/edge case that improves on ordinary server execution, and typical `$` bodies are too small to amortize the JS/Wasm boundary and module cost.
+
 ### Remaining Work
 
-- Independently review the accumulated experimental diff and public API naming.
+- Fix and independently re-review the C, D, and E semantic blockers before merging any optimization track into the baseline.
+- Integrate Track A Stage 2 and Track B only behind their proven complete-graph/escape gates, then rerun the conformance and benchmark matrices on the combined graph.
 - Implement and validate the two production modes as whole-application build contracts, including `solid-tsc` typed-summary emission and bundler/linker fixed-point analysis.
 - Add editor language-service support for projected direct-path syntax.
-- Build the required compiler/runtime/size benchmark matrix and establish acceptance thresholds.
-- Prototype and measure cold event-domain extraction and resumable event blocks; do not add compiler-created deferred feature regions.
-- Decide which runtime slicing, SSR serialization, and hydration specializations earn implementation after measurement.
+- Prototype the non-generator `$(() => {})` strict marker and `"use solid strict"` lexical opt-in using the shared analyzer; preserve generator overloads and reject ambiguous hosts or unknown escapes rather than adding another fallback.
+- Define and publish the `exact | bounded | unknown` graph-summary schema, stable symbol identity, versioning, and the small branded contracts exposed in declarations.
+- Share one analyzer and diagnostic mapping implementation among the production compiler, `solid-tsc`, and the custom Solid language server.
+- Keep the component/setup host, yielded creation, direct yielded context, and provider-dominance diagnostics deferred until render/owner summaries and child-slot contracts exist.
+- If post-suspension creation is implemented, restore the captured owner on continuation, preserve stale-flight exclusion, and decide immediate versus commit-atomic child visibility.
+- Extend the conformance harness with streamed shell/chunk hydration, transitions, optimistic writes, keyed lists, concurrent event adapters, `call()` composition, projections, and server-component frames.
+- Redesign and remeasure cold event-domain extraction after fixing evaluation order, AST guard lowering, queued-event semantics, and server-directive pinning; keep resumable events deferred.
+- Define the coordinated server/client boundary graph and environment-correct server ownership interface before enabling whole-graph SSR or server-component optimizations.
+- Decide which runtime slicing, SSR serialization, and hydration specializations earn integration after fixes reproduce under the combined harness and benchmark matrix.
 - Define compatibility and publication policy for libraries that cannot provide strict capability manifests.
 
 ## Core Goal
@@ -135,6 +214,193 @@ Inside an exact `$` block, signals are read through:
 ```ts
 yield * count;
 ```
+
+## Alternative Frontend: Strict Solid TSX
+
+Generators are useful as an explicit prototype syntax, but they are not required for the compiler-driven model. A proposed alternative keeps ordinary Solid TypeScript and marks only the functions that must be completely understood:
+
+```tsx
+const doubled = createMemo($(() => count() * 2));
+
+createEffect(
+  $(() => {
+    console.log(doubled());
+  })
+);
+
+const user = createAsync(
+  $(async () => {
+    const id = userId();
+    return fetchUser(id);
+  })
+);
+
+<button onClick={$(() => setCount(value => value + 1))}>Increment</button>;
+```
+
+For a non-generator function, `$` is a strict compile marker rather than a new memo, effect, event, or runtime host. The statically known consumer determines execution semantics:
+
+| Consumer                     | Host           | Read behavior                            |
+| ---------------------------- | -------------- | ---------------------------------------- |
+| `createMemo`, `createEffect` | reactive       | tracked for that computation             |
+| `createAsync`                | async reactive | tracked before first suspension          |
+| JSX event attribute          | event          | one-shot, untracked                      |
+| JSX dynamic insertion        | JSX            | tracked by the generated insertion owner |
+
+A marked callback must have one unambiguous host. Passing the same function to both a memo and an event, forwarding it through an unknown helper, or allowing it to escape without a summary makes the host `unknown` and is rejected in strict mode. Plain `$` should not guess a default host. Explicit forms such as `$event` or `$memo` may be considered only if contextual inference proves insufficient.
+
+The marker can be typed as an identity for ordinary value checking:
+
+```ts
+declare function $<F extends (...args: any[]) => any>(fn: F): F;
+```
+
+That declaration does not infer effects from the function body. The compiler, `solid-tsc`, and language server perform that analysis. Strict output erases the marker and must either produce ordinary handwritten-equivalent Solid code or fail with a source-located diagnostic; it must not retain the generator interpreter or silently switch to another fallback. Existing generator `$` overloads remain separate and unchanged.
+
+### Wider Opt-In
+
+The proposed function- and module-wide spelling is a valid JavaScript directive:
+
+```tsx
+function Counter() {
+  "use solid strict";
+
+  const [count, setCount] = createSignal(0);
+  const doubled = createMemo(() => count() * 2);
+
+  return <button onClick={() => setCount(value => value + 1)}>{doubled()}</button>;
+}
+```
+
+```tsx
+"use solid strict";
+
+// Every compiler-recognized component, reactive callback, JSX insertion, and
+// event callback in this module is subject to strict analysis.
+```
+
+The lexical rule is preferred: a strict component or module makes statically recognized nested hosts strict, while `$(() => {})` remains the incremental single-function opt-in. `"use strong"` was considered but rejected as too vague.
+
+### Strict Subset
+
+The first useful subset should accept:
+
+- Direct calls to statically resolved Solid reactive APIs.
+- Direct signal accessor calls and statically recoverable store paths.
+- Ordinary synchronous helpers after reactive inputs have been read to plain values.
+- Structured conditionals and loops while preserving runtime tracking when the active dependency set is data-dependent.
+- Normal `async`/`await` with parent dependencies read before the first suspension.
+- Static JSX components and finite component unions.
+- Local event handlers with one statically known event use.
+
+It should conservatively reject or mark unknown:
+
+- Aliased or dynamically selected reactive factories without summaries.
+- Reactive accessors, stores, callbacks, owners, or setters passed into unsummarized helpers.
+- Callbacks retained by unknown code or used as multiple host kinds.
+- Arbitrary dynamic components, registries, reflection, proxies, or `eval`.
+- Child render functions whose invocation/owner contract is unknown.
+- Imported libraries without compatible, versioned graph summaries when a complete proof is required.
+
+Reading first is the standard escape hatch for an ordinary helper:
+
+```ts
+createMemo($(() => formatPrice(total(), currency())));
+```
+
+The helper receives plain values. Passing `total` itself would expose a reactive capability to unknown code and must deoptimize or fail.
+
+### Graph Completeness
+
+Every analyzed region has one completeness classification:
+
+- **`exact`**: every relevant host, effect, ownership edge, and escape is resolved.
+- **`bounded`**: the compiler knows a finite conservative set of possibilities, but the active runtime graph may be a subset.
+- **`unknown`**: at least one relevant edge cannot be resolved.
+
+For example:
+
+```ts
+createMemo($(() => (enabled() ? first() : second())));
+```
+
+The static may-read set is bounded to `enabled | first | second`, but ordinary Solid subscribes only to the branch taken on a run. The compiler may use the bounded set for capability and reachability analysis, but it must retain runtime dependency tracking unless it emits a branch-sensitive subscription plan proven equivalent. Static may-read information alone does not justify subscribing to every possible source.
+
+An arbitrary callback registry is `unknown`, not bounded:
+
+```ts
+registerSomewhere($(() => count()));
+```
+
+Compat retains general runtime behavior at unknown boundaries. Strict rejects an unknown edge whenever host fusion, fallback removal, hydration elimination, runtime selection, or another whole-graph decision depends on completeness.
+
+### Shared Analyzer And Language Server
+
+Stock TypeScript can infer the values returned by marked callbacks, but it cannot infer an effect type from a function body. A custom Solid language server and `solid-tsc` should share the compiler analyzer and project a virtual typecheck-only program. Conceptually:
+
+```ts
+const doubled = __strongMemo<
+  number,
+  {
+    host: "memo";
+    reads: CountSymbol;
+    writes: never;
+    creates: never;
+    completeness: "exact";
+  }
+>(() => count() * 2);
+```
+
+The authored file remains ordinary TSX. The virtual projection supplies diagnostics, hover information, navigation, and small branded contracts. The same analyzer must run in the production compiler and `solid-tsc`; editor-only guarantees are insufficient for CI.
+
+Use three storage layers:
+
+1. Ordinary TypeScript types for values, props, return values, and event parameters.
+2. Small public brands for facts generic APIs genuinely constrain, such as capabilities, requirements, resumability, and `exact | bounded | unknown`.
+3. Versioned sidecar summaries for the full graph: hosts, reads, writes, paths, creations, ownership, escapes, render edges, source sites, async phases, and server/client reachability.
+
+Do not place the complete graph in declaration generics. Large transitive graph types would increase declaration size, inference cost, hover noise, and deep-instantiation failures. Symbol identity in summaries must follow resolved TypeScript symbols across aliases and re-exports rather than relying only on source text or value structure.
+
+The language server can expose compiler facts directly:
+
+```text
+doubled
+  host: memo
+  reads: count
+  owner: Counter
+  completeness: exact
+```
+
+Useful operations include going to a dependency, finding readers/writers, showing ownership, explaining hydration requirements, and tracing the edge that made a graph unknown.
+
+### Soundness Boundaries
+
+The strict model does not make arbitrary JavaScript statically exact. Its guarantee comes from rejecting unresolved cases. Important boundaries are:
+
+- Conditional reads produce a may-read graph, not necessarily the active subscription graph.
+- Higher-order helpers need effect-polymorphic summaries describing when callbacks run and which ownership they preserve.
+- Dynamic property access may collapse an exact path to a wildcard such as `user.*`.
+- Runtime-sized loops can describe an access pattern without identifying every concrete source.
+- Dynamic components, portals, render props, and arbitrary `children` need explicit owner/child-slot contracts.
+- Async continuation ownership must be restored by the runtime; graph metadata alone does not prevent leaks.
+- Fusion must preserve equality, laziness, scheduling, error routing, suspense, transitions, cleanup, and development hooks.
+- Missing or incompatible library summaries become unknown.
+- Stable symbol identities must survive package builds, aliases, re-exports, and duplicated packages.
+- Mixed strict/opaque code may preserve ordinary Solid behavior while preventing whole-graph optimization.
+
+### What The Strict Graph Unlocks
+
+Capabilities arrive at different proof levels rather than all at once:
+
+- A local exact graph enables generator-free lowering, direct diagnostics, direct fixed-dependency subscriptions where unconditional, and safe memo/JSX fusion.
+- Exact store paths enable handle reads and can contribute to proxy elimination when escape analysis also succeeds.
+- Exact ownership and escape edges enable dead reactive-node removal and lifetime diagnostics.
+- Exact event captures and transitive imports enable cold event chunks; addressable captures and boundary coordinates are later prerequisites for resumable events.
+- Complete server/client component graphs enable server-authoritative replay elimination and inert-region hydration removal.
+- Complete capability manifests enable smaller hydration/bootstrap runtimes and, when the entire selected graph is synchronous, an async-free reactive core.
+- The language server can explain reruns, ownership, hydration, deoptimizations, and unknown edges using the same facts that drive code generation.
+
+These are opportunities, not automatic consequences of marking a function. Every optimization retains its own semantic proof and measurement gate.
 
 ## Three Host Contexts
 
@@ -238,6 +504,62 @@ Events may:
 An event read is one-shot. It does not make the event rerun reactively.
 
 If a read signal is pending, the event waits for it while the current UI remains mounted.
+
+## Deferred Component Host, Creation, And Context
+
+A fourth one-shot component/setup host was explored:
+
+```tsx
+const Profile = $(function* Profile() {
+  const auth = useContext(AuthContext);
+
+  return $(function* () {
+    return <h1>{yield* auth.user.name}</h1>;
+  });
+});
+```
+
+Its intended role is to run setup once, create owned reactive scopes, and return a separate reactive JSX block. Component and reactive hosts may create owned computations; JSX and event hosts may not. An explicit yielded creation operation was considered because plain `yield* createMemo(...)` is ambiguous when accessors are themselves iterable reads.
+
+This host and yielded creation remain deferred. The generator-free strict frontend can first analyze ordinary component setup and existing `createMemo`/`createEffect`/`createAsync` calls without introducing a new runtime operation.
+
+### Creation After Suspension
+
+Owned creation after suspension is not rejected merely because previous children are disposed at recompute. Existing recomputation stages old children for disposal separately from children created by the new execution. A superseded block flight is already marked stale and must close rather than resume.
+
+The missing requirement is owner restoration: a Promise continuation runs after the original reactive stack exits, so the block driver must capture the run owner and resume through `runWithOwner(owner, ...)`. This restores ownership without reopening parent dependency tracking. Therefore the intended rules are:
+
+- Parent signal reads after first suspension remain invalid because the parent tracking frame has ended.
+- Context lookup after suspension would be an owner lookup rather than a dependency read, but direct yielded context is deferred for other reasons.
+- A newly created child computation after suspension may establish its own dependencies.
+- A stale or disposed flight must never resume to create children.
+- Immediate versus commit-atomic visibility of post-suspension children remains a separate semantic decision; commit-atomic creation would need a per-flight staging owner.
+
+### Context Decision
+
+Direct `yield* Context` and a `ContextReadOp` were considered, then removed from the current scope. Context continues to use ordinary setup-time Solid semantics:
+
+```tsx
+function SaveButton() {
+  const auth = useContext(AuthContext);
+
+  const save = $(() => saveUser(auth.user));
+  return <button onClick={save}>Save</button>;
+}
+```
+
+Event execution has no ambient context owner in current Solid. Event blocks therefore must not introduce event-time context lookup. They capture values resolved during component/setup execution, which matches ordinary Solid closure behavior and prevents forwarding from rebinding context.
+
+Future provider validation remains compiler tooling work even with ordinary `useContext`:
+
+- A component inherits requirements from direct setup reads, owned creations, returned render blocks, and rendered child components.
+- Provider satisfaction follows owner/provider child-slot dominance, not DOM ancestry.
+- Static JSX child edges are recoverable by compiler analysis, but ordinary TypeScript collapses JSX expressions to `JSX.Element` and loses requirement metadata.
+- TSRX's structured render tape is a better direct source of child, provider, control-flow, and boundary edges, although its current typecheck projection still emits ordinary TSX.
+- Dynamic components, arbitrary children, portals, escaped callbacks, and unresolved libraries become bounded or unknown according to the available contracts.
+- Stock `tsc` cannot enforce provider dominance; `solid-tsc` and the Solid language server must report the mapped diagnostic.
+
+Until that full render/owner summary exists, direct yielded context and type-level provider enforcement should not be added.
 
 ## What `$()` Returns
 
@@ -736,7 +1058,7 @@ Strict mode is a whole-application contract, not a per-file lint level:
 - Every reactive or effectful application boundary must use typed generator blocks with strict host and read/write rules.
 - All application modules, route chunks, workers, and participating libraries must be compiled in strict mode or provide a trusted strict capability manifest.
 - Unsupported generator forms, hidden effects, ordinary reactive reads inside blocks, unknown effectful callbacks, and unclassified dynamic imports are build errors.
-- Runtime generator fallback is not shipped. A block that cannot be lowered fails the build instead of deoptimizing.
+- As a baseline strict-mode requirement rather than an optimization slice, runtime generator fallback is not shipped. A block that cannot be lowered fails the build instead of deoptimizing.
 - Client and server graphs are checked and specialized independently.
 - Development builds verify compiler claims and fail loudly on metadata or capability mismatches.
 
@@ -1143,7 +1465,7 @@ The larger model is similar to algebraic effects: `$` blocks declare operations,
 - Runtime mode and transform mode must remain behaviorally identical.
 - Replacing actions entirely requires matching their transaction and cancellation semantics.
 
-## Prototype 1: Compiler Host Fusion and Block Erasure
+## Strict Baseline: Compiler Host Fusion and Block Erasure
 
 ### Design
 
@@ -1171,6 +1493,7 @@ Behind the `hostFusion: true` compiler option (default `false`). Requires
 `generators: true`.
 
 **Changed files:**
+
 - `packages/compiler/src/generators.rs` — `fuse_host_blocks()` pass (~250 lines), 6 unit tests (3 positive, 3 negative)
 - `packages/compiler/src/compiler.rs` — `host_fusion` option in `CompileOptions`, fusion pass call site
 - `packages/compiler/src/config.rs` — `host_fusion: Option<bool>` in NAPI `TransformOptions`
@@ -1186,16 +1509,19 @@ Behind the `hostFusion: true` compiler option (default `false`). Requires
 ### Test Results
 
 **Rust unit tests:** 72 passed, 0 failed (15 generator tests including 6 new fusion tests)
+
 ```
 cargo +1.97.1 test -- --test-threads=1
 ```
 
 **JS fixture tests:** 5823 passed, 0 failed, 28 skipped (40 test files)
+
 ```
 npx vitest run
 ```
 
 **Fusion-specific contract tests (5):**
+
 - erases `$()` wrapper and perform calls when consumed by createMemo/createEffect
 - erases path reads to member expressions
 - does NOT fuse standalone blocks (no known host)
@@ -1208,10 +1534,10 @@ npx vitest run
 
 #### Emitted output size (unminified)
 
-| Fixture | Without fusion | With fusion | Savings |
-|---------|---------------|-------------|---------|
-| memo-effect (3 blocks: createMemo×2 + createEffect×1) | 742 bytes | 688 bytes | 54 bytes (7.3%) |
-| paths (2 blocks: createMemo with readPath + readProp) | 363 bytes | 298 bytes | 65 bytes (17.9%) |
+| Fixture                                               | Without fusion | With fusion | Savings          |
+| ----------------------------------------------------- | -------------- | ----------- | ---------------- |
+| memo-effect (3 blocks: createMemo×2 + createEffect×1) | 742 bytes      | 688 bytes   | 54 bytes (7.3%)  |
+| paths (2 blocks: createMemo with readPath + readProp) | 363 bytes      | 298 bytes   | 65 bytes (17.9%) |
 
 #### Code-body parity with handwritten Solid
 
@@ -1224,6 +1550,7 @@ eliminated by bundler tree-shaking/dead-code elimination.
 #### Runtime overhead erasure
 
 Per fused block, the following runtime operations are eliminated at compile time:
+
 - 1× `$(fn)` call → `fn` (no block allocation, no `createComputation` overhead in `$`)
 - N× `_$perform(accessor)` → `accessor()` (no `readGuarded` call, no guard check)
 - M× `_$readPath(root, keys)` → `root.key1.key2...` (no path-token allocation)
@@ -1247,7 +1574,7 @@ Per fused block, the following runtime operations are eliminated at compile time
 
 ### Decision
 
-**KEEP** — prototype 1 demonstrates the core value proposition:
+**KEEP as a strict baseline** — the host-fusion prototype demonstrates the required code-generation parity:
 
 - The fused output is **identical** to handwritten Solid (ignoring import
   specifiers that tree-shaking removes).
