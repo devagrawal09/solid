@@ -20,6 +20,8 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import { writeFileSync } from "node:fs";
+import { summarizeProgram } from "./capabilities.js";
 
 const require = createRequire(import.meta.url);
 
@@ -227,7 +229,8 @@ export function check({ project, options: overrides = {}, files, cwd = process.c
     diagnostics: [...remapDiagnostics(diagnostics, projections), ...strictDiagnostics],
     emitSkipped,
     projections,
-    strictBlocks
+    strictBlocks,
+    program
   };
 }
 
@@ -239,6 +242,18 @@ export function run(argv, { log = console.log, cwd = process.cwd() } = {}) {
     log("solid-tsc: --build and --watch are not supported; run each project with -p");
     return 1;
   }
+  // `--capabilities <file>`: also write the typed capability summary (Track
+  // A stage 2; see capabilities.js). Not a tsc option — taken out first.
+  let capabilitiesFile = null;
+  const flagIndex = argv.indexOf("--capabilities");
+  if (flagIndex !== -1) {
+    capabilitiesFile = argv[flagIndex + 1];
+    if (!capabilitiesFile) {
+      log("solid-tsc: --capabilities requires an output file");
+      return 1;
+    }
+    argv = [...argv.slice(0, flagIndex), ...argv.slice(flagIndex + 2)];
+  }
   const parsed = ts.parseCommandLine(argv);
   if (parsed.errors.length) {
     log(formatDiagnostics(parsed.errors, cwd));
@@ -248,5 +263,13 @@ export function run(argv, { log = console.log, cwd = process.cwd() } = {}) {
   const result = check({ project, options, files: parsed.fileNames, cwd });
   const errors = result.diagnostics.filter(d => d.category === ts.DiagnosticCategory.Error);
   if (result.diagnostics.length) log(formatDiagnostics(result.diagnostics, cwd));
+  // A summary is only written for a program that typechecks: its verdicts
+  // are claims about well-typed code.
+  if (capabilitiesFile && result.program && !errors.length) {
+    writeFileSync(
+      path.resolve(cwd, capabilitiesFile),
+      JSON.stringify(summarizeProgram(result.program, result.projections), null, 2)
+    );
+  }
   return errors.length ? 1 : 0;
 }

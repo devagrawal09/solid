@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "package": "solid-js",
+  "description": "Track A stage 2 capability manifest (client and server entries). asyncExports: the async capabilities solid-js re-exports from @solidjs/signals plus its own async components and loaders. componentComputeProps: props a library component reads inside an async-aware internal computation (a Promise there would suspend on the full runtime), so the linker requires them proven synchronous.",
+  "runtimeDependency": "@solidjs/signals",
+  "asyncExports": [
+    "action",
+    "isPending",
+    "latest",
+    "resolve",
+    "until",
+    "refresh",
+    "affects",
+    "createOptimistic",
+    "createOptimisticStore",
+    "createLoadingBoundary",
+    "createRevealOrder",
+    "wait",
+    "loading",
+    "Loading",
+    "Reveal",
+    "lazy"
+  ],
+  "hosts": [
+    "createMemo",
+    "createSignal",
+    "createEffect",
+    "createRenderEffect",
+    "createStore",
+    "createProjection"
+  ],
+  "componentComputeProps": {
+    "Show": ["when"],
+    "Match": ["when"],
+    "For": ["each"],
+    "Repeat": ["count", "from"]
+  }
+}

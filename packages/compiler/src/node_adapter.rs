@@ -93,6 +93,18 @@ pub fn analyze_strict_blocks(
         .map_err(|error| Error::from_reason(error.to_string()))
 }
 
+/// Track A stage 2: one module's capability summary (JSON) for the
+/// whole-graph async-freedom proof. See `capabilities.rs`.
+#[napi]
+pub fn summarize_capabilities(
+    code: String,
+    options: Option<ProjectBlocksForTypecheckOptions>,
+) -> Result<String> {
+    let options = options.unwrap_or_default();
+    crate::capabilities::summarize_capabilities(&code, options.filename.as_deref())
+        .map_err(|error| Error::from_reason(error.to_string()))
+}
+
 #[cfg(feature = "tsrx")]
 #[napi(object)]
 pub struct TsrxTypecheckEmbeddedRegion {
