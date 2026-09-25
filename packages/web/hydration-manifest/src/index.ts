@@ -27,3 +27,9 @@ export {
   type CapabilityConsumers,
   type ComposeOptions
 } from "./compose.js";
+export {
+  resolveHydrationBootstrap,
+  type BootstrapOptions,
+  type HydrationBootstrap
+} from "./bootstrap.js";
+export type { EntrySourceMap } from "./sourcemap.js";

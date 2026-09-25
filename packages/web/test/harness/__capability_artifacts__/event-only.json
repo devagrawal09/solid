@@ -1,0 +1,6 @@
+{
+  "name": "event-only",
+  "records": [],
+  "shell": "<script>window._$HY||(e=>{let t=e=>e&&e.hasAttribute&&(e.hasAttribute(\"_hk\")?e:t(e.host&&e.host.nodeType?e.host:e.parentNode));[\"click\"].forEach((o=>document.addEventListener(o,(o=>{if(!e.events)return;let s=t(o.composedPath&&o.composedPath()[0]||o.target);s&&!e.completed.has(s)&&e.events.push([s,o])}))))})(_$HY={events:[],completed:new WeakSet,r:{},fe(){}});</script><!--xs--><section _hk=0><button id=\"inc\">press</button><span>idle</span></section>",
+  "rest": ""
+}

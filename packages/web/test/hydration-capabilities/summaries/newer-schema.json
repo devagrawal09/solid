@@ -1,0 +1,23 @@
+{
+  "schema": 2,
+  "graph": "full",
+  "producer": "linker:track-c@next",
+  "capabilities": {
+    "streamLedger": true,
+    "loadingMarkers": true,
+    "errorMarkers": true,
+    "asyncResults": true,
+    "storeAdapters": true,
+    "lazyAssets": true,
+    "delegatedEvents": [
+      "click",
+      "input"
+    ],
+    "ssrSources": [
+      "client",
+      "hybrid"
+    ],
+    "snapshots": true,
+    "resumableEvents": false
+  }
+}

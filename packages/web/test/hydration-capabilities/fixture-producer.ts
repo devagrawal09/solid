@@ -22,6 +22,22 @@ import type {
 
 export const MANIFEST_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "manifests");
 export const GENERATED_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "generated");
+export const SUMMARY_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "summaries");
+
+/**
+ * Read a capability summary as a producer might hand it to the bootstrap
+ * resolver — possibly foreign, unknown, or incompatible (summaries/*.json).
+ */
+export function readSummary(name: string): unknown {
+  return JSON.parse(readFileSync(resolve(SUMMARY_DIR, `${name}.json`), "utf-8"));
+}
+
+export function summaryNames(): string[] {
+  return readdirSync(SUMMARY_DIR)
+    .filter(f => f.endsWith(".json"))
+    .map(f => f.slice(0, -5))
+    .sort();
+}
 
 /** Read a fixture manifest verbatim (unvalidated: invalid fixtures are fixtures too). */
 export function readFixtureManifest(name: string): unknown {

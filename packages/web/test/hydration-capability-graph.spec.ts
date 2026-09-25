@@ -21,9 +21,10 @@ import { rollup, type Plugin } from "rollup";
 import { transform } from "esbuild";
 import {
   composeHydrationEntry,
+  resolveHydrationBootstrap,
   type ClientHydrationManifest
 } from "../hydration-manifest/src/index.js";
-import { readFixtureManifest } from "./hydration-capabilities/fixture-producer.js";
+import { readFixtureManifest, readSummary } from "./hydration-capabilities/fixture-producer.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SOLID = resolve(here, "../../solid/src");
@@ -126,6 +127,8 @@ const DOM_FUNCTIONS = {
 };
 
 const expected: Record<string, { modules: string[]; dom: (keyof typeof DOM_FUNCTIONS)[] }> = {
+  "read-only": { modules: ["state.ts"], dom: [] },
+  "event-only": { modules: ["state.ts"], dom: ["eventReplay"] },
   sync: { modules: ["state.ts"], dom: ["eventReplay"] },
   store: {
     modules: ["drafts.ts", "serialized.ts", "snapshots.ts", "state.ts", "stores.ts"],
@@ -178,6 +181,15 @@ describe("retained hydration graph per manifest (production)", () => {
 
   test("the universal hydrate() retains every capability", async () => {
     const { hydrationModules, code } = await bundle(`export { hydrate } from "@solidjs/web";\n`);
+    expect(hydrationModules).toEqual(ALL_MODULES);
+    for (const marker of Object.values(DOM_FUNCTIONS)) expect(code).toContain(marker);
+  });
+
+  test("a general-runtime bootstrap (unknown summary) retains every capability", async () => {
+    const summary = readSummary("unknown-capability-value");
+    const bootstrap = resolveHydrationBootstrap(summary);
+    expect(bootstrap.mode).toBe("general");
+    const { hydrationModules, code } = await bundle(bootstrap.entry.code);
     expect(hydrationModules).toEqual(ALL_MODULES);
     for (const marker of Object.values(DOM_FUNCTIONS)) expect(code).toContain(marker);
   });

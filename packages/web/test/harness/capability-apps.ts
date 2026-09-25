@@ -37,6 +37,22 @@ export type CapabilityApp = {
 
 export const capabilityApps: CapabilityApp[] = [
   {
+    name: "read-only",
+    load: () => import("./capability-apps/read-only.jsx").then(m => m.default),
+    mode: "loaded",
+    expectedText: "catalogitems 3manyalphabetagamma",
+    expectedTextAfterClick: "catalogitems 3manyalphabetagamma"
+  },
+  {
+    name: "event-only",
+    load: () => import("./capability-apps/event-only.jsx").then(m => m.default),
+    mode: "loaded",
+    expectedText: "pressidle",
+    preHydrationClick: true,
+    expectedTextAfterReplay: "pressclicked 1",
+    expectedTextAfterClick: "pressclicked 2"
+  },
+  {
     name: "sync",
     load: () => import("./capability-apps/sync.jsx").then(m => m.default),
     mode: "loaded",

@@ -77,7 +77,14 @@ export function distAlias(root) {
 
 export async function bundle(
   entrySource,
-  { hydratable = true, format = "esm", workDir, alias = PROD_ALIAS } = {}
+  {
+    hydratable = true,
+    format = "esm",
+    workDir,
+    alias = PROD_ALIAS,
+    minify = true,
+    external = []
+  } = {}
 ) {
   mkdirSync(workDir, { recursive: true });
   const entry = join(workDir, `entry-${Math.random().toString(36).slice(2)}.js`);
@@ -86,8 +93,9 @@ export async function bundle(
     entryPoints: [entry],
     bundle: true,
     write: false,
-    minify: true,
+    minify,
     format,
+    external,
     platform: "browser",
     target: "es2022",
     treeShaking: true,

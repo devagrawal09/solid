@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "graph": "read-only",
+  "producer": "fixture:read-only",
+  "capabilities": {
+    "streamLedger": false,
+    "loadingMarkers": false,
+    "errorMarkers": false,
+    "asyncResults": false,
+    "storeAdapters": false,
+    "lazyAssets": false,
+    "delegatedEvents": [],
+    "ssrSources": [],
+    "snapshots": false,
+    "resumableEvents": false
+  }
+}

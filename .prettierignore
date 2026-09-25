@@ -3,3 +3,4 @@
 # composeHydrationEntry golden entries and canonical fixture manifests.
 packages/web/test/hydration-capabilities/generated/
 packages/web/test/hydration-capabilities/manifests/
+packages/web/test/hydration-capabilities/summaries/

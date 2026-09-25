@@ -89,7 +89,11 @@ describe("composeHydrationEntry", () => {
 
   test("no stale golden entries", () => {
     const expected = new Set(valid.map(n => `${n}.entry.js`));
-    expect(readdirSync(GENERATED_DIR).filter(f => !expected.has(f))).toEqual([]);
+    // summary-*.entry.js are the bootstrap resolver's goldens
+    // (hydration-bootstrap.spec.ts owns and checks those).
+    expect(
+      readdirSync(GENERATED_DIR).filter(f => !expected.has(f) && !f.startsWith("summary-"))
+    ).toEqual([]);
   });
 
   test("the sync entry installs nothing but the delegated-event replay", () => {

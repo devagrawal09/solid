@@ -1,0 +1,343 @@
+{
+  "fixtures": {
+    "read-only": {
+      "app": "read-only",
+      "installers": [],
+      "selected": {
+        "total": {
+          "emitted": 100206,
+          "minified": 40980,
+          "gzip": 16006,
+          "brotli": 14569
+        },
+        "runtime": {
+          "emitted": 98059,
+          "minified": 40002,
+          "gzip": 15507,
+          "brotli": 14141
+        },
+        "entry": 283
+      },
+      "general": {
+        "total": {
+          "emitted": 140381,
+          "minified": 57380,
+          "gzip": 21690,
+          "brotli": 19712
+        },
+        "runtime": {
+          "emitted": 138296,
+          "minified": 56424,
+          "gzip": 21209,
+          "brotli": 19299
+        },
+        "entry": 257
+      }
+    },
+    "event-only": {
+      "app": "event-only",
+      "installers": [
+        "eventReplayHydration"
+      ],
+      "selected": {
+        "total": {
+          "emitted": 83424,
+          "minified": 33409,
+          "gzip": 13147,
+          "brotli": 11996
+        },
+        "runtime": {
+          "emitted": 82038,
+          "minified": 32748,
+          "gzip": 12769,
+          "brotli": 11684
+        },
+        "entry": 350
+      },
+      "general": {
+        "total": {
+          "emitted": 130644,
+          "minified": 52428,
+          "gzip": 19769,
+          "brotli": 18006
+        },
+        "runtime": {
+          "emitted": 129369,
+          "minified": 51823,
+          "gzip": 19420,
+          "brotli": 17724
+        },
+        "entry": 257
+      }
+    },
+    "synchronous-only": {
+      "app": "sync",
+      "installers": [
+        "eventReplayHydration"
+      ],
+      "selected": {
+        "total": {
+          "emitted": 103037,
+          "minified": 42085,
+          "gzip": 16419,
+          "brotli": 14993
+        },
+        "runtime": {
+          "emitted": 100317,
+          "minified": 40825,
+          "gzip": 15809,
+          "brotli": 14461
+        },
+        "entry": 338
+      },
+      "general": {
+        "total": {
+          "emitted": 141164,
+          "minified": 57682,
+          "gzip": 21825,
+          "brotli": 19805
+        },
+        "runtime": {
+          "emitted": 138556,
+          "minified": 56478,
+          "gzip": 21245,
+          "brotli": 19310
+        },
+        "entry": 257
+      }
+    },
+    "store-using": {
+      "app": "store",
+      "installers": [
+        "installSnapshotHydration",
+        "installStoreHydration",
+        "eventReplayHydration"
+      ],
+      "selected": {
+        "total": {
+          "emitted": 180603,
+          "minified": 75033,
+          "gzip": 27735,
+          "brotli": 25058
+        },
+        "runtime": {
+          "emitted": 176281,
+          "minified": 73016,
+          "gzip": 26840,
+          "brotli": 24272
+        },
+        "entry": 489
+      },
+      "general": {
+        "total": {
+          "emitted": 209195,
+          "minified": 86702,
+          "gzip": 31661,
+          "brotli": 28566
+        },
+        "runtime": {
+          "emitted": 205110,
+          "minified": 84827,
+          "gzip": 30814,
+          "brotli": 27831
+        },
+        "entry": 257
+      }
+    },
+    "streamed": {
+      "app": "streaming",
+      "installers": [
+        "installSnapshotHydration",
+        "installAsyncResultHydration",
+        "loadingMarkerHydration",
+        "streamLedgerHydration",
+        "eventReplayHydration"
+      ],
+      "selected": {
+        "total": {
+          "emitted": 129904,
+          "minified": 50289,
+          "gzip": 19248,
+          "brotli": 17507
+        },
+        "runtime": {
+          "emitted": 125479,
+          "minified": 48221,
+          "gzip": 18366,
+          "brotli": 16738
+        },
+        "entry": 630
+      },
+      "general": {
+        "total": {
+          "emitted": 142311,
+          "minified": 54834,
+          "gzip": 20767,
+          "brotli": 18852
+        },
+        "runtime": {
+          "emitted": 138228,
+          "minified": 52970,
+          "gzip": 19966,
+          "brotli": 18121
+        },
+        "entry": 257
+      }
+    },
+    "full-feature": {
+      "app": "full",
+      "installers": [
+        "installSnapshotHydration",
+        "installAsyncResultHydration",
+        "installSsrClientHydration",
+        "installSsrHybridHydration",
+        "installStoreHydration",
+        "installErrorMarkerHydration",
+        "loadingMarkerHydration",
+        "streamLedgerHydration",
+        "lazyAssetHydration",
+        "eventReplayHydration"
+      ],
+      "selected": {
+        "total": {
+          "emitted": 212496,
+          "minified": 88229,
+          "gzip": 32191,
+          "brotli": 29018
+        },
+        "runtime": {
+          "emitted": 205017,
+          "minified": 84724,
+          "gzip": 30766,
+          "brotli": 27759
+        },
+        "entry": 950
+      },
+      "general": {
+        "total": {
+          "emitted": 212437,
+          "minified": 88201,
+          "gzip": 32183,
+          "brotli": 28974
+        },
+        "runtime": {
+          "emitted": 205561,
+          "minified": 85086,
+          "gzip": 30897,
+          "brotli": 27847
+        },
+        "entry": 257
+      }
+    }
+  },
+  "compiler": {
+    "read-only": {
+      "resolveBootstrap": {
+        "medianUs": 13.08500000004642,
+        "n": 2000
+      },
+      "resolveBootstrapInlineMap": {
+        "medianUs": 21.939999999972315,
+        "n": 2000
+      },
+      "resolveGeneral": {
+        "medianUs": 2.676999999948748,
+        "n": 2000
+      },
+      "jsxCompileApp": {
+        "medianUs": 1105.5820000000267,
+        "n": 200
+      }
+    },
+    "event-only": {
+      "resolveBootstrap": {
+        "medianUs": 11.946999999963737,
+        "n": 2000
+      },
+      "resolveBootstrapInlineMap": {
+        "medianUs": 19.45800000021336,
+        "n": 2000
+      },
+      "resolveGeneral": {
+        "medianUs": 1.4169999999467109,
+        "n": 2000
+      },
+      "jsxCompileApp": {
+        "medianUs": 595.3620000000228,
+        "n": 200
+      }
+    },
+    "synchronous-only": {
+      "resolveBootstrap": {
+        "medianUs": 9.681999999884283,
+        "n": 2000
+      },
+      "resolveBootstrapInlineMap": {
+        "medianUs": 20.160000000032596,
+        "n": 2000
+      },
+      "resolveGeneral": {
+        "medianUs": 1.5989999997145787,
+        "n": 2000
+      },
+      "jsxCompileApp": {
+        "medianUs": 1494.9400000000423,
+        "n": 200
+      }
+    },
+    "store-using": {
+      "resolveBootstrap": {
+        "medianUs": 17.30600000018967,
+        "n": 2000
+      },
+      "resolveBootstrapInlineMap": {
+        "medianUs": 27.987999999822932,
+        "n": 2000
+      },
+      "resolveGeneral": {
+        "medianUs": 1.7510000002403103,
+        "n": 2000
+      },
+      "jsxCompileApp": {
+        "medianUs": 1379.4800000000578,
+        "n": 200
+      }
+    },
+    "streamed": {
+      "resolveBootstrap": {
+        "medianUs": 17.872999999781314,
+        "n": 2000
+      },
+      "resolveBootstrapInlineMap": {
+        "medianUs": 24.918000000070606,
+        "n": 2000
+      },
+      "resolveGeneral": {
+        "medianUs": 1.0080000001835288,
+        "n": 2000
+      },
+      "jsxCompileApp": {
+        "medianUs": 944.6989999996731,
+        "n": 200
+      }
+    },
+    "full-feature": {
+      "resolveBootstrap": {
+        "medianUs": 27.065000000220607,
+        "n": 2000
+      },
+      "resolveBootstrapInlineMap": {
+        "medianUs": 35.213000000112515,
+        "n": 2000
+      },
+      "resolveGeneral": {
+        "medianUs": 1.0099999999511056,
+        "n": 2000
+      },
+      "jsxCompileApp": {
+        "medianUs": 1834.4290000004548,
+        "n": 200
+      }
+    }
+  }
+}

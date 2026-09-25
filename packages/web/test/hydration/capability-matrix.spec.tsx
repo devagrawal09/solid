@@ -27,7 +27,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { capabilityApps, type CapabilityApp } from "../harness/capability-apps.js";
-import { capabilityMatrix } from "../hydration-capabilities/matrix.js";
+import { capabilityMatrix, summaryCases } from "../hydration-capabilities/matrix.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const artifactsDir = resolve(here, "../harness/__capability_artifacts__");
@@ -64,6 +64,8 @@ type Runtime = {
   hydrate: (fn: () => any, el: Element) => () => void;
   flush: () => void;
   createComponent: (c: any, p: any) => any;
+  solid: any;
+  web: any;
 };
 
 // A fresh solid-js/@solidjs/web instance pair, with the hydrate() either the
@@ -82,7 +84,7 @@ async function freshRuntime(manifest: string | null): Promise<Runtime> {
       throw new Error(`No composed entry for manifest "${manifest}" — run the manifest spec`);
     hydrate = ((await load()) as any).hydrate;
   }
-  return { hydrate, flush: solid.flush, createComponent: solid.createComponent };
+  return { hydrate, flush: solid.flush, createComponent: solid.createComponent, solid, web };
 }
 
 async function settle(rt: Runtime) {
@@ -285,4 +287,81 @@ describe("capability-selected hydration matrix", () => {
       );
     }
   }
+
+  // Bootstrap fallback: summaries the resolver cannot prove select the
+  // general runtime, which must hydrate exactly like the universal hydrate();
+  // an application envelope's hydration section selects its specialized entry.
+  for (const c of summaryCases) {
+    const app = appByName.get(c.app)!;
+    test(`bootstrap for summary "${c.summary}" (${c.mode}) hydrates ${c.app} like the universal runtime`, async () => {
+      const out = await runCase(app, `summary-${c.summary}`);
+      const ref = await reference(app);
+      expect(out.errors).toEqual([]);
+      expect(out.warnings).toEqual([]);
+      expect(out.text).toBe(app.expectedTextAfterReplay ?? app.expectedText);
+      expect(out.html).toBe(ref.html);
+      expect(out.lost).toEqual(ref.lost);
+      expect(out.created).toEqual(ref.created);
+      expect(out.htmlAfterClick).toBe(ref.htmlAfterClick);
+    });
+  }
+});
+
+describe("a sparse bootstrap never removes reactive implementations", () => {
+  test("after hydrating with the capability-free read-only entry, Loading, Errored, async memos, async derived stores and lazy() still work client-side", async () => {
+    const app = appByName.get("read-only")!;
+    const out = await runCase(app, "read-only");
+    expect(out.errors).toEqual([]);
+    // The runtime of that case is the one still loaded.
+    const solid: any = await import("solid-js");
+    const web: any = await import("@solidjs/web");
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const errors: unknown[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a) => void errors.push(a));
+    const dispose = web.render(() => {
+      const late = solid.createMemo(async () => {
+        await sleep(5);
+        return "late";
+      });
+      const [store] = solid.createStore(
+        async () => {
+          await sleep(5);
+          return { n: 1 };
+        },
+        { n: 0 }
+      );
+      const Page = solid.lazy(() => Promise.resolve({ default: () => "lazy" }));
+      return [
+        solid.createComponent(solid.Loading, {
+          fallback: "wait",
+          get children() {
+            return [
+              () => late(),
+              " ",
+              () => `store ${store.n}`,
+              " ",
+              solid.createComponent(Page, {})
+            ];
+          }
+        }),
+        " ",
+        solid.createComponent(solid.Errored, {
+          fallback: (e: () => Error) => `caught ${e().message}`,
+          get children() {
+            return solid.createComponent(() => {
+              throw new Error("x");
+            }, {});
+          }
+        })
+      ];
+    }, host);
+    await sleep(40);
+    solid.flush();
+    await sleep(40);
+    solid.flush();
+    expect(host.textContent).toBe("late store 1 lazy caught x");
+    expect(errors).toEqual([]);
+    dispose();
+  });
 });

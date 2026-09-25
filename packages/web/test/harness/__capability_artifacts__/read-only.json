@@ -1,0 +1,6 @@
+{
+  "name": "read-only",
+  "records": [],
+  "shell": "<script>window._$HY||(e=>{let t=e=>e&&e.hasAttribute&&(e.hasAttribute(\"_hk\")?e:t(e.host&&e.host.nodeType?e.host:e.parentNode));[\"\"].forEach((o=>document.addEventListener(o,(o=>{if(!e.events)return;let s=t(o.composedPath&&o.composedPath()[0]||o.target);s&&!e.completed.has(s)&&e.events.push([s,o])}))))})(_$HY={events:[],completed:new WeakSet,r:{},fe(){}});</script><!--xs--><article _hk=1><h1>catalog</h1><p>items <!--$-->3<!--/--></p><!--$--><b _hk=50>many</b><!--/--><ul><li _hk=600>alpha</li><li _hk=610>beta</li><li _hk=620>gamma</li></ul></article>",
+  "rest": ""
+}
