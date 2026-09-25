@@ -77,6 +77,9 @@ describe("classification (client graph)", () => {
     expect(limit).toMatchObject({ class: "shared", moved: false });
     expect(modules["src/features/stats.ts"].residue).toEqual([]);
     expect(client.iterations).toBe(2);
+    // A registered action keeps its identity: created by module evaluation, never moved.
+    const persist = client.bindings.find(b => b.module === "src/state.ts" && b.name === "persist");
+    expect(persist).toMatchObject({ class: "shared", moved: false });
   });
 
   it("proves event-only blocks across modules, barrels and prop forwarding", () => {

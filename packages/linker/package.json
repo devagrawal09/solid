@@ -6,7 +6,9 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.js"
+    ".": "./src/index.js",
+    "./runtime": "./src/runtime.js",
+    "./rollup": "./src/plugin.js"
   },
   "files": [
     "src",

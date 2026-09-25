@@ -4,8 +4,14 @@
 //                  typed summaries and library summaries
 //   analyze        event-only proofs, fixed-point hot|cold|shared|unknown
 //                  classification, interaction-domain clustering
+//   planExtraction slice 3: hot shells, cold block/residue/domain modules
 //   buildManifest  the `solid-link-manifest` document
+//   solidColdEvents the Rollup/Vite build plugin (also `@solidjs/linker/rollup`)
+//
+// Runtime: `@solidjs/linker/runtime` (`coldEvent`, `coldDomain`,
+// `prefetchColdDomains`).
 export { analyze, classOf, LABELS } from "./analyze.js";
+export { planExtraction, blockExportKey, DOMAIN_PREFIX, DOMAIN_ID_PREFIX } from "./extract.js";
 export {
   loadGraph,
   loadTypedSummaries,
@@ -17,6 +23,7 @@ export {
   LIBRARY_SCHEMA
 } from "./load.js";
 export { buildManifest, MANIFEST_SCHEMA, MANIFEST_VERSION } from "./manifest.js";
+export { solidColdEvents } from "./plugin.js";
 
 import fs from "node:fs";
 import { analyze } from "./analyze.js";
