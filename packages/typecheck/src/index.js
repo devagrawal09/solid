@@ -20,6 +20,17 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import { buildSummaries, writeSummaries } from "./summary.js";
+
+export {
+  buildSummaries,
+  writeSummaries,
+  mapToGenerated,
+  sourceHash,
+  MODULE_SCHEMA,
+  INDEX_SCHEMA,
+  SUMMARY_VERSION
+} from "./summary.js";
 
 const require = createRequire(import.meta.url);
 
@@ -119,8 +130,21 @@ export function formatDiagnostics(diagnostics, cwd = process.cwd()) {
 /**
  * Check (and emit, unless `noEmit`) one project. Returns the authored-position
  * diagnostics and the emit result.
+ *
+ * `summaries` (Track C): `true` builds the typed module summaries
+ * (`result.summaries = { index, modules }`); `{ outDir }` also writes them
+ * (`<outDir>/index.json`, `<outDir>/<module>.summary.json`); `rootDir`
+ * (default: the tsconfig's directory, else `cwd`) is what module paths are
+ * relative to.
  */
-export function check({ project, options: overrides = {}, files, cwd = process.cwd() }) {
+export function check({
+  project,
+  options: overrides = {},
+  files,
+  cwd = process.cwd(),
+  summaries,
+  compiler = loadCompiler()
+}) {
   let options;
   let fileNames;
   if (project) {
@@ -144,7 +168,7 @@ export function check({ project, options: overrides = {}, files, cwd = process.c
     fileNames = (files ?? []).map(file => path.resolve(cwd, file));
   }
   const projections = new Map();
-  const host = createProjectedHost(options, projections);
+  const host = createProjectedHost(options, projections, compiler);
   const program = ts.createProgram({ rootNames: fileNames, options, host });
   const diagnostics = [...ts.getPreEmitDiagnostics(program)];
   let emitSkipped = true;
@@ -153,7 +177,23 @@ export function check({ project, options: overrides = {}, files, cwd = process.c
     diagnostics.push(...result.diagnostics);
     emitSkipped = result.emitSkipped;
   }
-  return { diagnostics: remapDiagnostics(diagnostics, projections), emitSkipped, projections };
+  const result = {
+    diagnostics: remapDiagnostics(diagnostics, projections),
+    emitSkipped,
+    projections
+  };
+  if (summaries) {
+    const rootDir =
+      (typeof summaries === "object" && summaries.rootDir) ||
+      (project ? path.dirname(path.resolve(cwd, project)) : cwd);
+    const started = performance.now();
+    result.summaries = buildSummaries({ program, projections, compiler, rootDir, diagnostics });
+    if (typeof summaries === "object" && summaries.outDir) {
+      writeSummaries(result.summaries, path.resolve(cwd, summaries.outDir));
+    }
+    result.summaryTime = performance.now() - started;
+  }
+  return result;
 }
 
 /** CLI entry: a `tsc`-shaped argument list; returns the exit code. */
@@ -164,13 +204,26 @@ export function run(argv, { log = console.log, cwd = process.cwd() } = {}) {
     log("solid-tsc: --build and --watch are not supported; run each project with -p");
     return 1;
   }
+  // `--solidSummaries <dir>`: emit typed module summaries (not a tsc option,
+  // so it is taken out before tsc parses the rest).
+  let summaries;
+  const summaryIndex = argv.indexOf("--solidSummaries");
+  if (summaryIndex !== -1) {
+    const outDir = argv[summaryIndex + 1];
+    if (!outDir || outDir.startsWith("-")) {
+      log("solid-tsc: --solidSummaries requires an output directory");
+      return 1;
+    }
+    summaries = { outDir };
+    argv = [...argv.slice(0, summaryIndex), ...argv.slice(summaryIndex + 2)];
+  }
   const parsed = ts.parseCommandLine(argv);
   if (parsed.errors.length) {
     log(formatDiagnostics(parsed.errors, cwd));
     return 1;
   }
   const { project, ...options } = parsed.options;
-  const result = check({ project, options, files: parsed.fileNames, cwd });
+  const result = check({ project, options, files: parsed.fileNames, cwd, summaries });
   const errors = result.diagnostics.filter(d => d.category === ts.DiagnosticCategory.Error);
   if (result.diagnostics.length) log(formatDiagnostics(result.diagnostics, cwd));
   return errors.length ? 1 : 0;

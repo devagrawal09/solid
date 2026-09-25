@@ -52,6 +52,23 @@ The forms the native compiler lowers as paths, and only those: a `yield*` operan
 
 Left as written (TypeScript's own diagnosis of the authored code applies): optional chains (`store.user?.name`), calls (`store.items.filter(...)` — use `yield* readStore(store, s => s.items.filter(...))`), computed keys other than a literal or a bare identifier (`store.items[i + 1]` — bind the index first), `splitProps` / `mergeProps` results (ordinary objects; the compiler lowers reads on them as store paths, which track through their getters). A refused string operand is reported at the block (`TS2345`, the generator yields `string`), a refused non-iterable operand at the operand (`TS2488`).
 
+## Typed module summaries (strict linker input)
+
+```bash
+solid-tsc -p tsconfig.json --noEmit --solidSummaries .solid/summaries
+```
+
+Writes `index.json` (schema `solid-summary-index`) and one `<module>.summary.json` (schema `solid-module-summary`, version 1) per authored module, for the strict bundler/linker (`@solidjs/linker`). Each summary joins the compiler's behavioral summary (`summarizeModule`: imports/exports, bindings and their references, top-level effects, `$` blocks with operations, captures, escapes, event usage and sites, component prop usage, JSX event bindings, unknowns) with what only the checker knows:
+
+- resolved identity (file, name, authored position) of every import and export, through renaming re-exports and `export *`;
+- each block's instantiated `Block<Value, Reads, Tasks, Failures, Writes, Input>`, its brand, whether its input is a DOM `Event`, and a consistency check against the behavioral operations (`mismatches`);
+- each capture's type and validated brands (`block`, `accessor`, `setter`, `store`, `action`, `props`, `domNode`, `function`, `primitive`) plus a shallow `serializable` flag;
+- each direct path read's root type, path tuple and selected value type;
+- component prop types with brands, and the instantiated (contextual) prop type at each JSX event/prop site;
+- the module's type-error count (strict analysis does not trust a module with errors).
+
+Positions are authored UTF-16 offsets (projected modules are mapped back), type strings use root-relative paths, and every summary carries a `sha256` of its authored text so a stale summary is detected. Programmatically: `check({ project, summaries: true | { outDir, rootDir } })` returns `result.summaries = { index, modules }`.
+
 ## Editor limitation
 
 No TypeScript language-service plugin ships yet. Editors run stock `tsc` and still report the authored `yield* store.user.name` as an error (a `string` iterated to `void`, or TS2488 for numbers); the project's `solid-tsc` run is the source of truth. A language-service plugin would apply the same projection to the editor's program; it is not included because a plugin cannot rewrite source text reliably across the LSP surface (completions, renames and quick info would need the same position mapping in reverse).

@@ -3,6 +3,8 @@ dist/
 lib/
 # ...but an example's source tree may legitimately have one (src/lib/api.ts).
 !examples/*/src/lib/
+# The solid-tsc library fixture is source, not a build output.
+!packages/typecheck/tests/fixtures/lib/
 coverage/
 types/
 types-cjs/
