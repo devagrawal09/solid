@@ -1,0 +1,103 @@
+{
+  "meta": {
+    "node": "v22.22.2",
+    "v8": "12.4.254.21-node.39",
+    "cpu": "Intel(R) Xeon(R) Processor @ 2.80GHz",
+    "cores": 4,
+    "platform": "linux 6.18.44-fc-v37",
+    "samples": 21,
+    "ops": 200,
+    "warmup": 400,
+    "readsPerOp": 1000,
+    "rooted": false,
+    "dist": "file:///tmp/claude-0/-home-user-repo/c568bc04-86fe-5fee-a427-f1a72827f015/scratchpad/base/packages/signals/dist/prod/index.js",
+    "date": "2026-09-25T07:47:39.374Z"
+  },
+  "mode": "alloc",
+  "results": {
+    "shallow": {
+      "proxy": {
+        "bytesPerRead": 0.7163999999999999,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      },
+      "rewalk": {
+        "bytesPerRead": 665.5712,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      }
+    },
+    "deep": {
+      "proxy": {
+        "bytesPerRead": 0.5648,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      },
+      "rewalk": {
+        "bytesPerRead": 665.4011999999999,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      }
+    },
+    "dynamic": {
+      "proxy": {
+        "bytesPerRead": 1.7528,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      },
+      "rewalk": {
+        "bytesPerRead": 706.4692,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      }
+    },
+    "list": {
+      "proxy": {
+        "bytesPerRead": 619.7152,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      },
+      "rewalk": {
+        "bytesPerRead": 2062.2416000000003,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      }
+    },
+    "mount": {
+      "proxy": {
+        "bytesPerRead": 2600.6784,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      },
+      "rewalk": {
+        "bytesPerRead": 4427.672799999999,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      }
+    },
+    "update": {
+      "proxy": {
+        "bytesPerRead": 2877.2,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      },
+      "rewalk": {
+        "bytesPerRead": 3308,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      }
+    }
+  }
+}

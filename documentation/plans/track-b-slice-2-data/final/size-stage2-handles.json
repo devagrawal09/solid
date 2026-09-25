@@ -1,0 +1,21 @@
+{
+  "label": "stage2",
+  "repo": "/home/user/repo",
+  "handles": true,
+  "app": {
+    "raw": 1097,
+    "gzip": 558,
+    "brotli": 498
+  },
+  "bundle": {
+    "raw": 49850,
+    "gzip": 18262,
+    "brotli": 16537
+  },
+  "compat": {
+    "raw": 50574,
+    "gzip": 18618,
+    "brotli": 16853
+  },
+  "compiled": "import { $, createMemo, createRoot, createSignal, createStore, flush, perform as _$perform, readPath1 as _$readPath1, readPath2 as _$readPath2, readPath3 as _$readPath3, readPath4 as _$readPath4, createStoreHandle as _$createStoreHandle, readHandle2 as _$readHandle2, readHandle3 as _$readHandle3, readHandle4 as _$readHandle4, readHandle1 as _$readHandle1, storeProxy as _$storeProxy } from \"solid-js\";\nexport function app(rows) {\n\treturn createRoot(() => {\n\t\tconst [store, setStore] = _$createStoreHandle({\n\t\t\tuser: {\n\t\t\t\tname: \"Ada\",\n\t\t\t\taddress: {\n\t\t\t\t\tcity: \"London\",\n\t\t\t\t\tzip: \"N1\"\n\t\t\t\t},\n\t\t\t\tprefs: { theme: { mode: \"dark\" } }\n\t\t\t},\n\t\t\tfilter: \"all\",\n\t\t\titems: rows,\n\t\t\tcount: 0\n\t\t});\n\t\tconst [index, setIndex] = createSignal(0);\n\t\tconst name = createMemo($(function() {\n\t\t\treturn _$readHandle2(store, \"user\", \"name\");\n\t\t}));\n\t\tconst city = createMemo($(function() {\n\t\t\treturn _$readHandle3(store, \"user\", \"address\", \"city\");\n\t\t}));\n\t\tconst mode = createMemo($(function() {\n\t\t\treturn _$readHandle4(store, \"user\", \"prefs\", \"theme\", \"mode\");\n\t\t}));\n\t\tconst filter = createMemo($(function() {\n\t\t\treturn _$readHandle1(store, \"filter\");\n\t\t}));\n\t\tconst count = createMemo($(function() {\n\t\t\treturn _$readHandle1(store, \"count\");\n\t\t}));\n\t\tconst length = createMemo($(function() {\n\t\t\treturn _$readHandle2(store, \"items\", \"length\");\n\t\t}));\n\t\tconst current = createMemo($(function() {\n\t\t\tconst i = _$perform(index);\n\t\t\treturn `${_$readHandle3(store, \"items\", i, \"title\")}:${_$readHandle4(store, \"items\", i, \"meta\", \"done\")}`;\n\t\t}));\n\t\tconst summary = createMemo($(function() {\n\t\t\treturn `${_$perform(name)} in ${_$perform(city)} (${_$perform(mode)}) ${_$perform(filter)} ${_$perform(count)}/${_$perform(length)}`;\n\t\t}));\n\t\tconst labels = [];\n\t\tfor (let i = 0; i < rows.length; i++) {\n\t\t\tconst row = _$storeProxy(store).items[i];\n\t\t\tlabels.push(createMemo($(function() {\n\t\t\t\treturn `${_$readPath1(row, \"title\")}${_$readPath2(row, \"meta\", \"done\") ? \" ✓\" : \"\"}`;\n\t\t\t})));\n\t\t}\n\t\treturn {\n\t\t\tsummary,\n\t\t\tcurrent,\n\t\t\tlabels,\n\t\t\tsetStore,\n\t\t\tsetIndex,\n\t\t\tflush\n\t\t};\n\t});\n}\n"
+}

@@ -1,0 +1,193 @@
+{
+  "meta": {
+    "node": "v22.22.2",
+    "v8": "12.4.254.21-node.39",
+    "cpu": "Intel(R) Xeon(R) Processor @ 2.80GHz",
+    "cores": 4,
+    "platform": "linux 6.18.44-fc-v37",
+    "samples": 21,
+    "ops": 200,
+    "warmup": 400,
+    "readsPerOp": 1000,
+    "rooted": false,
+    "dist": "file:///tmp/claude-0/-home-user-repo/c568bc04-86fe-5fee-a427-f1a72827f015/scratchpad/dist-stage1/prod/index.js",
+    "date": "2026-09-25T07:48:00.976Z"
+  },
+  "mode": "alloc",
+  "results": {
+    "shallow": {
+      "proxy": {
+        "bytesPerRead": 0.7163999999999999,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      },
+      "rewalk": {
+        "bytesPerRead": 281.2964,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      },
+      "handle": {
+        "bytesPerRead": 0.9568,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      },
+      "fused": {
+        "bytesPerRead": 0.5648,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      },
+      "generic": {
+        "bytesPerRead": 0.5648,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      },
+      "inline": {
+        "bytesPerRead": 0.5648,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      }
+    },
+    "deep": {
+      "proxy": {
+        "bytesPerRead": 0.3328,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      },
+      "rewalk": {
+        "bytesPerRead": 280.94559999999996,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      },
+      "handle": {
+        "bytesPerRead": 0.6048,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      },
+      "fused": {
+        "bytesPerRead": 0.3328,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      },
+      "generic": {
+        "bytesPerRead": 0.3328,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      },
+      "inline": {
+        "bytesPerRead": 0.3328,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      }
+    },
+    "dynamic": {
+      "proxy": {
+        "bytesPerRead": 1.5208,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      },
+      "rewalk": {
+        "bytesPerRead": 321.9908,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      },
+      "handle": {
+        "bytesPerRead": 1.7928,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      },
+      "fused": {
+        "bytesPerRead": 1.5208,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      },
+      "inline": {
+        "bytesPerRead": 41.522,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      }
+    },
+    "list": {
+      "proxy": {
+        "bytesPerRead": 619.7216,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      },
+      "rewalk": {
+        "bytesPerRead": 1292.6932,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      },
+      "handle": {
+        "bytesPerRead": 732.7204,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      },
+      "fused": {
+        "bytesPerRead": 619.7216,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      }
+    },
+    "mount": {
+      "proxy": {
+        "bytesPerRead": 2594.74,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      },
+      "rewalk": {
+        "bytesPerRead": 3649.2636,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      },
+      "handle": {
+        "bytesPerRead": 2595.1972,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      }
+    },
+    "update": {
+      "proxy": {
+        "bytesPerRead": 2670.4,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      },
+      "rewalk": {
+        "bytesPerRead": 2674.4,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      },
+      "handle": {
+        "bytesPerRead": 2293.2,
+        "scavenges": 0,
+        "cleanWindows": 5,
+        "windows": 5
+      }
+    }
+  }
+}
