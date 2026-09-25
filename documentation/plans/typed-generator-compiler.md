@@ -108,6 +108,8 @@ The eight measured optimization slices are:
 
 Generator lowering, host fusion/block erasure to handwritten-equivalent Solid, and exclusion of the runtime generator fallback are strict-mode correctness and code-generation parity requirements, not optimization slices. Compat may retain block abstractions and fallback support where needed; strict must reject unsupported blocks and introduce no measurable overhead for qualifying code. Their transform cost, runtime parity, allocations, and compatibility bundle cost remain required acceptance measurements.
 
+Track A (slices 1 and 4) is prototyped and measured in [track-a/README.md](track-a/README.md): slice 1 is ITERATE (keep the `BLOCK_SYNC` proof and `syncOnly`; reject the separate status-free recompute as built), slice 4 is KEEP as an experiment (`@solidjs/signals/sync` selected by a whole-graph capability linker).
+
 ### Remaining Work
 
 - Independently review the accumulated experimental diff and public API naming.

@@ -347,6 +347,36 @@ importers:
         specifier: ^7.0.0
         version: 7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0)
 
+  examples/sync-blocks:
+    devDependencies:
+      '@solidjs/compiler':
+        specifier: workspace:*
+        version: link:../../packages/compiler
+      '@solidjs/signals':
+        specifier: workspace:*
+        version: link:../../packages/signals
+      '@solidjs/vite-plugin':
+        specifier: 3.0.0-next.35
+        version: 3.0.0-next.35(@solidjs/web@packages+web)(@testing-library/jest-dom@6.9.1)(solid-js@packages+solid)(vite@7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0))
+      '@solidjs/web':
+        specifier: workspace:*
+        version: link:../../packages/web
+      jsdom:
+        specifier: ^25.0.1
+        version: 25.0.1
+      solid-js:
+        specifier: workspace:*
+        version: link:../../packages/solid
+      typescript:
+        specifier: ^6.0.2
+        version: 6.0.3
+      vite:
+        specifier: ^7.0.0
+        version: 7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0)
+      vitest:
+        specifier: ^4.1.6
+        version: 4.1.6(@types/node@25.6.0)(@vitest/coverage-v8@4.1.6)(jsdom@25.0.1)(vite@7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0))
+
   examples/todos:
     devDependencies:
       '@solidjs/vite-plugin':

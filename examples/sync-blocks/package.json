@@ -1,0 +1,25 @@
+{
+  "name": "sync-blocks-example",
+  "description": "An async-free app in `$` typed generator blocks (local todo list + typed converter). Track A stage 2: the capability linker proves its client graph async-free and selects the async-free runtime (@solidjs/signals/sync).",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "summary": "node ../../packages/typecheck/bin/solid-tsc.js --noEmit -p tsconfig.json --capabilities .solid-capabilities.json",
+    "build": "pnpm summary && vite build",
+    "test": "pnpm summary && vitest run",
+    "typecheck": "node ../../packages/typecheck/bin/solid-tsc.js --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@solidjs/compiler": "workspace:*",
+    "@solidjs/signals": "workspace:*",
+    "@solidjs/vite-plugin": "3.0.0-next.35",
+    "@solidjs/web": "workspace:*",
+    "jsdom": "^25.0.1",
+    "solid-js": "workspace:*",
+    "typescript": "^6.0.2",
+    "vite": "^7.0.0",
+    "vitest": "^4.1.6"
+  }
+}

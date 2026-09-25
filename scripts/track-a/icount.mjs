@@ -32,7 +32,13 @@ const WARMUP = { mount: 20, update: 100 };
 const ONLY = args.variants ? args.variants.split(",") : null;
 const RUNTIME = args.runtime ? args.runtime : undefined;
 
-const outDir = join(ROOT, "node_modules/.cache/track-a/icount-modules");
+// One module directory per runtime: workers load their module per cell, so
+// concurrent runs against different runtimes must not share files.
+const outDir = join(
+  ROOT,
+  "node_modules/.cache/track-a/icount-modules",
+  (RUNTIME ?? "prod").replace(/\W+/g, "-")
+);
 const modules = {};
 for (const scenario of SCENARIOS) {
   for (const [variant, { source, options, rewrite }] of Object.entries(VARIANTS)) {
