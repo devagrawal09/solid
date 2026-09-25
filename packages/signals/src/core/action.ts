@@ -1,3 +1,4 @@
+import { markAsyncCapability } from "./dev.js";
 import {
   actionStepDepth,
   activeTransition,
@@ -106,6 +107,7 @@ export function action<Args extends any[], Y, R>(
   genFn: (...args: Args) => Generator<Y, R, any> | AsyncGenerator<Y, R, any>
 ) {
   return (...args: Args): Promise<R> => {
+    if (__TEST__) markAsyncCapability();
     // Invoking an action starts a transaction — like a write, it is invalid
     // synchronously inside an owned scope. The write guard can't catch this
     // at the real hazard point: post-await writes run with no ambient owner,

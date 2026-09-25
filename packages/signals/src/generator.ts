@@ -1,3 +1,4 @@
+import { markAsyncCapability } from "./core/dev.js";
 import { STATUS_ERROR } from "./core/constants.js";
 import { unwrapStatusError } from "./core/error.js";
 import {
@@ -658,6 +659,7 @@ export function wait<T, C extends ErrorClass<any>[] = []>(
   promise: PromiseLike<T>,
   ...errors: C
 ): AsyncOp<T, C extends [] ? unknown : InstanceType<C[number]>> {
+  if (__TEST__) markAsyncCapability();
   return { [OP]: "wait", promise, delegated: false, [Symbol.iterator]: opIterator } as any;
 }
 

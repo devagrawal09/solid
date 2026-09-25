@@ -23,9 +23,13 @@ afterAll(() => {
   for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
 });
 
-async function bundleFixture(code: string): Promise<{
+async function bundleFixture(
+  code: string,
+  { asyncCapability = true }: { asyncCapability?: boolean } = {}
+): Promise<{
   minifiedBytes: number;
   retained: string[];
+  code: string;
 }> {
   const dir = mkdtempSync(join(tmpdir(), "solid-treeshake-"));
   tempDirs.push(dir);
@@ -34,13 +38,28 @@ async function bundleFixture(code: string): Promise<{
   const result = (await build({
     configFile: false,
     logLevel: "silent",
-    define: { __DEV__: "false", __OBSERVE__: "false", __TEST__: "false" },
-    resolve: { alias: { sigsrc: join(SRC, "index.ts") } },
+    define: {
+      __DEV__: "false",
+      __OBSERVE__: "false",
+      __TEST__: "false",
+      __ASYNC__: String(asyncCapability)
+    },
+    resolve: {
+      alias: {
+        "sigsrc-sync": join(SRC, "index.sync.ts"),
+        sigsrc: join(SRC, "index.ts")
+      }
+    },
     build: {
       write: false,
       minify: false,
       target: "esnext",
-      lib: { entry, formats: ["es"], fileName: "out" }
+      lib: { entry, formats: ["es"], fileName: "out" },
+      // The async-free entry is pre-pruned at library build time with try
+      // deoptimization off (rollup.config.js): its dead async branches sit
+      // inside recompute's try, which rollup otherwise never shakes (#2883).
+      // App bundlers then consume already-pruned modules.
+      rollupOptions: asyncCapability ? {} : { treeshake: { tryCatchDeoptimization: false } }
     }
   })) as Rollup.RollupOutput[];
   const chunk = result[0].output[0];
@@ -53,7 +72,8 @@ async function bundleFixture(code: string): Promise<{
     minify: true,
     mangleProps: /^_/
   });
-  return { minifiedBytes: Buffer.byteLength(minified.code), retained };
+  // `code` is the unminified bundle: markers are source-level names.
+  return { minifiedBytes: Buffer.byteLength(minified.code), retained, code: chunk.code };
 }
 
 function retainedFrom(retained: string[], names: string[]): string[] {
@@ -243,6 +263,43 @@ describe("pay-for-use tree-shaking (#2883)", () => {
     // at 22,945.
     expect(minifiedBytes).toBeLessThan(23_000);
     expect(retainedFrom(retained, ["core/status-free.ts"])).toEqual([]);
+  });
+
+  it("the async-free entry sheds async handling, pending propagation and transactions", async () => {
+    const floor = `export { createSignal, createMemo, createEffect, createRoot, flush } from`;
+    const full = await bundleFixture(`${floor} "sigsrc";`);
+    const sync = await bundleFixture(`${floor} "sigsrc-sync";`, { asyncCapability: false });
+    // The async-only module disappears entirely from the floor except for
+    // the error-status helpers the core keeps (clearStatus / notifyStatus /
+    // the errored-dependents sweep live in async.ts too).
+    expect(sync.minifiedBytes).toBeLessThan(full.minifiedBytes);
+    // Each marker is a function (or class) only its async capability uses.
+    const markers = [
+      // Promise / AsyncIterable handling and flight cancellation.
+      "function handleAsync",
+      "Symbol.asyncIterator",
+      "function releaseFlightTeardown",
+      // Pending status and its propagation.
+      "function settlePendingSource",
+      "function parkLoadingWindow",
+      "function addPendingSource",
+      "function setPendingError",
+      // NotReadyError (neither produced nor tested by the core).
+      "class NotReadyError",
+      // Async transitions: adoption, completion accounting, lanes.
+      "function transitionComplete",
+      "function mergeTransitionState",
+      "function runInTransition",
+      "function assignOrMergeLane"
+    ];
+    for (const marker of markers) {
+      // Present in the full floor (the markers are real), absent from sync.
+      expect({ marker, inFull: full.code.includes(marker) }).toEqual({ marker, inFull: true });
+      expect({ marker, inSync: sync.code.includes(marker) }).toEqual({ marker, inSync: false });
+    }
+    // Measured at 13,928 (full floor 22,945) when stage 2 landed; see
+    // documentation/plans/track-a.
+    expect(sync.minifiedBytes).toBeLessThan(14_700);
   });
 
   it("importing statusFree retains the status-free recompute (hook side effect)", async () => {

@@ -1,3 +1,4 @@
+import { markAsyncCapability } from "./core/dev.js";
 import { createErrorBoundary, createLoadingBoundary } from "./boundaries.js";
 import {
   $,
@@ -35,6 +36,7 @@ export function loading<B extends AnyBlock & ReactiveHostBlock, F>(
   block: B,
   fallback: () => F
 ): Block<BlockValue<B> | F, ColoredAccessor<BlockValue<B> | F, false, BlockErrors<B>>> {
+  if (__TEST__) markAsyncCapability();
   const inner = createMemo(block);
   const view = createLoadingBoundary(() => inner(), fallback) as SourceAccessor<BlockValue<B> | F>;
   return $(function* () {

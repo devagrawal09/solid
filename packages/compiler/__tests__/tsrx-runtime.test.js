@@ -81,7 +81,8 @@ async function loadRuntimeModule(code, generate) {
     define: {
       __DEV__: "false",
       __OBSERVE__: "false",
-      __TEST__: "false"
+      __TEST__: "false",
+      __ASYNC__: "true"
     },
     plugins: [
       {

@@ -36,11 +36,12 @@ import prettier from "rollup-plugin-prettier";
 // `attribution.prod.ts`, an inert twin with the same surface — a prod build
 // has no hook sites to feed one.
 
-const flags = (dev, observe) =>
+const flags = (dev, observe, asyncCapability = true) =>
   replace({
     __DEV__: String(dev),
     __OBSERVE__: String(observe),
     __TEST__: "false",
+    __ASYNC__: String(asyncCapability),
     preventAssignment: true
   });
 
@@ -81,6 +82,27 @@ const flat = (name, dev, observe) => ({
   plugins: [flags(dev, observe), ts("dist"), pretty]
 });
 
+// The async-free runtime (Track A stage 2; `@solidjs/signals/sync`, selected
+// by the capability linker for graphs proven async-free — see
+// src/index.sync.ts). `__ASYNC__` false folds the async machinery out of
+// the sources; try deoptimization is off so that folding reaches the dead
+// async branches inside recompute's try blocks (#2883), and the published
+// modules are already pruned when an app bundler consumes them. One prod
+// tree, plus a flat dev file whose checks verify the linker's proof at
+// runtime ([ASYNC_IN_SYNC_GRAPH], [ASYNC_CAPABILITY_EXCLUDED]).
+const syncTree = dir => ({
+  input: { "index.sync": "src/index.sync.ts" },
+  output: { dir, format: "esm", preserveModules: true, preserveModulesRoot: "src" },
+  treeshake: { tryCatchDeoptimization: false },
+  plugins: [flags(false, false, false), ts(dir)]
+});
+const syncDev = {
+  input: { "sync.dev": "src/index.sync.ts" },
+  output: { dir: "dist", format: "esm", entryFileNames: "[name].js" },
+  treeshake: { tryCatchDeoptimization: false },
+  plugins: [flags(true, true, false), ts("dist"), pretty]
+};
+
 export default [
   flat("dev", true, true),
   tree("dist/prod", false, false),
@@ -88,5 +110,7 @@ export default [
   // edge counters, the diagnostics channel), every check folds out. Selected
   // by the `observe` export condition. Gets its own size-limit scenario; the
   // prod tree's caps must not move because of it.
-  tree("dist/observe", false, true)
+  tree("dist/observe", false, true),
+  syncTree("dist/sync"),
+  syncDev
 ];

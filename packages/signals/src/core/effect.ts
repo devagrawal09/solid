@@ -169,6 +169,7 @@ function runEffect(node: Effect<any>, type: number): void {
   // gate stashes it with the owner. Lane-less runners with no live owner
   // (reverts, wake-only lanes) apply now.
   if (
+    __ASYNC__ &&
     node._valueTransition !== null &&
     !currentTransition(node._valueTransition)._done &&
     (type & LANE_RUN ? !node._x?._optimisticLane : activeTransition !== null)

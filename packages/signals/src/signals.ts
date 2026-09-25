@@ -1,3 +1,4 @@
+import { markAsyncCapability } from "./core/dev.js";
 import type { Computed, Disposable, Owner, Refreshable } from "./core/index.js";
 import {
   $REFRESH,
@@ -765,6 +766,7 @@ class MicrotaskQueue extends Queue {
  * @param fn a reactive expression to resolve
  */
 export function resolve<T>(fn: () => T): Promise<T> {
+  if (__TEST__) markAsyncCapability();
   if (__DEV__ && getObserver()) {
     throw new Error(
       "Cannot call resolve inside a reactive scope; it only resolves the current value and does not track updates."
@@ -853,6 +855,7 @@ export function resolve<T>(fn: () => T): Promise<T> {
 export function refresh<T>(
   target: Refreshable<T>
 ): Promise<T extends (...args: any) => infer V ? V : T> {
+  if (__TEST__) markAsyncCapability();
   const node = (target as any)?.[$REFRESH] as Computed<any> | undefined;
   if (!node) {
     if (__DEV__) {
@@ -1008,6 +1011,7 @@ export interface UntilOptions {
  * @param options optional `timeout` (ms) and abort `signal`
  */
 export function until<T>(fn: () => T, options?: UntilOptions): Promise<Truthy<T>> {
+  if (__TEST__) markAsyncCapability();
   if (__DEV__ && getObserver()) {
     throw new Error(
       "Cannot call until inside a reactive scope; await it from an action or another imperative scope."
@@ -1122,6 +1126,7 @@ export function createOptimistic<T>(
   first?: T | ComputeFunction<T>,
   second?: SignalOptions<T> & MemoOptions<T>
 ): Signal<T | undefined> {
+  if (__TEST__) markAsyncCapability();
   // Install before the node exists: only engine-installed programs can carry
   // an _overrideValue slot (same runtime-install pattern as
   // GlobalQueue._clearOptimisticStore in createOptimisticStore).

@@ -7,7 +7,8 @@ export default defineConfig({
   define: {
     __DEV__: "true",
     __OBSERVE__: "true",
-    __TEST__: "true"
+    __TEST__: "true",
+    __ASYNC__: "true"
   },
   resolve: {
     // Array form: entries match in order, and the bare package alias would

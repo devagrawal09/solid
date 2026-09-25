@@ -1,3 +1,4 @@
+import { markAsyncCapability } from "./core/dev.js";
 import { recompute, ext } from "./core/core.js";
 import { unwrapStatusError } from "./core/error.js";
 import {
@@ -480,6 +481,7 @@ export function createLoadingBoundary<T, U>(
   fallback: () => U,
   options?: { on?: () => any }
 ): Accessor<T | U> {
+  if (__TEST__) markAsyncCapability();
   return createCollectionBoundary<T | U>(STATUS_PENDING, fn, () => fallback(), options?.on);
 }
 
@@ -568,6 +570,7 @@ export function createRevealOrder<T>(
   fn: () => T,
   options?: { order?: OrderAccessor; collapsed?: BoolAccessor }
 ): T {
+  if (__TEST__) markAsyncCapability();
   _revealUsed = true;
   const owner = createOwner();
   const parentController = getContext(RevealControllerContext);

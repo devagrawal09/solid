@@ -1,3 +1,4 @@
+import { markAsyncCapability } from "./dev.js";
 /**
  * The isPending()/latest() verdict layer, moved out of core.ts. Importing this
  * module installs the companion-maintenance hooks on GlobalQueue; apps that
@@ -562,6 +563,7 @@ function applyReask(el: Computed<any>, hadReask: boolean): boolean {
 }
 
 export function latest<T>(fn: () => T): T {
+  if (__TEST__) markAsyncCapability();
   const prevLatest = latestReadActive;
   setLatestReadActive(true);
   try {
@@ -572,6 +574,7 @@ export function latest<T>(fn: () => T): T {
 }
 
 export function isPending(fn: () => any): boolean {
+  if (__TEST__) markAsyncCapability();
   const prevPendingCheck = pendingCheckActive;
   const prevProbe = pendingProbe;
   setPendingCheckActive(true);

@@ -251,10 +251,15 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   let devChanged = false;
   if (__OBSERVE__ && attrHooks !== null) attrHooks.recomputeStart(el, create);
   if (!create) {
-    if (el._transition && (!isEffect || activeTransition) && activeTransition !== el._transition)
+    if (
+      __ASYNC__ &&
+      el._transition &&
+      (!isEffect || activeTransition) &&
+      activeTransition !== el._transition
+    )
       globalQueue.initTransition(el._transition);
     deleteFromHeap(el, queueFor(el));
-    if (el._x !== null) {
+    if (__ASYNC__ && el._x !== null) {
       el._x._inFlight = null;
       // Supersede is where an iterator flight dies (#3122): close it now.
       // Its cleanup(close) registration may sit in a zombie-deferred
@@ -264,7 +269,7 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
       releaseFlightTeardown(el);
     }
     // Tracked effects run after finalizePureQueue, so dispose immediately instead of deferring
-    if (el._transition || isEffect === EFFECT_TRACKED) disposeChildren(el);
+    if ((__ASYNC__ && el._transition) || isEffect === EFFECT_TRACKED) disposeChildren(el);
     else if (el._firstChild !== null || el._disposal !== null) {
       markDisposal(el);
       const x = ext(el);
@@ -277,8 +282,10 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
     } else if (__DEV__) clearSignals(el);
   }
 
-  let isOptimisticDirty = !!(el._flags & REACTIVE_OPTIMISTIC_DIRTY);
+  // Optimistic state and its lanes ride transactions: async capabilities.
+  let isOptimisticDirty = __ASYNC__ && !!(el._flags & REACTIVE_OPTIMISTIC_DIRTY);
   const hasOverride =
+    __ASYNC__ &&
     (el._config & CONFIG_OPTIMISTIC) !== 0 &&
     el._x?._overrideValue !== NOT_PENDING &&
     el._x?._overrideValue !== undefined;
@@ -288,14 +295,14 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   // value, leaving blocked dependents outside that source’s settle walk.
   const outgoingError = el._statusFlags & STATUS_ERROR ? el._x?._error : undefined;
   const outgoingPendingSources =
-    el._statusFlags & STATUS_PENDING ? el._x?._pendingSources : undefined;
+    __ASYNC__ && el._statusFlags & STATUS_PENDING ? el._x?._pendingSources : undefined;
   // Pending SOURCE-hood, captured before the compute clears status: a node
   // whose own flight parked dependents self-registers in _pendingSources
   // (notifyStatus, isSource). If this recompute supersedes that flight and
   // settles synchronously, those dependents settle HERE — asyncWrite's
   // settlePendingSource walk never runs for a landing that was preempted
   // (#3181).
-  const wasPendingSource = el._x?._pendingSources?.has(el);
+  const wasPendingSource = __ASYNC__ && el._x?._pendingSources?.has(el);
   // Re-ask classification lives in the verdict module; capture the flag before
   // the recompute wipes _flags below.
   const hadReask = (el._flags & REACTIVE_REASK) !== 0;
@@ -339,7 +346,9 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   // Lane posture lives with the engine: OPTIMISTIC_DIRTY is only ever set by
   // engine-driven paths, and _optimisticNodes is only pushed by
   // _optimisticWrite, so the hook is installed whenever either gate holds.
-  if (isOptimisticDirty) {
+  if (!__ASYNC__) {
+    // No lanes and no transactions exist in the async-free runtime.
+  } else if (isOptimisticDirty) {
     const lane = GlobalQueue._recomputeLane!(el, true);
     if (lane) currentOptimisticLane = lane;
     // `false` = wake-only lane demotion: recompute plain so a mid-tick
@@ -365,10 +374,16 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   // run produces is applied by the commit itself, and the stale recording
   // would publish the frame a second time. Drop it; the reads below re-record
   // if they are served the committed view again (a lane's committed read).
-  if (isEffect && activeTransition !== null && activeTransition._gatedSubs.size)
+  if (__ASYNC__ && isEffect && activeTransition !== null && activeTransition._gatedSubs.size)
     activeTransition._gatedSubs.delete(el);
   try {
-    if (!__DEV__ && el._config & CONFIG_SYNC) {
+    if (!__ASYNC__) {
+      // Async-free runtime: the graph was proven to return plain values
+      // everywhere, so there is no shape to probe (dev verifies the proof).
+      value = el._fn(value);
+      if (__DEV__) verifyAsyncFree!(el, value);
+      el._loading = false;
+    } else if (!__DEV__ && el._config & CONFIG_SYNC) {
       value = el._fn(value);
       if (el._x !== null) el._x._inFlight = null;
       el._loading = false;
@@ -399,10 +414,13 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
     if (el._statusFlags !== 0 || el._x !== null) clearStatus(el, create);
     // _optimisticLane is only ever assigned by engine paths (CONFIG_HAS_LANE
     // is their sticky presence mark).
-    if (el._config & CONFIG_HAS_LANE && el._x?._optimisticLane) GlobalQueue._laneAsyncSettled!(el);
+    if (__ASYNC__ && el._config & CONFIG_HAS_LANE && el._x?._optimisticLane)
+      GlobalQueue._laneAsyncSettled!(el);
   } catch (e) {
-    const notReady = e instanceof NotReadyError;
-    if (notReady && el._loading) {
+    // The async-free runtime never produces NotReadyError: every throw is an
+    // error.
+    const notReady = __ASYNC__ && e instanceof NotReadyError;
+    if (__ASYNC__ && notReady && el._loading) {
       // Loading window with an unready sync dependency: register for the
       // source's settle (the settlePendingSource walk runs off
       // _pendingSources + _blocked alone) but take NO read-visible pending
@@ -414,9 +432,9 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
     } else {
       // Track pending async in the lane (not the lane's source — it creates the lane
       // but doesn't belong to it). Set lane BEFORE notifyStatus for downstream propagation.
-      if (notReady && currentOptimisticLane) GlobalQueue._laneAsyncPending!(el);
+      if (__ASYNC__ && notReady && currentOptimisticLane) GlobalQueue._laneAsyncPending!(el);
       let reaskChanged = false;
-      if (notReady) {
+      if (__ASYNC__ && notReady) {
         ext(el)._blocked = true;
         if (GlobalQueue._applyReask !== null) reaskChanged = GlobalQueue._applyReask(el, hadReask);
       }
@@ -429,8 +447,8 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
       );
       // The replacement source is fully propagated now. If no new flight
       // re-owned self, retire the superseded flight and its dependent copies.
-      if (notReady && wasPendingSource && !el._x?._inFlight) settlePendingSource(el);
-      if (reaskChanged) GlobalQueue._repollVerdicts!(el);
+      if (__ASYNC__ && notReady && wasPendingSource && !el._x?._inFlight) settlePendingSource(el);
+      if (__ASYNC__ && reaskChanged) GlobalQueue._repollVerdicts!(el);
     }
   } finally {
     tracking = prevTracking;
@@ -522,7 +540,7 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
         // what it computes. A previous owner that was mainline, or already
         // committed, left nothing to protect.
         let prev: Transition | null = (el as any)._valueTransition;
-        if (prev !== activeTransition) {
+        if (__ASYNC__ && prev !== activeTransition) {
           (el as any)._valueTransition = activeTransition;
           if (
             prev !== null &&
@@ -570,7 +588,7 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
         // override unconditionally. The direct _value commit is the lane's
         // own reveal schedule; drop any superseded older hold so its queued
         // commit can't clobber the fresh value.
-        if (hasOverride && isOptimisticDirty) {
+        if (__ASYNC__ && hasOverride && isOptimisticDirty) {
           ext(el)._overrideValue = value === undefined ? OVERRIDE_UNDEFINED : value;
           el._pendingValue = NOT_PENDING;
         }
@@ -585,7 +603,11 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
         // (#2831). Both companion writes are transition-scoped (optimistic) and
         // auto-revert/re-derive at commit. Skipped for plain flushes where the
         // pending value commits before effects run.
-        if ((activeTransition || el._transition) && GlobalQueue._syncCompanions !== null)
+        if (
+          __ASYNC__ &&
+          (activeTransition || el._transition) &&
+          GlobalQueue._syncCompanions !== null
+        )
           GlobalQueue._syncCompanions(el, value);
       }
 
@@ -607,9 +629,9 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
       // in this same tick (optimisticWrite stamps `_overrideTime`) is the
       // newer intent over whatever this pass derives from the batch's staged
       // inputs, and is not superseded by it.
-      else if (hasOverride && !isOptimisticDirty && el._x!._overrideTime !== clock)
+      else if (__ASYNC__ && hasOverride && !isOptimisticDirty && el._x!._overrideTime !== clock)
         GlobalQueue._supersedeOverride!(el, value);
-    } else if (hasOverride) {
+    } else if (__ASYNC__ && hasOverride) {
       // Unchanged value (equals the override) recomputed while the override
       // is active: _value may still be stale, so hold the authoritative value
       // for commit on its own transition's schedule — invisibly (A17/A18).
@@ -640,7 +662,7 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
       if (outgoingError !== undefined) settleErroredDependents(el, outgoingError);
       // Self-registration (this node's own superseded flight) is the #3181
       // sweep's business below — retiring it here too would walk twice.
-      if (outgoingPendingSources)
+      if (__ASYNC__ && outgoingPendingSources)
         for (const source of outgoingPendingSources)
           if (source !== el) settlePendingSource(el, source);
     }
@@ -648,7 +670,11 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
     // #3181: a synchronous settle supersedes the old landing callback, so
     // recompute owns its pending-source sweep. An uninitialized node without
     // a replacement source still has no truth to reveal and must stay parked.
-    if (wasPendingSource && !(el._statusFlags & (STATUS_PENDING | STATUS_UNINITIALIZED)))
+    if (
+      __ASYNC__ &&
+      wasPendingSource &&
+      !(el._statusFlags & (STATUS_PENDING | STATUS_UNINITIALIZED))
+    )
       settlePendingSource(el);
   }
   // Attribution hook: fired before the lane restore so `currentOptimisticLane`
@@ -679,7 +705,8 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
     (!create || el._statusFlags & STATUS_PENDING) &&
     (!el._transition || hasOverride) &&
     queuePendingNode(el);
-  el._transition &&
+  __ASYNC__ &&
+    el._transition &&
     isEffect &&
     activeTransition !== el._transition &&
     runInTransition(el._transition, () => recompute(el));
@@ -693,6 +720,45 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
     schedule();
   }
 }
+
+export const ASYNC_IN_SYNC_GRAPH_MESSAGE =
+  "[ASYNC_IN_SYNC_GRAPH] A computation returned a Promise or AsyncIterable under the async-free " +
+  "runtime (@solidjs/signals/sync). The capability linker selected that runtime because it " +
+  "proved every compute in this graph synchronous; this compute disproves it. Production would " +
+  "store the value unawaited. Build without the capability linker, and report the summary that " +
+  "claimed the compute synchronous.";
+
+/** Dev-only verification of the linker's whole-graph proof (async-free
+ * runtime): the probe production skips, run as a check. */
+function devVerifyAsyncFree(el: Computed<any>, result: unknown): void {
+  if (typeof result !== "object" || result === null) return;
+  let asyncShaped = false;
+  untrack(() => {
+    asyncShaped =
+      (result as any)[Symbol.asyncIterator] !== undefined ||
+      typeof (result as any).then === "function";
+  });
+  if (!asyncShaped) return;
+  emitDiagnostic({
+    code: "ASYNC_IN_SYNC_GRAPH",
+    kind: "async",
+    severity: "error",
+    message: ASYNC_IN_SYNC_GRAPH_MESSAGE,
+    ownerId: el.id,
+    ownerName: (el as any)._name
+  });
+  throw new Error(ASYNC_IN_SYNC_GRAPH_MESSAGE);
+}
+
+/**
+ * The async-free runtime's dev verifier, installed only in that runtime's
+ * dev build. recompute names this variable — never the function — from
+ * inside its try block: rollup's tryCatchDeoptimization retains every
+ * function a try block references, even behind a folded guard (#2883), and
+ * the full builds must not carry the verifier.
+ */
+export let verifyAsyncFree: ((el: Computed<any>, result: unknown) => void) | null = null;
+if (__DEV__ && !__ASYNC__) verifyAsyncFree = devVerifyAsyncFree;
 
 function updateIfNecessary(el: Computed<unknown>): void {
   // Never re-enter a node that is currently computing: its dep bookkeeping
@@ -717,7 +783,7 @@ function updateIfNecessary(el: Computed<unknown>): void {
 
   if (
     el._flags & (REACTIVE_DIRTY | REACTIVE_OPTIMISTIC_DIRTY) ||
-    (el._x?._error && el._time < clock && !el._x?._inFlight)
+    (el._x?._error && el._time < clock && (!__ASYNC__ || !el._x?._inFlight))
   ) {
     recompute(el);
   }
@@ -1463,7 +1529,7 @@ export function readNodeFast<T>(el: Signal<T>): T | typeof READ_SLOW {
     !c ||
     el._pendingValue === NOT_PENDING ||
     c._config & CONFIG_CHILDREN_FORBIDDEN ||
-    (stale && heldFromStale(el, c as Computed<any>))
+    (__ASYNC__ && stale && heldFromStale(el, c as Computed<any>))
       ? el._value
       : el._pendingValue
   ) as T;
@@ -1476,7 +1542,7 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
   // Checked before isPending so that isPending(() => latest(x)) checks
   // the _pendingSignal of _latestValueComputed (async in flight) rather
   // than the original node (which stays "pending" while held in a transition).
-  if (latestReadActive) return GlobalQueue._latestRead!(el) as T;
+  if (__ASYNC__ && latestReadActive) return GlobalQueue._latestRead!(el) as T;
 
   let c = context;
   if ((c as Root)?._root) c = (c as Root)._parentComputed;
@@ -1487,7 +1553,7 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
   // Handle isPending() mode: collect pending state while preserving normal read semantics.
   // Probe mode is suspended while preparing the node so nested reads during a
   // recompute don't collect into the probe.
-  if (pendingCheckActive) {
+  if (__ASYNC__ && pendingCheckActive) {
     GlobalQueue._pendingCheck!(el, c as Computed<any> | null, owner as any, firewall);
   } else if (typeof computed._fn === "function") {
     prepareComputed(el as Computed<unknown>, false);
@@ -1510,7 +1576,7 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
       !c ||
       el._pendingValue === NOT_PENDING ||
       c._config & CONFIG_CHILDREN_FORBIDDEN ||
-      (stale && heldFromStale(el, c as Computed<any>))
+      (__ASYNC__ && stale && heldFromStale(el, c as Computed<any>))
         ? el._value
         : el._pendingValue
     ) as T;
@@ -1552,7 +1618,8 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
     }
   }
 
-  if (owner._statusFlags & STATUS_PENDING) {
+  // The async-free runtime has no pending state to observe.
+  if (__ASYNC__ && owner._statusFlags & STATUS_PENDING) {
     // A reader landing on a pending node throws — the reveal that discovered
     // the flight holds on it (A15: observed async settles as one unit) — with
     // one carve-out: a stale (render) reader of a node pending in some OTHER
@@ -1643,7 +1710,7 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
       nodeName: (owner as any)?._name
     });
 
-  if (el._x?._overrideValue !== undefined && el._x?._overrideValue !== NOT_PENDING) {
+  if (__ASYNC__ && el._x?._overrideValue !== undefined && el._x?._overrideValue !== NOT_PENDING) {
     // A17: the override IS the value for every reader — except an authoritative
     // reader (until()'s predicate carries CONFIG_AUTHORITATIVE_READ): it must
     // observe independently-arriving truth, and serving it the caller's own
@@ -1675,6 +1742,7 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
   // so it re-runs with the new committed view. (Gate details live with the
   // engine — a non-null lane implies it is installed.)
   if (
+    __ASYNC__ &&
     currentOptimisticLane !== null &&
     activeTransition !== null &&
     c !== null &&
@@ -1691,11 +1759,12 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
   // readNodeFast (#3006).
   const value =
     !c ||
-    (currentOptimisticLane !== null &&
+    (__ASYNC__ &&
+      currentOptimisticLane !== null &&
       GlobalQueue._laneReadsCommitted!(el, owner, c as Computed<any>)) ||
     el._pendingValue === NOT_PENDING ||
     c._config & CONFIG_CHILDREN_FORBIDDEN ||
-    (stale && heldFromStale(el, c as Computed<any>)) ||
+    (__ASYNC__ && stale && heldFromStale(el, c as Computed<any>)) ||
     // A17 for HELD truth (#3164, see CONFIG_HELD_TRUTH): staged confirming
     // truth — fold-staged onto an armed family, or entangle-stolen by an
     // awaited until() — is masked from ordinary readers until its
@@ -1704,14 +1773,15 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
     // compose override + staged truth into a state no timeline contains).
     // Authoritative readers (until()'s predicate) and latest() see the
     // staged truth — the tunnel that keeps the hold deadlock-free.
-    (el._config & CONFIG_HELD_TRUTH &&
+    (__ASYNC__ &&
+      el._config & CONFIG_HELD_TRUTH &&
       !latestReadActive &&
       !((c as Computed<any>)._config & CONFIG_AUTHORITATIVE_READ))
       ? el._value
       : (el._pendingValue as T);
   // Record that this isPending() probe observed the fresh pending value, so
   // the probe doesn't pair "pending" with the new value (#2831).
-  if (pendingCheckActive) GlobalQueue._recordFresh!(el, value);
+  if (__ASYNC__ && pendingCheckActive) GlobalQueue._recordFresh!(el, value);
   if (
     !c &&
     owner === el &&
@@ -1787,7 +1857,7 @@ export function setSignal<T>(el: Signal<T> | Computed<T>, v: T | ((prev: T) => T
     throw new Error(ownedScopeWriteMessage(context));
   }
 
-  if (el._transition && activeTransition !== el._transition)
+  if (__ASYNC__ && el._transition && activeTransition !== el._transition)
     globalQueue.initTransition(el._transition);
 
   // The optimistic write path lives with the engine: only optimisticSignal /
@@ -1795,7 +1865,7 @@ export function setSignal<T>(el: Signal<T> | Computed<T>, v: T | ((prev: T) => T
   // _overrideValue slot (flagged by CONFIG_OPTIMISTIC — a masked read of the
   // always-present config instead of a missing-property probe), and every
   // module that installs one installs the engine first.
-  if (el._config & CONFIG_OPTIMISTIC) {
+  if (__ASYNC__ && el._config & CONFIG_OPTIMISTIC) {
     if (!projectionWriteActive) return GlobalQueue._optimisticWrite!(el, v);
     // An authoritative store landing on an override-covered node: the store
     // twin of asyncWrite's override branch, decided by the engine (#3331).

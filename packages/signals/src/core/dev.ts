@@ -28,6 +28,18 @@ export interface DevHooks {
  */
 export type DiagnosticSeverity = "info" | "warn" | "error";
 
+/**
+ * Test-only census of the async capability set (Track A stage 2): every
+ * entry point that the async-free runtime (`@solidjs/signals/sync`) folds
+ * out or stubs marks the running test. The sync-entry differential
+ * (tests/sync-entry.differential.test.ts, scripts/track-a/sync-differential.mjs)
+ * requires every test that never marks to pass unchanged under that
+ * runtime. Called behind `__TEST__` only — no build carries it.
+ */
+export function markAsyncCapability(): void {
+  (globalThis as any).__SOLID_ASYNC_CAPABILITY__ = true;
+}
+
 export type DiagnosticCode =
   | "STRICT_READ_UNTRACKED"
   | "PENDING_ASYNC_UNTRACKED_READ"
@@ -50,6 +62,7 @@ export type DiagnosticCode =
   | "MISSING_EFFECT_FN"
   | "SYNC_NODE_RECEIVED_ASYNC"
   | "NOTHROW_NODE_THREW"
+  | "ASYNC_IN_SYNC_GRAPH"
   | "REACTIVITY_HALTED"
   | "INVARIANT_VIOLATION"
   | "HUGE_FAN_OUT"

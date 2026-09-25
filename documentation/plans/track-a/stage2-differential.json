@@ -1,0 +1,20 @@
+{
+  "total": 1829,
+  "census": {
+    "synchronousBehaviour": 881,
+    "asyncCapability": 947
+  },
+  "fullSuiteUnderSync": {
+    "synchronousPassed": 820,
+    "synchronousFailedByCascade": 61,
+    "asyncFailed": 869,
+    "asyncPassed": 78
+  },
+  "synchronousSubsetUnderSync": {
+    "total": 881,
+    "passed": 881,
+    "failed": 0
+  },
+  "unmatched": [],
+  "regressions": []
+}

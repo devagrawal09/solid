@@ -14,7 +14,7 @@
  * primitives; the generic draft write-traps are reused from the legacy
  * module unchanged.
  */
-import { ext } from "../../core/core.js";
+import { ext, verifyAsyncFree } from "../../core/core.js";
 import {
   computed,
   CONFIG_AUTO_DISPOSE,
@@ -306,7 +306,15 @@ export function runProjectionComputedNext<T extends object>(
           storeSetterNext(wrappedStore, st => reconcileNextState(v, st, key, true), false);
         wrapCommit ? wrapCommit(write, v as T) : write();
       };
-      const sync = handleAsync(owner, result, commit);
+      // The async-free runtime: the projection's result is plain (proven by
+      // the capability linker); commit it as handleAsync's sync branch would.
+      let sync: unknown;
+      if (__ASYNC__) sync = handleAsync(owner, result, commit);
+      else {
+        if (__DEV__) verifyAsyncFree!(owner, result);
+        owner._loading = false;
+        sync = result;
+      }
       if (!owner._loading) commit(sync as void | T);
     },
     false

@@ -1,3 +1,4 @@
+import { markAsyncCapability } from "./dev.js";
 import {
   CONFIG_CHILD_COMPANIONS,
   CONFIG_AUTO_DISPOSE,
@@ -332,6 +333,8 @@ export function handleAsync<T>(
     el._loading = false;
     return result as T;
   }
+
+  if (__TEST__) markAsyncCapability();
 
   // Dev-only contract enforcement for `sync: true` nodes. In production these
   // never reach `handleAsync` (the recompute fast path skips the call), but in
@@ -833,14 +836,16 @@ export function handleAsync<T>(
 }
 
 export function clearStatus(el: Computed<any>, clearUninitialized: boolean = false): void {
-  if (el._x?._pendingSources) clearPendingSources(el);
-  if (el._x?._blocked) if (el._x !== null) el._x._blocked = false;
+  if (__ASYNC__ && el._x?._pendingSources) clearPendingSources(el);
+  if (__ASYNC__ && el._x?._blocked) if (el._x !== null) el._x._blocked = false;
   // The pending window is over; its quiet classification dies with it.
   // (Unconditional: _reask is baked into the node literals, so this is a
   // plain store to an existing slot — no shape change.)
   if (el._x !== null) el._x._reask = false;
   el._statusFlags = clearUninitialized ? 0 : el._statusFlags & STATUS_UNINITIALIZED;
-  if (el._x?._error) setPendingError(el);
+  // Clearing the error slot (setPendingError's no-source arm, inlined so the
+  // async-free runtime does not retain the pending-error helper).
+  if (el._x?._error) el._x._error = null;
   // Update pending signal for isPending() reactivity (companions only exist
   // once the verdict layer created them, which installs the hooks).
   if (el._x?._pendingSignal || el._x?._latestValueComputed) GlobalQueue._updatePendingSignal!(el);
@@ -865,19 +870,23 @@ export function notifyStatus(
   if (
     status === STATUS_ERROR &&
     !(error instanceof StatusError) &&
-    !(error instanceof NotReadyError)
+    !(__ASYNC__ && error instanceof NotReadyError)
   )
     error = new StatusError(el, error);
 
+  // The async-free runtime only ever notifies errors (no pending status, no
+  // optimistic boundaries).
   const pendingSource =
-    status === STATUS_PENDING && error instanceof NotReadyError ? error.source : undefined;
+    __ASYNC__ && status === STATUS_PENDING && error instanceof NotReadyError
+      ? error.source
+      : undefined;
   const isSource = pendingSource === el;
   const isOptimisticBoundary =
-    status === STATUS_PENDING && el._x?._overrideValue !== undefined && !isSource;
-  const startsBlocking = isOptimisticBoundary && hasActiveOverride(el);
+    __ASYNC__ && status === STATUS_PENDING && el._x?._overrideValue !== undefined && !isSource;
+  const startsBlocking = __ASYNC__ && isOptimisticBoundary && hasActiveOverride(el);
 
   if (!blockStatus) {
-    if (status === STATUS_PENDING && pendingSource) {
+    if (__ASYNC__ && status === STATUS_PENDING && pendingSource) {
       addPendingSource(el, pendingSource);
       // A fresh flight from a settled state starts with its inputs unpublished
       // (a replacement flight while still pending keeps the mark: the first
@@ -888,7 +897,7 @@ export function notifyStatus(
       // can register every distinct pending source with the transition.
       setPendingError(el, pendingSource, error);
     } else {
-      clearPendingSources(el);
+      if (__ASYNC__) clearPendingSources(el);
       el._statusFlags =
         status | (status !== STATUS_ERROR ? el._statusFlags & STATUS_UNINITIALIZED : 0);
       ext(el)._error = error;
@@ -902,7 +911,7 @@ export function notifyStatus(
       GlobalQueue._updateChildCompanions(el);
   }
 
-  if (lane && !blockStatus) {
+  if (__ASYNC__ && lane && !blockStatus) {
     assignOrMergeLane(el, lane);
   }
 
@@ -924,7 +933,8 @@ export function notifyStatus(
   forEachDependent(el, (sub, link) => {
     sub._time = clock;
     if (
-      (status === STATUS_PENDING &&
+      (__ASYNC__ &&
+        status === STATUS_PENDING &&
         pendingSource &&
         !sub._x?._pendingSources?.has(pendingSource)) ||
       (status !== STATUS_PENDING && (sub._x?._error !== error || sub._x?._pendingSources))
@@ -934,7 +944,12 @@ export function notifyStatus(
       // not carry a real (non-NotReadyError) error — the synchronous `isPending`
       // read swallows those, and the async path must match. Re-run the observer
       // so `isPending` re-evaluates (to not-pending) instead of forwarding.
-      if (link._pendingObserver && status !== STATUS_PENDING && !(error instanceof NotReadyError)) {
+      if (
+        __ASYNC__ &&
+        link._pendingObserver &&
+        status !== STATUS_PENDING &&
+        !(error instanceof NotReadyError)
+      ) {
         enqueueSub(sub);
         schedule();
         return;
