@@ -87,7 +87,7 @@ use oxc_span::{GetSpan, Span};
 use oxc_syntax::identifier::is_identifier_name;
 use oxc_syntax::scope::ScopeFlags;
 
-use crate::block_proofs::{BLOCK_STATUS_FREE, BLOCK_SYNC, ProofSymbols, Prover};
+use crate::block_proofs::{BLOCK_SYNC, ProofSymbols, Prover};
 use crate::shared::ast::{argument_to_expression, expression_to_argument};
 use crate::shared::ast_builder::AstBuilder;
 
@@ -165,7 +165,7 @@ struct Plan {
 }
 
 /// Track A (stage 1) proof configuration: the pass proves `$` blocks
-/// synchronous / non-throwing and annotates them and their hosts. See
+/// synchronous / non-throwing and annotates blocks and synchronous hosts. See
 /// `block_proofs.rs`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ProofConfig {
@@ -178,13 +178,10 @@ pub(crate) struct ProofConfig {
 /// The options a proven host call receives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HostOption {
-    /// `sync: true, noThrow: true` — the status-free path.
-    StatusFree,
     /// `sync: true` — the async-shape probe is skipped.
     SyncOnly,
 }
 
-const STATUS_FREE_LOCAL: &str = "_$statusFree";
 const SYNC_ONLY_LOCAL: &str = "_$syncOnly";
 
 /// A `yield*` over a member chain, with its lowering plan.
@@ -338,9 +335,7 @@ fn build_plan(
             else {
                 return;
             };
-            let option = if flags == BLOCK_STATUS_FREE {
-                HostOption::StatusFree
-            } else if flags & BLOCK_SYNC != 0 {
+            let option = if flags & BLOCK_SYNC != 0 {
                 HostOption::SyncOnly
             } else {
                 return;
@@ -721,9 +716,6 @@ impl<'a> VisitMut<'a> for Rewriter<'a> {
                 needed.push(("readProp", READ_PROP_LOCAL));
             }
             let options = |wanted| self.plan.host_options.iter().any(|(_, o)| *o == wanted);
-            if options(HostOption::StatusFree) {
-                needed.push(("statusFree", STATUS_FREE_LOCAL));
-            }
             if options(HostOption::SyncOnly) {
                 needed.push(("syncOnly", SYNC_ONLY_LOCAL));
             }
@@ -776,9 +768,10 @@ impl<'a> VisitMut<'a> for Rewriter<'a> {
                     .iter()
                     .find(|(span, _)| *span == call.span) =>
             {
-                // Track A: `createMemo($(fn, 3), _$statusFree)`.
+                // Track A: every proven synchronous host uses the retained
+                // shape-probe fast path; the measured-negative status-free
+                // recompute is never compiler-selected.
                 let local = match option {
-                    HostOption::StatusFree => STATUS_FREE_LOCAL,
                     HostOption::SyncOnly => SYNC_ONLY_LOCAL,
                 };
                 let options = ast.expression_identifier(Span::new(0, 0), ast.ident(local));
