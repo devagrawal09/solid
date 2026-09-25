@@ -12,6 +12,35 @@ import type { Element as SolidElement } from "../types.js";
 
 export function enableHydration() {}
 
+// Client hydration capability installers (optimization slice 7). A server
+// graph never hydrates, so these are inert: a manifest-composed client entry
+// imported by an isomorphic module must not pull client hydration code into
+// the server bundle, nor throw at import time.
+/** @internal */
+export function enableHydrationWith(_installers: readonly (() => void)[]) {}
+/** @internal */
+export function installSnapshotHydration() {}
+/** @internal */
+export function installAsyncResultHydration() {}
+/** @internal */
+export function installSsrClientHydration() {}
+/** @internal */
+export function installSsrHybridHydration() {}
+/** @internal */
+export function installStoreHydration() {}
+/** @internal */
+export function installErrorMarkerHydration() {}
+/** @internal */
+export function installLoadingMarkerHydration() {}
+/** @internal */
+export function installStreamLedgerHydration() {}
+/** @internal */
+export function installLazyAssetHydration() {}
+/** @internal */
+export function hydrationManifestViolation(capability: string, detail: string): never {
+  throw new Error(`[HYDRATION_MANIFEST] "${capability}": ${detail}`);
+}
+
 /**
  * A general `Component` has no implicit `children` prop. If desired, specify
  * one explicitly, e.g. `Component<{ name: string; children: Element }>`.

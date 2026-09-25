@@ -1,6 +1,6 @@
 import { untrack, createMemo } from "@solidjs/signals";
 import { $DEVCOMP, IS_DEV, IS_OBSERVE, observedComponent } from "../client/core.js";
-import { _lazyHydrationLookup, sharedConfig } from "./hydration.js";
+import { sharedConfig, slots } from "./hydration/state.js";
 import type { Element as SolidElement } from "../types.js";
 
 /**
@@ -167,9 +167,11 @@ export function lazy<T extends Component<any>>(
     return cur;
   };
   const wrap: T & { preload?: () => void; moduleUrl?: string } = ((props: any) => {
-    // `hydrating` can only be true once enableHydration() installed the slot.
-    if (sharedConfig.hydrating)
-      comp = _lazyHydrationLookup!(comp, moduleUrl, exportName) as () => T;
+    // The lookup is the lazyAssets hydration capability; a client graph with
+    // no lazy() never installs it (development builds install a guard that
+    // asserts it is really unused).
+    if (sharedConfig.hydrating && slots.lazy)
+      comp = slots.lazy(comp, moduleUrl, exportName) as () => T;
     // The import (`p`) is shared across instances, but the memo tracking it
     // must be owned per instance: a shared memo dies with whichever instance
     // rendered first, stranding survivors mid-flight (#2915). load() runs

@@ -15,7 +15,17 @@ import {
   flatten,
   createMemo,
   flush,
-  enableHydration,
+  enableHydrationWith,
+  installSnapshotHydration,
+  installAsyncResultHydration,
+  installSsrClientHydration,
+  installSsrHybridHydration,
+  installStoreHydration,
+  installErrorMarkerHydration,
+  installLoadingMarkerHydration,
+  installStreamLedgerHydration,
+  installLazyAssetHydration,
+  hydrationManifestViolation,
   enforceLoadingBoundary,
   resetErrorHalt,
   OBSERVE,
@@ -937,9 +947,14 @@ const SCOPE_OPTIONS = { scope: true };
 // guard on the null slot; only hydrate() can assign it (#2883). Rollup folds
 // the guards away entirely in CSR bundles; esbuild keeps the ~30-byte residue
 // but drops these bodies once nothing else references them.
+//
+// The claim itself (claimInitial) is part of every hydrating runtime; the
+// region reclaim after a streamed swap and the replayed-event dedupe are the
+// streamLedger and delegatedEvents capabilities (optimization slice 7) and
+// start as inert defaults a capability replaces.
 let hydrationRt = null;
-export function installHydrationRuntime() {
-  hydrationRt = {
+function claimRuntime() {
+  return (hydrationRt ||= {
     // insert(): claim the parent's childNodes as the initial current on
     // hydration, dropping server text-hole separators.
     claimInitial(parent, multi, initial) {
@@ -949,47 +964,67 @@ export function installHydrationRuntime() {
       }
       return initial;
     },
-    // A streamed `$df` fragment swap replaces a hole's region out from under
-    // its bookkeeping (Loading fallback claimed during hydration, settled
-    // content swapped in later). When the tracked nodes are gone
-    // mid-hydration, re-claim the live region so the content pass can match
-    // loose text positionally — elements recover through the registry, text
-    // only has position. The region is `parent`'s children, or for
-    // marker-bounded holes the nodes back to the matching `<!--$-->` start.
-    reclaimRegion(current, parent, marker) {
-      if (!sharedConfig.hydrating || !current || !parent.isConnected) return current;
-      const first = Array.isArray(current) ? current[0] : current;
-      if (!first || !first.nodeType || first.isConnected) return current;
-      let nodes;
-      if (marker) {
-        nodes = [];
-        let node = marker.previousSibling,
-          depth = 0;
-        while (node) {
-          if (node.nodeType === 8) {
-            const v = node.nodeValue;
-            if (v === "/") depth++;
-            else if (v === "$") {
-              if (depth === 0) break;
-              depth--;
-            }
-          }
-          nodes.unshift(node);
-          node = node.previousSibling;
+    reclaimRegion: keepRegion,
+    dedupEvent: noDedup
+  });
+}
+const keepRegion = current => current;
+const noDedup = () => false;
+
+// A streamed `$df` fragment swap replaces a hole's region out from under
+// its bookkeeping (Loading fallback claimed during hydration, settled
+// content swapped in later). When the tracked nodes are gone
+// mid-hydration, re-claim the live region so the content pass can match
+// loose text positionally — elements recover through the registry, text
+// only has position. The region is `parent`'s children, or for
+// marker-bounded holes the nodes back to the matching `<!--$-->` start.
+function reclaimRegion(current, parent, marker) {
+  if (!sharedConfig.hydrating || !current || !parent.isConnected) return current;
+  const first = Array.isArray(current) ? current[0] : current;
+  if (!first || !first.nodeType || first.isConnected) return current;
+  let nodes;
+  if (marker) {
+    nodes = [];
+    let node = marker.previousSibling,
+      depth = 0;
+    while (node) {
+      if (node.nodeType === 8) {
+        const v = node.nodeValue;
+        if (v === "/") depth++;
+        else if (v === "$") {
+          if (depth === 0) break;
+          depth--;
         }
-      } else nodes = [...parent.childNodes];
-      return stripTextSeparators(nodes);
-    },
-    // eventHandler(): replayed server events are deduped against the live
-    // event queue during hydration.
-    dedupEvent(e) {
-      return !!(
-        sharedConfig.registry &&
-        sharedConfig.events &&
-        sharedConfig.events.find(([el, ev]) => ev === e)
-      );
+      }
+      nodes.unshift(node);
+      node = node.previousSibling;
     }
-  };
+  } else nodes = [...parent.childNodes];
+  return stripTextSeparators(nodes);
+}
+
+// eventHandler(): replayed server events are deduped against the live
+// event queue during hydration.
+function dedupEvent(e) {
+  return !!(
+    sharedConfig.registry &&
+    sharedConfig.events &&
+    sharedConfig.events.find(([el, ev]) => ev === e)
+  );
+}
+
+/**
+ * Installs every DOM hydration behavior (the universal runtime). Kept for
+ * integrations that drive hydration by hand; hydrate() and createHydrator()
+ * install exactly what their capabilities select.
+ * @internal
+ */
+export function installHydrationRuntime(): void;
+
+export function installHydrationRuntime() {
+  const rt = claimRuntime();
+  rt.reclaimRegion = reclaimRegion;
+  rt.dedupEvent = dedupEvent;
 }
 
 // Drop the `<!--!$-->` text-hole separators the server emits so adjacent
@@ -1736,6 +1771,22 @@ export function useHead(tags) {
   );
 }
 
+// === DOM hydration capabilities (optimization slice 7) ===
+//
+// hydrate() is the universal entry: it installs every capability, because
+// without a client manifest it cannot know what the page will deliver.
+// createHydrator(capabilities) is the manifest-composed form a generated
+// client entry uses; each capability below pairs its solid-js installer with
+// the DOM half it needs, and one omitted from the list never enters the
+// bundle. Each DOM half is a per-root prologue step, run by hydrateRoot at
+// the exact point the universal hydrate() always ran it.
+let prepareLazyAssets = null;
+let prepareEventReplay = null;
+let prepareFragmentCleanup = null;
+let prepareBoundaryScopes = null;
+let preloadRootModules = null;
+let replayHydrationEvents = null;
+
 // Module asset loading for hydration. `mapping` pairs opaque keys with
 // client-loadable entry URLs. Keys are chosen by the reactive library's
 // server-side lazy() (e.g. hydration ids) and are never interpreted here —
@@ -1766,6 +1817,186 @@ function loadModuleAssets(mapping) {
   }
   return pending.length ? Promise.all(pending).then(() => {}) : undefined;
 }
+
+/**
+ * Hydration capability: lazy asset maps — boundary module preloads, lazy()'s
+ * synchronous preloaded-module lookup, and the per-root module-map preload
+ * that defers the root render until its lazy modules are in.
+ * @internal
+ */
+export function lazyAssetHydration(): void;
+
+export function lazyAssetHydration() {
+  installLazyAssetHydration();
+  prepareLazyAssets = () => {
+    if (!globalThis._$HY.modules) globalThis._$HY.modules = {};
+    if (!globalThis._$HY.loading) globalThis._$HY.loading = {};
+    sharedConfig.loadModuleAssets = loadModuleAssets;
+  };
+  preloadRootModules = (code, element, options) => {
+    // Root module maps serialize under a renderId-scoped name — island
+    // integrations run one render per island into the same document, and a
+    // single page-global "_assets" name would leave only the last island's map
+    // alive. The bare name remains as fallback for the OTHER islands shape: a
+    // single document render (renderId "") whose islands re-enter through
+    // Hydration ids — every island's modules live in that one root map, and
+    // each hydrate() root preloads it (loadModuleAssets dedupes the fetches).
+    const hyr = globalThis._$HY.r;
+    const rootMapping = hyr && (hyr[options.renderId + "_assets"] || hyr["_assets"]);
+    if (!rootMapping || typeof rootMapping !== "object") return;
+    const p = loadModuleAssets(rootMapping);
+    if (!p) return;
+    gatherHydratable(element, options.renderId);
+    // This root's render is deferred behind the preload, but sharedConfig
+    // is shared and LIVE: another hydrate() root can run its synchronous
+    // prologue before this .then fires — islands entry-clients start
+    // several roots in one tick — replacing registry/gather, and the first
+    // deferred root to finish clears `hydrating` for everyone after it.
+    // Re-install this root's scope around its deferred render so it claims
+    // exactly what it gathered (the same per-root pairing a late boundary
+    // resume gets from captureBoundaryScope).
+    const registry = sharedConfig.registry;
+    const gather = sharedConfig.gather;
+    let disposer;
+    p.then(
+      () => {
+        sharedConfig.registry = registry;
+        sharedConfig.gather = gather;
+        sharedConfig.hydrating = true;
+        try {
+          disposer = render(code, element, [...element.childNodes], options);
+        } finally {
+          sharedConfig.hydrating = false;
+        }
+      },
+      err => {
+        // A chunk failed to preload; hydration can't claim the server DOM
+        // (lazy components have no module). Fall back to a fresh client
+        // render replacing the server markup — lazy's own import() gets to
+        // retry through normal channels — instead of a silently dead page.
+        // A document root has no such fallback: the shell (<html>/<head>/
+        // <body>) cannot be client-created, and rendering the document tree
+        // fresh dies deep in the walk with an unrelated "Hydration Mismatch"
+        // (#3338). Abandon hydration explicitly instead — the server markup
+        // stays — and hand the failure to the platform's uncaught-error
+        // channel (window.onerror / error monitoring) with its real cause,
+        // the same way an uncaught reactive error is reported.
+        sharedConfig.hydrating = false;
+        sharedConfig.registry = undefined;
+        if (element.nodeType === 9) {
+          // The preload failure itself is what monitoring needs (which chunk,
+          // why); the framing is dev-only so prod ships no wrapper Error.
+          if ("_SOLID_DEV_")
+            console.error(
+              "Hydration module preload failed for a document root; a document shell cannot " +
+                "be client-rendered, so hydration was abandoned and the page is not interactive."
+            );
+          (globalThis.reportError || console.error)(err);
+          return;
+        }
+        console.error("Hydration module preload failed, falling back to client render:", err);
+        disposer = render(code, element, [...element.childNodes], options);
+      }
+    );
+    return () => disposer && disposer();
+  };
+}
+
+/**
+ * Hydration capability: the streamed-fragment ledger — fragment reveal
+ * policy, truncation, streamed-boundary resume, the claim runtime's region
+ * reclaim after a `$df` swap, and fragment cleanup on boundary disposal.
+ * Requires loadingMarkerHydration.
+ * @internal
+ */
+export function streamLedgerHydration(): void;
+
+export function streamLedgerHydration() {
+  installStreamLedgerHydration();
+  claimRuntime().reclaimRegion = reclaimRegion;
+  prepareFragmentCleanup = () => {
+    sharedConfig.cleanupFragment = id => {
+      const tpl = document.getElementById("pl-" + id);
+      if (tpl) {
+        let node = tpl.nextSibling;
+        while (node) {
+          const next = node.nextSibling;
+          if (node.nodeType === 8 && node.nodeValue === "pl-" + id) {
+            node.remove();
+            break;
+          }
+          node.remove();
+          node = next;
+        }
+        tpl.remove();
+      }
+    };
+  };
+}
+
+/**
+ * Hydration capability: loading-boundary marker adoption, plus the per-root
+ * boundary scope capture that lets a late resume claim against the root it
+ * registered under.
+ * @internal
+ */
+export function loadingMarkerHydration(): void;
+
+export function loadingMarkerHydration() {
+  installLoadingMarkerHydration();
+  prepareBoundaryScopes = () => {
+    // Multiple hydrate() roots share one sharedConfig, but each call replaces
+    // registry/gather. A boundary that resumes after another root has started
+    // must claim against the root it registered under (solidjs/solid#2917), so
+    // the reactive library calls captureBoundaryScope at boundary-registration
+    // time — the pair is unambiguous there, keyed by the full boundary id (no
+    // prefix parsing: root id and counter path have no delimiter). The resume
+    // path reads and removes the entry, falling back to the live globals when
+    // none exists. The map is shared across roots, so create it only once.
+    if (!sharedConfig.boundaryScopes) sharedConfig.boundaryScopes = new Map();
+    sharedConfig.captureBoundaryScope = id => {
+      if (sharedConfig.registry)
+        sharedConfig.boundaryScopes.set(id, {
+          registry: sharedConfig.registry,
+          gather: sharedConfig.gather
+        });
+    };
+  };
+}
+
+/**
+ * Hydration capability: delegated-event replay — events the server bootstrap
+ * script captured before hydration (`generateHydrationScript({ eventNames })`)
+ * are replayed once their target is claimed, and deduped against live
+ * dispatch while hydrating.
+ * @internal
+ */
+export function eventReplayHydration(): void;
+
+export function eventReplayHydration() {
+  claimRuntime().dedupEvent = dedupEvent;
+  replayHydrationEvents = replayEvents;
+  prepareEventReplay = () => {
+    sharedConfig.completed = globalThis._$HY.completed;
+    sharedConfig.events = globalThis._$HY.events;
+  };
+}
+
+// Every hydration capability, in canonical order: the universal hydrate()
+// installs all of them.
+const ALL_HYDRATION_CAPABILITIES = [
+  installSnapshotHydration,
+  installAsyncResultHydration,
+  installSsrClientHydration,
+  installSsrHybridHydration,
+  installStoreHydration,
+  installErrorMarkerHydration,
+  loadingMarkerHydration,
+  streamLedgerHydration,
+  lazyAssetHydration,
+  eventReplayHydration
+];
+
 /**
  * Resumes a server-rendered tree on the client, attaching event listeners
  * and reactive bindings without reconstructing the DOM. Returns a `dispose`
@@ -1789,10 +2020,64 @@ export function hydrate(
   options?: { renderId?: string; owner?: unknown }
 ): () => void;
 
-export function hydrate(code, element, options = {}) {
-  enableHydration();
-  installHydrationRuntime();
+export function hydrate(code, element, options) {
+  return hydrateRoot(ALL_HYDRATION_CAPABILITIES, undefined, code, element, options);
+}
+
+/**
+ * Builds a `hydrate()` that installs only the given hydration capabilities.
+ * Called by client entries generated from a client capability manifest
+ * (`@solidjs/web/hydration-manifest`'s `composeHydrationEntry`) — not an
+ * end-user feature switch: the capability list is derived from the
+ * complete client graph. `delegatedEvents` is the manifest's delegated
+ * event types; development builds assert the page never needs an omitted
+ * capability and that every delegated event type the client registers is
+ * captured by the server bootstrap.
+ * @internal
+ */
+export function createHydrator(
+  capabilities: readonly (() => void)[],
+  delegatedEvents: readonly string[]
+): typeof hydrate;
+
+export function createHydrator(capabilities, delegatedEvents) {
+  return (code, element, options) =>
+    hydrateRoot(capabilities, delegatedEvents, code, element, options);
+}
+
+// Development-only: the page must not deliver anything the manifest's DOM
+// capabilities cannot adopt. Solid-side records are asserted where each
+// adapter would have run; these are the records only the DOM half reads.
+function assertDomManifest(delegated) {
+  const hy = globalThis._$HY;
+  if (!prepareEventReplay && hy.events && hy.events.length)
+    hydrationManifestViolation(
+      "delegatedEvents",
+      `the server bootstrap captured ${hy.events.length} pre-hydration event(s) to replay`
+    );
+  for (const name of delegatedEvents)
+    if (delegated.indexOf(name) < 0)
+      hydrationManifestViolation(
+        "delegatedEvents",
+        `the client registers delegated "${name}" events, which the manifest does not list ` +
+          `(the server bootstrap would not capture them before hydration)`
+      );
+  for (const key in hy.r) {
+    if (!prepareFragmentCleanup && key.endsWith("_fr"))
+      hydrationManifestViolation(
+        "streamLedger",
+        `the server streamed a boundary fragment ("${key}")`
+      );
+    if (!preloadRootModules && key.endsWith("_assets"))
+      hydrationManifestViolation("lazyAssets", `the server serialized a module map ("${key}")`);
+  }
+}
+
+function hydrateRoot(capabilities, delegated, code, element, options = {}) {
+  enableHydrationWith(capabilities);
+  claimRuntime();
   if (globalThis._$HY.done) return render(code, element, [...element.childNodes], options);
+  if ("_SOLID_DEV_" && delegated) assertDomManifest(delegated);
   // #3081: the server splices useHead's charset/base prelude immediately
   // after the <head> open tag — a byte-placement constraint (charset within
   // the first 1024 bytes, base before URL-bearing tags) the parser has
@@ -1812,47 +2097,14 @@ export function hydrate(code, element, options = {}) {
     }
   }
   options.renderId ||= "";
-  if (!globalThis._$HY.modules) globalThis._$HY.modules = {};
-  if (!globalThis._$HY.loading) globalThis._$HY.loading = {};
-  sharedConfig.completed = globalThis._$HY.completed;
-  sharedConfig.events = globalThis._$HY.events;
+  prepareLazyAssets && prepareLazyAssets();
+  prepareEventReplay && prepareEventReplay();
   sharedConfig.load = id => globalThis._$HY.r[id];
   sharedConfig.has = id => id in globalThis._$HY.r;
   sharedConfig.gather = root => gatherHydratable(element, root);
-  sharedConfig.loadModuleAssets = loadModuleAssets;
-  sharedConfig.cleanupFragment = id => {
-    const tpl = document.getElementById("pl-" + id);
-    if (tpl) {
-      let node = tpl.nextSibling;
-      while (node) {
-        const next = node.nextSibling;
-        if (node.nodeType === 8 && node.nodeValue === "pl-" + id) {
-          node.remove();
-          break;
-        }
-        node.remove();
-        node = next;
-      }
-      tpl.remove();
-    }
-  };
+  prepareFragmentCleanup && prepareFragmentCleanup();
   sharedConfig.registry = new Map();
-  // Multiple hydrate() roots share one sharedConfig, but each call replaces
-  // registry/gather. A boundary that resumes after another root has started
-  // must claim against the root it registered under (solidjs/solid#2917), so
-  // the reactive library calls captureBoundaryScope at boundary-registration
-  // time — the pair is unambiguous there, keyed by the full boundary id (no
-  // prefix parsing: root id and counter path have no delimiter). The resume
-  // path reads and removes the entry, falling back to the live globals when
-  // none exists. The map is shared across roots, so create it only once.
-  if (!sharedConfig.boundaryScopes) sharedConfig.boundaryScopes = new Map();
-  sharedConfig.captureBoundaryScope = id => {
-    if (sharedConfig.registry)
-      sharedConfig.boundaryScopes.set(id, {
-        registry: sharedConfig.registry,
-        gather: sharedConfig.gather
-      });
-  };
+  prepareBoundaryScopes && prepareBoundaryScopes();
   sharedConfig.hydrating = true;
   if ("_SOLID_DEV_") {
     sharedConfig.verifyHydration = () => {
@@ -1867,73 +2119,8 @@ export function hydrate(code, element, options = {}) {
       }
     };
   }
-  // Root module maps serialize under a renderId-scoped name — island
-  // integrations run one render per island into the same document, and a
-  // single page-global "_assets" name would leave only the last island's map
-  // alive. The bare name remains as fallback for the OTHER islands shape: a
-  // single document render (renderId "") whose islands re-enter through
-  // Hydration ids — every island's modules live in that one root map, and
-  // each hydrate() root preloads it (loadModuleAssets dedupes the fetches).
-  const hyr = globalThis._$HY.r;
-  const rootMapping = hyr && (hyr[options.renderId + "_assets"] || hyr["_assets"]);
-  if (rootMapping && typeof rootMapping === "object") {
-    const p = loadModuleAssets(rootMapping);
-    if (p) {
-      gatherHydratable(element, options.renderId);
-      // This root's render is deferred behind the preload, but sharedConfig
-      // is shared and LIVE: another hydrate() root can run its synchronous
-      // prologue before this .then fires — islands entry-clients start
-      // several roots in one tick — replacing registry/gather, and the first
-      // deferred root to finish clears `hydrating` for everyone after it.
-      // Re-install this root's scope around its deferred render so it claims
-      // exactly what it gathered (the same per-root pairing a late boundary
-      // resume gets from captureBoundaryScope).
-      const registry = sharedConfig.registry;
-      const gather = sharedConfig.gather;
-      let disposer;
-      p.then(
-        () => {
-          sharedConfig.registry = registry;
-          sharedConfig.gather = gather;
-          sharedConfig.hydrating = true;
-          try {
-            disposer = render(code, element, [...element.childNodes], options);
-          } finally {
-            sharedConfig.hydrating = false;
-          }
-        },
-        err => {
-          // A chunk failed to preload; hydration can't claim the server DOM
-          // (lazy components have no module). Fall back to a fresh client
-          // render replacing the server markup — lazy's own import() gets to
-          // retry through normal channels — instead of a silently dead page.
-          // A document root has no such fallback: the shell (<html>/<head>/
-          // <body>) cannot be client-created, and rendering the document tree
-          // fresh dies deep in the walk with an unrelated "Hydration Mismatch"
-          // (#3338). Abandon hydration explicitly instead — the server markup
-          // stays — and hand the failure to the platform's uncaught-error
-          // channel (window.onerror / error monitoring) with its real cause,
-          // the same way an uncaught reactive error is reported.
-          sharedConfig.hydrating = false;
-          sharedConfig.registry = undefined;
-          if (element.nodeType === 9) {
-            // The preload failure itself is what monitoring needs (which chunk,
-            // why); the framing is dev-only so prod ships no wrapper Error.
-            if ("_SOLID_DEV_")
-              console.error(
-                "Hydration module preload failed for a document root; a document shell cannot " +
-                  "be client-rendered, so hydration was abandoned and the page is not interactive."
-              );
-            (globalThis.reportError || console.error)(err);
-            return;
-          }
-          console.error("Hydration module preload failed, falling back to client render:", err);
-          disposer = render(code, element, [...element.childNodes], options);
-        }
-      );
-      return () => disposer && disposer();
-    }
-  }
+  const deferred = preloadRootModules && preloadRootModules(code, element, options);
+  if (deferred) return deferred;
   try {
     gatherHydratable(element, options.renderId);
     return render(code, element, [...element.childNodes], options);
@@ -2077,6 +2264,13 @@ function describeSiblings(parent, mismatchChild, expectedTag, isMissing) {
 export function runHydrationEvents(): void;
 
 export function runHydrationEvents() {
+  // The replay loop is the delegatedEvents hydration capability; compiled
+  // hydratable output calls this unconditionally, so the body lives behind a
+  // slot and shakes out of clients that replay nothing.
+  if (replayHydrationEvents !== null) replayHydrationEvents();
+}
+
+function replayEvents() {
   if (sharedConfig.events && !sharedConfig.events.queued) {
     queueMicrotask(() => {
       const { completed, events } = sharedConfig;

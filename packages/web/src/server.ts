@@ -5086,6 +5086,10 @@ export {
   notSup as className,
   notSup as assign,
   notSup as hydrate,
+  notSup as lazyAssetHydration,
+  notSup as streamLedgerHydration,
+  notSup as loadingMarkerHydration,
+  notSup as eventReplayHydration,
   notSup as getNextElement,
   notSup as getNextMatch,
   notSup as getNextMarker,
@@ -5095,6 +5099,19 @@ export {
   notSup as readShallow,
   notSup as acquireAsset
 };
+
+/**
+ * Server stub for the manifest-composed client hydrator: a generated client
+ * entry imported from an isomorphic module must not throw at import time on
+ * the server, so construction succeeds and only calling the result fails.
+ * @internal
+ */
+export function createHydrator(
+  _capabilities: readonly (() => void)[],
+  _delegatedEvents: readonly string[]
+): (...args: any[]) => never {
+  return notSup as (...args: any[]) => never;
+}
 
 function notSup() {
   throw new Error(
