@@ -74,7 +74,7 @@ for (const name of names) {
         JSON.stringify({
           scenario: name,
           serverAuthority: process.env.SOLID_SERVER_AUTHORITY !== "0",
-          inertRegions: process.env.SOLID_INERT_REGIONS !== "0",
+          inertRegions: process.env.SOLID_INERT_REGIONS === "1",
           prodBuild: !DEV,
           gc: !!gc,
           iterations: ITERATIONS,

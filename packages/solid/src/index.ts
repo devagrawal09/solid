@@ -182,6 +182,10 @@ export function ssrHandleError() {}
 export function ssrScope<T>(fn: () => T): () => T {
   return fn;
 }
+/** @internal — server-only: the client never renders an inert region while hydrating. */
+export function runInert<T>(fn: () => T): T {
+  return fn();
+}
 /** @internal */
 export function runInServerComponentScope<T>(fn: () => T): T {
   return fn();

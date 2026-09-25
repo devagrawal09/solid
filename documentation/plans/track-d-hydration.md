@@ -398,3 +398,204 @@ both modes. jsdom DOM claiming dominates small pages.
 **KEEP.** Measurable CPU, allocation, node, and link reductions on data-heavy
 pages. The data-byte cost is bounded by the compute-only rule. Every
 uncertain case falls back to ordinary hydration.
+
+---
+
+## Slice 6: inert-region hydration elimination (smallest safe form)
+
+### Baseline behavior
+
+A hydrating client reruns every component, even one whose markup can never
+change:
+
+- it calls the function;
+- it claims each template root from the key registry (`getNextElement`);
+- it walks the claimed DOM;
+- in dev and observe builds, it creates a component owner.
+
+The server stamps a `_hk` key on every one of those roots.
+
+### Proof
+
+The pass is `packages/compiler/src/inert_regions.rs`, behind the
+`inertRegions` option on hydratable builds. It is intra-module and syntactic,
+and anything unproven keeps ordinary hydration.
+
+A same-module component is **inert** only when all of these hold:
+
+- **No caller input.** It takes no props: no parameter, or one never
+  referenced. That also excludes `children`.
+- **Nothing executes.** The body is exactly `return <jsx/>`, or an arrow's JSX
+  body. No statements, calls, reads, writes, `onCleanup`, `useContext`, or
+  `isServer` logic can run.
+- **Static markup only.** It uses only intrinsic elements (custom elements
+  with a `-` are refused because they may upgrade), fragments, text, and
+  literal expression containers.
+- **Plain attributes.** Every attribute is a plain name with a literal value.
+  No `on*` events, no `ref`, no namespaced `use:` / `prop:` / `on:`
+  directives, and no spreads.
+- **Inert descendants.** Every nested component is itself inert, or is an
+  import the summary declares `inert-component`. A runtime component (`Show`,
+  `For`, `Loading`, `Errored`, context providers) is refused because it
+  receives props or children. That rules out boundaries and interactive
+  descendants.
+
+A **use site** `<X />` (no attributes, no children) is rewritten only when it
+sits unconditionally inside intrinsic elements of a function's returned JSX
+root. It becomes a hole holding a hoisted
+`const _$inertN = _$inert(() => <X />)`.
+
+Not rewritten, so they keep full hydration:
+
+- conditional and ternary positions;
+- component children, such as `<Show><X/></Show>`;
+- a component's own root;
+- use sites inside inert components.
+
+### Runtime
+
+- **Server.** `@solidjs/web` `inert()` calls the new `solid-js` internal
+  `runInert()`. It renders under a transparent owner, which consumes no id
+  slot, with the no-hydration context set, so no `_hk` keys are emitted and no
+  ids are allocated.
+- **Client while hydrating.** `inert()` returns a sentinel. `insert()` leaves
+  the server's nodes in place and returns. Nothing is called, claimed, or
+  owned.
+- **Client otherwise.** Client-only mounts, rows added later, and fresh clones
+  render normally.
+- **Id parity.** Neither side allocates ids for the region, so parity holds.
+  The parity harness passes with the pass on and off.
+
+### Tests
+
+```sh
+cd packages/compiler && cargo test --lib inert_regions     # 4 tests
+cd packages/web && pnpm run test:track-d                    # harness + slice 5/6 specs, inert on
+# baseline: the default configs (inert regions are opt-in, SOLID_INERT_REGIONS=1)
+```
+
+- **Compiler, proven and rewritten.** A static footer with a nested inert
+  icon; an arrow component; a summarized imported inert component; use sites
+  in a live component.
+- **Compiler, refusals.** Each is refused with a specific reason:
+  - a signal read, an `onClick`, a `ref` attribute or ref variable, and a
+    `use:` directive;
+  - `useContext`, `onCleanup`, a `<Show>` boundary, and `isServer`;
+  - `props.children`, a spread, a custom element, and a nested non-inert
+    child;
+  - an unsummarized import, and non-literal attributes.
+- **Compiler, use sites left alone.** A conditional use site, a
+  component-children use site, a use site with attributes, and a
+  component-root use site.
+- **Harness scenarios.** Parity passes in both modes, and with inert on
+  (`test:track-d`: 87 server renders, 141 client tests):
+  - `inert-footer`: inert regions beside a live counter;
+  - `inert-nested-live`: inert regions inside a live component, between live
+    descendants;
+  - `inert-in-for`: inert icons in live `<For>` rows, plus a row added after
+    hydration;
+  - `inert-in-loading`: an inert region inside a streamed `<Loading>`
+    boundary, in both replay modes;
+  - `inert-refused`: an event-handling component that keeps its key and
+    handler;
+  - `inert-bulk`: 60 cards.
+- **Slice spec.** `track-d-inert.spec.tsx` asserts:
+  - inert nodes keep their identity through hydration and a later update, and
+    carry no `_hk`;
+  - live parts update;
+  - the refused handler fires;
+  - client-only rendering still renders the regions.
+
+**Why opt-in in the shared web configs.** With inert regions on, the existing
+`ssr-stream.spec.tsx` "preserves hydration key order…" test fails. Its
+`Sibling` component is static, so it is correctly proven inert and loses its
+`_hk`, which that test asserts literally. The behavior is correct; the test
+encodes the old key layout. It is left untouched.
+
+**Full suites with slice 6 applied.** Default configs: signals 1803, solid
+600, web client 748, web server 814 (1 known failure), web hydrate 208,
+compiler Rust 97, todos-blocks 6. Solid and web type tests pass.
+
+### Measurements
+
+Raw logs are in `documentation/plans/track-d-raw/slice6-*.txt`.
+
+**Census.** Dev build, one hydration each.
+
+| Scenario | Keys, baseline | Keys, inert | Owners, baseline | Owners, inert |
+|---|---|---|---|---|
+| inert-bulk (60 cards) | 123 | 1 | 124 | 2 |
+| inert-footer | 4 | 1 | 5 | 2 |
+| inert-nested-live | 4 | 2 | 5 | 3 |
+| inert-in-for | 5 | 3 | 8 | 6 |
+| inert-in-loading | 2 | 1 | 6 | 5 |
+| inert-refused | 4 | 2 | 5 | 3 |
+
+Computations, effects, and links are unchanged: inert regions had none.
+Production builds create no component owners, so there the savings are the
+skipped component calls, key claims, and DOM walks.
+
+**Hydration time and allocation.** Production bundles in jsdom, 40 samples
+after 8 warmups, 3 interleaved rounds.
+
+| Scenario | Median ms, baseline | Median ms, inert | Median allocated, baseline | Median allocated, inert |
+|---|---|---|---|---|
+| inert-bulk | 4.10 / 3.94 / 3.83 | 2.39 / 2.21 / 2.36 | 1.03–1.05 MB | 377 KB |
+| inert-footer | 0.77 / 0.77 / 0.76 | 0.67 / 0.66 / 0.64 | 64.5 KB | 47.1 KB |
+| inert-nested-live | 0.75 / 0.80 / 0.76 | 0.74 / 0.71 / 0.77 | 65.7 KB | 55.1 KB |
+
+The nested-live timing difference is within noise; its p90 is about 0.8–1.0
+ms in both modes.
+
+**Bytes.**
+
+| Measure | Baseline | Inert |
+|---|---|---|
+| inert-bulk HTML, raw / gzip | 16,675 / 724 B | 15,767 / 399 B |
+| inert-footer HTML, raw / gzip | 366 / 267 B | 348 / 258 B |
+| Client runtime, hydrating-app entry, min / gz | 84,003 / 30,389 B | 84,161 / 30,427 B |
+| Compiled scenario module, min / gz | 8,531 / 2,609 B | 9,455 / 2,951 B |
+
+The compiled module grows by 924 bytes minified (342 gzipped) because each
+use site gets a hoisted thunk and the inert components' code still ships.
+For comparison, slice 5's compiled module difference is +74 / +14 B.
+
+### Limitations and blockers
+
+- **Client code is not omitted.** Omitting it would need proof that a use site
+  never renders outside hydration: no client navigation re-mount, no
+  enclosing branch toggle. That is a whole-graph reachability fact.
+  **Blocker: Track C linker.** The contract to consume is "use site S is
+  hydration-only". This pass would then drop the thunk and let the bundler
+  shake the component.
+- **Use-site shape.** Only prop-less use sites in unconditional intrinsic
+  positions qualify. Static components that take literal props, or sit inside
+  flow controls, keep hydrating.
+- **Cross-module facts.** They come only from the `authoritySummary`
+  `inert-component` kind. Which components are proven is reported under
+  `SOLID_AUTHORITY_REPORT=1` (`[solid inert]`), for a linker to lift into
+  summaries.
+- **Tooling interactions.** HMR (`hot`) wrappers and Babel-JSX mode don't
+  combine with the pass. Both sides must compile with the same option.
+
+### Decision
+
+**KEEP**, as opt-in: a large win on static-heavy pages (the 60-card page is
+42% faster with 64% less allocation) at a small byte cost. **ITERATE** on
+code omission, which is blocked on Track C.
+
+---
+
+## Integration contracts and blockers for Track C
+
+- **Summary interface.** `authoritySummary` maps
+  `module → export → pure | server | readonly-component | inert-component`.
+  The same object must reach the server and client compiles. Today it is
+  hand-supplied; a linker should produce it from the per-module reports.
+- **Needed from the linker:**
+  - prop-authority facts, so sealed memos can read props;
+  - hydration-only reachability of use sites, for slice 6 code omission;
+  - cross-module mutation facts for shared adopted values.
+- **Not done in Track D:** projection and store sealing, rendered-branch
+  collapse for `<Show>`/`<For>`, resumable events, and deferred feature
+  regions (the last two are out of scope).

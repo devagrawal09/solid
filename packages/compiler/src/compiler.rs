@@ -123,6 +123,10 @@ pub struct CompileOptions {
     /// The cross-module summary interface the proof consults for imports
     /// (supplied identically to the server and client compiles).
     pub authority_summary: crate::server_authority::AuthoritySummary,
+    /// Track D slice 6: prove static components inert and skip hydrating
+    /// their eligible use sites (see `inert_regions.rs`). Hydratable builds
+    /// only. Default `false`.
+    pub inert_regions: bool,
 }
 
 impl Default for CompileOptions {
@@ -157,6 +161,7 @@ impl Default for CompileOptions {
             host_fusion: false,
             server_authority: false,
             authority_summary: Default::default(),
+            inert_regions: false,
         }
     }
 }
@@ -315,6 +320,30 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
                     decision.reason.as_deref().unwrap_or("sealed")
                 );
             }
+        }
+    }
+
+    // Track D slice 6: inert regions — identical on every generate.
+    if options.inert_regions && options.hydratable {
+        let (decisions, sites) = crate::inert_regions::mark_inert_regions(
+            &allocator,
+            &mut program,
+            &options.module_name,
+            &options.authority_summary,
+        );
+        if std::env::var_os("SOLID_AUTHORITY_REPORT").is_some() {
+            for decision in decisions {
+                eprintln!(
+                    "[solid inert] {} {}: {}",
+                    options.filename.as_deref().unwrap_or("<input>"),
+                    decision.name,
+                    decision.reason.as_deref().unwrap_or("inert")
+                );
+            }
+            eprintln!(
+                "[solid inert] {} rewritten use sites: {sites}",
+                options.filename.as_deref().unwrap_or("<input>")
+            );
         }
     }
 

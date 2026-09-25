@@ -351,6 +351,21 @@ export function NoHydration(props: { children: SolidElement }): SolidElement {
 }
 
 /**
+ * Track D slice 6: render a compiler-proven inert region without hydration
+ * keys. Unlike `NoHydration`, the scope is a TRANSPARENT owner, so it consumes
+ * no id slot — matching the hydrating client, which never runs the region.
+ *
+ * @internal Reached through `@solidjs/web`'s compiler-emitted `inert()`.
+ */
+export function runInert<T>(render: () => T): T {
+  const o = createOwner({ transparent: true });
+  return runWithOwner(o, () => {
+    setContext(NoHydrateContext, true);
+    return render();
+  });
+}
+
+/**
  * Re-enables hydration within a `NoHydration` zone, establishing a new ID namespace.
  * Pass an `id` prop matching the client's `hydrate({ renderId })` to align hydration keys.
  * Has no effect when not inside a `NoHydration` zone (passthrough).

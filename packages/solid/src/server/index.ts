@@ -174,6 +174,7 @@ export {
   ssrHandleError,
   ssrScope,
   NoHydration,
+  runInert,
   Hydration,
   NoHydrateContext
 } from "./hydration.js";

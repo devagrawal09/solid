@@ -294,7 +294,8 @@ const nativeOptionKeys = new Set([
   "generators",
   "hostFusion",
   "serverAuthority",
-  "authoritySummary"
+  "authoritySummary",
+  "inertRegions"
 ]);
 
 function validateOptions(code, options) {
@@ -351,7 +352,7 @@ function validateOptions(code, options) {
   return nativeOptions;
 }
 
-// `{ "<module>": { "<export>": "pure" | "server" | "readonly-component" } }`
+// `{ "<module>": { "<export>": "pure" | "server" | "readonly-component" | "inert-component" } }`
 // → the flat entry list the native binding takes.
 function flattenAuthoritySummary(summary) {
   if (summary == null) return undefined;
@@ -361,9 +362,14 @@ function flattenAuthoritySummary(summary) {
   const entries = [];
   for (const [module, exports] of Object.entries(summary)) {
     for (const [exportName, kind] of Object.entries(exports || {})) {
-      if (kind !== "pure" && kind !== "server" && kind !== "readonly-component") {
+      if (
+        kind !== "pure" &&
+        kind !== "server" &&
+        kind !== "readonly-component" &&
+        kind !== "inert-component"
+      ) {
         throw new TypeError(
-          `@solidjs/compiler \`authoritySummary\` kind for ${module}#${exportName} must be "pure", "server" or "readonly-component"`
+          `@solidjs/compiler \`authoritySummary\` kind for ${module}#${exportName} must be "pure", "server", "readonly-component" or "inert-component"`
         );
       }
       entries.push({ module, exportName, kind });

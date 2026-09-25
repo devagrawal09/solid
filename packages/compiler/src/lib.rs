@@ -24,6 +24,7 @@ mod directives;
 mod dom;
 mod error;
 mod generators;
+mod inert_regions;
 #[cfg(feature = "node")]
 mod lazy;
 #[cfg(feature = "node")]

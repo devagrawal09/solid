@@ -932,6 +932,20 @@ export function scope(fn) {
 
 const SCOPE_OPTIONS = { scope: true };
 
+const INERT = Symbol("inert");
+
+/** Compiler-emitted primitive (Track D slice 6); not for hand-written code. @internal */
+export function inert<T>(render: () => T): T;
+
+// A compiler-proven inert region (static markup, no client-live behavior —
+// see the compiler's inert_regions.rs). While hydrating, the server already
+// rendered it without hydration keys: hand `insert()` a sentinel that adopts
+// the claimed range in place, so the region's component never runs, claims
+// nothing, and creates no owner. Outside hydration it renders normally.
+export function inert(render) {
+  return sharedConfig.hydrating ? { [INERT]: render } : render();
+}
+
 // Hydration-time behaviors reached from the hot insert/event paths, installed
 // by hydrate() so client-only bundles shake the implementations. Call sites
 // guard on the null slot; only hydrate() can assign it (#2883). Rollup folds
@@ -1052,6 +1066,13 @@ export function insert(parent, accessor, marker, initial, options) {
   // re-wraps bare getters for id-allocating holes, so only text holes pass
   // the accessor itself.
   if (typeof accessor === "function" && accessor.$sealed) accessor = accessor();
+  // An inert region (Track D slice 6): adopt the server's nodes untouched
+  // while hydrating; render it if this position is not a claim (a fresh
+  // clone, a client-only mount).
+  if (accessor != null && typeof accessor === "object" && accessor[INERT]) {
+    if (hydrationRt !== null && isHydrating(parent)) return;
+    accessor = accessor[INERT]();
+  }
   if (typeof accessor !== "function") {
     accessor = normalize(accessor, initial, multi, true);
     if (typeof accessor !== "function") {

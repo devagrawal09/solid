@@ -67,9 +67,19 @@ export interface TransformOptions {
   serverAuthority?: boolean;
   /**
    * The cross-module summary `serverAuthority` consults for imports:
-   * `{ "<module specifier>": { "<export>": "pure" | "server" | "readonly-component" } }`.
+   * `{ "<module specifier>": { "<export>": "pure" | "server" | "readonly-component" | "inert-component" } }`.
    */
-  authoritySummary?: Record<string, Record<string, "pure" | "server" | "readonly-component">>;
+  authoritySummary?: Record<
+    string,
+    Record<string, "pure" | "server" | "readonly-component" | "inert-component">
+  >;
+  /**
+   * Track D slice 6 (experimental, hydratable builds): prove static
+   * components inert and skip hydrating their eligible use sites (no keys,
+   * owners, or DOM claims). Compile the server and client with the same
+   * setting. Default `false`.
+   */
+  inertRegions?: boolean;
 }
 
 export interface RendererOption {

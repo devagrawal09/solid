@@ -11,7 +11,8 @@ import {
   createComponent,
   untrack,
   merge as mergeProps,
-  ssrScope as scope
+  ssrScope as scope,
+  runInert
 } from "solid-js";
 import { effect, memo } from "./render.js";
 import {
@@ -302,6 +303,16 @@ export type FetchMiddleware = (
 // core, and a local copy here drifts from them (it resolved function sources
 // for key enumeration only, dropping their values in SSR output).
 export { createComponent, effect, memo, untrack, mergeProps, scope, getOwner };
+
+/** Compiler-emitted primitive (Track D slice 6); not for hand-written code. @internal */
+export function inert<T>(render: () => T): T;
+
+// Server half of an inert region: render it without hydration keys, in a
+// transparent no-hydration scope that allocates no ids — exactly like the
+// client, which never runs the region while hydrating.
+export function inert(render) {
+  return runInert(render);
+}
 // Read by compiled SSR output under the `serverComponents` compiler option:
 // the claims-gate guard (`sharedConfig.context.claims ? ssrClaim(...) : ""`)
 // needs the shared render context at template-evaluation time.

@@ -88,6 +88,8 @@ pub enum AuthorityKind {
     Server,
     /// A component that never mutates its props (sealed values may flow in).
     ReadonlyComponent,
+    /// A component proven inert (Track D slice 6): static markup only.
+    InertComponent,
 }
 
 /// `(module specifier, export name, kind)` triples.

@@ -16,7 +16,7 @@ pub struct RendererOption {
 pub struct AuthoritySummaryEntry {
     pub module: String,
     pub export_name: String,
-    /// `"pure"` | `"server"` | `"readonly-component"`.
+    /// `"pure"` | `"server"` | `"readonly-component"` | `"inert-component"`.
     pub kind: String,
 }
 
@@ -86,6 +86,9 @@ pub struct TransformOptions {
     pub server_authority: Option<bool>,
     /// The cross-module summary `serverAuthority` consults for imports.
     pub authority_summary: Option<Vec<AuthoritySummaryEntry>>,
+    /// Track D slice 6: skip hydrating proven-inert component regions
+    /// (hydratable builds). Default `false`.
+    pub inert_regions: Option<bool>,
 }
 
 #[napi(object)]

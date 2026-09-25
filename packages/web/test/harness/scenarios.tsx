@@ -37,6 +37,7 @@ import {
 import { Portal, httpStatus, httpHeader, clientOnly, isServer } from "@solidjs/web";
 import { blockScenarios } from "./block-scenarios.jsx";
 import { trackDScenarios } from "./track-d-scenarios.jsx";
+import { trackDInertScenarios } from "./track-d-inert-scenarios.jsx";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
@@ -2119,5 +2120,6 @@ export const scenarios: Scenario[] = [
   // `$` typed blocks rendered as JSX — see ./block-scenarios.tsx.
   ...blockScenarios,
   // Track D optimization slices — see ./track-d-scenarios.tsx.
-  ...trackDScenarios
+  ...trackDScenarios,
+  ...trackDInertScenarios
 ];

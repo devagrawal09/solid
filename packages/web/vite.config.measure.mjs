@@ -14,6 +14,10 @@ import { resolve } from "path";
 const rootDir = resolve(import.meta.dirname);
 
 const serverAuthority = process.env.SOLID_SERVER_AUTHORITY !== "0";
+// Track D slice 6: inert-region elimination, opt-in (`SOLID_INERT_REGIONS=1`,
+// see the `test:track-d` script): it drops hydration keys from static
+// components, which existing specs assert literally.
+const inertRegions = process.env.SOLID_INERT_REGIONS === "1";
 const authoritySummary = {
   "./track-d-api.js": {
     fetchCatalog: "server",
@@ -26,7 +30,13 @@ export default defineConfig({
   plugins: [
     solidPlugin({
       hot: false,
-      solid: { dev: false, hydratable: true, serverAuthority, authoritySummary }
+      solid: {
+        dev: false,
+        hydratable: true,
+        serverAuthority,
+        authoritySummary,
+        inertRegions
+      }
     })
   ],
   test: {

@@ -1,0 +1,5 @@
+{
+  "name": "inert-footer",
+  "shell": "<main _hk=0><section><div _hk=1 class=\"banner\"><h3>Welcome</h3><p>Static marketing copy.</p></div></section><p class=\"count\">count: <!--$-->0<!--/--></p><div><footer _hk=3 class=\"legal\"><!--$--><svg _hk=4 viewBox=\"0 0 8 8\" class=\"icon\"><path d=\"M0 0L8 8\"></path></svg><!--/--><p>(c) 2026 ACME — all rights reserved</p><a href=\"/terms\">terms</a></footer></div></main>",
+  "rest": ""
+}

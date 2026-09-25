@@ -326,6 +326,7 @@ fn core_options(options: TransformOptions) -> Result<CompileOptions> {
         generators: options.generators.unwrap_or(true),
         host_fusion: options.host_fusion.unwrap_or(false),
         server_authority: options.server_authority.unwrap_or(false),
+        inert_regions: options.inert_regions.unwrap_or(false),
         authority_summary: crate::server_authority::AuthoritySummary {
             entries: options
                 .authority_summary
@@ -337,6 +338,9 @@ fn core_options(options: TransformOptions) -> Result<CompileOptions> {
                         "server" => crate::server_authority::AuthorityKind::Server,
                         "readonly-component" => {
                             crate::server_authority::AuthorityKind::ReadonlyComponent
+                        }
+                        "inert-component" => {
+                            crate::server_authority::AuthorityKind::InertComponent
                         }
                         _ => return None,
                     };

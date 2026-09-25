@@ -1,0 +1,5 @@
+{
+  "name": "inert-nested-live",
+  "shell": "<section _hk=0><div _hk=1 class=\"panel\"><button>close</button><div class=\"static\"><!--$--><svg _hk=2 viewBox=\"0 0 8 8\" class=\"icon\"><path d=\"M0 0L8 8\"></path></svg><!--/--><!--$--><div _hk=3 class=\"banner\"><h3>Welcome</h3><p>Static marketing copy.</p></div><!--/--></div><span>opened</span></div></section>",
+  "rest": ""
+}
