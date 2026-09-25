@@ -423,7 +423,21 @@ export function analyze(
           if (capture.scope === "import" && identityMismatch.has(id + "\0" + capture.name)) {
             fail(`identityMismatch:${capture.name}`, true);
           }
+          if (capture.scope === "import") {
+            // The cold module would re-import this binding: it must resolve to
+            // summarized code (or the runtime), or the handler stays inline.
+            const linked = resolveImportBinding(id, capture.name);
+            if (linked?.unknown && linked.reason?.startsWith("module:")) {
+              fail(`unknownLibrary:${capture.name}`, true);
+            } else if (!linked || linked.unknown) fail(`unresolvedImport:${capture.name}`, true);
+            else if (linked.module && modules.get(linked.module)?.status !== "ok") {
+              fail(`unknownLibrary:${capture.name}`, true);
+            }
+          }
         }
+        // Exact | bounded | unknown: types refine the compiler's verdict.
+        const completeness = typed?.completeness ?? body.completeness;
+        if (completeness === "unknown") fail("completeness:unknown", true);
         if (body.ops.plainYields.length || body.ops.throws.length) fail("invalidBlockBody");
         if (body.dynamicImports.some(entry => entry.source == null)) fail("dynamicImport", true);
         if (body.nestedBlocks) fail("createsBlocks");
@@ -470,7 +484,8 @@ export function analyze(
         reasons,
         unknown,
         prelude,
-        snapshot
+        snapshot,
+        completeness: typed?.completeness ?? body?.completeness ?? "unknown"
       };
       blocksOut.push(result);
       if (!reasons.length) candidates.set(key, result);
@@ -939,7 +954,8 @@ export function analyze(
       events: result.events,
       domain: domainOf.get(result.key) ?? null,
       prelude: result.prelude.map(statement => statement.kind),
-      snapshot: candidates.has(result.key) ? result.snapshot : null
+      snapshot: candidates.has(result.key) ? result.snapshot : null,
+      completeness: result.completeness
     }))
     .sort((a, b) => (a.key < b.key ? -1 : 1));
 

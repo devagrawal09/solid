@@ -96,7 +96,7 @@ describe("classification (client graph)", () => {
     const blocks = byBlock(client);
     const cold = client.blocks.filter(b => b.class === "cold").map(b => b.name ?? b.key);
     expect(cold.sort()).toEqual(
-      ["clear", "fail", "legacy", "run", "save", "submit", "src/features/editor.tsx#b10"].sort()
+      ["clear", "fail", "run", "save", "submit", "src/features/editor.tsx#b10"].sort()
     );
     // Exported, imported through App, forwarded Toolbar.onSave → Button.onPress → <button onClick>.
     expect(blocks["src/exported-handler.tsx:save"]).toMatchObject({
@@ -131,9 +131,34 @@ describe("classification (client graph)", () => {
     }
   });
 
+  it("refuses wrappers, forwarding into a delegating wrapper, and unsummarized libraries", () => {
+    const blocks = byBlock(client);
+    expect(blocks["src/features/wrappers.tsx:viaConfirm"]).toMatchObject({
+      class: "hot",
+      reasons: ["notEventOnly:forward:Confirm.onPress:propUse:delegated"]
+    });
+    expect(blocks["src/features/wrappers.tsx:viaWrap"]).toMatchObject({
+      class: "hot",
+      reasons: ["notEventOnly:site:argument"]
+    });
+    expect(blocks["src/features/wrappers.tsx:confirm"].reasons).toEqual([
+      "eventEscapes:argument:call"
+    ]);
+    expect(blocks["src/features/editor.tsx:legacy"]).toMatchObject({
+      class: "unknown",
+      reasons: ["unknownLibrary:legacyFormat"]
+    });
+  });
+
+  it("records exact | bounded | unknown completeness per block", () => {
+    const blocks = byBlock(client);
+    expect(blocks["src/features/editor.tsx:fail"].completeness).toBe("exact");
+    expect(blocks["src/features/editor.tsx:submit"].completeness).toBe("bounded");
+  });
+
   it("clusters by interaction domain: one chunk per route root, not one per handler", () => {
     expect(client.domains.map(d => [d.roots, d.blocks.length])).toEqual([
-      [["src/main.tsx"], 6],
+      [["src/main.tsx"], 5],
       [["src/routes/Settings.tsx"], 1]
     ]);
     expect(client.lazyRoots).toEqual(["src/routes/Settings.tsx"]);
@@ -183,7 +208,7 @@ describe("missing, stale, incompatible or escaped metadata becomes unknown (nega
       resolve: resolverFor(),
       strict: false
     });
-    expect(loose.blocks.filter(b => b.class === "cold")).toHaveLength(7);
+    expect(loose.blocks.filter(b => b.class === "cold")).toHaveLength(6);
   });
 
   it("a stale typed summary (source changed after solid-tsc) makes the module's blocks unknown", async () => {

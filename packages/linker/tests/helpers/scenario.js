@@ -11,7 +11,7 @@ export function entryFile(dir) {
   return path.join(dir, name);
 }
 
-const ids = ["message", "words", "log", "failed", "report-out"];
+const ids = ["message", "words", "log", "choice", "failed", "report-out"];
 
 export async function runScenario(buildDir, steps) {
   // A fresh copy per run: ES modules are cached by URL, and a cached entry
@@ -81,6 +81,8 @@ export const fullScenario = [
   step("counted", api => api.click("counted")),
   step("outer", api => api.click("outer", { button: 2 })),
   step("report", api => api.click("report")),
+  step("confirm", api => api.click("confirm")),
+  step("wrapped", api => api.click("wrapped")),
   step("type again", api => api.type("again")),
   step("submit again", api => api.submit()),
   step("save again", api => api.click("save")),

@@ -91,8 +91,9 @@ describe("chunking", () => {
     for (const domain of cold.manifest.domains) {
       expect(fs.existsSync(path.join(dirs.cold, domain.chunk))).toBe(true);
     }
-    // 7 extracted; 8 stay hot (5 negative cases, 3 JSX blocks).
-    expect(cold.manifest.stats.blocks).toEqual({ hot: 8, cold: 7, unknown: 0 });
+    // 6 extracted; the rest stay inline (negative cases, wrappers, JSX blocks,
+    // and one handler using a library that ships no summary).
+    expect(cold.manifest.stats.blocks).toEqual({ hot: 12, cold: 6, unknown: 1 });
   });
 });
 
