@@ -170,9 +170,9 @@
       "status": "resumable",
       "message": "`click` handler resumes from serialized captures (setCount: setter of count, count: accessor of count)",
       "site": {
-        "start": 739,
-        "end": 766,
-        "line": 21,
+        "start": 755,
+        "end": 782,
+        "line": 23,
         "column": 40
       }
     }

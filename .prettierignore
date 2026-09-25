@@ -1,1 +1,4 @@
 packages/resumable/test/.out
+# byte-exact native compiler fixture snapshots (update via their test commands)
+packages/compiler/__tests__/resumable/fixtures/**/output.js
+packages/compiler/__tests__/resumable/fixtures/**/event-module.js
