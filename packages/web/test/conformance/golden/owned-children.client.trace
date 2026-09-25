@@ -1,0 +1,36 @@
+## mount
+read outer = 1
+run parent(1)
+read inner = 1
+run child(1,1)
+value child = 101
+value parent = 1
+## write inner (child reruns, parent does not)
+write inner = 2
+read inner = 2
+run child(1,2)
+cleanup child(1,1)
+effect-cleanup child(101)
+value child = 102
+## write outer (parent reruns, old child disposed)
+write outer = 2
+read outer = 2
+run parent(2)
+read inner = 2
+run child(2,2)
+effect-cleanup child(102)
+cleanup child(1,2)
+cleanup parent(1)
+value child = 202
+value parent = 2
+## write inner again (only the new child)
+write inner = 3
+read inner = 3
+run child(2,3)
+cleanup child(2,2)
+effect-cleanup child(202)
+value child = 203
+## teardown
+effect-cleanup child(203)
+cleanup child(2,3)
+cleanup parent(2)

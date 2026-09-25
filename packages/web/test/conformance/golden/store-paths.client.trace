@@ -1,0 +1,27 @@
+## mount
+run name
+run second
+run count
+run names
+value name = "ada"
+value second = "b"
+value count = 2
+value names = "a,b"
+## unrelated write (user.age)
+## user.name
+run name
+value name = "grace"
+## items[0].name (not items[1])
+run names
+value names = "A,b"
+## push
+run count
+run names
+value count = 3
+value names = "A,b,c"
+## items[1].name
+run second
+run names
+value second = "B"
+value names = "A,B,c"
+## teardown

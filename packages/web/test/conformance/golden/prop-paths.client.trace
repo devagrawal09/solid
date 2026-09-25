@@ -1,0 +1,14 @@
+## mount
+run shown
+read label = "a"
+## initial
+html = <div><p class="child">[a]</p></div>
+## unrelated prop
+write other = 1
+html = <div><p class="child">[a]</p></div>
+## label
+write label = "b"
+run shown
+read label = "b"
+html = <div><p class="child">[b]</p></div>
+## teardown

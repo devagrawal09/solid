@@ -1,0 +1,11 @@
+## hydrate
+run Counter
+read count = 1
+hydration server-nodes 4/4 kept, 0 client-inserted
+## initial
+html = <main _hk="0"><!--$--><p _hk="1" class="count">n=<!--$-->1<!--/--></p><!--/--><!--$--><b _hk="3" class="label">x</b><!--/--><span class="after">after</span><!--$--><b _hk="4" class="label">y</b><!--/--></main>
+## update
+write count = 2
+read count = 2
+html = <main _hk="0"><!--$--><p _hk="1" class="count">n=<!--$-->2<!--/--></p><!--/--><!--$--><b _hk="3" class="label">x</b><!--/--><span class="after">after</span><!--$--><b _hk="4" class="label">y</b><!--/--></main>
+## teardown

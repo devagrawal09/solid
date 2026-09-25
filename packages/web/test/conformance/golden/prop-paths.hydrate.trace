@@ -1,0 +1,15 @@
+## hydrate
+run shown
+read label = "a"
+hydration server-nodes 2/2 kept, 0 client-inserted
+## initial
+html = <div _hk="0"><p _hk="2" class="child">[a]</p></div>
+## unrelated prop
+write other = 1
+html = <div _hk="0"><p _hk="2" class="child">[a]</p></div>
+## label
+write label = "b"
+run shown
+read label = "b"
+html = <div _hk="0"><p _hk="2" class="child">[b]</p></div>
+## teardown

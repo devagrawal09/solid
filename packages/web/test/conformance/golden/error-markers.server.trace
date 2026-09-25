@@ -1,0 +1,7 @@
+## render
+run value
+read ok = false
+caught boundary = NotFound(missing)
+markup = <div _hk=1><p _hk=30 class="err">NotFound</p></div>
+hydration-keys = ["1","30"]
+serialized = ["2"]

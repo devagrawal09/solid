@@ -1,0 +1,27 @@
+## mount
+read count = 0
+## initial
+html = <div><button class="inc">+</button><p class="count">0</p></div>
+## click
+run inc
+owner inc handler = none
+read count = 0
+write count = 1
+read count = 1
+html = <div><button class="inc">+</button><p class="count">1</p></div>
+## external write (handler must not rerun)
+write count = 10
+read count = 10
+html = <div><button class="inc">+</button><p class="count">10</p></div>
+## click twice
+run inc
+owner inc handler = none
+read count = 10
+write count = 11
+run inc
+owner inc handler = none
+read count = 10
+write count = 11
+read count = 11
+html = <div><button class="inc">+</button><p class="count">11</p></div>
+## teardown

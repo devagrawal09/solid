@@ -1,0 +1,21 @@
+## mount
+run double
+read count = 1
+run big
+run effect.compute
+value effect = false
+## write 2 (big stays false: effect suppressed)
+write count = 2
+run double
+read count = 2
+run big
+## write 2 again (signal equality)
+write count = 2
+## write 3 (big flips)
+write count = 3
+run double
+read count = 3
+run big
+run effect.compute
+value effect = true
+## teardown
