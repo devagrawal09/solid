@@ -29,7 +29,7 @@ import {
   CAP_LAZY_ASSETS,
   type SsrSourcePolicy
 } from "./state.js";
-import { hydrateSignalLike, hydratedEffect } from "./dispatch.js";
+import { installSignalDispatch } from "./dispatch.js";
 
 /** Manifest capability names, as the manifest schema spells them. */
 export type HydrationCapabilityName =
@@ -101,9 +101,9 @@ export function installManifestGuards(): void {
         "(asyncResults, storeAdapters, ssrSources or loadingMarkers)"
     );
 
+  if (!(installedCapabilities & (CAP_ASYNC_RESULTS | CAP_SSR_CLIENT | CAP_SSR_HYBRID)))
+    installSignalDispatch();
   if (!has(CAP_ASYNC_RESULTS)) {
-    slots.signal ||= hydrateSignalLike;
-    slots.effect ||= hydratedEffect;
     slots.adopt = (coreFn, fn, options) => {
       const id = peekId();
       if (id != null) assertNoRecord("asyncResults", id, "an async result");
@@ -115,15 +115,8 @@ export function installManifestGuards(): void {
       coreFn(compute, effectFn, options);
     };
   }
-  if (!has(CAP_SSR_CLIENT)) {
-    slots.signal ||= hydrateSignalLike;
-    slots.effect ||= hydratedEffect;
-    slots.client = policyGuard("client");
-  }
-  if (!has(CAP_SSR_HYBRID)) {
-    slots.signal ||= hydrateSignalLike;
-    slots.hybrid = policyGuard("hybrid");
-  }
+  if (!has(CAP_SSR_CLIENT)) slots.client = policyGuard("client");
+  if (!has(CAP_SSR_HYBRID)) slots.hybrid = policyGuard("hybrid");
   if (!has(CAP_STORES)) {
     slots.store = (coreFn, fn, initialValue, options) => {
       const src = options?.ssrSource;
@@ -139,6 +132,7 @@ export function installManifestGuards(): void {
   }
   if (!has(CAP_ERROR_MARKERS)) {
     slots.error = (fn, fallback) => {
+      if (!sharedConfig.hydrating) return coreErrorBoundary(fn, fallback);
       const id = peekId();
       if (id != null && sharedConfig.has!(id) && sharedConfig.load!(id) !== undefined)
         hydrationManifestViolation(
@@ -150,6 +144,7 @@ export function installManifestGuards(): void {
   }
   if (!has(CAP_LOADING_MARKERS)) {
     slots.loading = (fn, fallback, options) => {
+      if (!sharedConfig.hydrating) return coreLoadingBoundary(fn, fallback, options);
       const id = peekId();
       if (id != null) {
         assertNoRecord("loadingMarkers", id, "a loading-boundary marker");

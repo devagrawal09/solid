@@ -133,10 +133,19 @@ export type SnapshotHooks = {
 };
 
 export type HydrationSlots = {
-  /** Signal-family dispatcher (memo / computed signal / computed optimistic). */
-  signal?: (coreFn: AnyFn, fn: any, options: any) => any;
-  /** Effect dispatcher (render effects and user effects). */
-  effect?: (coreFn: AnyFn, compute: any, effectFn: any, options: any) => void;
+  // Signal-family and effect entry points (dispatch.ts). Each checks
+  // `sharedConfig.hydrating` itself, so the public wrappers stay
+  // `(slot || core)(...args)` and CSR bundles pay only the slot read.
+  /** createMemo under hydration. */
+  memo?: AnyFn;
+  /** createSignal under hydration. */
+  signal?: AnyFn;
+  /** Signal-family dispatcher for a given core primitive (createOptimistic). */
+  signalLike?: (coreFn: AnyFn, fn: any, options: any) => any;
+  /** createRenderEffect under hydration. */
+  renderEffect?: AnyFn;
+  /** createEffect under hydration. */
+  effect?: AnyFn;
   /** asyncResults: serialized async result adoption for the signal family. */
   adopt?: (coreFn: AnyFn, fn: any, options: any) => any;
   /** asyncResults: serialized value adoption for effects. */
@@ -147,9 +156,9 @@ export type HydrationSlots = {
   hybrid?: SsrSourcePolicy;
   /** storeAdapters: derived store / projection / optimistic-store hydration. */
   store?: (coreFn: AnyFn, fn: any, initialValue: any, options: any) => any;
-  /** errorMarkers: adopt a serialized boundary error. */
+  /** errorMarkers: createErrorBoundary under hydration (adopts a serialized boundary error). */
   error?: (fn: () => any, fallback: (error: Accessor<unknown>, reset: () => void) => any) => any;
-  /** loadingMarkers: adopt serialized loading-boundary markers. */
+  /** loadingMarkers: createLoadingBoundary under hydration (adopts serialized markers). */
   loading?: (fn: () => any, fallback: () => any, options?: { on?: () => any }) => any;
   /** streamLedger: the streamed-fragment (`<id>_fr`) branch of a loading boundary. */
   stream?: (

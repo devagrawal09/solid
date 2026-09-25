@@ -389,10 +389,7 @@ export const createMemo: {
     compute: ComputeFunction<undefined | NoInfer<T>, T>,
     options?: HydrationMemoOptions<T>
   ): SourceAccessor<T>;
-} = ((compute: any, options?: any) =>
-  sharedConfig.hydrating && !options?.transparent && slots.signal
-    ? slots.signal(coreMemo, compute, options)
-    : coreMemo(compute, options)) as any;
+} = ((...args: any[]) => (slots.memo || coreMemo)(...args)) as any;
 
 /**
  * Creates a simple reactive state with a getter and setter.
@@ -445,10 +442,7 @@ export const createSignal: {
     fn: ComputeFunction<undefined | NoInfer<T>, T>,
     options?: HydrationSignalOptions<T>
   ): Signal<T>;
-} = ((...args: any[]) =>
-  typeof args[0] === "function" && sharedConfig.hydrating && slots.signal
-    ? slots.signal(coreSignal, args[0], args[1])
-    : (coreSignal as Function)(...args)) as any;
+} = ((...args: any[]) => (slots.signal || coreSignal)(...args)) as any;
 
 /**
  * Internal primitive that backs the `<Errored>` flow control.
@@ -466,10 +460,8 @@ export const createSignal: {
  *
  * @internal
  */
-export const createErrorBoundary = ((fn: any, fallback: any) =>
-  sharedConfig.hydrating && slots.error
-    ? slots.error(fn, fallback)
-    : coreErrorBoundary(fn, fallback)) as <T, U>(
+export const createErrorBoundary = ((...args: any[]) =>
+  (slots.error || coreErrorBoundary)(...(args as [any, any]))) as <T, U>(
   fn: () => T,
   fallback: (error: Accessor<unknown>, reset: () => void) => U
 ) => Accessor<T | U>;
@@ -535,8 +527,8 @@ export const createOptimistic: {
   // Passing coreOptimistic in here (instead of a dedicated hydrated impl
   // installed with the capability) is what lets the optimistic engine shake
   // out of hydrating bundles that never import this primitive.
-  typeof args[0] === "function" && sharedConfig.hydrating && slots.signal
-    ? slots.signal(coreOptimistic, args[0], args[1])
+  typeof args[0] === "function" && sharedConfig.hydrating && slots.signalLike
+    ? slots.signalLike(coreOptimistic, args[0], args[1])
     : (coreOptimistic as Function)(...args)) as any;
 
 /**
@@ -777,14 +769,8 @@ export const createOptimisticStore: {
  *
  * @description https://docs.solidjs.com/reference/secondary-primitives/create-render-effect
  */
-export const createRenderEffect: typeof coreRenderEffect = ((
-  compute: any,
-  effectFn: any,
-  options?: any
-) =>
-  sharedConfig.hydrating && !options?.transparent && slots.effect
-    ? slots.effect(coreRenderEffect, compute, effectFn, options)
-    : coreRenderEffect(compute, effectFn, options)) as typeof coreRenderEffect;
+export const createRenderEffect: typeof coreRenderEffect = ((...args: any[]) =>
+  (slots.renderEffect || coreRenderEffect)(...args)) as typeof coreRenderEffect;
 
 /**
  * Creates a reactive effect with **separate compute and effect phases**.
@@ -842,10 +828,8 @@ export const createRenderEffect: typeof coreRenderEffect = ((
  *
  * @description https://docs.solidjs.com/reference/basic-reactivity/create-effect
  */
-export const createEffect: typeof coreEffect = ((compute: any, effectFn: any, options?: any) =>
-  sharedConfig.hydrating && !options?.transparent && slots.effect
-    ? slots.effect(coreEffect, compute, effectFn, options)
-    : coreEffect(compute, effectFn, options)) as typeof coreEffect;
+export const createEffect: typeof coreEffect = ((...args: any[]) =>
+  (slots.effect || coreEffect)(...args)) as typeof coreEffect;
 
 /**
  * Internal primitive that backs the `<Loading>` component. Returns a
@@ -861,10 +845,7 @@ export const createLoadingBoundary = (<T, U>(
   fn: () => T,
   fallback: () => U,
   options?: { on?: () => any }
-): Accessor<T | U> =>
-  sharedConfig.hydrating && slots.loading
-    ? slots.loading(fn, fallback, options)
-    : coreLoadingBoundary(fn, fallback, options)) as <T, U>(
+): Accessor<T | U> => (slots.loading || coreLoadingBoundary)(fn, fallback, options)) as <T, U>(
   fn: () => T,
   fallback: () => U,
   options?: { on?: () => any }

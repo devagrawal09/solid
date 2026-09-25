@@ -1,0 +1,78 @@
+{
+  "apps": {
+    "sync": {
+      "csr": {
+        "raw": 37951,
+        "gzip": 14886,
+        "brotli": 13508
+      },
+      "universal": {
+        "raw": 56198,
+        "gzip": 21268,
+        "brotli": 19323
+      }
+    },
+    "store": {
+      "csr": {
+        "raw": 66360,
+        "gzip": 24643,
+        "brotli": 22254
+      },
+      "universal": {
+        "raw": 84859,
+        "gzip": 31070,
+        "brotli": 27999
+      }
+    },
+    "async": {
+      "csr": {
+        "raw": 36949,
+        "gzip": 14606,
+        "brotli": 13215
+      },
+      "universal": {
+        "raw": 52969,
+        "gzip": 20189,
+        "brotli": 18321
+      }
+    },
+    "streaming": {
+      "csr": {
+        "raw": 36943,
+        "gzip": 14588,
+        "brotli": 13272
+      },
+      "universal": {
+        "raw": 53096,
+        "gzip": 20215,
+        "brotli": 18351
+      }
+    },
+    "lazy": {
+      "csr": {
+        "raw": 34159,
+        "gzip": 13489,
+        "brotli": 12257
+      },
+      "universal": {
+        "raw": 52512,
+        "gzip": 19971,
+        "brotli": 18118
+      }
+    },
+    "full": {
+      "csr": {
+        "raw": 69981,
+        "gzip": 25993,
+        "brotli": 23483
+      },
+      "universal": {
+        "raw": 86350,
+        "gzip": 31594,
+        "brotli": 28468
+      }
+    }
+  },
+  "marginal": {},
+  "removed": {}
+}

@@ -9,7 +9,7 @@
 // Store-family adoption is the separate storeAdapters capability.
 import { getOwner, peekNextChildId } from "@solidjs/signals";
 import { sharedConfig, slots, markInstalled, CAP_ASYNC_RESULTS } from "./state.js";
-import { hydrateSignalLike, hydratedEffect } from "./dispatch.js";
+import { installSignalDispatch } from "./dispatch.js";
 import {
   subFetch,
   syncThenable,
@@ -145,8 +145,7 @@ function adoptEffect(coreFn: Function, compute: any, effectFn: any, options?: an
  * @internal
  */
 export function installAsyncResultHydration(): void {
-  slots.signal = hydrateSignalLike;
-  slots.effect = hydratedEffect;
+  installSignalDispatch();
   slots.adopt = adoptSignal;
   slots.adoptEffect = adoptEffect;
   markInstalled(CAP_ASYNC_RESULTS);

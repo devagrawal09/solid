@@ -12,7 +12,7 @@ import {
   CAP_SSR_HYBRID,
   type SsrSourcePolicy
 } from "./state.js";
-import { hydrateSignalLike, hydratedEffect } from "./dispatch.js";
+import { installSignalDispatch } from "./dispatch.js";
 import {
   subFetch,
   readHydratedValue,
@@ -159,8 +159,7 @@ const hybridPolicy: SsrSourcePolicy = {
  */
 export function installSsrClientHydration(): void {
   slots.client = clientPolicy;
-  slots.signal = hydrateSignalLike;
-  slots.effect = hydratedEffect;
+  installSignalDispatch();
   markInstalled(CAP_SSR_CLIENT);
 }
 
@@ -172,6 +171,6 @@ export function installSsrClientHydration(): void {
  */
 export function installSsrHybridHydration(): void {
   slots.hybrid = hybridPolicy;
-  slots.signal = hydrateSignalLike;
+  installSignalDispatch();
   markInstalled(CAP_SSR_HYBRID);
 }

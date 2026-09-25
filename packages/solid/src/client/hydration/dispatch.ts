@@ -3,7 +3,14 @@
 // the plain core primitive. Installed by any capability that hydrates the
 // signal family (asyncResults, ssrSources); a client graph with neither never
 // retains them and its memos/signals/effects stay on the core path.
-import { getOwner, peekNextChildId } from "@solidjs/signals";
+import {
+  getOwner,
+  peekNextChildId,
+  createMemo as coreMemo,
+  createSignal as coreSignal,
+  createRenderEffect as coreRenderEffect,
+  createEffect as coreEffect
+} from "@solidjs/signals";
 import { sharedConfig, slots } from "./state.js";
 
 // One signal-shaped hydration body for memo/signal/optimistic — the families
@@ -29,7 +36,9 @@ export function hydrateSignalLike(coreFn: Function, fn: any, options?: any) {
   return slots.adopt ? slots.adopt(coreFn as any, fn, options) : (coreFn as any)(fn, options);
 }
 
-export function hydratedEffect(coreFn: Function, compute: any, effectFn: any, options?: any) {
+function hydratedEffect(coreFn: Function, compute: any, effectFn: any, options?: any) {
+  if (!sharedConfig.hydrating || options?.transparent)
+    return (coreFn as any)(compute, effectFn, options);
   if (options?.ssrSource === "client" && slots.client) {
     slots.client.effect!(coreFn as any, compute, effectFn, options);
     return;
@@ -38,4 +47,29 @@ export function hydratedEffect(coreFn: Function, compute: any, effectFn: any, op
   slots.snap?.markTop();
   if (slots.adoptEffect) slots.adoptEffect(coreFn as any, compute, effectFn, options);
   else (coreFn as any)(compute, effectFn, options);
+}
+
+function hydratedCreateMemo(compute: any, options?: any) {
+  if (!sharedConfig.hydrating || options?.transparent) return coreMemo(compute, options);
+  return hydrateSignalLike(coreMemo, compute, options);
+}
+
+function hydratedCreateSignal(fn?: any, second?: any) {
+  if (typeof fn !== "function" || !sharedConfig.hydrating) return coreSignal(fn, second);
+  return hydrateSignalLike(coreSignal, fn, second);
+}
+
+/**
+ * Route the signal family and effects through the hydration dispatcher.
+ * Installed by every capability that hydrates them (asyncResults,
+ * ssrSources) and by the development guards.
+ */
+export function installSignalDispatch(): void {
+  slots.memo = hydratedCreateMemo;
+  slots.signal = hydratedCreateSignal;
+  slots.signalLike = hydrateSignalLike;
+  slots.renderEffect = (compute: any, effectFn: any, options?: any) =>
+    hydratedEffect(coreRenderEffect, compute, effectFn, options);
+  slots.effect = (compute: any, effectFn: any, options?: any) =>
+    hydratedEffect(coreEffect, compute, effectFn, options);
 }

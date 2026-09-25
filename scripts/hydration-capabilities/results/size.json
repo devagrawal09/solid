@@ -1,0 +1,215 @@
+{
+  "apps": {
+    "sync": {
+      "csr": {
+        "raw": 37965,
+        "gzip": 14898,
+        "brotli": 13534
+      },
+      "universal": {
+        "raw": 57682,
+        "gzip": 21830,
+        "brotli": 19786
+      },
+      "selected": {
+        "raw": 42085,
+        "gzip": 16419,
+        "brotli": 14993
+      }
+    },
+    "store": {
+      "csr": {
+        "raw": 66718,
+        "gzip": 24672,
+        "brotli": 22268
+      },
+      "universal": {
+        "raw": 86702,
+        "gzip": 31676,
+        "brotli": 28528
+      },
+      "selected": {
+        "raw": 75033,
+        "gzip": 27735,
+        "brotli": 25058
+      }
+    },
+    "async": {
+      "csr": {
+        "raw": 37209,
+        "gzip": 14627,
+        "brotli": 13281
+      },
+      "universal": {
+        "raw": 54705,
+        "gzip": 20761,
+        "brotli": 18851
+      },
+      "selected": {
+        "raw": 45013,
+        "gzip": 17474,
+        "brotli": 15906
+      }
+    },
+    "streaming": {
+      "csr": {
+        "raw": 37205,
+        "gzip": 14616,
+        "brotli": 13264
+      },
+      "universal": {
+        "raw": 54834,
+        "gzip": 20762,
+        "brotli": 18884
+      },
+      "selected": {
+        "raw": 50289,
+        "gzip": 19248,
+        "brotli": 17507
+      }
+    },
+    "lazy": {
+      "csr": {
+        "raw": 34401,
+        "gzip": 13521,
+        "brotli": 12305
+      },
+      "universal": {
+        "raw": 54240,
+        "gzip": 20547,
+        "brotli": 18666
+      },
+      "selected": {
+        "raw": 40065,
+        "gzip": 15604,
+        "brotli": 14219
+      }
+    },
+    "full": {
+      "csr": {
+        "raw": 70350,
+        "gzip": 26019,
+        "brotli": 23482
+      },
+      "universal": {
+        "raw": 88201,
+        "gzip": 32179,
+        "brotli": 28988
+      },
+      "selected": {
+        "raw": 88229,
+        "gzip": 32191,
+        "brotli": 29018
+      }
+    }
+  },
+  "marginal": {
+    "base": {
+      "raw": 42085,
+      "gzip": 16419,
+      "brotli": 14993
+    },
+    "snapshots": {
+      "raw": 614,
+      "gzip": 264,
+      "brotli": 259
+    },
+    "asyncResults": {
+      "raw": 3653,
+      "gzip": 1262,
+      "brotli": 1093
+    },
+    "storeAdapters": {
+      "raw": 3987,
+      "gzip": 1463,
+      "brotli": 1263
+    },
+    "errorMarkers": {
+      "raw": 2282,
+      "gzip": 895,
+      "brotli": 776
+    },
+    "loadingMarkers": {
+      "raw": 4838,
+      "gzip": 1812,
+      "brotli": 1638
+    },
+    "streamLedger": {
+      "raw": 8000,
+      "gzip": 2861,
+      "brotli": 2550
+    },
+    "lazyAssets": {
+      "raw": 1465,
+      "gzip": 530,
+      "brotli": 449
+    },
+    "ssrSources[client]": {
+      "raw": 1716,
+      "gzip": 654,
+      "brotli": 582
+    },
+    "ssrSources[hybrid]": {
+      "raw": 3720,
+      "gzip": 1331,
+      "brotli": 1221
+    },
+    "ssrSources[client,hybrid]": {
+      "raw": 3965,
+      "gzip": 1412,
+      "brotli": 1288
+    },
+    "delegatedEvents (replay)": {
+      "raw": 795,
+      "gzip": 290,
+      "brotli": 315
+    }
+  },
+  "removed": {
+    "full": {
+      "raw": 57704,
+      "gzip": 21837,
+      "brotli": 19847
+    },
+    "asyncResults": {
+      "raw": 942,
+      "gzip": 300,
+      "brotli": 271
+    },
+    "storeAdapters": {
+      "raw": 1555,
+      "gzip": 535,
+      "brotli": 447
+    },
+    "errorMarkers": {
+      "raw": 323,
+      "gzip": 119,
+      "brotli": 131
+    },
+    "streamLedger": {
+      "raw": 3162,
+      "gzip": 1038,
+      "brotli": 914
+    },
+    "loadingMarkers+streamLedger": {
+      "raw": 5382,
+      "gzip": 1805,
+      "brotli": 1666
+    },
+    "lazyAssets": {
+      "raw": 1432,
+      "gzip": 448,
+      "brotli": 440
+    },
+    "ssrSources": {
+      "raw": 847,
+      "gzip": 304,
+      "brotli": 303
+    },
+    "universal - full-manifest (same capabilities)": {
+      "raw": -22,
+      "gzip": -7,
+      "brotli": -61
+    }
+  }
+}

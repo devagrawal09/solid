@@ -43,6 +43,7 @@ function hydratedCreateErrorBoundary<T, U>(
   fn: () => T,
   fallback: (error: () => unknown, reset: () => void) => U
 ): Accessor<T | U> {
+  if (!sharedConfig.hydrating) return coreErrorBoundary(fn, fallback);
   slots.snap?.markTop();
   const parent = getOwner()!;
   const expectedId = peekNextChildId(parent);
@@ -257,6 +258,7 @@ function hydratedCreateLoadingBoundary<T, U>(
   fallback: () => U,
   options?: { on?: () => any }
 ): Accessor<T | U> {
+  if (!sharedConfig.hydrating) return coreLoadingBoundary(fn, fallback, options);
   // Shared with the stream-ledger branch: once a resume is queued for this
   // boundary, later runs of the memo must not register another one.
   const state = { q: false };
