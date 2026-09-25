@@ -1,0 +1,21 @@
+{
+  "label": "base",
+  "repo": "/tmp/claude-0/-home-user-repo/c568bc04-86fe-5fee-a427-f1a72827f015/scratchpad/base",
+  "handles": false,
+  "app": {
+    "raw": 1038,
+    "gzip": 505,
+    "brotli": 444
+  },
+  "bundle": {
+    "raw": 52545,
+    "gzip": 19247,
+    "brotli": 17440
+  },
+  "compat": {
+    "raw": 49887,
+    "gzip": 18336,
+    "brotli": 16637
+  },
+  "compiled": "import { $, createMemo, createRoot, createSignal, createStore, flush, perform as _$perform, readPath as _$readPath, readProp as _$readProp } from \"solid-js\";\nexport function app(rows) {\n\treturn createRoot(() => {\n\t\tconst [store, setStore] = createStore({\n\t\t\tuser: {\n\t\t\t\tname: \"Ada\",\n\t\t\t\taddress: {\n\t\t\t\t\tcity: \"London\",\n\t\t\t\t\tzip: \"N1\"\n\t\t\t\t},\n\t\t\t\tprefs: { theme: { mode: \"dark\" } }\n\t\t\t},\n\t\t\tfilter: \"all\",\n\t\t\titems: rows,\n\t\t\tcount: 0\n\t\t});\n\t\tconst [index, setIndex] = createSignal(0);\n\t\tconst name = createMemo($(function() {\n\t\t\treturn _$perform(_$readPath(store, [\"user\", \"name\"]));\n\t\t}));\n\t\tconst city = createMemo($(function() {\n\t\t\treturn _$perform(_$readPath(store, [\n\t\t\t\t\"user\",\n\t\t\t\t\"address\",\n\t\t\t\t\"city\"\n\t\t\t]));\n\t\t}));\n\t\tconst mode = createMemo($(function() {\n\t\t\treturn _$perform(_$readPath(store, [\n\t\t\t\t\"user\",\n\t\t\t\t\"prefs\",\n\t\t\t\t\"theme\",\n\t\t\t\t\"mode\"\n\t\t\t]));\n\t\t}));\n\t\tconst filter = createMemo($(function() {\n\t\t\treturn _$perform(_$readPath(store, [\"filter\"]));\n\t\t}));\n\t\tconst count = createMemo($(function() {\n\t\t\treturn _$perform(_$readPath(store, [\"count\"]));\n\t\t}));\n\t\tconst length = createMemo($(function() {\n\t\t\treturn _$perform(_$readPath(store, [\"items\", \"length\"]));\n\t\t}));\n\t\tconst current = createMemo($(function() {\n\t\t\tconst i = _$perform(index);\n\t\t\treturn `${_$perform(_$readPath(store, [\n\t\t\t\t\"items\",\n\t\t\t\ti,\n\t\t\t\t\"title\"\n\t\t\t]))}:${_$perform(_$readPath(store, [\n\t\t\t\t\"items\",\n\t\t\t\ti,\n\t\t\t\t\"meta\",\n\t\t\t\t\"done\"\n\t\t\t]))}`;\n\t\t}));\n\t\tconst summary = createMemo($(function() {\n\t\t\treturn `${_$perform(name)} in ${_$perform(city)} (${_$perform(mode)}) ${_$perform(filter)} ${_$perform(count)}/${_$perform(length)}`;\n\t\t}));\n\t\tconst labels = [];\n\t\tfor (let i = 0; i < rows.length; i++) {\n\t\t\tconst row = store.items[i];\n\t\t\tlabels.push(createMemo($(function() {\n\t\t\t\treturn `${_$perform(_$readPath(row, [\"title\"]))}${_$perform(_$readPath(row, [\"meta\", \"done\"])) ? \" ✓\" : \"\"}`;\n\t\t\t})));\n\t\t}\n\t\treturn {\n\t\t\tsummary,\n\t\t\tcurrent,\n\t\t\tlabels,\n\t\t\tsetStore,\n\t\t\tsetIndex,\n\t\t\tflush\n\t\t};\n\t});\n}\n"
+}

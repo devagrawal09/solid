@@ -1,0 +1,62 @@
+[
+  {
+    "name": "signals: core floor (createSignal/Memo/Effect/Root/flush)",
+    "passed": false,
+    "size": 8520,
+    "sizeLimit": 8450
+  },
+  {
+    "name": "signals: + createStore",
+    "passed": false,
+    "size": 16949,
+    "sizeLimit": 15350
+  },
+  {
+    "name": "signals: + isPending/latest",
+    "passed": false,
+    "size": 10793,
+    "sizeLimit": 10750
+  },
+  {
+    "name": "app: render + one signal (the simple-app floor)",
+    "passed": false,
+    "size": 11532,
+    "sizeLimit": 11150
+  },
+  {
+    "name": "app: hydrating (no stores) with Show/For/Loading/Errored/lazy",
+    "passed": false,
+    "size": 18921,
+    "sizeLimit": 18650
+  },
+  {
+    "name": "app: hydrating + every store primitive family",
+    "passed": false,
+    "size": 29998,
+    "sizeLimit": 28300
+  },
+  {
+    "name": "app: CSR with Show/For/Loading/Errored/lazy",
+    "passed": false,
+    "size": 14331,
+    "sizeLimit": 14000
+  },
+  {
+    "name": "app: CSR, observe tier (same app on the `observe` artifacts)",
+    "passed": false,
+    "size": 15713,
+    "sizeLimit": 15400
+  },
+  {
+    "name": "app: CSR, observe tier + attribution engine enabled",
+    "passed": false,
+    "size": 27189,
+    "sizeLimit": 26920
+  },
+  {
+    "name": "frames: eager client consumer (frames client + transport, lazy codec)",
+    "passed": true,
+    "size": 11372,
+    "sizeLimit": 11400
+  }
+]
