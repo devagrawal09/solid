@@ -23,6 +23,10 @@ import {
   releaseSnapshotScope,
   clearSnapshots,
   type Accessor,
+  type AnyBlock,
+  type BlockAccessor,
+  type BlockValue,
+  type ReactiveHostBlock,
   type ComputeFunction,
   type MemoOptions,
   type NoInfer,
@@ -1408,6 +1412,11 @@ export function enableHydration() {
  * @description https://docs.solidjs.com/reference/basic-reactivity/create-memo
  */
 export const createMemo: {
+  // A `$` block keeps its dependency / async / error metadata on the accessor.
+  <B extends AnyBlock & ReactiveHostBlock>(
+    compute: B,
+    options?: HydrationMemoOptions<BlockValue<B>>
+  ): BlockAccessor<B>;
   // Commit #0 (loadingValue) removes the uninitialized window: the accessor
   // never reads undefined — even for `ssrSource: "client"`, where the loading
   // value serves until the post-hydration compute lands — and `prev` is

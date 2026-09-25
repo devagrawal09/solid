@@ -132,6 +132,7 @@ Pass `sourceMap: true` to receive a JSON source map string in `result.map`. For 
 - `requireImportSource`
 - `serverComponents`
 - `renderers`
+- `generators` (default `true`): lower `$(function* () { … yield* signal … })` typed blocks (`$` from `solid-js` / `@solidjs/signals`) to call form — `$(function () { … perform(signal) … })`, importing `perform` from the same module — ahead of JSX lowering. Only the sync subset is lowered: `yield*` over identifiers / member expressions and over direct `raise(...)` / `attempt(...)` / `write(...)` / `call(...)` / `readStore(...)` calls (a lowered `readStore` is one selector invocation). A block that yields `wait(...)` or any other call is left to the runtime driver. Inside a `$` body, `throw`, a bare `yield`, and `async function*` are compile errors (`[THROW_IN_BLOCK]`, `[PLAIN_YIELD_IN_BLOCK]`, `[ASYNC_GENERATOR_IN_BLOCK]`), as is a `yield*` inside JSX in a block the pass cannot lower (`[JSX_YIELD_IN_UNLOWERED_BLOCK]`). `yield*` inside JSX expression containers is only compilable with this pass on.
 
 ### Server function directives (experimental)
 

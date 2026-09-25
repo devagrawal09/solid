@@ -14,6 +14,7 @@ export {
   installAuthoritativeRead,
   markRefresh,
   staleValues,
+  setBlockGuard,
   setSnapshotCapture,
   markSnapshotScope,
   releaseSnapshotScope,

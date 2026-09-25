@@ -38,6 +38,18 @@ export interface TransformOptions {
   builtIns?: string[];
   requireImportSource?: false | string;
   renderers?: RendererOption[];
+  /**
+   * Lower `$(function* () { … yield* signal … })` typed blocks (`$` imported
+   * from `solid-js` / `@solidjs/signals`) to call form
+   * (`$(function () { … perform(signal) … })`) ahead of JSX lowering. Only
+   * the sync subset is lowered (`yield*` over identifiers / member
+   * expressions and direct `raise` / `attempt` / `write` / `call` / `readStore`
+   * calls);
+   * blocks that `wait` stay with the runtime driver. `throw`, bare `yield`,
+   * `async function*`, and a `yield*` inside JSX in an unlowerable block are
+   * compile errors. Default `true`.
+   */
+  generators?: boolean;
 }
 
 export interface RendererOption {

@@ -28,6 +28,14 @@ import {
   trackedEffect,
   untrack
 } from "./core/index.js";
+import {
+  accessorIterator,
+  type AnyBlock,
+  type BlockAccessor,
+  type BlockValue,
+  type ReactiveHostBlock,
+  type ReadOp
+} from "./generator.js";
 import { emitDiagnostic, registerGraph, reportDiagnostic } from "./core/dev.js";
 import { installOptimisticEngine } from "./core/optimistic.js";
 import {
@@ -115,11 +123,22 @@ export function onCleanup(fn: Disposable): Disposable {
  * creating a subscription.
  */
 export type Accessor<T> = () => T;
-export type SourceAccessor<T> = Refreshable<Accessor<T>>;
+/**
+ * The iterable half of a signal accessor: `yield* signal` inside a `$` block
+ * yields a read operation that the block driver performs (a tracked read,
+ * like `signal()`) and evaluates to the signal's value.
+ */
+export interface AccessorIterable<T> {
+  [Symbol.iterator](): Generator<ReadOp<this>, T, T>;
+}
+export type SourceAccessor<T> = Refreshable<Accessor<T>> & AccessorIterable<T>;
 
 export function accessor<T>(node: any): SourceAccessor<T> {
   const fn = read.bind(null, node) as SourceAccessor<T>;
   (fn as any)[$REFRESH] = node;
+  // Same two extra properties on every accessor, in the same order, so the
+  // bound functions share one shape.
+  (fn as any)[Symbol.iterator] = accessorIterator;
   return fn;
 }
 
@@ -143,9 +162,12 @@ export type Setter<in out T> = {
 /** A `[get, set]` pair returned from `createSignal` / `createOptimistic`. */
 export type Signal<T> = [get: SourceAccessor<T>, set: Setter<T>];
 
-export type ComputeFunction<Prev, Next extends Prev = Prev> = (
+// `ReactiveHostBlock`: a `$` block is accepted only when its Writes are
+// `never` — a reactive computation may read, wait and fail, but not write.
+export type ComputeFunction<Prev, Next extends Prev = Prev> = ((
   v: Prev
-) => PromiseLike<Next> | AsyncIterable<Next> | Next;
+) => PromiseLike<Next> | AsyncIterable<Next> | Next) &
+  ReactiveHostBlock;
 export type EffectFunction<Prev, Next extends Prev = Prev> = (
   v: Next,
   p?: Prev
@@ -408,6 +430,12 @@ export function createSignal<T>(
 // the memo/effect result type is still driven by the compute return type.
 // With a loadingValue the compute's `prev` is never undefined — commit #0 is
 // the first prev — so that overload drops `undefined` from the parameter.
+// A `$` block keeps its effect metadata on the accessor, so blocks reading
+// this memo accumulate it transitively. A reactive host admits no Writes.
+export function createMemo<B extends AnyBlock & ReactiveHostBlock>(
+  compute: B,
+  options?: MemoOptions<BlockValue<B>>
+): BlockAccessor<B>;
 export function createMemo<T>(
   compute: ComputeFunction<NoInfer<T>, T>,
   options: MemoOptions<T> & { loadingValue: T }

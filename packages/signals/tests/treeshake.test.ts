@@ -229,7 +229,12 @@ describe("pay-for-use tree-shaking (#2883)", () => {
     // Conditional pending recovery adds 191 B over next at b5bd6fba
     // (22,457 → 22,648 B), including the alternate dependency path guard
     // and the self-source skip that leaves the #3181 sweep as the one walk.
-    expect(minifiedBytes).toBeLessThan(22_700);
+    // CONSCIOUS BUMP (iterable accessors): +~190 B for `yield* signal`
+    // support — accessor() installs the shared `accessorIterator` generator
+    // as `Symbol.iterator`, which yields a read-op envelope through the
+    // shared op iterator (the `$` driver, its operations and the dev-only
+    // read guard shake out). Measured at 22,834.
+    expect(minifiedBytes).toBeLessThan(22_900);
   });
 
   it("plain stores shed the verdict layer, affects, boundaries, and map", async () => {

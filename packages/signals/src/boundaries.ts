@@ -27,6 +27,7 @@ import type { IQueue, Signal } from "./core/index.js";
 import { emitDiagnostic, reportDiagnostic } from "./core/dev.js";
 import { attrHooks } from "./core/attribution-hooks.js";
 import { haltReactivity, schedule } from "./core/scheduler.js";
+import { isBlock, renderBlock } from "./generator.js";
 import { accessor, type Accessor } from "./signals.js";
 
 export interface BoundaryComputed<T> extends Computed<T> {
@@ -620,7 +621,8 @@ export function flatten(
   if (typeof children === "function" && !children.length) {
     if (options?.doNotUnwrap) return children;
     do {
-      children = children();
+      // A `$` block rendered as a child runs as a JSX host (reads only).
+      children = isBlock(children) ? renderBlock(children) : children();
     } while (typeof children === "function" && !children.length);
   }
   if (
@@ -660,7 +662,7 @@ function flattenArray(
           continue;
         }
         do {
-          child = child();
+          child = isBlock(child) ? renderBlock(child) : child();
         } while (typeof child === "function" && !child.length);
       }
       if (Array.isArray(child)) {

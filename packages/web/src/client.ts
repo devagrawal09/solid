@@ -18,7 +18,10 @@ import {
   enableHydration,
   enforceLoadingBoundary,
   resetErrorHalt,
-  OBSERVE
+  OBSERVE,
+  isBlock,
+  renderBlock,
+  dispatchBlock
 } from "solid-js";
 import { effect, memo, tagElement } from "./render.js";
 
@@ -664,6 +667,12 @@ export function addEvent(
 ): EventListener | EventListenerObject | void;
 
 export function addEvent(node, name, handler, delegate) {
+  // A `$` event block reaches this sink unchanged (through props, spreads,
+  // tuples); here it is bound as an event host under the owner in scope, so
+  // its failures route to that owner's error boundary.
+  if (Array.isArray(handler)) {
+    if (isBlock(handler[0])) handler = [eventBlockListener(handler[0]), handler[1]];
+  } else if (isBlock(handler)) handler = eventBlockListener(handler);
   if (delegate) {
     const key = `$$${name}`;
     let data;
@@ -696,7 +705,18 @@ export function addEvent(node, name, handler, delegate) {
   }
   node.addEventListener(name, handler, typeof handler !== "function" && handler);
   return handler;
-} /** Compiler-emitted primitive; not for hand-written code. @internal */
+}
+
+/** Listener for a `$` event block bound through `addEvent` (spreads,
+ * dynamic props): dispatch as an event host under the block's creation
+ * owner. */
+function eventBlockListener(block) {
+  return function (a, b) {
+    // Delegated and direct paths call `(e)` or `(data, e)`.
+    dispatchBlock(block, b === undefined ? a : b);
+  };
+}
+/** Compiler-emitted primitive; not for hand-written code. @internal */
 export function style(
   node: Element,
   value: { [k: string]: string },
@@ -1040,10 +1060,13 @@ export function insert(parent, accessor, marker, initial, options) {
     initial = [placeholder];
   }
   let current = initial;
+  // A `$` block inserted as a child runs as a JSX host (reads only); the
+  // block is the same branded value the author passed, interpreted here.
+  const read = isBlock(accessor) ? () => renderBlock(accessor) : accessor;
   effect(
     prev => {
       if (hydrationRt !== null) current = hydrationRt.reclaimRegion(current, parent, marker);
-      const value = normalize(accessor(), current, multi, true);
+      const value = normalize(read(), current, multi, true);
       if (typeof value !== "function") return value;
       effect(
         () => (
@@ -2254,11 +2277,16 @@ function eventHandler(e, container, state) {
     }
     if (handler && !node.disabled) {
       const data = node[`${key}Data`];
-      data !== undefined
-        ? handler.call(node, data, e)
-        : typeof handler === "function"
-          ? handler.call(node, e)
-          : handler.handleEvent(e);
+      // A `$` event block bound by the compiler (`node.$$click = block`)
+      // is interpreted here, at the delegated sink: it runs as an event
+      // host under its creation owner.
+      if (isBlock(handler)) dispatchBlock(handler, e);
+      else
+        data !== undefined
+          ? handler.call(node, data, e)
+          : typeof handler === "function"
+            ? handler.call(node, e)
+            : handler.handleEvent(e);
       if (e.cancelBubble) return;
     }
     node.host &&

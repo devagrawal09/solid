@@ -21,6 +21,7 @@ mod config;
 mod directives;
 mod dom;
 mod error;
+mod generators;
 #[cfg(feature = "node")]
 mod lazy;
 #[cfg(feature = "node")]

@@ -63,6 +63,10 @@ pub struct TransformOptions {
     /// Default `["For", "Show", "Switch", "Match", "Loading", "Reveal", "Portal", "Repeat", "Dynamic", "Errored"]`.
     pub built_ins: Option<Vec<String>>,
     pub renderers: Option<Vec<RendererOption>>,
+    /// Lower `$(function* …)` generator computations (`$` imported from
+    /// `solid-js` / `@solidjs/signals`) to plain functions with `signal()`
+    /// reads. Default `true`.
+    pub generators: Option<bool>,
 }
 
 #[napi(object)]

@@ -28,20 +28,84 @@ export {
 
 export { flatten } from "@solidjs/signals";
 export { snapshot, omit, storePath, $PROXY, $TRACK } from "@solidjs/signals";
+// The `$` block driver and its operations are pure (they only call the
+// accessors and functions they are handed), so the server shares the client
+// implementation. The block boundaries (`loading` / `errored`) are built on
+// the server primitives in ./blocks.ts.
+export {
+  $,
+  wait,
+  raise,
+  attempt,
+  readStore,
+  write,
+  call,
+  perform,
+  isBlock,
+  renderBlock,
+  dispatchBlock
+} from "@solidjs/signals";
 
 // === Type re-exports ===
 
 import type {
   Accessor as SignalAccessor,
+  AccessorIterable,
+  AnyBlock,
+  BlockAccessor,
+  BlockValue,
+  ReactiveHostBlock,
   ProjectionOptions,
   Refreshable,
   StoreOptions
 } from "@solidjs/signals";
 
-export type SourceAccessor<T> = Refreshable<SignalAccessor<T>>;
+export type SourceAccessor<T> = Refreshable<SignalAccessor<T>> & AccessorIterable<T>;
+
+/** `yield* accessor` support for the `$` driver — see `@solidjs/signals`. */
+function* accessorIterator<T>(this: SourceAccessor<T>): Generator<SourceAccessor<T>, T, T> {
+  return yield this;
+}
+function iterable<T>(fn: () => T): SourceAccessor<T> {
+  (fn as any)[Symbol.iterator] = accessorIterator;
+  return fn as SourceAccessor<T>;
+}
 
 export type {
   Accessor,
+  AccessorIterable,
+  Block,
+  AnyBlock,
+  BlockAccessor,
+  ColoredAccessor,
+  BlockMeta,
+  BlockValue,
+  BlockReads,
+  BlockTasks,
+  BlockFailures,
+  BlockWrites,
+  BlockInput,
+  BlockOps,
+  BlockAsync,
+  BlockErrors,
+  ReadsOf,
+  TasksOf,
+  FailuresOf,
+  WritesOf,
+  ReactiveHostBlock,
+  JsxBlock,
+  JsxBlockShape,
+  EventBlock,
+  ErrorClass,
+  AnySetter,
+  Op,
+  ReadOp,
+  StoreReadOp,
+  AsyncOp,
+  RaiseOp,
+  AttemptOp,
+  WriteOp,
+  CallOp,
   ComputeFunction,
   EffectFunction,
   EffectBundle,
@@ -736,7 +800,7 @@ export function createSignal<T>(
   }
   // Plain value form — no ID allocation (IDs are only for owners/computations)
   return [
-    () => first as T,
+    iterable(() => first as T),
     v => {
       warnServerWrite("signal");
       return ((first as any) = typeof v === "function" ? (v as (prev: T) => T)(first as T) : v);
@@ -748,6 +812,10 @@ export function createSignal<T>(
 // createSignal. Bare `ssrSource: "client"` (no loadingValue) is the
 // structural form: the source suspends server-side as a FINAL hole and the
 // nearest <Loading> boundary hands the position to the client.
+export function createMemo<B extends AnyBlock & ReactiveHostBlock>(
+  compute: B,
+  options?: ServerMemoOptions<BlockValue<B>>
+): BlockAccessor<B>;
 export function createMemo<T>(
   compute: ComputeFunction<NoInfer<T>, T>,
   options: ServerMemoOptions<T> & { loadingValue: T }
@@ -922,7 +990,7 @@ export function createMemo<T>(
     return comp.value;
   }) as SourceAccessor<T | undefined>;
   (read as any)[$REFRESH] = comp;
-  return read;
+  return iterable(read);
 }
 
 /**
@@ -1014,7 +1082,7 @@ function createSyncMemo<T>(
     }
   }
 
-  return (() => {
+  return iterable(() => {
     if (cached && (!ctx?.commitEpoch || ctx.commitEpoch() === epoch)) {
       if (errored) throw error;
       return value;

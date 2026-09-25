@@ -273,6 +273,7 @@ fn core_options(options: TransformOptions) -> Result<CompileOptions> {
                 elements: renderer.elements,
             })
             .collect(),
+        generators: options.generators.unwrap_or(true),
     })
 }
 

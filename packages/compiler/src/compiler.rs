@@ -104,6 +104,11 @@ pub struct CompileOptions {
     pub omit_last_closing_tag: bool,
     pub built_ins: Vec<String>,
     pub renderers: Vec<Renderer>,
+    /// Lower `$(function* …)` generator computations (a named `$` import
+    /// from `solid-js` / `@solidjs/signals`) to plain functions with
+    /// `signal()` reads before JSX lowering. Default `true`; `false` leaves
+    /// them to the runtime driver. See `generators.rs` for the safe subset.
+    pub generators: bool,
 }
 
 impl Default for CompileOptions {
@@ -134,6 +139,7 @@ impl Default for CompileOptions {
             omit_last_closing_tag: true,
             built_ins: default_built_ins(),
             renderers: Vec::new(),
+            generators: true,
         }
     }
 }
@@ -250,6 +256,13 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
             artifacts,
             options.source_map,
         )?;
+    }
+
+    // Before JSX lowering: `yield*` reads inside JSX expression containers
+    // must be ordinary calls by the time the JSX transform classifies them.
+    if options.generators {
+        crate::generators::transform_generators(&allocator, &mut program, source)
+            .map_err(CompileError::transform)?;
     }
 
     match options.generate {

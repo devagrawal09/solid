@@ -279,7 +279,8 @@ const nativeOptionKeys = new Set([
   "omitLastClosingTag",
   "serverComponents",
   "builtIns",
-  "renderers"
+  "renderers",
+  "generators"
 ]);
 
 function validateOptions(code, options) {

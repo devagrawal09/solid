@@ -294,9 +294,15 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   let prevTracking = tracking;
   let prevLane = currentOptimisticLane;
   let prevStrictRead: string | false = false;
+  let prevBlockGuard = false;
   if (__DEV__) {
     prevStrictRead = strictRead;
     strictRead = false;
+    // A computation's run is its own read scope: a render effect or memo
+    // created inside a `$` block body (JSX inserts) reads for itself, not
+    // for the block. The block driver re-raises the guard when it resumes.
+    prevBlockGuard = blockGuard;
+    blockGuard = false;
   }
   tracking = true;
   // A computed's fn establishes its OWN dependencies, so it must never run
@@ -406,7 +412,10 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   } finally {
     tracking = prevTracking;
     latestReadActive = prevLatestRead;
-    if (__DEV__) strictRead = prevStrictRead;
+    if (__DEV__) {
+      strictRead = prevStrictRead;
+      blockGuard = prevBlockGuard;
+    }
     if (isStaleEffect) stale = prevStale;
     // Consume the missed-wake latch (#3037, set by insertSubs): a dep write
     // landed beneath this pass on a link it had already validated. The wipe
@@ -1225,6 +1234,38 @@ export function isEqual<T>(a: T, b: T): boolean {
  * scope will log a dev-mode warning. Managed automatically by `untrack(fn, strictReadLabel)`.
  */
 export let strictRead: string | false = false;
+
+/**
+ * Dev-only strict scope for `$` blocks: while a block body runs, every read
+ * must go through the block driver (`yield* signal`), which lowers the guard
+ * around the read it performs. A direct `signal()` call inside the body
+ * finds the guard raised and fails. Saved/restored by the driver so nested
+ * blocks, pulls of upstream computations, and continuations cannot leak it.
+ */
+export let blockGuard = false;
+export function setBlockGuard(v: boolean): boolean {
+  const prev = blockGuard;
+  blockGuard = v;
+  return prev;
+}
+export const DIRECT_READ_IN_BLOCK_MESSAGE =
+  "[DIRECT_READ_IN_BLOCK] Reading a signal directly inside a `$` block is not allowed. " +
+  "Every reactive read in a block must go through `yield* signal` so the block's type records it.";
+function throwDirectReadInBlock(el: any): never {
+  const name = el?._name;
+  const message = name
+    ? `${DIRECT_READ_IN_BLOCK_MESSAGE} (reading ${name})`
+    : DIRECT_READ_IN_BLOCK_MESSAGE;
+  emitDiagnostic({
+    code: "DIRECT_READ_IN_BLOCK",
+    kind: "lifecycle",
+    severity: "error",
+    message,
+    ownerId: (context as any)?.id,
+    ownerName: (context as any)?._name
+  });
+  throw new Error(message);
+}
 export function setStrictRead(v: string | false): string | false {
   const prev = strictRead;
   strictRead = v;
@@ -1365,6 +1406,7 @@ function heldFromStale(el: Signal<any> | Computed<any>, c: Computed<any>): boole
 
 export function readNodeFast<T>(el: Signal<T>): T | typeof READ_SLOW {
   if (
+    (__DEV__ && blockGuard) ||
     latestReadActive ||
     pendingCheckActive ||
     (el as Partial<Computed<T>>)._fn ||
@@ -1401,6 +1443,8 @@ export function readNodeFast<T>(el: Signal<T>): T | typeof READ_SLOW {
 }
 
 export function read<T>(el: Signal<T> | Computed<T>): T {
+  // Strict `$` block scope (dev): only driver-mediated reads may pass.
+  if (__DEV__ && blockGuard) throwDirectReadInBlock(el);
   // Handle latest() mode: read from _latestValueComputed
   // Checked before isPending so that isPending(() => latest(x)) checks
   // the _pendingSignal of _latestValueComputed (async in flight) rather
