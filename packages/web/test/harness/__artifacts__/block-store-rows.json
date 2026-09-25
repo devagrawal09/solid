@@ -1,0 +1,5 @@
+{
+  "name": "block-store-rows",
+  "shell": "<ul _hk=0><li _hk=1000 class=\"\">one</li><!--!$--><li _hk=1100 class=\"done\">two</li></ul>",
+  "rest": ""
+}

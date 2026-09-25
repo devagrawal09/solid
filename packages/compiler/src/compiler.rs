@@ -279,6 +279,13 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
             .map_err(CompileError::transform)?;
     }
 
+    // Hydration id scopes for JSX-producing `$` blocks: identical on every
+    // generate, after lowering/fusion and before JSX lowering (see
+    // `block_scope.rs`).
+    if options.generators && options.hydratable {
+        crate::block_scope::scope_jsx_blocks(&allocator, &mut program);
+    }
+
     match options.generate {
         Generate::Dom => {
             let mut transform = AstDomTransform::new(

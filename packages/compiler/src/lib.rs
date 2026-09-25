@@ -15,6 +15,7 @@
 //! supported public contract.
 
 mod block_projection;
+mod block_scope;
 mod compiler;
 #[cfg(feature = "node")]
 mod config;

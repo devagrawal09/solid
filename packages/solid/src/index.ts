@@ -12,6 +12,7 @@ export {
   isBlock,
   renderBlock,
   dispatchBlock,
+  blockScope,
   loading,
   errored,
   $PROXY,

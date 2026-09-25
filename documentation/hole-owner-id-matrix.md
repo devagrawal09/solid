@@ -28,6 +28,32 @@ one namespace.
 | `lazy()` | client memo owner | server memo owner (server/component.ts) | registration / registration | yes |
 | mapArray/Repeat rows | real row owners | **row-owner elision, synthesized id prefixes** (server/signals.ts ~1395) | — | yes — perf optimization, DO NOT touch |
 | Inner unwrapping insert effect (accessor value is itself a function) | nested effect (client.js:347) — transparent | no analog — `resolveSSRNode` unwraps in place | n/a | yes — MUST stay transparent (depth invariant) |
+| JSX-producing `$` block (`$(function* () { return <…/> })`) | `$(blockScope(body))` — slot reserved at `$()`, body runs under it (virtual swap) | same, server `blockScope` twin | registration / registration | yes — see "JSX blocks" below (was NO: content allocated at the sink) |
+
+## JSX blocks
+
+A `$` block defers its JSX until it runs, and it runs at whichever sink
+renders it — the client's `insert` effect (at `insert()` time, source order) or
+a flow control's flatten, the server's template-hole resolution (at `ssr()`
+time, after later siblings registered). Content ids therefore came from the
+sink's counter at different moments on each side: `<b _hk=4>` server vs `1`
+client for a block component in an element hole followed by a condition memo.
+
+Fix (hydratable builds only): the compiler wraps the body of every `$` block
+whose body contains JSX — decided syntactically in a pass shared by both
+generates (`packages/compiler/src/block_scope.rs`) — as
+`$(_$blockScope(body))`. `blockScope` (client `@solidjs/signals`, server
+`solid-js` server runtime) reserves one child slot when the block is created
+(the component body — where a plain component's JSX would allocate) and runs
+every invocation of the body with the counter owner's `id`/`_childCount`
+swapped to `(scopeId, 0)`, exactly like `ssrScope`. Reruns and failed-then-
+retried runs are deterministic; ownership, disposal and tracking stay with
+the sink. A runtime-driven (generator) body keeps the scope across steps.
+
+Envelope: one block VALUE rendered at two live positions at once shares its
+scope (duplicate keys) — create one block per position. Babel-JSX mode and
+`generators: false` emit no wrapper on either side (consistent, but the
+original drift remains there).
 
 ## The defect
 

@@ -1,0 +1,5 @@
+{
+  "name": "block-show-child",
+  "shell": "<div _hk=0><!--$--><b _hk=300><!--$-->s<!--/--><!--$-->1<!--/--></b><!--/--><span>tail</span></div>",
+  "rest": ""
+}

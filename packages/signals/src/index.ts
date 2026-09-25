@@ -92,7 +92,8 @@ export {
   perform,
   isBlock,
   renderBlock,
-  dispatchBlock
+  dispatchBlock,
+  blockScope
 } from "./generator.js";
 export type {
   Block,

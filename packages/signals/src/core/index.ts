@@ -36,7 +36,10 @@ export {
   getOwner,
   isDisposed,
   cleanup,
-  peekNextChildId
+  peekNextChildId,
+  reserveIdScope,
+  runInIdScope,
+  idScopeEndCount
 } from "./owner.js";
 export {
   createContext,

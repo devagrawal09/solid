@@ -4,6 +4,9 @@ import {
   cleanup,
   effect,
   getOwner,
+  idScopeEndCount,
+  reserveIdScope,
+  runInIdScope,
   runWithOwner,
   setBlockGuard,
   untrack,
@@ -797,6 +800,58 @@ export function $(body: (input: any) => any): AnyBlock {
     return yield* blockGenerator(block, undefined);
   };
   return block;
+}
+
+/**
+ * Hydration id scope for a JSX-producing block body. The compiler emits
+ * `$(blockScope(body))` for every `$` block whose body contains JSX, in the
+ * pass shared by the client and server generates, so both sides wrap the same
+ * blocks.
+ *
+ * A block defers its JSX to whichever sink runs it (the client's `insert`
+ * effect or a flow control's flatten; the server's template-hole resolution),
+ * and those sinks run at different times under different owners on each side
+ * — content ids drifted apart (the JSX-block hydration-id parity defect).
+ * `blockScope` reserves one child-id slot when the block is CREATED (the `$()`
+ * call, in source order on both sides, exactly where a component's own JSX
+ * would allocate) and runs every invocation of the body under that id with a
+ * zeroed counter. The scope is virtual (see `runInIdScope`): ownership,
+ * disposal and tracking stay with the sink. A runtime-driven (generator) body
+ * keeps the scope across its steps.
+ *
+ * Outside an id-carrying tree nothing is reserved and `body` is returned
+ * as-is. The server twin (`solid-js` server runtime) must stay slot-for-slot
+ * identical.
+ *
+ * @internal Compiler-emitted; not for hand-written code.
+ */
+export function blockScope<F extends (...args: any[]) => any>(body: F): F {
+  const scopeId = reserveIdScope();
+  if (scopeId === undefined) return body;
+  return function (this: unknown, input?: unknown) {
+    const result = runInIdScope(scopeId, 0, body, this, input);
+    return isSyncIterator(result) ? scopeSteps(result, scopeId, idScopeEndCount()) : result;
+  } as unknown as F;
+}
+
+/** A runtime-driven body: every step runs in the scope, continuing its count. */
+function scopeSteps(
+  it: Generator<Op, unknown, any>,
+  scopeId: string,
+  count: number
+): Generator<Op, unknown, any> {
+  const step = (method: "next" | "throw" | "return", value: unknown) => {
+    const result = runInIdScope(scopeId, count, it[method] as any, it, value);
+    count = idScopeEndCount();
+    return result;
+  };
+  const scoped = {
+    next: (v?: unknown) => step("next", v),
+    throw: (e?: unknown) => step("throw", e),
+    return: (v?: unknown) => step("return", v),
+    [Symbol.iterator]: () => scoped
+  };
+  return scoped as unknown as Generator<Op, unknown, any>;
 }
 
 /** Delegation: run the block's body inside the caller's generator frame. */

@@ -523,6 +523,94 @@ export function ssrScope<T>(fn: () => T): () => unknown {
   };
 }
 
+/**
+ * Server twin of `@solidjs/signals`' `blockScope` — the hydration id scope of
+ * a JSX-producing `$` block body (compiler-emitted as `$(blockScope(body))`
+ * on both generates). One child-id slot is reserved from the current owner
+ * when the block is created (the `$()` call in the component body, source
+ * order — the same point on the client), and every run of the body allocates
+ * under that id with a zeroed counter, wherever and whenever the server
+ * resolves the block (an `escape`d hole at `ssr()` time, a boundary pass, a
+ * flow-control value). Virtual, like `ssrScope`: the counter owner the run's
+ * allocations would hit has its `id` / `_childCount` swapped around the
+ * synchronous run. Must stay slot-for-slot identical with the client.
+ *
+ * @internal Compiler-emitted; not for hand-written code.
+ */
+export function blockScope<F extends (...args: any[]) => any>(body: F): F {
+  const owner = currentOwner;
+  if (!owner || counterOf(owner).id == null) return body;
+  const scopeId = nextChildIdFor(owner, true);
+  return function (this: unknown, input?: unknown) {
+    const result = runInBlockScope(scopeId, 0, body, this, input);
+    return isSyncIterator(result) ? scopeSteps(result, scopeId, blockScopeEnd) : result;
+  } as unknown as F;
+}
+
+function counterOf(owner: SSROwner): SSROwner {
+  let counter = owner;
+  while (counter._transparent && counter._parent) counter = counter._parent;
+  return counter;
+}
+
+let blockScopeEnd = 0;
+
+function runInBlockScope<T>(
+  scopeId: string,
+  start: number,
+  fn: (this: unknown, arg?: unknown) => T,
+  self?: unknown,
+  arg?: unknown
+): T {
+  const current = currentOwner;
+  const target = current && counterOf(current);
+  if (!target || target.id == null) {
+    blockScopeEnd = start;
+    return fn.call(self, arg);
+  }
+  const prevId = target.id;
+  const prevCount = target._childCount;
+  target.id = scopeId;
+  target._childCount = start;
+  try {
+    return fn.call(self, arg);
+  } finally {
+    blockScopeEnd = target._childCount;
+    target.id = prevId;
+    target._childCount = prevCount;
+  }
+}
+
+function isSyncIterator(value: any): value is Iterator<unknown> {
+  // Untracked shape probe: a block may return a store proxy.
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    untrack(
+      () =>
+        typeof value.next === "function" &&
+        typeof value[Symbol.iterator] === "function" &&
+        !(Symbol.asyncIterator in value)
+    )
+  );
+}
+
+/** A runtime-driven body: every step runs in the scope, continuing its count. */
+function scopeSteps(it: Iterator<unknown>, scopeId: string, count: number) {
+  const step = (method: "next" | "throw" | "return", value: unknown) => {
+    const result = runInBlockScope(scopeId, count, (it as any)[method], it, value);
+    count = blockScopeEnd;
+    return result;
+  };
+  const scoped = {
+    next: (v?: unknown) => step("next", v),
+    throw: (e?: unknown) => step("throw", e),
+    return: (v?: unknown) => step("return", v),
+    [Symbol.iterator]: () => scoped
+  };
+  return scoped;
+}
+
 // === Observer tracking (for async memo) ===
 
 interface ServerComputation<T = any> {
@@ -2721,9 +2809,14 @@ export function createErrorBoundary<T, U>(
           () => err,
           () => {}
         );
+  // The boundary's id as allocated — captured, because a JSX block's id scope
+  // (`blockScope`) virtually swaps the counter owner's `id` while the block
+  // runs, and an error surfacing from inside that run reaches the handler
+  // with the swap still in place.
+  const boundaryId = owner.id;
   const serializeError = (err: any) => {
-    if (ctx && owner.id && !runWithOwner(owner, () => getContext(NoHydrateContext))) {
-      ctx.serialize(owner.id, err);
+    if (ctx && boundaryId && !runWithOwner(owner, () => getContext(NoHydrateContext))) {
+      ctx.serialize(boundaryId, err);
     }
   };
   const handleError = (err: any) => {
@@ -2744,8 +2837,15 @@ export function createErrorBoundary<T, U>(
         result = ctx
           ? runWithBoundaryErrorContext(owner, resolve, err => {
               if (err instanceof NotReadyError) throw err;
-              handled = true;
-              result = handleError(err);
+              // Once per pass: an error thrown while a lazy hole resolves (a
+              // JSX block's content, a returned accessor) is rethrown through
+              // every enclosing resolver catch, and each one re-invokes this
+              // handler — rendering the fallback again would spend a second
+              // fallback id slot the client never allocates.
+              if (!handled) {
+                handled = true;
+                result = handleError(err);
+              }
               throw err;
             })
           : runWithOwner(owner, fn);

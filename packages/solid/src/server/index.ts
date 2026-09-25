@@ -16,6 +16,7 @@ export {
   isBlock,
   renderBlock,
   dispatchBlock,
+  blockScope,
   $PROXY,
   $REFRESH,
   $TRACK,
