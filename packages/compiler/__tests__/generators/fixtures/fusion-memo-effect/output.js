@@ -1,4 +1,4 @@
-import { $, createEffect, createMemo, createSignal, perform as _$perform } from "solid-js";
+import { $, createEffect, createMemo, createSignal } from "solid-js";
 export function counter() {
 	const [count, setCount] = createSignal(1);
 	const [label, setLabel] = createSignal("items");
