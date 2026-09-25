@@ -55,7 +55,7 @@ function initial() {
 
 export const api: { setStore?: any; store?: any; snapshot?: () => unknown } = {};
 
-export function App() {
+export function App(): JSX.Element {
   // A literal initializer: a call could return a function (the derived
   // form), so only literals qualify for a handle.
   const [store, setStore] = createStore({

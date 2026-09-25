@@ -224,7 +224,10 @@ export async function observeServer(
     });
     const tasks = controller(recorder);
     let rendered = false;
-    done.then(() => (rendered = true));
+    void done.then(
+      () => (rendered = true),
+      () => undefined
+    );
     await drain();
     // Async SSR: settle each flight the render started, in start order, with
     // the value the scenario declared. Never timer-driven.

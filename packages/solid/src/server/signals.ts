@@ -99,9 +99,11 @@ import type {
 
 export type SourceAccessor<T> = Refreshable<SignalAccessor<T>> & AccessorIterable<T>;
 
-/** `yield* accessor` support for the `$` driver — see `@solidjs/signals`. */
-function* accessorIterator<T>(this: SourceAccessor<T>): Generator<SourceAccessor<T>, T, T> {
-  return yield this;
+/** `yield* accessor` support for the pull-based server runtime. */
+function* accessorIterator<T>(this: SourceAccessor<T>): Generator<never, T, never> {
+  // The server has no dependency graph to notify. Read directly instead of
+  // yielding the accessor to the client driver, which rejects plain yields.
+  return this();
 }
 function iterable<T>(fn: () => T): SourceAccessor<T> {
   (fn as any)[Symbol.iterator] = accessorIterator;

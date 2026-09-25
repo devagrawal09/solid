@@ -5,9 +5,8 @@
  *
  * Each scenario is real source compiled by the native compiler
  * (`@solidjs/compiler`, workspace build) and executed against this
- * package's source. Every variant must produce the same trace; the
- * optimized variants must actually take the status-free path where the
- * scenario is provable, and must not where it is not.
+ * package's source. Every variant must produce the same trace, and the
+ * rejected status-free recompute must remain unselected.
  *
  * Skipped when the native compiler binding has not been built
  * (`pnpm --filter @solidjs/compiler build`).
@@ -87,8 +86,6 @@ interface Scenario {
   filename: string;
   handwritten: string;
   block: string;
-  /** Whether the optimized variants must take the status-free path. */
-  provable: boolean;
 }
 
 const HEADER = `import { $, createEffect, createErrorBoundary, createLoadingBoundary, createMemo, createRenderEffect, createRoot, createSignal, flush } from "@solidjs/signals";`;
@@ -97,7 +94,6 @@ const SCENARIOS: Scenario[] = [
   {
     name: "flags, identity comparisons and selections",
     filename: "flags.js",
-    provable: true,
     handwritten: `${HEADER}
 export function run(log) {
   const [filter, setFilter] = createSignal("all");
@@ -142,7 +138,6 @@ export function run(log) {
   {
     name: "typed arithmetic, templates and conditional dependencies (TypeScript)",
     filename: "typed.ts",
-    provable: true,
     handwritten: `${HEADER}
 export function run(log: unknown[]) {
   const [a, setA] = createSignal(1);
@@ -189,7 +184,6 @@ export function run(log: unknown[]) {
   {
     name: "an unprovable read of a throwing memo routes to the boundary identically",
     filename: "errors.js",
-    provable: false,
     handwritten: `${HEADER}
 export function run(log) {
   const [fail, setFail] = createSignal(false);
@@ -222,7 +216,6 @@ export function run(log) {
   {
     name: "an unprovable read of a pending memo suspends identically",
     filename: "pending.js",
-    provable: false,
     handwritten: `${HEADER}
 export async function run(log) {
   let resolve;
@@ -267,18 +260,13 @@ describe.skipIf(!compiler)("Track A stage 1: handwritten vs transformed vs optim
       for (const variant of Object.keys(VARIANT_OPTIONS) as Variant[]) {
         expect({ variant, log: results[variant].log }).toEqual({ variant, log: expected });
       }
-      // Only the optimized variants may take the status-free path, and they
-      // must when the scenario is provable.
+      // The compiler keeps synchrony facts and emits `syncOnly`, but never
+      // selects the measured-negative status-free recompute.
       expect(results.handwritten.fast).toBe(0);
       expect(results.runtime.fast).toBe(0);
       expect(results.transformed.fast).toBe(0);
-      if (scenario.provable) {
-        expect(results.optimized.fast).toBeGreaterThan(0);
-        expect(results.optimizedUnfused.fast).toBeGreaterThan(0);
-      } else {
-        expect(results.optimized.fast).toBe(0);
-        expect(results.optimizedUnfused.fast).toBe(0);
-      }
+      expect(results.optimized.fast).toBe(0);
+      expect(results.optimizedUnfused.fast).toBe(0);
     });
   }
 });

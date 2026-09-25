@@ -972,7 +972,12 @@ impl<'a> VisitMut<'a> for Rewriter<'a> {
 
 /// Reactive hosts whose first argument is the compute function: each runs the
 /// block as `fn(prev)` under the reactive host (`Writes` refused).
-const FUSION_HOSTS: &[&str] = &["createMemo", "createEffect", "createRenderEffect", "createSignal"];
+const FUSION_HOSTS: &[&str] = &[
+    "createMemo",
+    "createEffect",
+    "createRenderEffect",
+    "createSignal",
+];
 /// The local name of the fused path read (`readValue`).
 const READ_VALUE_LOCAL: &str = "_$readValue";
 /// Bound on bottom-up passes over nested hosts. Real nesting is shallow; the
@@ -1313,8 +1318,7 @@ impl<'s, 'b> BodyCheck<'s, 'b> {
         // wrapper, the access is a path token the run never reads
         // (`[UNREAD_PATH]`); erased, it would be a silent tracked read.
         for &root in &self.member_roots {
-            if self.path_roots.contains(&root)
-                || self.context.binding_origin(root) == Origin::Store
+            if self.path_roots.contains(&root) || self.context.binding_origin(root) == Origin::Store
             {
                 self.ok = false;
                 return;
@@ -1510,7 +1514,8 @@ impl<'a> VisitMut<'a> for FusionRewriter<'a> {
                     argument_to_expression(argument).expect("planned: a function")
                 } else if plan.accessor_calls.contains(&span) {
                     // `_$perform(acc)` → `acc()`
-                    let accessor = argument_to_expression(argument).expect("planned: an identifier");
+                    let accessor =
+                        argument_to_expression(argument).expect("planned: an identifier");
                     ast.expression_call(span, accessor, None, ast.vec(), false)
                 } else if plan.path_reads.contains(&span) {
                     // `_$perform(_$readPath(root, ["a", 0, k]))` → `_$readValue(root.a[0][k])`
@@ -1608,7 +1613,14 @@ fn finish_fusion_imports<'a>(
     program: &mut Program<'a>,
     needs_read_value: bool,
 ) {
-    const GENERATED: &[&str] = &[PERFORM_LOCAL, READ_PATH_LOCAL, READ_PROP_LOCAL];
+    const GENERATED: &[&str] = &[
+        PERFORM_LOCAL,
+        "_$readPathN",
+        "_$readPath1",
+        "_$readPath2",
+        "_$readPath3",
+        "_$readPath4",
+    ];
     let unused: Vec<String> = {
         let semantic = SemanticBuilder::new().build(program).semantic;
         let scoping = semantic.scoping();
@@ -1993,7 +2005,7 @@ const a = $(function* () { return yield* count; });
     }
 
     #[test]
-    fn proves_total_reads_status_free_and_annotates_the_host() {
+    fn proves_total_reads_and_annotates_the_sync_host() {
         let out = proven(
             r#"import { $, createMemo, createSignal } from "solid-js";
 const [count] = createSignal(1);
@@ -2001,11 +2013,11 @@ const isOne = createMemo($(function* () { return (yield* count) === 1; }));
 "#,
         );
         assert!(
-            out.contains("const isOne = createMemo($(function() {\n\treturn _$perform(count) === 1;\n}, 3), _$statusFree);"),
+            out.contains("const isOne = createMemo($(function() {\n\treturn _$perform(count) === 1;\n}, 3), _$syncOnly);"),
             "{out}"
         );
-        assert!(out.contains("statusFree as _$statusFree"), "{out}");
-        assert!(!out.contains("_$syncOnly"), "{out}");
+        assert!(out.contains("syncOnly as _$syncOnly"), "{out}");
+        assert!(!out.contains("_$statusFree"), "{out}");
     }
 
     #[test]
@@ -2039,7 +2051,7 @@ const text = createMemo($(function* () { return `${yield* label}:${yield* count}
             "input.ts",
             false,
         );
-        assert_eq!(ts.matches("}, 3), _$statusFree)").count(), 3, "{ts}");
+        assert_eq!(ts.matches("}, 3), _$syncOnly)").count(), 3, "{ts}");
     }
 
     #[test]
@@ -2054,7 +2066,7 @@ const fromLoose = createMemo($(function* () { return !(yield* loose); }));
 "#,
         );
         assert!(
-            out.contains("return !_$perform(isOne);\n}, 3), _$statusFree)"),
+            out.contains("return !_$perform(isOne);\n}, 3), _$syncOnly)"),
             "{out}"
         );
         // An unknown call proves nothing, and a read of that memo can observe
@@ -2094,7 +2106,7 @@ const inCallback = createRoot(() => createMemo($(function* () { return (yield* d
         // Top level, and inside an arrow created after the declaration: the
         // binding is initialized before the block can run.
         assert_eq!(
-            out.matches("_$perform(declaredBefore) === 1;\n}, 3), _$statusFree)")
+            out.matches("_$perform(declaredBefore) === 1;\n}, 3), _$syncOnly)")
                 .count(),
             2,
             "{out}"
@@ -2134,16 +2146,16 @@ const branch = createMemo($(function* () { if ((yield* count) === 1) return "a";
         );
         // Arrays and `then`-free object literals are never thenables.
         assert!(
-            out.contains("return [_$perform(count)];\n}, 3), _$statusFree)"),
+            out.contains("return [_$perform(count)];\n}, 3), _$syncOnly)"),
             "{out}"
         );
         assert!(
-            out.contains("n: _$perform(count) };\n}, 3), _$statusFree)"),
+            out.contains("n: _$perform(count) };\n}, 3), _$syncOnly)"),
             "{out}"
         );
         assert!(out.contains("then: _$perform(count) };\n}, 2))"), "{out}");
         assert!(!out.contains("...(_$perform(count)) };\n}, "), "{out}");
-        assert!(out.contains("return null;\n}, 3), _$statusFree)"), "{out}");
+        assert!(out.contains("return null;\n}, 3), _$syncOnly)"), "{out}");
     }
 
     #[test]
@@ -2178,7 +2190,7 @@ const [writable] = createSignal($(function* () { return (yield* count) === 1; })
 "#,
         );
         assert_eq!(
-            out.matches("(v) => log(v), _$statusFree)").count(),
+            out.matches("(v) => log(v), _$syncOnly)").count(),
             2,
             "{out}"
         );
@@ -2189,7 +2201,7 @@ const [writable] = createSignal($(function* () { return (yield* count) === 1; })
             out.contains("const [writable] = createSignal($(function() {"),
             "{out}"
         );
-        assert!(out.contains("=== 1;\n}, 3), _$statusFree);\n"), "{out}");
+        assert!(out.contains("=== 1;\n}, 3), _$syncOnly);\n"), "{out}");
     }
 
     #[test]
@@ -2204,7 +2216,7 @@ const isOne = createMemo($(function* () { return (yield* count) === 1; }));
         );
         assert!(
             out.contains(
-                "const isOne = createMemo(function() {\n\treturn count() === 1;\n}, _$statusFree);"
+                "const isOne = createMemo(function() {\n\treturn count() === 1;\n}, _$syncOnly);"
             ),
             "{out}"
         );
@@ -2275,9 +2287,15 @@ createEffect($(function* () { return `${yield* double} ${yield* total}`; }), v =
 createRenderEffect($(function* () { return yield* count; }), v => log(v));
 "#)
         .unwrap();
-        assert!(out.contains("const double = createMemo(function(prev) {"), "{out}");
+        assert!(
+            out.contains("const double = createMemo(function(prev) {"),
+            "{out}"
+        );
         assert!(out.contains("const c = count();"), "{out}");
-        assert!(out.contains("const [total] = createSignal(function() {"), "{out}");
+        assert!(
+            out.contains("const [total] = createSignal(function() {"),
+            "{out}"
+        );
         assert!(out.contains("return double() + draft();"), "{out}");
         assert!(out.contains("createEffect(function() {"), "{out}");
         assert!(out.contains("return `${double()} ${total()}`;"), "{out}");
@@ -2294,18 +2312,28 @@ createRenderEffect($(function* () { return yield* count; }), v => log(v));
     }
 
     #[test]
-    fn fuses_hand_written_call_form_and_arrow_bodies() {
-        let out = fused(r#"import { $, createMemo, createSignal, perform } from "solid-js";
+    fn strict_markers_take_precedence_over_hand_written_call_form() {
+        let out = fused(
+            r#"import { $, createMemo, createSignal, perform } from "solid-js";
 const [count] = createSignal(1);
 const a = createMemo($(() => perform(count) + 1));
 const b = createMemo($(function () { return perform(count); }));
-"#)
+"#,
+        )
         .unwrap();
-        assert!(out.contains("const a = createMemo(() => count() + 1);"), "{out}");
+        // The strict marker pass runs first for ordinary callbacks. It erases
+        // `$`, while an explicitly authored `perform` remains user code.
+        assert!(
+            out.contains("const a = createMemo(() => perform(count) + 1);"),
+            "{out}"
+        );
         assert!(out.contains("const b = createMemo(function() {"), "{out}");
-        assert!(out.contains("return count();"), "{out}");
+        assert!(out.contains("return perform(count);"), "{out}");
         // The user's own specifier is theirs to keep.
-        assert!(out.contains(r#"import { $, createMemo, createSignal, perform } from "solid-js";"#), "{out}");
+        assert!(
+            out.contains(r#"import { $, createMemo, createSignal, perform } from "solid-js";"#),
+            "{out}"
+        );
     }
 
     #[test]
@@ -2348,26 +2376,43 @@ const count = createMemo($(function* () { return yield* readStore(store, sel); }
 const city = createMemo($(function* () { return yield* readStore(store.user, u => u.address.city); }));
 "#)
         .unwrap();
-        assert!(out.contains("return ((s) => s.items.map((x) => x.name))(store);"), "{out}");
+        assert!(
+            out.contains("return ((s) => s.items.map((x) => x.name))(store);"),
+            "{out}"
+        );
         assert!(out.contains("return sel(store);"), "{out}");
-        assert!(out.contains("return ((u) => u.address.city)(store.user);"), "{out}");
+        assert!(
+            out.contains("return ((u) => u.address.city)(store.user);"),
+            "{out}"
+        );
         assert!(!out.contains("_$perform"), "{out}");
         assert!(!out.contains("$(function"), "{out}");
-        assert!(out.contains(r#"import { $, createMemo, readStore } from "solid-js";"#), "{out}");
+        assert!(
+            out.contains(r#"import { $, createMemo, readStore } from "solid-js";"#),
+            "{out}"
+        );
     }
 
     #[test]
     fn fuses_nested_hosts_bottom_up() {
-        let out = fused(r#"import { $, createMemo, createSignal } from "solid-js";
+        let out = fused(
+            r#"import { $, createMemo, createSignal } from "solid-js";
 const [count] = createSignal(1);
 const outer = createMemo($(function* () {
   const inner = createMemo($(function* () { return (yield* count) * 2; }));
   return (yield* inner) + 1;
 }));
-"#)
+"#,
+        )
         .unwrap();
-        assert!(out.contains("const outer = createMemo(function() {"), "{out}");
-        assert!(out.contains("const inner = createMemo(function() {"), "{out}");
+        assert!(
+            out.contains("const outer = createMemo(function() {"),
+            "{out}"
+        );
+        assert!(
+            out.contains("const inner = createMemo(function() {"),
+            "{out}"
+        );
         assert!(out.contains("return count() * 2;"), "{out}");
         assert!(out.contains("return inner() + 1;"), "{out}");
         assert!(!out.contains("perform"), "{out}");
@@ -2375,7 +2420,8 @@ const outer = createMemo($(function* () {
 
     #[test]
     fn fuses_jsx_returning_memos_ahead_of_jsx_lowering() {
-        let out = fused_dom(r#"import { $, createMemo, createSignal } from "solid-js";
+        let out = fused_dom(
+            r#"import { $, createMemo, createSignal } from "solid-js";
 function View(props) {
   const [count] = createSignal(1);
   const view = createMemo($(function* () {
@@ -2383,10 +2429,14 @@ function View(props) {
   }));
   return view;
 }
-"#)
+"#,
+        )
         .unwrap();
-        assert!(out.contains("const view = createMemo(function() {"), "{out}");
-        assert!(out.contains("_$readValue(props.theme)"), "{out}");
+        assert!(
+            out.contains("const view = createMemo(function() {"),
+            "{out}"
+        );
+        assert!(out.contains("_$readPath1(props, \"theme\")"), "{out}");
         assert!(!out.contains("_$perform"), "{out}");
         assert!(!out.contains("$(function"), "{out}");
     }
@@ -2421,7 +2471,10 @@ const proven = createMemo($(function* () { return yield* count; }));
             assert!(out.contains(stays), "{stays} must stay lowered: {out}");
         }
         assert_eq!(out.matches("$(function() {").count(), 7, "{out}");
-        assert!(out.contains("const proven = createMemo(function() {"), "{out}");
+        assert!(
+            out.contains("const proven = createMemo(function() {"),
+            "{out}"
+        );
         assert!(out.contains("return count();"), "{out}");
         // `perform` is still referenced, so its specifier stays.
         assert!(out.contains("perform as _$perform"), "{out}");
@@ -2451,7 +2504,8 @@ const f = createMemo($(function* () { return yield* wait(fetch("/api")); }));
 
     #[test]
     fn refuses_visible_violations() {
-        let out = fused(r#"import { $, createMemo, createSignal, createStore, perform } from "solid-js";
+        let out = fused(
+            r#"import { $, createMemo, createSignal, createStore, perform } from "solid-js";
 const [count] = createSignal(1);
 const [store] = createStore({ flag: true, x: 1 });
 const direct = createMemo($(function* () { const c = count(); return c + (yield* count); }));
@@ -2460,7 +2514,8 @@ const bare = createMemo($(function* () { return store.x + (yield* count); }));
 const nested = createMemo($(function* () { return items.map(item => perform(count) + item); }));
 const self_ = createMemo($(function* () { return this.total + (yield* count); }));
 const args = createMemo($(function* () { return arguments.length + (yield* count); }));
-"#)
+"#,
+        )
         .unwrap();
         assert!(!out.contains("createMemo(function"), "{out}");
         assert_eq!(out.matches("$(function() {").count(), 6, "{out}");
@@ -2472,7 +2527,8 @@ const args = createMemo($(function* () { return arguments.length + (yield* count
 
     #[test]
     fn refuses_unknown_hosts_and_shadowing_and_is_off_by_default() {
-        let out = fused(r#"import { $, createMemo, createSignal } from "solid-js";
+        let out = fused(
+            r#"import { $, createMemo, createSignal } from "solid-js";
 import { createMemo as otherMemo } from "other-lib";
 const [count] = createSignal(1);
 const standalone = $(function* () { return yield* count; });
@@ -2483,7 +2539,8 @@ function local() {
   return createMemo($(function* () { return yield* count; }));
 }
 const second = createMemo(() => 1, $(function* () { return yield* count; }));
-"#)
+"#,
+        )
         .unwrap();
         assert_eq!(out.matches("$(function() {").count(), 4, "{out}");
         assert!(!out.contains("createMemo(function"), "{out}");

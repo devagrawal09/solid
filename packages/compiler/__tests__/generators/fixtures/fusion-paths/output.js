@@ -1,4 +1,4 @@
-import { $, createMemo, createStore, perform as _$perform, readPath1 as _$readPath1, readPath2 as _$readPath2, readValue as _$readValue } from "solid-js";
+import { $, createMemo, createStore, readPath1 as _$readPath1, readPath2 as _$readPath2, readPath3 as _$readPath3 } from "solid-js";
 function Counter(props) {
 	const [store] = createStore({
 		user: { name: "Ada" },
@@ -16,7 +16,7 @@ function Counter(props) {
 	});
 	// An index, a dynamic key, `length`, and a key that is not an identifier.
 	const summary = createMemo(function() {
-		return `${_$readValue(store.items[0].name)} ${_$readValue(store.items[i])} ${_$readValue(store.items.length)} ${_$readValue(store["data-x"])}`;
+		return `${_$readPath3(store, "items", 0, "name")} ${_$readPath2(store, "items", i)} ${_$readPath2(store, "items", "length")} ${_$readPath1(store, "data-x")}`;
 	});
 	return [
 		name,

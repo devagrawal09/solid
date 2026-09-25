@@ -1,19 +1,19 @@
-import { $, createEffect, createMemo, createSignal, perform as _$perform, statusFree as _$statusFree, syncOnly as _$syncOnly } from "solid-js";
+import { $, createEffect, createMemo, createSignal, perform as _$perform, syncOnly as _$syncOnly } from "solid-js";
 export function counter() {
 	const [count, setCount] = createSignal(1);
 	const [label] = createSignal("items");
 	const [anything] = createSignal<unknown>(null);
-	// Typed primitive reads: total arithmetic and templates — status-free.
+	// Typed primitive reads: total arithmetic and templates — sync-only; non-throwing fact retained.
 	const double = createMemo($(function() {
 		return _$perform(count) * 2;
-	}, 3), _$statusFree);
+	}, 3), _$syncOnly);
 	const text = createMemo($(function() {
 		return `${_$perform(double)} ${_$perform(label)}`;
-	}, 3), _$statusFree);
-	// `===` never throws; a read of an untyped signal is total — status-free.
+	}, 3), _$syncOnly);
+	// `===` never throws; a read of an untyped signal is total — sync-only; non-throwing fact retained.
 	const isNull = createMemo($(function() {
 		return _$perform(anything) === null;
-	}, 3), _$statusFree);
+	}, 3), _$syncOnly);
 	// A bare read of an untyped value may be a Promise: NOTHROW only.
 	const raw = createMemo($(function() {
 		return _$perform(anything);

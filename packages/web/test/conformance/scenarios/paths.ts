@@ -208,15 +208,7 @@ export function setup() {
         flush();
       }
     }
-  ],
-  modes: {
-    "client/fused": {
-      status: "known-defect",
-      reason:
-        'baseline host fusion erases `_$readPath(store, ["items", i, "name"])` with an identifier key to `store.items[].name` (invalid JavaScript); fuse_host_blocks drops non-literal keys',
-      firstDivergence: "uncaught load = SyntaxError(Unexpected token ']')"
-    }
-  }
+  ]
 };
 
 export const propPaths: Scenario = {
@@ -330,16 +322,30 @@ export function App() {
   }
 };
 
-/**
- * typed-generator-compiler.md, "Strict SSR And Hydration Findings": returned
- * JSX `$` blocks consume hydration IDs differently on server and client.
- * Reproduced here: the server renders the block's element after its sibling
- * components have taken their keys (`<p _hk=3>` where the reference renders
- * `<p _hk=1>`), and the client, which claims in reference order, halts with a
- * tag mismatch.
- */
-const JSX_BLOCK_IDS =
-  "baseline defect: a component returning a `$` JSX block is rendered by the server after its siblings claim hydration keys, so keys diverge from ordinary Solid and hydration halts (typed-generator-compiler.md: release blocker)";
+const JSX_BLOCK_ORACLE_SSR = [
+  'markup = <main _hk=0><!--$--><p _hk=1 class="count">n=<!--$-->1<!--/--></p><!--/--><!--$--><b _hk=3 class="label">x</b><!--/--><span class="after">after</span><!--$--><b _hk=4 class="label">y</b><!--/--></main>',
+  'hydration-keys = ["0","1","3","4"]'
+];
+
+const JSX_BLOCK_RUNTIME_SSR = [
+  'markup = <main _hk=0><!--$--><p _hk=3 class="count">n=<!--$-->1<!--/--></p><!--/--><!--$--><b _hk=1 class="label">x</b><!--/--><span class="after">after</span><!--$--><b _hk=2 class="label">y</b><!--/--></main>',
+  'hydration-keys = ["0","3","1","2"]'
+];
+
+const JSX_BLOCK_SCOPED_SSR = [
+  'markup = <main _hk=0><!--$--><p _hk=10 class="count">n=<!--$-->1<!--/--></p><!--/--><!--$--><b _hk=2 class="label">x</b><!--/--><span class="after">after</span><!--$--><b _hk=3 class="label">y</b><!--/--></main>',
+  'hydration-keys = ["0","10","2","3"]'
+];
+
+const JSX_BLOCK_ORACLE_HYDRATE = [
+  'html = <main _hk="0"><!--$--><p _hk="1" class="count">n=<!--$-->1<!--/--></p><!--/--><!--$--><b _hk="3" class="label">x</b><!--/--><span class="after">after</span><!--$--><b _hk="4" class="label">y</b><!--/--></main>',
+  'html = <main _hk="0"><!--$--><p _hk="1" class="count">n=<!--$-->2<!--/--></p><!--/--><!--$--><b _hk="3" class="label">x</b><!--/--><span class="after">after</span><!--$--><b _hk="4" class="label">y</b><!--/--></main>'
+];
+
+const JSX_BLOCK_SCOPED_HYDRATE = [
+  'html = <main _hk="0"><!--$--><p _hk="10" class="count">n=<!--$-->1<!--/--></p><!--/--><!--$--><b _hk="2" class="label">x</b><!--/--><span class="after">after</span><!--$--><b _hk="3" class="label">y</b><!--/--></main>',
+  'html = <main _hk="0"><!--$--><p _hk="10" class="count">n=<!--$-->2<!--/--></p><!--/--><!--$--><b _hk="2" class="label">x</b><!--/--><span class="after">after</span><!--$--><b _hk="3" class="label">y</b><!--/--></main>'
+];
 
 export const jsxBlock: Scenario = {
   name: "jsx-block",
@@ -429,34 +435,35 @@ export function App() {
     "server/runtime": {
       status: "differs",
       reason:
-        "JSX `yield*` without the compiler pass: the ssr generate hoists the child into a template hole where the yield is no longer delegated, and the driver refuses it",
-      trace: [
-        "## render",
-        "run Counter",
-        "uncaught render = TypeError([PLAIN_YIELD_IN_BLOCK] Signals and blocks must be delegated to with `yield*`, not `yield`)",
-        "markup = ",
-        "hydration-keys = []",
-        "serialized = []"
-      ]
+        "without the generator compiler, the server driver reads the accessor correctly but no creation-anchored blockScope is emitted; the deferred block therefore claims its element ID after its siblings",
+      remove: JSX_BLOCK_ORACLE_SSR,
+      insert: [{ after: "read count = 1", lines: JSX_BLOCK_RUNTIME_SSR }]
     },
     "hydrate/runtime": {
       status: "not-applicable",
-      reason: "server/runtime cannot render this scenario (see its declared difference)"
+      reason:
+        "generators:false deliberately omits the compiler-emitted blockScope, so server/runtime's deferred ID layout has no matching hydration scope"
     },
     ...forModes(
       {
-        status: "known-defect",
-        reason: JSX_BLOCK_IDS,
-        firstDivergence: 'markup = <main _hk=0><!--$--><p _hk=3 class="count">'
+        status: "differs",
+        reason:
+          "blockScope reserves the block's source-order slot and allocates its JSX in that child namespace; the IDs intentionally differ from an ordinary component while matching the hydrating client",
+        remove: JSX_BLOCK_ORACLE_SSR,
+        insert: [{ after: "read count = 1", lines: JSX_BLOCK_SCOPED_SSR }]
       },
       { environments: ["server"], only: ["compiled", "fused"] }
     ),
     ...forModes(
       {
-        status: "known-defect",
-        reason: JSX_BLOCK_IDS,
-        firstDivergence:
-          'console.warn = Hydration tag mismatch for key "1": expected <p> but found <b>'
+        status: "differs",
+        reason:
+          "hydration preserves the server's scoped block ID namespace, so the keyed HTML differs from an ordinary component while node reuse, reads and updates remain equivalent",
+        remove: JSX_BLOCK_ORACLE_HYDRATE,
+        insert: [
+          { after: "## initial", lines: [JSX_BLOCK_SCOPED_HYDRATE[0]] },
+          { after: "read count = 2", lines: [JSX_BLOCK_SCOPED_HYDRATE[1]] }
+        ]
       },
       { environments: ["hydrate"], only: ["compiled", "fused"] }
     )

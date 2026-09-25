@@ -2,7 +2,7 @@
 
 ## Exploration Status
 
-Status as of 2026-09-25: the design remains experimental, but the baseline and optimization prototypes are now published on the fork. The end-to-end baseline covers typed blocks, host enforcement, direct typed store/prop paths, compiler lowering, projected TypeScript checking, block-derived signals/stores, DOM event dispatch, and a converted TodoMVC example. Tracks A-E and the semantic conformance harness have pushed results; independent review classifies C, D, and E as fix-first rather than integration-ready.
+Status as of 2026-09-25: the design remains experimental, but the baseline and optimization prototypes are now published on the fork. The end-to-end baseline covers typed blocks, host enforcement, direct typed store/prop paths, compiler lowering, projected TypeScript checking, block-derived signals/stores, DOM event dispatch, and a converted TodoMVC example. The reviewed integration includes Strict TSX, the safe Track A/B foundations, and Track D's hydration-ID prerequisite. Track C, D's replay/inert slices, and Track E remain excluded.
 
 The production proposal has two modes only:
 
@@ -23,6 +23,7 @@ Current exploration work:
 ### 2026-09-25 (strict-solid-tsx)
 
 - Added the first generator-free strict slice: `$(fn)` with an ordinary callback is a compilation marker that is analyzed for its statically known host (`createMemo`, `createSignal(fn)`, `createEffect` / `createRenderEffect` compute, DOM `on*` attributes) and erased, with a sidecar graph summary and `[STRICT_…]` diagnostics. See [strict-solid-tsx.md](./strict-solid-tsx.md). Generator blocks are unchanged.
+- Integrated source head `77e5dcec` as `b4afbadf`, preserving generator blocks and compat behavior while strict callbacks refuse unknown hosts, capability escapes, writes in reactive hosts, and incomplete analysis.
 
 ### 2026-09-25
 
@@ -76,7 +77,7 @@ Current exploration work:
 - `examples/todos-blocks` exercises transformed blocks, JSX reads, events, stores, direct paths, structural selectors, loading, errors, and runtime fallback coverage.
 - The direct-path pass reported green signals, compiler Rust/fixture, Solid, web client, SSR, hydration, `packages/typecheck`, TodoMVC typecheck/test/build, and formatting suites.
 - Runtime/transform equivalence, host rejection, root/path inference, diagnostic remapping, declaration emit, and separate consumer compilation have focused coverage.
-- `packages/web/test/conformance/` is a semantic conformance harness: canonical scenarios run through handwritten Solid, the `$` runtime driver, compiler-lowered and host-fused output, SSR and hydration, compared as structured traces with explicit per-mode expectations. Its generated `COVERAGE.md` lists pinned baseline defects (dynamic-index host fusion, JSX-block hydration keys, the server accessor iterator).
+- `packages/web/test/conformance/` is a semantic conformance harness: canonical scenarios run through handwritten Solid, the `$` runtime driver, compiler-lowered and host-fused output, SSR and hydration, compared as structured traces with explicit per-mode expectations. Its generated `COVERAGE.md` records exact intentional differences and currently contains no pinned defects.
 
 ### Strict SSR And Hydration Findings
 
@@ -126,39 +127,39 @@ Generator lowering, host fusion/block erasure to handwritten-equivalent Solid, a
 
 ### Published Prototype Results
 
-All optimization tracks have published reviewable branches from baseline `1fc0b873`. These remain experiments, not accepted baseline changes.
+All optimization tracks published reviewable branches from baseline `1fc0b873`. The table records the reviewed source heads and the actual integration decision.
 
-| Track       | Head       | Scope                                                      | Current decision                                                           |
-| ----------- | ---------- | ---------------------------------------------------------- | -------------------------------------------------------------------------- |
-| A           | `0f97a4f4` | Synchronous status-free paths and async-free core          | Stage 1 **ITERATE**; Stage 2 **KEEP as experimental**                      |
-| B           | `6fb67597` | Proxy-free strict stores                                   | **KEEP as experimental opt-in; iterate on compatibility cost**             |
-| C           | `95389304` | Summaries, linker, and cold event extraction               | **FIX FIRST**                                                              |
-| D           | `f855369a` | Hydration-ID parity, replay elimination, and inert regions | ID parity held; slices 5-6 **FIX FIRST**, with slice 6 rejected as written |
-| E           | `44abd1eb` | Capability-selected hydration runtime                      | **FIX FIRST**                                                              |
-| Conformance | `fe6bd41f` | Cross-mode semantic oracle                                 | Keep and extend                                                            |
+| Track       | Head       | Scope                                                      | Current decision                                                                        |
+| ----------- | ---------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| A           | `0f97a4f4` | Synchronous status-free paths and async-free core          | Foundations integrated through `b080170e`; status-free selection disabled by `f3d22c3b` |
+| B           | `6fb67597` | Proxy-free strict stores                                   | Integrated through `ed186040` as an off-by-default, conservative opt-in                 |
+| C           | `95389304` | Summaries, linker, and cold event extraction               | Excluded; measurements retained as review evidence                                      |
+| D           | `f855369a` | Hydration-ID parity, replay elimination, and inert regions | Only source `49f0d4d9` integrated as `6cf748ca`; slices 5-6 excluded                    |
+| E           | `44abd1eb` | Capability-selected hydration runtime                      | Excluded                                                                                |
+| Conformance | `fe6bd41f` | Cross-mode semantic oracle                                 | Content-equivalent harness at `d3f6a42b`; repaired defects are unpinned                 |
 
 Track A's local status-free hook fired on none of 14 real blocks, made updates slower, and cost 374 B gzip; the shape needs another iteration. Its complete-graph async-free runtime reduced the measured client gzip by 12.3%, server gzip by 18.1%, and update instruction counts by 12-19%, while refusing graphs that touch async capabilities.
 
 Track B's fixed-arity handle paths removed per-read allocations and measured at 0.66-0.76x handwritten proxy-read time for representative dynamic/four-key paths. Handle-rooted Stage 2 reads measured at 0.62-0.69x handwritten, with lower mount allocation and update time, but adds compatibility/runtime bytes and a 37% transform-time increase on the store-dense opt-in benchmark. Unknown uses must still materialize the lazy compatibility proxy.
 
-Track C, D, and E were reviewed independently and in a combined worktree. Their focused suites passed, but semantic repros prevent acceptance:
+Track C, D, and E were reviewed independently and in a combined worktree. Their focused suites passed, but semantic repros prevent acceptance of the excluded slices:
 
-- Track C can delay imported top-level effects and moved initializers, corrupt guards through text replacement, drop a first event while its chunk loads, reorder handlers, collapse queued input snapshots, and move or leak `"use server"` code unless server directives are pinned.
-- Track D's hydration-ID parity commit held. Replay sealing still needs serializability and purity proofs and can hoist before local declarations. Inert-region objects escape fragment-child sites and can reach DOM insertion as non-Nodes, crashing SSR or halting client reactivity.
+- Track C can delay imported top-level effects and moved initializers, corrupt strings/comments/member names through textual guard rewriting, drop a first event while its chunk loads, reorder handlers, and collapse queued input snapshots. Dynamic-import exports must refuse; `"use server"` directives and file-path-derived IDs must be pinned; unresolved or unknown libraries remain conservative. Measurement commit `95389304` reported initial JS -1.4% gzip, route chunks -44% gzip, total bytes +15-27%, and build cost +75-97%. Those results support keeping summaries/linker work and iterating on extraction, but do not make the coupled implementation safe to merge.
+- Track D's hydration-ID parity commit held and is integrated. Replay sealing remains excluded until values have serializability plus purity/escape proofs; its local-declaration hoist can cross a TDZ. Inert-region objects can escape fragment-child sites as non-Nodes and crash SSR or halt client reactivity, so every unsafe slice-6 site is excluded rather than patched around. Trust summaries also need resolved package identity and version.
 - Track E's universal installer split is conservative, but selected production entries can fail silently outside error boundaries. Generated comments need line-terminator escaping, input envelopes need schema/version validation, D's sealed values need an explicit capability, and the universal path adds about 720 B before selection pays it back.
 - C and E currently use different manifest conventions. The shared contract must define one versioned envelope rather than relying on E's conservative fallback as the permanent integration.
 
-The generator-free frontend remains an active cloud prototype, but `experiment/strict-solid-tsx` still points at baseline `1fc0b873`; no implementation commit is published yet. The separate local host-fusion baseline measured 7.3% less unminified output for the memo/effect fixture and 17.9% for the direct-path fixture.
+The generator-free frontend and host fusion now coexist in the integration. A/B conflict repairs preserve strict summaries, capability summaries, store summaries, source maps, option validation, and stable exports. Dynamic path fusion uses fixed-arity readers without constructing invalid member syntax. The separate host-fusion baseline measured 7.3% less unminified output for the memo/effect fixture and 17.9% for the direct-path fixture.
 
 ### Semantic Conformance Harness
 
-`packages/web/test/conformance/` runs 15 scenarios across 12 modes and three environments. It uses the actual compiler transform, controlled async settlement, structured traces, committed handwritten references, exact intentional-difference declarations, and known-defect expectations that fail when a defect unexpectedly disappears. Its mutation tests prove detection of missing cleanup, unconditional branch reads, duplicate event writes, stale async commits, owner mismatch, and hydration-ID mismatch.
+`packages/web/test/conformance/` runs 15 scenarios across 12 modes and three environments. It uses the actual compiler transform, controlled async settlement, structured traces, committed handwritten references, exact intentional-difference declarations, and defect expectations that fail when behavior changes unexpectedly. Its mutation tests prove detection of missing cleanup, unconditional branch reads, duplicate event writes, stale async commits, owner mismatch, and hydration-ID mismatch.
 
-Current pinned defects are:
+The integration repairs the three defects originally pinned by the harness, so no `known-defect` cells remain:
 
-- Dynamic-index host fusion can emit invalid `store.items[].name` syntax.
-- A component returning a `$` JSX block can allocate its hydration keys after sibling components, producing a tag mismatch and halting hydration.
-- The server signal iterator yields a bare accessor rather than a read operation, so an uncompiled server `$` block fails; blocks containing `wait` cannot currently compile away and therefore cannot render asynchronously on the server.
+- Dynamic-index host fusion lowers to `readPath1`-`readPath4`/`readPathN` and emits valid syntax.
+- Creation-anchored block scopes preserve JSX sibling hydration-ID parity. A scoped block intentionally uses a child ID namespace (`10` where an ordinary component uses `1`), so SSR and the hydrated key-bearing HTML declare that exact layout difference from an ordinary component; node reuse, reads, and updates remain equivalent. The `generators:false` mode remains non-applicable to hydration because it deliberately omits the compiler-emitted scope.
+- The pull-based server accessor iterator reads its accessor directly and no longer delegates a bare accessor to the client driver. This does not claim client-owner semantics for server async continuations.
 
 The harness also records that handwritten Solid reruns an async memo fetch during hydration and discards the restarted result. Server-authoritative replay elimination is therefore a new behavior requiring an explicit proof, not a description of current hydration.
 

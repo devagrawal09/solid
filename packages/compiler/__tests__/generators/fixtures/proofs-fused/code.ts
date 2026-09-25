@@ -5,7 +5,7 @@ export function counter() {
   const [label] = createSignal("items");
   const [anything] = createSignal<unknown>(null);
 
-  // Typed primitive reads: total arithmetic and templates — status-free.
+  // Typed primitive reads: total arithmetic and templates — sync-only; non-throwing fact retained.
   const double = createMemo(
     $(function* () {
       return (yield* count) * 2;
@@ -16,7 +16,7 @@ export function counter() {
       return `${yield* double} ${yield* label}`;
     })
   );
-  // `===` never throws; a read of an untyped signal is total — status-free.
+  // `===` never throws; a read of an untyped signal is total — sync-only; non-throwing fact retained.
   const isNull = createMemo(
     $(function* () {
       return (yield* anything) === null;

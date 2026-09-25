@@ -464,7 +464,14 @@ describe("handle path readers: exact equivalence with the proxy walk", () => {
     const messages = [
       () => proxyWalk(store, ["user", "name"]),
       () => readPath2(store, "user", "name"),
-      () => createRoot(() => createMemo($(() => readPath2(store, "user", "name"))))()
+      () =>
+        createRoot(() =>
+          createMemo(
+            $(function* () {
+              return readPath2(store, "user", "name");
+            })
+          )
+        )()
     ].map(f => {
       try {
         f();
