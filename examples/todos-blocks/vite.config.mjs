@@ -5,8 +5,14 @@ import { defineConfig } from "vitest/config";
 // `vite build`. `solid-js/refresh` HMR runs in dev as in the source example.
 import solid from "@solidjs/vite-plugin";
 
+// `SOLID_HOST_FUSION=1` also turns on the compiler's experimental host
+// fusion (`createMemo($(fn))` → `createMemo(fn)`) for `vite build` and
+// `vitest` — the A/B the host-fusion prototype's measurements and end-to-end
+// runs use; the default build is the plain lowering.
+const hostFusion = process.env.SOLID_HOST_FUSION === "1";
+
 export default defineConfig({
-  plugins: [solid()],
+  plugins: [solid({ solid: { hostFusion } })],
   server: { port: 3012 },
   preview: { port: 3012 },
   test: {

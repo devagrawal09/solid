@@ -65,19 +65,29 @@
 //! rather than miscompiling. The lowered function stays a `function`
 //! expression (`this`/`arguments` keep their meaning); a `: Generator<…>`
 //! return annotation is dropped since it no longer describes the function.
+//!
+//! # Host fusion (experimental, `host_fusion`)
+//!
+//! A lowered block that is the direct argument of a reactive host
+//! (`createMemo($(fn))`) can additionally be erased into the host's own
+//! compute function — `createMemo(fn)` with `count()` for `_$perform(count)`
+//! — when every operation in its body is proven from its declaration. See
+//! `fuse_host_blocks` below for the proof obligations and the refusals.
 
 use oxc_allocator::Allocator;
 use oxc_ast::AstKind;
 use oxc_ast::ast::{
-    Argument, CallExpression, Expression, Function, IdentifierReference,
-    ImportDeclarationSpecifier, ImportOrExportKind, Program, Statement, ThrowStatement,
-    YieldExpression,
+    Argument, ArrayExpressionElement, BindingPattern, CallExpression, Expression, Function,
+    IdentifierReference, ImportDeclarationSpecifier, ImportOrExportKind, Program, Statement,
+    ThrowStatement, VariableDeclarationKind, YieldExpression,
 };
 use oxc_ast_visit::{Visit, VisitMut, walk, walk_mut};
 use oxc_semantic::{AstNodes, NodeId, Scoping, SemanticBuilder, SymbolId};
 use oxc_span::{GetSpan, Span};
+use oxc_syntax::identifier::is_identifier_name;
 use oxc_syntax::scope::ScopeFlags;
 
+use crate::shared::ast::{argument_to_expression, expression_to_argument};
 use crate::shared::ast_builder::AstBuilder;
 
 /// Modules whose named exports are the block runtime.
@@ -713,436 +723,786 @@ impl<'a> VisitMut<'a> for Rewriter<'a> {
 }
 
 // ---------------------------------------------------------------------------
-// Host fusion: erase `$()` and `_$perform` when the host is statically known
+// Host fusion (experimental, `host_fusion`): erase a lowered `$()` into the
+// reactive host that consumes it
 // ---------------------------------------------------------------------------
+//
+// After `transform_generators`, a block consumed *directly* by a reactive
+// host —
+//
+// ```js
+// createMemo($(function (prev) { const c = _$perform(count); return c * 2; }));
+// ```
+//
+// — still pays for machinery the host never uses: the block wrapper (its
+// per-run host/guard/token bookkeeping and result-shape probes) and one
+// `perform` dispatch per read. When the compiler can *prove* what every
+// operation in the body is, the same computation is emitted the way it would
+// be hand-written:
+//
+// ```js
+// createMemo(function (prev) { const c = count(); return c * 2; });
+// ```
+//
+// # What is proven, and what each erasure relies on
+//
+// `perform(x)` is a dispatch on the runtime shape of `x` (accessor, block,
+// path token, operation object). The fusion never guesses that shape; it
+// erases only operands whose shape follows from their declaration in the
+// same module (resolved by symbol, so shadowing and aliases are respected):
+//
+// - `_$perform(acc)` → `acc()` when `acc` is a `const` binding of the
+//   accessor a runtime factory returns: `const [acc] = createSignal(…)` /
+//   `createOptimistic(…)`, or `const acc = createMemo(…)`. For an accessor,
+//   `perform` is `readGuarded(acc)`, and inside a computation the strict
+//   guard is already down (the core lowers it for every run), so the call is
+//   the read. Anything else — an import, a parameter, a `let`, a hook result,
+//   an alias of a store path, an operation held in a variable — is refused:
+//   the runtime dispatch is what gives those their meaning.
+// - `_$perform(_$readPath(root, ["a", 0, k]))` (and `_$readProp`) →
+//   `_$readValue(root.a[0][k])`. The member chain *is* the tracked walk the
+//   path op performs (the same property reads, in the same order, through
+//   the real store proxy or the props getters — no path tokens exist with
+//   the guard down). `readValue` keeps the one part of the op the chain
+//   cannot express: reading *through* an accessor or block found at the
+//   path (`yield* props.filter` with `filter: SourceAccessor<Filter>` is a
+//   `Filter`), under the reactive host the erased block ran as. Erasing to
+//   the bare chain would hand back the accessor itself — a silent type
+//   change — so the helper stays.
+// - `_$perform(_$readStore(store, selector))` → `selector(store)`. A store
+//   read is one selector invocation with the guard down; that is the whole
+//   operation.
+//
+// The `$` wrapper itself is erased only when *every* `perform` in the body
+// is erased, so no operation is left to run under an ambient host: the
+// erased body has no host-dependent step. Read-kind operations are admitted
+// by every host; the reactive host's one refusal (`write`) never arises
+// because a `write` operand is not erasable.
+//
+// # Refusals (the block is left exactly as lowered)
+//
+// - any `perform` whose operand is not one of the three shapes above, or a
+//   `perform` inside a nested function or arrow (a callback runs under
+//   whatever is ambient when it is called — the wrapper is what pins it);
+// - a direct accessor call `acc()` in the body, or a member access on a
+//   store the body also reads by path (or a proven store binding): the
+//   runtime reports those violations (`[DIRECT_READ_IN_BLOCK]`,
+//   `[UNREAD_PATH]`); erasing the wrapper would silently admit them, and the
+//   pass never turns a visible violation into an allowed read;
+// - a `function` body that uses `this` or `arguments`: `$` calls the body as
+//   a plain function while a host invokes its compute as a method of the
+//   node, so only an erased body could observe the difference;
+// - a block that is not the first argument of a known host, a block whose
+//   body is still a generator (it waits), a host or `$` that does not
+//   resolve to the runtime import.
+//
+// What the erased wrapper no longer does — documented, not hidden: it no
+// longer raises the dev-only strict guard for the body (a hidden read inside
+// an opaque helper called from the body is tracked instead of reported), no
+// longer probes the body's result for iterator shape (a body returning an
+// iterator object is handed to the host as a value instead of being driven),
+// and no longer raises `[UNREAD_PATH]` for store accesses the compiler could
+// not see. Each is a compat-mode runtime diagnostic for spellings the strict
+// contract forbids; behavior for conforming code is unchanged.
+//
+// Nested hosts (`createMemo($(… const m = createMemo($(…)) … yield* m …))`)
+// fuse bottom-up: a pass fuses the innermost erasable blocks (an unfused
+// inner block still contains `perform` calls, which refuse its parent), and
+// the next pass re-examines the parents. Finally the generated import
+// specifiers that no longer have a reference are dropped and `readValue`
+// is imported when a path read was erased.
 
-/// Statically known reactive hosts whose first argument may be a `$()` block.
-const HOST_IMPORTS: &[&str] = &["createMemo", "createEffect", "createRenderEffect"];
+/// Reactive hosts whose first argument is the compute function: each runs the
+/// block as `fn(prev)` under the reactive host (`Writes` refused).
+const FUSION_HOSTS: &[&str] = &["createMemo", "createEffect", "createRenderEffect", "createSignal"];
+/// The local name of the fused path read (`readValue`).
+const READ_VALUE_LOCAL: &str = "_$readValue";
+/// Bound on bottom-up passes over nested hosts. Real nesting is shallow; the
+/// cap only bounds a pathological input.
+const MAX_FUSION_PASSES: usize = 8;
 
-/// Symbols the generator transform inserts that the fusion pass needs to
-/// resolve by symbol ID (not name) to avoid false positives from shadowing.
-struct HelperSymbols {
-    perform: Vec<SymbolId>,
-    read_path: Vec<SymbolId>,
-    read_prop: Vec<SymbolId>,
-}
-
-/// After `transform_generators`, fuse `createMemo($(fn))` → `createMemo(fn)`
-/// with `_$perform(x)` → `x()` and path reads → member expressions. Only
-/// blocks whose body is fully erasable (no `readStore`, `raise`, `attempt`,
-/// `write`, `call` inside `perform`) are fused; everything else is left for
-/// the runtime.
-///
-/// All callee matching uses symbol-based resolution through Oxc's semantic
-/// analysis, not string-name comparison, so user code that shadows `_$perform`
-/// etc. in a nested scope does not trigger false positives.
+/// Fuse every provably erasable `HOST($(fn))` in `program`. Runs after
+/// `transform_generators` (the bodies it inspects are in call form) and
+/// before JSX lowering. Never fails: a block that cannot be proven is left
+/// exactly as lowered.
 pub(crate) fn fuse_host_blocks<'a>(
     allocator: &'a Allocator,
     program: &mut Program<'a>,
-    source: &'a str,
+    _source: &'a str,
 ) -> Result<(), String> {
     if !imports_adapter(program) {
         return Ok(());
     }
-    let semantic = SemanticBuilder::new()
-        .with_build_nodes(true)
-        .build(program)
-        .semantic;
-    let scoping = semantic.scoping();
+    let mut fused = false;
+    let mut needs_read_value = false;
+    for _ in 0..MAX_FUSION_PASSES {
+        let plan = build_fusion_plan(program);
+        if plan.blocks.is_empty() {
+            break;
+        }
+        fused = true;
+        needs_read_value |= !plan.path_reads.is_empty();
+        let mut rewriter = FusionRewriter { allocator, plan };
+        rewriter.visit_program(program);
+    }
+    if fused {
+        finish_fusion_imports(allocator, program, needs_read_value);
+    }
+    Ok(())
+}
 
-    let mut adapter_symbols: Vec<SymbolId> = Vec::new();
-    let mut host_symbols: Vec<SymbolId> = Vec::new();
-    let mut helpers = HelperSymbols {
-        perform: Vec::new(),
-        read_path: Vec::new(),
-        read_prop: Vec::new(),
-    };
-    for statement in program.body.iter() {
+/// Runtime import bindings the fusion resolves by symbol.
+#[derive(Default)]
+struct FusionSymbols {
+    /// `$`.
+    adapter: Vec<SymbolId>,
+    /// `createMemo` / `createEffect` / `createRenderEffect` / `createSignal`.
+    hosts: Vec<SymbolId>,
+    /// `perform` (the generator pass's `_$perform`, or a user import).
+    perform: Vec<SymbolId>,
+    /// `readPath` and `readProp`: one tracked walk plus read-through.
+    read_path: Vec<SymbolId>,
+    /// `readStore`: one selector invocation.
+    read_store: Vec<SymbolId>,
+    /// Factories whose tuple element 0 is an accessor: `createSignal`,
+    /// `createOptimistic`.
+    accessor_tuples: Vec<SymbolId>,
+    /// Factories whose value is an accessor: `createMemo`.
+    accessor_values: Vec<SymbolId>,
+    /// Factories whose tuple element 0 is a store proxy: `createStore`,
+    /// `createOptimisticStore`.
+    store_tuples: Vec<SymbolId>,
+    /// Factories whose value is a store proxy: `createProjection`.
+    store_values: Vec<SymbolId>,
+}
+
+fn collect_fusion_symbols(program: &Program<'_>) -> FusionSymbols {
+    let mut symbols = FusionSymbols::default();
+    for statement in &program.body {
         let Statement::ImportDeclaration(import) = statement else {
             continue;
         };
-        if !RUNTIME_SOURCES.contains(&import.source.value.as_str()) {
+        if !RUNTIME_SOURCES.contains(&import.source.value.as_str())
+            || import.import_kind == ImportOrExportKind::Type
+        {
             continue;
         }
         for specifier in import.specifiers.iter().flatten() {
-            let ImportDeclarationSpecifier::ImportSpecifier(s) = specifier else {
+            let ImportDeclarationSpecifier::ImportSpecifier(specifier) = specifier else {
                 continue;
             };
-            let Some(symbol_id) = s.local.symbol_id.get() else {
+            let Some(symbol) = specifier.local.symbol_id.get() else {
                 continue;
             };
-            match s.imported.name().as_str() {
-                "$" => adapter_symbols.push(symbol_id),
-                "perform" => helpers.perform.push(symbol_id),
-                "readPath" => helpers.read_path.push(symbol_id),
-                "readProp" => helpers.read_prop.push(symbol_id),
-                name if HOST_IMPORTS.contains(&name) => host_symbols.push(symbol_id),
+            let name = specifier.imported.name();
+            let name = name.as_str();
+            if FUSION_HOSTS.contains(&name) {
+                symbols.hosts.push(symbol);
+            }
+            match name {
+                "$" => symbols.adapter.push(symbol),
+                "perform" => symbols.perform.push(symbol),
+                "readPath" | "readProp" => symbols.read_path.push(symbol),
+                "readStore" => symbols.read_store.push(symbol),
+                _ => {}
+            }
+            match name {
+                "createSignal" | "createOptimistic" => symbols.accessor_tuples.push(symbol),
+                "createMemo" => symbols.accessor_values.push(symbol),
+                "createStore" | "createOptimisticStore" => symbols.store_tuples.push(symbol),
+                "createProjection" => symbols.store_values.push(symbol),
                 _ => {}
             }
         }
     }
-    if adapter_symbols.is_empty() || host_symbols.is_empty() || helpers.perform.is_empty() {
-        return Ok(());
-    }
-
-    let plan = build_fusion_plan(scoping, &adapter_symbols, &host_symbols, &helpers, program, source);
-    if plan.blocks.is_empty() {
-        return Ok(());
-    }
-    let mut rewriter = FusionRewriter {
-        allocator,
-        plan,
-        source,
-    };
-    rewriter.visit_program(program);
-    Ok(())
+    symbols
 }
 
+/// What a binding is proven to hold, from its declaration.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Origin {
+    /// A signal accessor: `const [x] = createSignal(…)`, `const x = createMemo(…)`.
+    Accessor,
+    /// A store proxy: `const [s] = createStore(…)`, `const s = createProjection(…)`.
+    Store,
+    /// Anything the pass cannot prove.
+    Other,
+}
+
+struct FusionContext<'s> {
+    scoping: &'s Scoping,
+    nodes: &'s AstNodes<'s>,
+    symbols: FusionSymbols,
+}
+
+impl FusionContext<'_> {
+    fn reference_symbol(&self, reference: &IdentifierReference<'_>) -> Option<SymbolId> {
+        reference
+            .reference_id
+            .get()
+            .and_then(|id| self.scoping.get_reference(id).symbol_id())
+    }
+
+    /// The origin of a binding: a `const` declarator whose initializer is a
+    /// direct call to a runtime factory, with the symbol bound either as the
+    /// whole value or as element 0 of an array pattern — nothing else.
+    fn binding_origin(&self, symbol: SymbolId) -> Origin {
+        let mut node_id = self.scoping.symbol_declaration(symbol);
+        // The binder records the declarator for every name it binds; walk up
+        // from a binding identifier to be safe against either convention.
+        let declarator = loop {
+            match self.nodes.get_node(node_id).kind() {
+                AstKind::VariableDeclarator(declarator) => break declarator,
+                AstKind::BindingIdentifier(_) | AstKind::ArrayPattern(_) => {
+                    let parent = self.nodes.parent_id(node_id);
+                    if parent == node_id {
+                        return Origin::Other;
+                    }
+                    node_id = parent;
+                }
+                _ => return Origin::Other,
+            }
+        };
+        let parent = self.nodes.parent_id(node_id);
+        if parent == node_id
+            || !matches!(
+                self.nodes.get_node(parent).kind(),
+                AstKind::VariableDeclaration(declaration)
+                    if declaration.kind == VariableDeclarationKind::Const
+            )
+        {
+            return Origin::Other;
+        }
+        let tuple = match &declarator.id {
+            BindingPattern::BindingIdentifier(id) if id.symbol_id.get() == Some(symbol) => false,
+            BindingPattern::ArrayPattern(pattern) => match pattern.elements.first() {
+                Some(Some(BindingPattern::BindingIdentifier(id)))
+                    if id.symbol_id.get() == Some(symbol) =>
+                {
+                    true
+                }
+                _ => return Origin::Other,
+            },
+            _ => return Origin::Other,
+        };
+        let Some(Expression::CallExpression(init)) = &declarator.init else {
+            return Origin::Other;
+        };
+        let Some(factory) = resolve_callee(self.scoping, init) else {
+            return Origin::Other;
+        };
+        let symbols = &self.symbols;
+        if tuple {
+            if symbols.accessor_tuples.contains(&factory) {
+                Origin::Accessor
+            } else if symbols.store_tuples.contains(&factory) {
+                Origin::Store
+            } else {
+                Origin::Other
+            }
+        } else if symbols.accessor_values.contains(&factory) {
+            Origin::Accessor
+        } else if symbols.store_values.contains(&factory) {
+            Origin::Store
+        } else {
+            Origin::Other
+        }
+    }
+}
+
+/// One pass's rewrites, all keyed by the span of the node they replace.
+#[derive(Default)]
 struct FusionPlan {
-    /// `$(fn)` call spans to unwrap — replace with the inner function.
+    /// `$(fn)` → `fn`.
     blocks: Vec<Span>,
-    /// `_$perform(ident)` or `_$perform(member)` call spans — replace with
-    /// `ident()` or `member()`.
-    perform_calls: Vec<Span>,
-    /// `_$perform(_$readPath/Prop(root, [keys]))` — replace with a member chain.
-    perform_paths: Vec<FusionPath>,
+    /// `_$perform(acc)` → `acc()`.
+    accessor_calls: Vec<Span>,
+    /// `_$perform(_$readPath(root, [keys]))` → `_$readValue(root.k…)`.
+    path_reads: Vec<Span>,
+    /// `_$perform(_$readStore(store, selector))` → `selector(store)`.
+    store_reads: Vec<Span>,
 }
 
-struct FusionPath {
-    span: Span,
-    root_name: String,
-    keys: Vec<String>,
-}
-
-fn build_fusion_plan(
-    scoping: &Scoping,
-    adapter_symbols: &[SymbolId],
-    host_symbols: &[SymbolId],
-    helpers: &HelperSymbols,
-    program: &Program<'_>,
-    source: &str,
-) -> FusionPlan {
-    let plan = FusionPlan {
-        blocks: Vec::new(),
-        perform_calls: Vec::new(),
-        perform_paths: Vec::new(),
+fn build_fusion_plan(program: &Program<'_>) -> FusionPlan {
+    let semantic = SemanticBuilder::new()
+        .with_build_nodes(true)
+        .build(program)
+        .semantic;
+    let symbols = collect_fusion_symbols(program);
+    if symbols.adapter.is_empty() || symbols.hosts.is_empty() {
+        return FusionPlan::default();
+    }
+    let context = FusionContext {
+        scoping: semantic.scoping(),
+        nodes: semantic.nodes(),
+        symbols,
     };
-    struct Collector<'a> {
-        scoping: &'a Scoping,
-        adapter_symbols: &'a [SymbolId],
-        host_symbols: &'a [SymbolId],
-        helpers: &'a HelperSymbols,
-        source: &'a str,
+
+    struct Collector<'s> {
+        context: &'s FusionContext<'s>,
         plan: FusionPlan,
     }
+
     impl<'b> Visit<'b> for Collector<'_> {
         fn visit_call_expression(&mut self, call: &CallExpression<'b>) {
-            // Match HOST($(fn)): a host call whose first argument is a `$()` call
-            // containing a non-generator function expression.
-            if let Some(host_sym) = resolve_callee(self.scoping, call) {
-                if self.host_symbols.contains(&host_sym) && !call.arguments.is_empty() {
-                    if let Argument::CallExpression(inner) = &call.arguments[0] {
-                        if let Some(adapter_sym) = resolve_callee(self.scoping, inner) {
-                            if self.adapter_symbols.contains(&adapter_sym)
-                                && inner.arguments.len() == 1
-                            {
-                                if let Argument::FunctionExpression(func) = &inner.arguments[0] {
-                                    if !func.generator
-                                        && body_is_erasable(
-                                            self.scoping, self.helpers, func,
-                                        )
-                                    {
-                                        self.plan.blocks.push(inner.span);
-                                        collect_performs(
-                                            self.scoping,
-                                            self.helpers,
-                                            func,
-                                            &mut self.plan,
-                                            self.source,
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
+            if let Some(block) = self.host_block(call) {
+                let mut check = BodyCheck::new(self.context, block);
+                check.run();
+                if check.ok {
+                    self.plan.blocks.push(block.span);
+                    self.plan.accessor_calls.extend(check.accessor_calls);
+                    self.plan.path_reads.extend(check.path_reads);
+                    self.plan.store_reads.extend(check.store_reads);
                 }
             }
             walk::walk_call_expression(self, call);
         }
     }
 
+    impl<'s> Collector<'s> {
+        /// `HOST($(fn), …)` with `fn` in call form: the `$` call.
+        fn host_block<'b>(&self, call: &'b CallExpression<'b>) -> Option<&'b CallExpression<'b>> {
+            let context = self.context;
+            let host = resolve_callee(context.scoping, call)?;
+            if !context.symbols.hosts.contains(&host) {
+                return None;
+            }
+            let Some(Argument::CallExpression(block)) = call.arguments.first() else {
+                return None;
+            };
+            let adapter = resolve_callee(context.scoping, block)?;
+            if !context.symbols.adapter.contains(&adapter) || block.arguments.len() != 1 {
+                return None;
+            }
+            match &block.arguments[0] {
+                Argument::FunctionExpression(function) => {
+                    (!function.generator && !function.r#async && function.body.is_some())
+                        .then_some(block)
+                }
+                Argument::ArrowFunctionExpression(arrow) => (!arrow.r#async).then_some(block),
+                _ => None,
+            }
+        }
+    }
+
     let mut collector = Collector {
-        scoping,
-        adapter_symbols,
-        host_symbols,
-        helpers,
-        source,
-        plan,
+        context: &context,
+        plan: FusionPlan::default(),
     };
     collector.visit_program(program);
     collector.plan
 }
 
-/// Resolve an identifier callee to its symbol and check if it matches one
-/// of the given target symbols (symbol-based, not name-based).
-fn is_callee_one_of(
-    scoping: &Scoping,
-    call: &CallExpression<'_>,
-    targets: &[SymbolId],
-) -> bool {
-    resolve_callee(scoping, call)
-        .map_or(false, |sym| targets.contains(&sym))
+/// Erasability of one block body (the sole argument of a `$` call).
+struct BodyCheck<'s, 'b> {
+    context: &'s FusionContext<'s>,
+    block: &'b CallExpression<'b>,
+    /// The body is an arrow: `this` and `arguments` are lexical either way.
+    arrow: bool,
+    /// Depth inside nested functions of any kind; `perform` must be at 0.
+    depth: usize,
+    /// Depth inside nested `function`s only (arrows keep `this`).
+    function_depth: usize,
+    ok: bool,
+    accessor_calls: Vec<Span>,
+    path_reads: Vec<Span>,
+    store_reads: Vec<Span>,
+    /// Roots of erased path reads, by symbol.
+    path_roots: Vec<SymbolId>,
+    /// Identifiers the body accesses a member of (depth 0), by symbol.
+    member_roots: Vec<SymbolId>,
 }
 
-/// Every `_$perform(…)` in the function body is one we know how to erase.
-fn body_is_erasable(scoping: &Scoping, helpers: &HelperSymbols, func: &Function<'_>) -> bool {
-    let Some(body) = func.body.as_ref() else {
-        return false;
-    };
-    struct Checker<'a> {
-        scoping: &'a Scoping,
-        helpers: &'a HelperSymbols,
-        ok: bool,
-    }
-    impl<'b> Visit<'b> for Checker<'_> {
-        fn visit_function(&mut self, _it: &Function<'b>, _flags: ScopeFlags) {}
-        fn visit_arrow_function_expression(
-            &mut self,
-            _it: &oxc_ast::ast::ArrowFunctionExpression<'b>,
-        ) {
-            // Do not walk into arrows. At the fusion point (after generator
-            // transform, before JSX lowering) no `_$perform` calls exist inside
-            // arrows because `yield*` is a syntax error inside arrows and the
-            // generator transform only creates `_$perform` from `yield*`.
+impl<'s, 'b> BodyCheck<'s, 'b> {
+    fn new(context: &'s FusionContext<'s>, block: &'b CallExpression<'b>) -> Self {
+        Self {
+            context,
+            block,
+            arrow: matches!(block.arguments[0], Argument::ArrowFunctionExpression(_)),
+            depth: 0,
+            function_depth: 0,
+            ok: true,
+            accessor_calls: Vec::new(),
+            path_reads: Vec::new(),
+            store_reads: Vec::new(),
+            path_roots: Vec::new(),
+            member_roots: Vec::new(),
         }
-        fn visit_call_expression(&mut self, call: &CallExpression<'b>) {
-            if is_callee_one_of(self.scoping, call, &self.helpers.perform)
-                && !is_erasable_perform_arg(self.scoping, self.helpers, call)
+    }
+
+    fn run(&mut self) {
+        match &self.block.arguments[0] {
+            Argument::FunctionExpression(function) => {
+                if let Some(body) = function.body.as_ref() {
+                    self.visit_function_body(body);
+                }
+            }
+            Argument::ArrowFunctionExpression(arrow) => self.visit_arrow_function_body(&arrow.body),
+            _ => self.ok = false,
+        }
+        if !self.ok {
+            return;
+        }
+        // A member access on a store the body reads by path (`if (store.flag)`
+        // beside `yield* store.x`) or on a proven store binding: with the
+        // wrapper, the access is a path token the run never reads
+        // (`[UNREAD_PATH]`); erased, it would be a silent tracked read.
+        for &root in &self.member_roots {
+            if self.path_roots.contains(&root)
+                || self.context.binding_origin(root) == Origin::Store
             {
                 self.ok = false;
+                return;
             }
-            walk::walk_call_expression(self, call);
         }
     }
-    let mut checker = Checker { scoping, helpers, ok: true };
-    checker.visit_function_body(body);
-    checker.ok
-}
 
-fn is_erasable_perform_arg(
-    scoping: &Scoping,
-    helpers: &HelperSymbols,
-    call: &CallExpression<'_>,
-) -> bool {
-    if call.arguments.len() != 1 {
-        return false;
-    }
-    match &call.arguments[0] {
-        Argument::Identifier(_) => true,
-        Argument::StaticMemberExpression(m) => !m.optional,
-        Argument::ComputedMemberExpression(m) => !m.optional,
-        Argument::CallExpression(inner) => {
-            is_callee_one_of(
-                scoping,
-                inner,
-                &[&helpers.read_path[..], &helpers.read_prop[..]].concat(),
-            ) && inner.arguments.len() == 2
-                && matches!(&inner.arguments[0], Argument::Identifier(_))
-                && matches!(&inner.arguments[1], Argument::ArrayExpression(_))
+    /// Classify one `perform` at depth 0. Returns false when the operand is
+    /// not erasable (the caller then refuses the block).
+    fn classify_perform(&mut self, call: &CallExpression<'b>) -> bool {
+        if call.arguments.len() != 1 {
+            return false;
         }
-        _ => false,
-    }
-}
-
-fn collect_performs(
-    scoping: &Scoping,
-    helpers: &HelperSymbols,
-    func: &Function<'_>,
-    plan: &mut FusionPlan,
-    source: &str,
-) {
-    let Some(body) = func.body.as_ref() else {
-        return;
-    };
-    struct Collector<'a> {
-        scoping: &'a Scoping,
-        helpers: &'a HelperSymbols,
-        plan: &'a mut FusionPlan,
-        source: &'a str,
-    }
-    impl<'b> Visit<'b> for Collector<'_> {
-        fn visit_function(&mut self, _it: &Function<'b>, _flags: ScopeFlags) {}
-        fn visit_arrow_function_expression(
-            &mut self,
-            _it: &oxc_ast::ast::ArrowFunctionExpression<'b>,
-        ) {
-            // Same rationale as `body_is_erasable`: no `_$perform` calls exist
-            // inside arrows at the fusion point.
-        }
-        fn visit_call_expression(&mut self, call: &CallExpression<'b>) {
-            if is_callee_one_of(self.scoping, call, &self.helpers.perform) {
-                classify_perform(self.scoping, self.helpers, call, self.plan, self.source);
+        let context = self.context;
+        match &call.arguments[0] {
+            Argument::Identifier(accessor) => {
+                let proven = context
+                    .reference_symbol(accessor)
+                    .is_some_and(|symbol| context.binding_origin(symbol) == Origin::Accessor);
+                if proven {
+                    self.accessor_calls.push(call.span);
+                }
+                proven
             }
-            walk::walk_call_expression(self, call);
+            Argument::CallExpression(inner) => {
+                let Some(op) = resolve_callee(context.scoping, inner) else {
+                    return false;
+                };
+                if context.symbols.read_path.contains(&op) {
+                    // `_$readPath(root, ["a", 0, k])` as the generator pass emits it.
+                    if inner.arguments.len() != 2 {
+                        return false;
+                    }
+                    let (Argument::Identifier(root), Argument::ArrayExpression(keys)) =
+                        (&inner.arguments[0], &inner.arguments[1])
+                    else {
+                        return false;
+                    };
+                    let literal_keys = keys.elements.iter().all(|key| {
+                        matches!(
+                            key,
+                            ArrayExpressionElement::StringLiteral(_)
+                                | ArrayExpressionElement::NumericLiteral(_)
+                                | ArrayExpressionElement::Identifier(_)
+                        )
+                    });
+                    if !literal_keys {
+                        return false;
+                    }
+                    if let Some(symbol) = context.reference_symbol(root) {
+                        self.path_roots.push(symbol);
+                    }
+                    self.path_reads.push(call.span);
+                    true
+                } else if context.symbols.read_store.contains(&op) {
+                    // `_$readStore(store, selector)`: both operands must be
+                    // side-effect free so `selector(store)` evaluates them in
+                    // either order — an identifier or member chain, and an
+                    // identifier or inline function. The selector body is
+                    // checked like any nested function (no `perform`).
+                    if inner.arguments.len() != 2 {
+                        return false;
+                    }
+                    let store = match &inner.arguments[0] {
+                        Argument::Identifier(_) => true,
+                        Argument::StaticMemberExpression(_)
+                        | Argument::ComputedMemberExpression(_) => {
+                            member_chain_root(inner.arguments[0].to_expression()).is_some()
+                        }
+                        _ => false,
+                    };
+                    if !store {
+                        return false;
+                    }
+                    match &inner.arguments[1] {
+                        Argument::Identifier(_) => {}
+                        Argument::ArrowFunctionExpression(arrow) => {
+                            self.visit_arrow_function_expression(arrow);
+                        }
+                        Argument::FunctionExpression(function) => {
+                            self.visit_function(function, ScopeFlags::Function);
+                        }
+                        _ => return false,
+                    }
+                    if !self.ok {
+                        return false;
+                    }
+                    self.store_reads.push(call.span);
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => false,
         }
     }
-    let mut collector = Collector { scoping, helpers, plan, source };
-    collector.visit_function_body(body);
 }
 
-fn classify_perform(
-    scoping: &Scoping,
-    helpers: &HelperSymbols,
-    call: &CallExpression<'_>,
-    plan: &mut FusionPlan,
-    source: &str,
-) {
-    let span = call.span;
-    match &call.arguments[0] {
-        Argument::CallExpression(inner)
-            if is_callee_one_of(
-                scoping,
-                inner,
-                &[&helpers.read_path[..], &helpers.read_prop[..]].concat(),
-            ) =>
+impl<'b> Visit<'b> for BodyCheck<'_, 'b> {
+    fn visit_function(&mut self, it: &Function<'b>, flags: ScopeFlags) {
+        self.depth += 1;
+        self.function_depth += 1;
+        walk::walk_function(self, it, flags);
+        self.depth -= 1;
+        self.function_depth -= 1;
+    }
+
+    fn visit_arrow_function_expression(&mut self, it: &oxc_ast::ast::ArrowFunctionExpression<'b>) {
+        self.depth += 1;
+        walk::walk_arrow_function_expression(self, it);
+        self.depth -= 1;
+    }
+
+    fn visit_this_expression(&mut self, _it: &oxc_ast::ast::ThisExpression) {
+        // `$` calls the body as a plain function; a host calls its compute as
+        // a method of the node. Only a `function` body could tell.
+        if !self.arrow && self.function_depth == 0 {
+            self.ok = false;
+        }
+    }
+
+    fn visit_identifier_reference(&mut self, it: &IdentifierReference<'b>) {
+        if it.name == "arguments" && !self.arrow && self.function_depth == 0 {
+            self.ok = false;
+        }
+    }
+
+    fn visit_member_expression(&mut self, it: &oxc_ast::ast::MemberExpression<'b>) {
+        if self.depth == 0
+            && let Expression::Identifier(root) = it.object()
+            && let Some(symbol) = self.context.reference_symbol(root)
         {
-            if let (Argument::Identifier(root), Argument::ArrayExpression(array)) =
-                (&inner.arguments[0], &inner.arguments[1])
-            {
-                let root_name = root.name.to_string();
-                let keys = array_literal_to_keys(array, source);
-                plan.perform_paths.push(FusionPath {
-                    span,
-                    root_name,
-                    keys,
-                });
-            }
+            self.member_roots.push(symbol);
         }
-        _ => {
-            plan.perform_calls.push(span);
-        }
+        walk::walk_member_expression(self, it);
     }
-}
 
-/// Extract the key strings from an array literal `["user", "name"]` or
-/// `["items", 0, i]` the way the generator transform emitted them.
-fn array_literal_to_keys(
-    array: &oxc_ast::ast::ArrayExpression<'_>,
-    source: &str,
-) -> Vec<String> {
-    array
-        .elements
-        .iter()
-        .map(|element| match element {
-            oxc_ast::ast::ArrayExpressionElement::StringLiteral(s) => {
-                format!("\"{}\"", s.value)
+    fn visit_call_expression(&mut self, call: &CallExpression<'b>) {
+        if !self.ok {
+            return;
+        }
+        if let Some(symbol) = resolve_callee(self.context.scoping, call) {
+            if self.context.symbols.perform.contains(&symbol) {
+                // The operand's sub-expressions were examined by the
+                // classification; nothing else in a `perform` is walked.
+                if self.depth != 0 || !self.classify_perform(call) {
+                    self.ok = false;
+                }
+                return;
             }
-            oxc_ast::ast::ArrayExpressionElement::NumericLiteral(n) => {
-                n.raw.as_ref().map_or_else(|| n.value.to_string(), |r| r.to_string())
+            // A direct `acc()` in the body: the violation the strict scope
+            // reports in dev (`[DIRECT_READ_IN_BLOCK]`).
+            if self.depth == 0 && self.context.binding_origin(symbol) == Origin::Accessor {
+                self.ok = false;
+                return;
             }
-            other => {
-                let span = other.span();
-                source[span.start as usize..span.end as usize].to_string()
-            }
-        })
-        .collect()
+        }
+        walk::walk_call_expression(self, call);
+    }
 }
 
 struct FusionRewriter<'a> {
     allocator: &'a Allocator,
     plan: FusionPlan,
-    source: &'a str,
 }
 
 impl<'a> VisitMut<'a> for FusionRewriter<'a> {
     fn visit_expression(&mut self, expression: &mut Expression<'a>) {
-        let ast = AstBuilder::new(self.allocator);
-        let span = expression.span();
-
-        // Unwrap `$(fn)` → `fn`
-        if self.plan.blocks.contains(&span) {
-            let placeholder = ast.expression_null_literal(Span::new(0, 0));
-            let owned = std::mem::replace(expression, placeholder);
-            if let Expression::CallExpression(call_box) = owned {
-                let mut call = call_box.unbox();
-                if let Some(fn_arg) = call.arguments.pop() {
-                    if let Some(fn_expr) = crate::shared::ast::argument_to_expression(fn_arg) {
-                        *expression = fn_expr;
-                    }
-                }
+        if let Expression::CallExpression(call) = expression {
+            let span = call.span;
+            let plan = &self.plan;
+            let planned = plan.blocks.contains(&span)
+                || plan.accessor_calls.contains(&span)
+                || plan.path_reads.contains(&span)
+                || plan.store_reads.contains(&span);
+            if planned {
+                let ast = AstBuilder::new(self.allocator);
+                let placeholder = ast.expression_null_literal(Span::new(0, 0));
+                let Expression::CallExpression(call) = std::mem::replace(expression, placeholder)
+                else {
+                    unreachable!("matched above");
+                };
+                let mut call = call.unbox();
+                let argument = call.arguments.pop().expect("planned: exactly one argument");
+                *expression = if plan.blocks.contains(&span) {
+                    // `$(fn)` → `fn`
+                    argument_to_expression(argument).expect("planned: a function")
+                } else if plan.accessor_calls.contains(&span) {
+                    // `_$perform(acc)` → `acc()`
+                    let accessor = argument_to_expression(argument).expect("planned: an identifier");
+                    ast.expression_call(span, accessor, None, ast.vec(), false)
+                } else if plan.path_reads.contains(&span) {
+                    // `_$perform(_$readPath(root, ["a", 0, k]))` → `_$readValue(root.a[0][k])`
+                    let Argument::CallExpression(op) = argument else {
+                        unreachable!("planned: a path op");
+                    };
+                    let mut op = op.unbox();
+                    let Some(Argument::ArrayExpression(keys)) = op.arguments.pop() else {
+                        unreachable!("planned: literal keys");
+                    };
+                    let root = argument_to_expression(op.arguments.pop().expect("planned: a root"))
+                        .expect("planned: an identifier");
+                    let chain = member_chain_from_keys(&ast, root, keys.unbox());
+                    ast.expression_call(
+                        span,
+                        ast.expression_identifier(span, ast.ident(READ_VALUE_LOCAL)),
+                        None,
+                        ast.vec1(expression_to_argument(chain)),
+                        false,
+                    )
+                } else {
+                    // `_$perform(_$readStore(store, selector))` → `selector(store)`
+                    let Argument::CallExpression(op) = argument else {
+                        unreachable!("planned: a store op");
+                    };
+                    let mut op = op.unbox();
+                    let selector = argument_to_expression(op.arguments.pop().expect("planned"))
+                        .expect("planned: a selector");
+                    let store = op.arguments.pop().expect("planned: a store");
+                    ast.expression_call(span, selector, None, ast.vec1(store), false)
+                };
             }
         }
-
-        // `_$perform(_$readPath/Prop(root, [keys]))` → `root.key1.key2…`
-        if let Some(idx) = self
-            .plan
-            .perform_paths
-            .iter()
-            .position(|p| p.span == span)
-        {
-            let path = &self.plan.perform_paths[idx];
-            *expression = build_member_chain(&ast, &path.root_name, &path.keys, self.source);
-        }
-
-        // `_$perform(x)` → `x()`
-        if self.plan.perform_calls.contains(&span) {
-            let placeholder = ast.expression_null_literal(Span::new(0, 0));
-            let owned = std::mem::replace(expression, placeholder);
-            if let Expression::CallExpression(call_box) = owned {
-                let mut call = call_box.unbox();
-                if let Some(arg) = call.arguments.pop() {
-                    if let Some(callee) = crate::shared::ast::argument_to_expression(arg) {
-                        *expression =
-                            ast.expression_call(span, callee, None, ast.vec(), false);
-                    }
-                }
-            }
-        }
-
         walk_mut::walk_expression(self, expression);
     }
 }
 
-/// Build `root.key1.key2[idx]…` from a root identifier and the key strings
-/// the generator transform emitted (`"name"` → static, `0` → computed number,
-/// bare ident → computed identifier).
-fn build_member_chain<'a>(
+/// `root` followed by one member access per key, as the generator pass spelled
+/// them: a string that is an identifier name is a static access, any other
+/// string or a number is a computed literal, an identifier is a computed
+/// dynamic key. The key nodes are moved, keeping their source text.
+fn member_chain_from_keys<'a>(
     ast: &AstBuilder<'a>,
-    root_name: &str,
-    keys: &[String],
-    _source: &str,
+    root: Expression<'a>,
+    keys: oxc_ast::ast::ArrayExpression<'a>,
 ) -> Expression<'a> {
     let synth = Span::new(0, 0);
-    let mut expr = ast.expression_identifier(synth, ast.ident(root_name));
-    for key in keys {
-        if let Some(text) = key.strip_prefix('"').and_then(|k| k.strip_suffix('"')) {
-            // Static property: root.name
-            expr = Expression::StaticMemberExpression(ast.alloc_static_member_expression(
-                synth,
-                expr,
-                ast.identifier_name(synth, ast.ident(text)),
-                false,
-            ));
-        } else if let Ok(num) = key.parse::<f64>() {
-            // Numeric index: root[0]
-            let index = ast.expression_numeric_literal(
-                synth,
-                num,
-                Some(ast.str(key)),
-                oxc_syntax::number::NumberBase::Decimal,
+    let mut chain = root;
+    for key in keys.elements {
+        chain = match key {
+            ArrayExpressionElement::StringLiteral(literal) => {
+                if is_identifier_name(&literal.value) {
+                    Expression::StaticMemberExpression(ast.alloc_static_member_expression(
+                        synth,
+                        chain,
+                        ast.identifier_name(literal.span, ast.ident(&literal.value)),
+                        false,
+                    ))
+                } else {
+                    Expression::ComputedMemberExpression(ast.alloc_computed_member_expression(
+                        synth,
+                        chain,
+                        Expression::StringLiteral(literal),
+                        false,
+                    ))
+                }
+            }
+            ArrayExpressionElement::NumericLiteral(literal) => {
+                Expression::ComputedMemberExpression(ast.alloc_computed_member_expression(
+                    synth,
+                    chain,
+                    Expression::NumericLiteral(literal),
+                    false,
+                ))
+            }
+            ArrayExpressionElement::Identifier(key) => {
+                Expression::ComputedMemberExpression(ast.alloc_computed_member_expression(
+                    synth,
+                    chain,
+                    Expression::Identifier(key),
+                    false,
+                ))
+            }
+            _ => unreachable!("planned: string, number or identifier keys"),
+        };
+    }
+    chain
+}
+
+/// Import maintenance after fusion: drop the generated specifiers
+/// (`_$perform`, `_$readPath`, `_$readProp`) that no longer have a
+/// reference, and import `readValue` when a path read was erased.
+fn finish_fusion_imports<'a>(
+    allocator: &'a Allocator,
+    program: &mut Program<'a>,
+    needs_read_value: bool,
+) {
+    const GENERATED: &[&str] = &[PERFORM_LOCAL, READ_PATH_LOCAL, READ_PROP_LOCAL];
+    let unused: Vec<String> = {
+        let semantic = SemanticBuilder::new().build(program).semantic;
+        let scoping = semantic.scoping();
+        program
+            .body
+            .iter()
+            .filter_map(|statement| match statement {
+                Statement::ImportDeclaration(import)
+                    if RUNTIME_SOURCES.contains(&import.source.value.as_str()) =>
+                {
+                    Some(import)
+                }
+                _ => None,
+            })
+            .flat_map(|import| import.specifiers.iter().flatten())
+            .filter_map(|specifier| match specifier {
+                ImportDeclarationSpecifier::ImportSpecifier(specifier)
+                    if GENERATED.contains(&specifier.local.name.as_str())
+                        && specifier
+                            .local
+                            .symbol_id
+                            .get()
+                            .is_some_and(|symbol| scoping.symbol_is_unused(symbol)) =>
+                {
+                    Some(specifier.local.name.to_string())
+                }
+                _ => None,
+            })
+            .collect()
+    };
+    let ast = AstBuilder::new(allocator);
+    let mut added = !needs_read_value;
+    for statement in program.body.iter_mut() {
+        let Statement::ImportDeclaration(import) = statement else {
+            continue;
+        };
+        if !RUNTIME_SOURCES.contains(&import.source.value.as_str())
+            || import.import_kind == ImportOrExportKind::Type
+        {
+            continue;
+        }
+        if let Some(specifiers) = import.specifiers.as_mut() {
+            specifiers.retain(|specifier| {
+                !matches!(
+                    specifier,
+                    ImportDeclarationSpecifier::ImportSpecifier(specifier)
+                        if unused.iter().any(|name| name == specifier.local.name.as_str())
+                )
+            });
+        }
+        if !added {
+            let span = Span::new(0, 0);
+            let specifier = ast.import_declaration_specifier_import_specifier(
+                span,
+                ast.module_export_name_identifier_name(span, ast.ident("readValue")),
+                ast.binding_identifier(span, ast.ident(READ_VALUE_LOCAL)),
+                ImportOrExportKind::Value,
             );
-            expr = Expression::ComputedMemberExpression(
-                ast.alloc_computed_member_expression(synth, expr, index, false),
-            );
-        } else {
-            // Dynamic identifier: root[i]
-            let ident = ast.expression_identifier(synth, ast.ident(key));
-            expr = Expression::ComputedMemberExpression(
-                ast.alloc_computed_member_expression(synth, expr, ident, false),
-            );
+            match import.specifiers.as_mut() {
+                Some(specifiers) => specifiers.push(specifier),
+                None => import.specifiers = Some(ast.vec1(specifier)),
+            }
+            added = true;
         }
     }
-    expr
 }
 
 #[cfg(test)]
@@ -1154,19 +1514,6 @@ mod tests {
             source,
             &CompileOptions {
                 generate: Generate::Ssr,
-                ..CompileOptions::default()
-            },
-        )
-        .map(|output| output.code)
-        .map_err(|error| error.to_string())
-    }
-
-    fn fused(source: &str) -> Result<String, String> {
-        compile(
-            source,
-            &CompileOptions {
-                generate: Generate::Ssr,
-                host_fusion: true,
                 ..CompileOptions::default()
             },
         )
@@ -1450,166 +1797,268 @@ const a = $(function* () { return yield* count; });
         assert!(off.contains("yield* count"), "{off}");
     }
 
-    // --- host fusion tests -------------------------------------------------------
+    // --- host fusion -----------------------------------------------------------
+
+    fn fused(source: &str) -> Result<String, String> {
+        compile(
+            source,
+            &CompileOptions {
+                generate: Generate::Ssr,
+                host_fusion: true,
+                ..CompileOptions::default()
+            },
+        )
+        .map(|output| output.code)
+        .map_err(|error| error.to_string())
+    }
+
+    fn fused_dom(source: &str) -> Result<String, String> {
+        compile(
+            source,
+            &CompileOptions {
+                host_fusion: true,
+                ..CompileOptions::default()
+            },
+        )
+        .map(|output| output.code)
+        .map_err(|error| error.to_string())
+    }
 
     #[test]
-    fn fuses_creatememo_erasing_block_and_perform() {
-        let out = fused(r#"import { $, createMemo, createSignal } from "solid-js";
+    fn fuses_reactive_hosts_with_proven_accessors() {
+        let out = fused(r#"import { $, createMemo, createEffect, createRenderEffect, createSignal, createOptimistic } from "solid-js";
 const [count] = createSignal(1);
+const [draft] = createOptimistic(0);
 const double = createMemo($(function* (prev) {
   const c = yield* count;
   return c * 2 + (prev ?? 0);
 }));
+const [total] = createSignal($(function* () { return (yield* double) + (yield* draft); }));
+createEffect($(function* () { return `${yield* double} ${yield* total}`; }), v => log(v));
+createRenderEffect($(function* () { return yield* count; }), v => log(v));
 "#)
         .unwrap();
-        // $ wrapper erased: createMemo receives the plain function directly
-        assert!(out.contains("createMemo(function(prev) {"), "{out}");
-        // No $(function in the code body (imports may still reference $)
-        assert!(!out.contains("$(function("), "{out}");
-        // perform erased: direct accessor call
+        assert!(out.contains("const double = createMemo(function(prev) {"), "{out}");
         assert!(out.contains("const c = count();"), "{out}");
-        // No _$perform in the code body (the import specifier may remain)
-        assert!(!out.contains("_$perform(count)"), "{out}");
+        assert!(out.contains("const [total] = createSignal(function() {"), "{out}");
+        assert!(out.contains("return double() + draft();"), "{out}");
+        assert!(out.contains("createEffect(function() {"), "{out}");
+        assert!(out.contains("return `${double()} ${total()}`;"), "{out}");
+        assert!(out.contains("createRenderEffect(function() {"), "{out}");
+        assert!(!out.contains("$(function"), "{out}");
+        // Every `perform` was erased, so the generated specifier is dropped.
+        assert!(!out.contains("perform"), "{out}");
+        assert!(
+            out.contains(
+                r#"import { $, createMemo, createEffect, createRenderEffect, createSignal, createOptimistic } from "solid-js";"#
+            ),
+            "{out}"
+        );
     }
 
     #[test]
-    fn fuses_createeffect_erasing_block_and_perform() {
-        let out = fused(r#"import { $, createEffect } from "solid-js";
-createEffect($(function* () { return yield* double; }), v => log(v));
+    fn fuses_hand_written_call_form_and_arrow_bodies() {
+        let out = fused(r#"import { $, createMemo, createSignal, perform } from "solid-js";
+const [count] = createSignal(1);
+const a = createMemo($(() => perform(count) + 1));
+const b = createMemo($(function () { return perform(count); }));
 "#)
         .unwrap();
-        assert!(out.contains("createEffect(function() {"), "{out}");
-        assert!(out.contains("return double();"), "{out}");
-        assert!(!out.contains("_$perform(double)"), "{out}");
+        assert!(out.contains("const a = createMemo(() => count() + 1);"), "{out}");
+        assert!(out.contains("const b = createMemo(function() {"), "{out}");
+        assert!(out.contains("return count();"), "{out}");
+        // The user's own specifier is theirs to keep.
+        assert!(out.contains(r#"import { $, createMemo, createSignal, perform } from "solid-js";"#), "{out}");
     }
 
     #[test]
-    fn fuses_path_reads_to_member_expressions() {
-        let out = fused(r#"import { $, createMemo } from "solid-js";
+    fn fuses_path_reads_through_read_value() {
+        let out = fused(r#"import { $, createMemo, createStore } from "solid-js";
 function Counter(props) {
-  const name = createMemo($(function* () {
-    return yield* store.user.name;
-  }));
-  const label = createMemo($(function* () {
-    return yield* props.count;
-  }));
+  const [store] = createStore({ user: { name: "Ada" }, items: [], "data-x": 1 });
+  const i = 0;
+  const a = createMemo($(function* () { return yield* store.user.name; }));
+  const b = createMemo($(function* () { return `${yield* store.items[0].name} ${yield* store.items[i]} ${yield* store.items.length}`; }));
+  const c = createMemo($(function* () { return yield* props.count; }));
+  const d = createMemo($(function* () { return yield* store["data-x"]; }));
+  const e = createMemo($(function* () { return yield* state["label"]; }));
+  return [a, b, c, d, e];
 }
 "#)
         .unwrap();
-        // Path reads erased to direct member access
-        assert!(out.contains("return store.user.name;"), "{out}");
-        assert!(out.contains("return props.count;"), "{out}");
-        // No perform calls in the code body
-        assert!(!out.contains("_$perform("), "{out}");
-        assert!(!out.contains("_$readPath("), "{out}");
-        assert!(!out.contains("_$readProp("), "{out}");
+        assert!(out.contains("return _$readValue(store.user.name);"), "{out}");
+        assert!(out.contains("_$readValue(store.items[0].name)"), "{out}");
+        assert!(out.contains("_$readValue(store.items[i])"), "{out}");
+        assert!(out.contains("_$readValue(store.items.length)"), "{out}");
+        assert!(out.contains("return _$readValue(props.count);"), "{out}");
+        assert!(out.contains(r#"_$readValue(store["data-x"])"#), "{out}");
+        assert!(out.contains("_$readValue(state.label)"), "{out}");
+        assert!(!out.contains("_$perform"), "{out}");
+        assert!(!out.contains("_$readPath"), "{out}");
+        assert!(!out.contains("_$readProp"), "{out}");
+        assert!(!out.contains("$(function"), "{out}");
+        assert!(
+            out.contains(r#"import { $, createMemo, createStore, readValue as _$readValue } from "solid-js";"#),
+            "{out}"
+        );
     }
 
     #[test]
-    fn refuses_fusion_when_body_has_non_erasable_perform() {
-        // `readStore` perform args are not erasable in the prototype.
+    fn fuses_store_selectors_to_one_call() {
         let out = fused(r#"import { $, createMemo, readStore } from "solid-js";
-const names = createMemo($(function* () {
-  return yield* readStore(store, s => s.items.map(x => x.name));
-}));
+const names = createMemo($(function* () { return yield* readStore(store, s => s.items.map(x => x.name)); }));
+const sel = s => s.count;
+const count = createMemo($(function* () { return yield* readStore(store, sel); }));
+const city = createMemo($(function* () { return yield* readStore(store.user, u => u.address.city); }));
 "#)
         .unwrap();
-        assert!(out.contains("$(function() {"), "{out}");
-        assert!(out.contains("_$perform(readStore("), "{out}");
+        assert!(out.contains("return ((s) => s.items.map((x) => x.name))(store);"), "{out}");
+        assert!(out.contains("return sel(store);"), "{out}");
+        assert!(out.contains("return ((u) => u.address.city)(store.user);"), "{out}");
+        assert!(!out.contains("_$perform"), "{out}");
+        assert!(!out.contains("$(function"), "{out}");
+        assert!(out.contains(r#"import { $, createMemo, readStore } from "solid-js";"#), "{out}");
     }
 
     #[test]
-    fn refuses_fusion_for_standalone_blocks() {
-        // A `$()` not consumed by a known host stays wrapped.
-        let out = fused(r#"import { $, createMemo } from "solid-js";
-const block = $(function* () { return yield* count; });
-const m = createMemo(block);
-"#)
-        .unwrap();
-        assert!(out.contains("$(function() {"), "{out}");
-        assert!(out.contains("_$perform(count)"), "{out}");
-    }
-
-    #[test]
-    fn refuses_fusion_for_unlowered_generators() {
-        let out = fused(r#"import { $, createMemo, wait } from "solid-js";
-const m = createMemo($(function* () {
-  return yield* wait(fetch("/api"));
+    fn fuses_nested_hosts_bottom_up() {
+        let out = fused(r#"import { $, createMemo, createSignal } from "solid-js";
+const [count] = createSignal(1);
+const outer = createMemo($(function* () {
+  const inner = createMemo($(function* () { return (yield* count) * 2; }));
+  return (yield* inner) + 1;
 }));
 "#)
         .unwrap();
-        // Generator not lowered → function* stays → fusion skipped
+        assert!(out.contains("const outer = createMemo(function() {"), "{out}");
+        assert!(out.contains("const inner = createMemo(function() {"), "{out}");
+        assert!(out.contains("return count() * 2;"), "{out}");
+        assert!(out.contains("return inner() + 1;"), "{out}");
+        assert!(!out.contains("perform"), "{out}");
+    }
+
+    #[test]
+    fn fuses_jsx_returning_memos_ahead_of_jsx_lowering() {
+        let out = fused_dom(r#"import { $, createMemo, createSignal } from "solid-js";
+function View(props) {
+  const [count] = createSignal(1);
+  const view = createMemo($(function* () {
+    return <p class={yield* props.theme}>{yield* count}</p>;
+  }));
+  return view;
+}
+"#)
+        .unwrap();
+        assert!(out.contains("const view = createMemo(function() {"), "{out}");
+        assert!(out.contains("_$readValue(props.theme)"), "{out}");
+        assert!(!out.contains("_$perform"), "{out}");
+        assert!(!out.contains("$(function"), "{out}");
+    }
+
+    #[test]
+    fn refuses_operands_it_cannot_prove() {
+        let out = fused(r#"import { $, createMemo, createSignal, createStore, readStore } from "solid-js";
+import { imported } from "./state";
+const [count] = createSignal(1);
+let [mutable] = createSignal(1);
+const [store] = createStore({ user: { name: "Ada" } });
+const hook = useCount();
+const fromImport = createMemo($(function* () { return yield* imported; }));
+const fromParam = (source) => createMemo($(function* () { return yield* source; }));
+const fromLet = createMemo($(function* () { return yield* mutable; }));
+const fromHook = createMemo($(function* () { return yield* hook; }));
+const aliasedPath = createMemo($(function* () { const u = store.user; return yield* u; }));
+const heldOp = createMemo($(function* () { const op = readStore(store, s => s.user.name); return yield* op; }));
+const asStore = createMemo($(function* () { return yield* store; }));
+const proven = createMemo($(function* () { return yield* count; }));
+"#)
+        .unwrap();
+        for stays in [
+            "_$perform(imported)",
+            "_$perform(source)",
+            "_$perform(mutable)",
+            "_$perform(hook)",
+            "_$perform(u)",
+            "_$perform(op)",
+            "_$perform(store)",
+        ] {
+            assert!(out.contains(stays), "{stays} must stay lowered: {out}");
+        }
+        assert_eq!(out.matches("$(function() {").count(), 7, "{out}");
+        assert!(out.contains("const proven = createMemo(function() {"), "{out}");
+        assert!(out.contains("return count();"), "{out}");
+        // `perform` is still referenced, so its specifier stays.
+        assert!(out.contains("perform as _$perform"), "{out}");
+    }
+
+    #[test]
+    fn refuses_non_read_operations_and_unlowered_blocks() {
+        let out = fused(r#"import { $, createMemo, createSignal, attempt, raise, write, call, wait } from "solid-js";
+const [count, setCount] = createSignal(1);
+const a = createMemo($(function* () { return yield* attempt(() => JSON.parse(raw), SyntaxError); }));
+const b = createMemo($(function* () { if ((yield* count) < 0) yield* raise(new RangeError("negative")); return 1; }));
+const c = createMemo($(function* () { yield* write(setCount, 2); return 1; }));
+const d = createMemo($(function* () { return yield* call(other, 1); }));
+const e = createMemo($(function* () { return yield* store.items[i + 1]; }));
+const f = createMemo($(function* () { return yield* wait(fetch("/api")); }));
+"#)
+        .unwrap();
+        assert!(out.contains("_$perform(attempt("), "{out}");
+        assert!(out.contains("_$perform(raise("), "{out}");
+        assert!(out.contains("_$perform(write("), "{out}");
+        assert!(out.contains("_$perform(call("), "{out}");
+        assert!(out.contains("_$perform(store.items[i + 1])"), "{out}");
         assert!(out.contains("$(function* () {"), "{out}");
         assert!(out.contains("yield* wait(fetch"), "{out}");
+        assert!(!out.contains("createMemo(function"), "{out}");
     }
 
     #[test]
-    fn fusion_off_by_default() {
-        let out = ssr(r#"import { $, createMemo } from "solid-js";
+    fn refuses_visible_violations() {
+        let out = fused(r#"import { $, createMemo, createSignal, createStore, perform } from "solid-js";
+const [count] = createSignal(1);
+const [store] = createStore({ flag: true, x: 1 });
+const direct = createMemo($(function* () { const c = count(); return c + (yield* count); }));
+const unread = createMemo($(function* () { if (store.flag) return yield* store.x; return 0; }));
+const bare = createMemo($(function* () { return store.x + (yield* count); }));
+const nested = createMemo($(function* () { return items.map(item => perform(count) + item); }));
+const self_ = createMemo($(function* () { return this.total + (yield* count); }));
+const args = createMemo($(function* () { return arguments.length + (yield* count); }));
+"#)
+        .unwrap();
+        assert!(!out.contains("createMemo(function"), "{out}");
+        assert_eq!(out.matches("$(function() {").count(), 6, "{out}");
+        // The user's spellings are untouched, for the runtime to report.
+        assert!(out.contains("const c = count();"), "{out}");
+        assert!(out.contains("if (store.flag)"), "{out}");
+        assert!(out.contains("perform(count) + item"), "{out}");
+    }
+
+    #[test]
+    fn refuses_unknown_hosts_and_shadowing_and_is_off_by_default() {
+        let out = fused(r#"import { $, createMemo, createSignal } from "solid-js";
+import { createMemo as otherMemo } from "other-lib";
+const [count] = createSignal(1);
+const standalone = $(function* () { return yield* count; });
+const viaVariable = createMemo(standalone);
+const other = otherMemo($(function* () { return yield* count; }));
+function local() {
+  const createMemo = fn => fn;
+  return createMemo($(function* () { return yield* count; }));
+}
+const second = createMemo(() => 1, $(function* () { return yield* count; }));
+"#)
+        .unwrap();
+        assert_eq!(out.matches("$(function() {").count(), 4, "{out}");
+        assert!(!out.contains("createMemo(function"), "{out}");
+        assert!(out.contains("perform as _$perform"), "{out}");
+
+        let off = ssr(r#"import { $, createMemo, createSignal } from "solid-js";
+const [count] = createSignal(1);
 const m = createMemo($(function* () { return yield* count; }));
 "#)
         .unwrap();
-        // Without host_fusion, the block and perform remain.
-        assert!(out.contains("$(function("), "{out}");
-        assert!(out.contains("_$perform(count)"), "{out}");
-    }
-
-    #[test]
-    fn fusion_ignores_shadowed_perform() {
-        // A local variable named `_$perform` inside the block body must not
-        // be mistaken for the imported perform helper. Symbol-based resolution
-        // must distinguish the two.
-        let out = fused(r#"import { $, createMemo } from "solid-js";
-const m = createMemo($(function* () {
-  const _$perform = (x) => x + 1;
-  return _$perform(yield* count);
-}));
-"#)
-        .unwrap();
-        // The `_$perform` call here is the local shadow, not the imported
-        // perform. The block should still be lowered (yield* → perform) but
-        // fusion should not erase the user's `_$perform` call.
-        // The local `_$perform` call has a non-erasable argument (a
-        // perform(count) call result), so body_is_erasable should see the
-        // imported _$perform(count) and consider it erasable, but the local
-        // _$perform(...) is not the import and is ignored by the checker.
-        // Since the block body still uses the imported perform for `count`,
-        // fusion may or may not apply — but the local _$perform must NOT
-        // be rewritten.
-        // The key assertion: the local `_$perform` declaration is preserved.
-        assert!(
-            out.contains("const _$perform = (x) => x + 1;"),
-            "local _$perform declaration must be preserved: {out}"
-        );
-    }
-
-    #[test]
-    fn fusion_skips_perform_in_nested_function() {
-        // A _$perform call inside a nested function declaration is not part
-        // of the block's scope. The checker skips nested functions, so the
-        // block body has no direct perform calls → body_is_erasable returns
-        // false (empty body from the checker's perspective, but actually the
-        // block is fine since there are no performs to erase).
-        //
-        // In practice the generator transform never produces _$perform inside
-        // nested functions (yield* is invalid there), so this tests a
-        // theoretical edge case from hand-written post-transform code.
-        let out = fused(r#"import { $, createMemo, createSignal, perform as _$perform } from "solid-js";
-const [count] = createSignal(1);
-const m = createMemo($(function() {
-  function helper() { return _$perform(count); }
-  return helper();
-}));
-"#)
-        .unwrap();
-        // The body has no direct perform calls (the one inside `helper` is
-        // in a nested scope), so the block is erasable. But the inner
-        // _$perform is inside a nested function and is NOT rewritten.
-        // The $() wrapper is erased (empty erasable body), but the nested
-        // function's _$perform remains.
-        assert!(
-            out.contains("function helper() {"),
-            "nested function must be preserved: {out}"
-        );
+        assert!(off.contains("createMemo($(function() {"), "{off}");
+        assert!(off.contains("_$perform(count)"), "{off}");
     }
 }
