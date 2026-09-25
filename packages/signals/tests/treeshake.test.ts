@@ -234,7 +234,25 @@ describe("pay-for-use tree-shaking (#2883)", () => {
     // as `Symbol.iterator`, which yields a read-op envelope through the
     // shared op iterator (the `$` driver, its operations and the dev-only
     // read guard shake out). Measured at 22,834.
-    expect(minifiedBytes).toBeLessThan(22_900);
+    // CONSCIOUS BUMP (Track A stage 1, status-free fast path): +111 B for
+    // the seam only — the `noThrow` option term in the computed and effect
+    // literals (CONFIG_NOTHROW), recompute's one masked dispatch to the
+    // `GlobalQueue._recomputeStatusFree` hook slot, and the slot itself. The
+    // status-free recompute lives in core/status-free.ts and shakes out
+    // unless compiled output imports `statusFree` (asserted below). Measured
+    // at 22,945.
+    expect(minifiedBytes).toBeLessThan(23_000);
+    expect(retainedFrom(retained, ["core/status-free.ts"])).toEqual([]);
+  });
+
+  it("importing statusFree retains the status-free recompute (hook side effect)", async () => {
+    const { minifiedBytes, retained } = await bundleFixture(
+      `export { createSignal, createMemo, createEffect, createRoot, flush, statusFree } from "sigsrc";`
+    );
+    expect(retainedFrom(retained, ["core/status-free.ts"])).toEqual(["core/status-free.ts"]);
+    // The module is the specialized recompute: measured at 25,185 (+2,240 B
+    // over the floor) when it landed.
+    expect(minifiedBytes).toBeLessThan(25_500);
   });
 
   it("plain stores shed the verdict layer, affects, boundaries, and map", async () => {

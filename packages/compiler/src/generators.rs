@@ -87,6 +87,7 @@ use oxc_span::{GetSpan, Span};
 use oxc_syntax::identifier::is_identifier_name;
 use oxc_syntax::scope::ScopeFlags;
 
+use crate::block_proofs::{BLOCK_STATUS_FREE, BLOCK_SYNC, ProofSymbols, Prover};
 use crate::shared::ast::{argument_to_expression, expression_to_argument};
 use crate::shared::ast_builder::AstBuilder;
 
@@ -106,11 +107,12 @@ pub(crate) fn transform_generators<'a>(
     allocator: &'a Allocator,
     program: &mut Program<'a>,
     source: &'a str,
+    proofs: Option<ProofConfig>,
 ) -> Result<(), String> {
     if !imports_adapter(program) {
         return Ok(());
     }
-    let plan = build_plan(program, source)?;
+    let plan = build_plan(program, source, proofs)?;
     if plan.calls.is_empty() {
         return Ok(());
     }
@@ -154,7 +156,36 @@ struct Plan {
     needs_path_import: bool,
     /// The runtime import declaration that receives the `perform` specifier.
     import_span: Option<Span>,
+    /// Track A block proofs: `$` call span → metadata flags, appended as
+    /// `$(fn, flags)`.
+    block_flags: Vec<(Span, u32)>,
+    /// Reactive host calls that receive proven host options, appended as the
+    /// host's options argument.
+    host_options: Vec<(Span, HostOption)>,
 }
+
+/// Track A (stage 1) proof configuration: the pass proves `$` blocks
+/// synchronous / non-throwing and annotates them and their hosts. See
+/// `block_proofs.rs`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ProofConfig {
+    /// TypeScript source: primitive signal domains are trusted.
+    pub(crate) typed: bool,
+    /// Intrinsic JSX elements evaluate to plain nodes (DOM and SSR output).
+    pub(crate) jsx_plain: bool,
+}
+
+/// The options a proven host call receives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HostOption {
+    /// `sync: true, noThrow: true` — the status-free path.
+    StatusFree,
+    /// `sync: true` — the async-shape probe is skipped.
+    SyncOnly,
+}
+
+const STATUS_FREE_LOCAL: &str = "_$statusFree";
+const SYNC_ONLY_LOCAL: &str = "_$syncOnly";
 
 /// A `yield*` over a member chain, with its lowering plan.
 struct PathYield {
@@ -173,6 +204,13 @@ pub(crate) struct RuntimeSymbols {
     pub(crate) sync_ops: Vec<SymbolId>,
     /// Declaration span of the first runtime import (host for `_$perform`).
     pub(crate) import_span: Option<Span>,
+    /// Reactive hosts whose first argument is a compute (proof annotation):
+    /// `createMemo` / `createSignal` take `(fn, options)`, `createEffect` /
+    /// `createRenderEffect` take `(fn, effect, options)`.
+    pub(crate) one_arg_hosts: Vec<SymbolId>,
+    pub(crate) two_arg_hosts: Vec<SymbolId>,
+    pub(crate) create_signal: Vec<SymbolId>,
+    pub(crate) create_memo: Vec<SymbolId>,
 }
 
 /// The runtime import bindings of a program (after `SemanticBuilder`).
@@ -200,6 +238,15 @@ pub(crate) fn collect_runtime_symbols(program: &Program<'_>) -> RuntimeSymbols {
                 "raise" | "attempt" | "write" | "call" | "readStore" => {
                     symbols.sync_ops.push(symbol_id)
                 }
+                "createMemo" => {
+                    symbols.one_arg_hosts.push(symbol_id);
+                    symbols.create_memo.push(symbol_id);
+                }
+                "createSignal" => {
+                    symbols.one_arg_hosts.push(symbol_id);
+                    symbols.create_signal.push(symbol_id);
+                }
+                "createEffect" | "createRenderEffect" => symbols.two_arg_hosts.push(symbol_id),
                 _ => {}
             }
         }
@@ -207,7 +254,11 @@ pub(crate) fn collect_runtime_symbols(program: &Program<'_>) -> RuntimeSymbols {
     symbols
 }
 
-fn build_plan(program: &Program<'_>, source: &str) -> Result<Plan, String> {
+fn build_plan(
+    program: &Program<'_>,
+    source: &str,
+    proofs: Option<ProofConfig>,
+) -> Result<Plan, String> {
     let semantic = SemanticBuilder::new()
         .with_build_nodes(true)
         .build(program)
@@ -218,6 +269,19 @@ fn build_plan(program: &Program<'_>, source: &str) -> Result<Plan, String> {
     if symbols.adapter.is_empty() {
         return Ok(Plan::default());
     }
+    let prover = proofs.map(|config| {
+        Prover::new(
+            scoping,
+            semantic.nodes(),
+            ProofSymbols {
+                create_signal: symbols.create_signal.clone(),
+                create_memo: symbols.create_memo.clone(),
+                adapter: symbols.adapter.clone(),
+            },
+            config.typed,
+            config.jsx_plain,
+        )
+    });
 
     struct Collector<'s> {
         scoping: &'s Scoping,
@@ -226,6 +290,7 @@ fn build_plan(program: &Program<'_>, source: &str) -> Result<Plan, String> {
         source: &'s str,
         plan: Plan,
         error: Option<String>,
+        prover: Option<Prover<'s>>,
     }
 
     impl<'b> Visit<'b> for Collector<'_> {
@@ -237,10 +302,52 @@ fn build_plan(program: &Program<'_>, source: &str) -> Result<Plan, String> {
                 }
             }
             walk::walk_call_expression(self, call);
+            // Post-order: the block argument was proven by the walk above.
+            if self.prover.is_some() {
+                self.annotate_host(call);
+            }
         }
     }
 
     impl Collector<'_> {
+        /// `HOST($(fn*))` with the host's exact compute arity and a proven
+        /// block: pass the proven host options. A host that already has an
+        /// options argument keeps its own (refused, not merged).
+        fn annotate_host(&mut self, call: &CallExpression<'_>) {
+            let Some(host) = resolve_callee(self.scoping, call) else {
+                return;
+            };
+            let arity = if self.symbols.one_arg_hosts.contains(&host) {
+                1
+            } else if self.symbols.two_arg_hosts.contains(&host) {
+                2
+            } else {
+                return;
+            };
+            if call.arguments.len() != arity {
+                return;
+            }
+            let Some(Argument::CallExpression(block)) = call.arguments.first() else {
+                return;
+            };
+            let Some(&(_, flags)) = self
+                .plan
+                .block_flags
+                .iter()
+                .find(|(span, _)| *span == block.span)
+            else {
+                return;
+            };
+            let option = if flags == BLOCK_STATUS_FREE {
+                HostOption::StatusFree
+            } else if flags & BLOCK_SYNC != 0 {
+                HostOption::SyncOnly
+            } else {
+                return;
+            };
+            self.plan.host_options.push((call.span, option));
+        }
+
         fn is_adapter_call(&self, call: &CallExpression<'_>) -> bool {
             resolve_callee(self.scoping, call)
                 .is_some_and(|symbol| self.symbols.adapter.contains(&symbol))
@@ -291,6 +398,12 @@ fn build_plan(program: &Program<'_>, source: &str) -> Result<Plan, String> {
                 ));
             }
             if yields.lowerable {
+                if let Some(prover) = self.prover.as_mut() {
+                    let proof = prover.prove(call, function);
+                    if proof.flags != 0 {
+                        self.plan.block_flags.push((call.span, proof.flags));
+                    }
+                }
                 self.plan.calls.push(call.span);
                 self.plan.yields.extend(yields.spans);
                 if !yields.paths.is_empty() {
@@ -309,6 +422,7 @@ fn build_plan(program: &Program<'_>, source: &str) -> Result<Plan, String> {
         source,
         plan: Plan::default(),
         error: None,
+        prover,
     };
     collector.visit_program(program);
     if let Some(error) = collector.error {
@@ -606,6 +720,13 @@ impl<'a> VisitMut<'a> for Rewriter<'a> {
                 needed.push(("readPath", READ_PATH_LOCAL));
                 needed.push(("readProp", READ_PROP_LOCAL));
             }
+            let options = |wanted| self.plan.host_options.iter().any(|(_, o)| *o == wanted);
+            if options(HostOption::StatusFree) {
+                needed.push(("statusFree", STATUS_FREE_LOCAL));
+            }
+            if options(HostOption::SyncOnly) {
+                needed.push(("syncOnly", SYNC_ONLY_LOCAL));
+            }
             for (imported, local) in needed {
                 let specifier = ast.import_declaration_specifier_import_specifier(
                     span,
@@ -631,6 +752,38 @@ impl<'a> VisitMut<'a> for Rewriter<'a> {
                     // `: Generator<…>` no longer describes the function.
                     function.return_type = None;
                 }
+                // Track A: `$(fn, flags)` — the proven block metadata.
+                if let Some(&(_, flags)) = self
+                    .plan
+                    .block_flags
+                    .iter()
+                    .find(|(span, _)| *span == call.span)
+                {
+                    let literal = ast.expression_numeric_literal(
+                        Span::new(0, 0),
+                        f64::from(flags),
+                        None,
+                        oxc_syntax::number::NumberBase::Decimal,
+                    );
+                    call.arguments
+                        .push(crate::shared::ast::expression_to_argument(literal));
+                }
+            }
+            Expression::CallExpression(call)
+                if let Some(&(_, option)) = self
+                    .plan
+                    .host_options
+                    .iter()
+                    .find(|(span, _)| *span == call.span) =>
+            {
+                // Track A: `createMemo($(fn, 3), _$statusFree)`.
+                let local = match option {
+                    HostOption::StatusFree => STATUS_FREE_LOCAL,
+                    HostOption::SyncOnly => SYNC_ONLY_LOCAL,
+                };
+                let options = ast.expression_identifier(Span::new(0, 0), ast.ident(local));
+                call.arguments
+                    .push(crate::shared::ast::expression_to_argument(options));
             }
             Expression::YieldExpression(yield_expression)
                 if let Some(index) = self
@@ -1071,7 +1224,14 @@ fn build_fusion_plan(program: &Program<'_>) -> FusionPlan {
                 return None;
             };
             let adapter = resolve_callee(context.scoping, block)?;
-            if !context.symbols.adapter.contains(&adapter) || block.arguments.len() != 1 {
+            // `$(fn)`, or `$(fn, flags)` with the proof pass's metadata
+            // literal (the host keeps the proof as its options argument).
+            let flags_ok = match block.arguments.len() {
+                1 => true,
+                2 => matches!(block.arguments[1], Argument::NumericLiteral(_)),
+                _ => false,
+            };
+            if !context.symbols.adapter.contains(&adapter) || !flags_ok {
                 return None;
             }
             match &block.arguments[0] {
@@ -1332,8 +1492,14 @@ impl<'a> VisitMut<'a> for FusionRewriter<'a> {
                 else {
                     unreachable!("matched above");
                 };
-                let mut call = call.unbox();
-                let argument = call.arguments.pop().expect("planned: exactly one argument");
+                let call = call.unbox();
+                // The operand is the first argument (a `$` call may carry a
+                // trailing metadata literal, which erasure drops).
+                let argument = call
+                    .arguments
+                    .into_iter()
+                    .next()
+                    .expect("planned: an operand argument");
                 *expression = if plan.blocks.contains(&span) {
                     // `$(fn)` → `fn`
                     argument_to_expression(argument).expect("planned: a function")
@@ -1795,6 +1961,269 @@ const a = $(function* () { return yield* count; });
         .unwrap()
         .code;
         assert!(off.contains("yield* count"), "{off}");
+    }
+
+    // --- Track A stage 1: block proofs -----------------------------------------
+
+    fn proven_as(source: &str, filename: &str, host_fusion: bool) -> String {
+        compile(
+            source,
+            &CompileOptions {
+                filename: Some(filename.into()),
+                generate: Generate::Ssr,
+                block_proofs: true,
+                host_fusion,
+                ..CompileOptions::default()
+            },
+        )
+        .map(|output| output.code)
+        .unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    fn proven(source: &str) -> String {
+        proven_as(source, "input.js", false)
+    }
+
+    #[test]
+    fn proves_total_reads_status_free_and_annotates_the_host() {
+        let out = proven(
+            r#"import { $, createMemo, createSignal } from "solid-js";
+const [count] = createSignal(1);
+const isOne = createMemo($(function* () { return (yield* count) === 1; }));
+"#,
+        );
+        assert!(
+            out.contains("const isOne = createMemo($(function() {\n\treturn _$perform(count) === 1;\n}, 3), _$statusFree);"),
+            "{out}"
+        );
+        assert!(out.contains("statusFree as _$statusFree"), "{out}");
+        assert!(!out.contains("_$syncOnly"), "{out}");
+    }
+
+    #[test]
+    fn separates_synchrony_from_non_throwing() {
+        // `*` coerces an operand of unknown type (a Symbol throws): SYNC only.
+        let js = proven(
+            r#"import { $, createMemo, createSignal } from "solid-js";
+const [count] = createSignal(1);
+const double = createMemo($(function* () { return (yield* count) * 2; }));
+const same = createMemo($(function* () { return yield* count; }));
+"#,
+        );
+        assert!(
+            js.contains("return _$perform(count) * 2;\n}, 1), _$syncOnly)"),
+            "{js}"
+        );
+        // A bare read never throws, but its value could be a Promise in an
+        // untyped module: NOTHROW only, so the host is left alone.
+        assert!(js.contains("return _$perform(count);\n}, 2))"), "{js}");
+        assert!(js.contains("syncOnly as _$syncOnly"), "{js}");
+
+        // TypeScript: `createSignal(1)` holds a number, so both are total.
+        let ts = proven_as(
+            r#"import { $, createMemo, createSignal } from "solid-js";
+const [count] = createSignal(1);
+const [label] = createSignal<string>();
+const double = createMemo($(function* () { return (yield* count) * 2; }));
+const same = createMemo($(function* () { return yield* count; }));
+const text = createMemo($(function* () { return `${yield* label}:${yield* count}`; }));
+"#,
+            "input.ts",
+            false,
+        );
+        assert_eq!(ts.matches("}, 3), _$statusFree)").count(), 3, "{ts}");
+    }
+
+    #[test]
+    fn chains_through_proven_memos_only() {
+        let out = proven(
+            r#"import { $, createMemo, createSignal } from "solid-js";
+const [count] = createSignal(1);
+const isOne = createMemo($(function* () { return (yield* count) === 1; }));
+const notOne = createMemo($(function* () { return !(yield* isOne); }));
+const loose = createMemo($(function* () { return format(yield* count); }));
+const fromLoose = createMemo($(function* () { return !(yield* loose); }));
+"#,
+        );
+        assert!(
+            out.contains("return !_$perform(isOne);\n}, 3), _$statusFree)"),
+            "{out}"
+        );
+        // An unknown call proves nothing, and a read of that memo can observe
+        // its error status.
+        assert!(
+            out.contains("return format(_$perform(count));\n}))"),
+            "{out}"
+        );
+        assert!(
+            out.contains("return !_$perform(loose);\n}, 1), _$syncOnly)"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn refuses_bindings_that_may_be_uninitialized() {
+        let out = proven(
+            r#"import { $, createMemo, createRoot, createSignal } from "solid-js";
+import { imported } from "./state";
+function early() {
+  return createMemo($(function* () { return (yield* late) === 1; }));
+}
+const [late] = createSignal(1);
+function hoisted() {
+  return createMemo($(function* () { return (yield* declaredBefore) === 1; }));
+}
+const [declaredBefore] = createSignal(1);
+const viaImport = createMemo($(function* () { return (yield* imported) === 1; }));
+const a = createMemo($(function* () { return (yield* declaredBefore) === 1; }));
+const inCallback = createRoot(() => createMemo($(function* () { return (yield* declaredBefore) === 1; })));
+"#,
+        );
+        // Declared after the `$` call, inside a hoisted function declaration,
+        // or imported: the read may run first — SYNC (`===`) only.
+        assert_eq!(out.matches("}, 1), _$syncOnly)").count(), 3, "{out}");
+        assert!(out.contains("const a = createMemo($(function() {"), "{out}");
+        // Top level, and inside an arrow created after the declaration: the
+        // binding is initialized before the block can run.
+        assert_eq!(
+            out.matches("_$perform(declaredBefore) === 1;\n}, 3), _$statusFree)")
+                .count(),
+            2,
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn refuses_unknown_calls_member_access_and_computations() {
+        let out = proven(
+            r#"import { $, createMemo, createSignal, createStore } from "solid-js";
+const [count] = createSignal(1);
+const [derived] = createSignal(() => 1);
+const [store] = createStore({ x: 1 });
+const call = createMemo($(function* () { const c = yield* count; return helper(c) === 1; }));
+const member = createMemo($(function* () { return (yield* count).value === 1; }));
+const path = createMemo($(function* () { return (yield* store.x) === 1; }));
+const computed = createMemo($(function* () { return (yield* derived) === 1; }));
+const loop = createMemo($(function* () { for (const x of []) {} return (yield* count) === 1; }));
+"#,
+        );
+        // Each refuses NOTHROW; `===` keeps SYNC.
+        assert_eq!(out.matches("}, 1), _$syncOnly)").count(), 5, "{out}");
+        assert!(!out.contains("_$statusFree"), "{out}");
+    }
+
+    #[test]
+    fn proves_result_shapes_for_synchrony() {
+        let out = proven(
+            r#"import { $, createMemo, createSignal } from "solid-js";
+const [count] = createSignal(1);
+const arr = createMemo($(function* () { return [yield* count]; }));
+const obj = createMemo($(function* () { return { n: yield* count }; }));
+const thenable = createMemo($(function* () { return { then: yield* count }; }));
+const spread = createMemo($(function* () { return { ...(yield* count) }; }));
+const branch = createMemo($(function* () { if ((yield* count) === 1) return "a"; return null; }));
+"#,
+        );
+        // Arrays and `then`-free object literals are never thenables.
+        assert!(
+            out.contains("return [_$perform(count)];\n}, 3), _$statusFree)"),
+            "{out}"
+        );
+        assert!(
+            out.contains("n: _$perform(count) };\n}, 3), _$statusFree)"),
+            "{out}"
+        );
+        assert!(out.contains("then: _$perform(count) };\n}, 2))"), "{out}");
+        assert!(!out.contains("...(_$perform(count)) };\n}, "), "{out}");
+        assert!(out.contains("return null;\n}, 3), _$statusFree)"), "{out}");
+    }
+
+    #[test]
+    fn jsx_blocks_prove_synchrony_only() {
+        let out = compile(
+            r#"import { $, createMemo, createSignal } from "solid-js";
+const [count] = createSignal(1);
+export const view = $(function* () { return <p>{(yield* count) === 1 ? "one" : "other"}</p>; });
+export const comp = $(function* () { return <Other value={yield* count} />; });
+"#,
+            &CompileOptions {
+                block_proofs: true,
+                ..CompileOptions::default()
+            },
+        )
+        .unwrap()
+        .code;
+        // An intrinsic element is a node (SYNC); a component returns anything.
+        assert!(out.contains("}, 1);"), "{out}");
+        assert_eq!(out.matches("}, 1);").count(), 1, "{out}");
+    }
+
+    #[test]
+    fn annotates_effects_and_respects_existing_options() {
+        let out = proven(
+            r#"import { $, createMemo, createEffect, createRenderEffect, createSignal } from "solid-js";
+const [count] = createSignal(1);
+createEffect($(function* () { return (yield* count) === 1; }), v => log(v));
+createRenderEffect($(function* () { return (yield* count) === 1; }), v => log(v));
+const named = createMemo($(function* () { return (yield* count) === 1; }), { name: "named" });
+const [writable] = createSignal($(function* () { return (yield* count) === 1; }));
+"#,
+        );
+        assert_eq!(
+            out.matches("(v) => log(v), _$statusFree)").count(),
+            2,
+            "{out}"
+        );
+        // A host with its own options keeps them; the block still carries
+        // its metadata.
+        assert!(out.contains("}, 3), { name: \"named\" })"), "{out}");
+        assert!(
+            out.contains("const [writable] = createSignal($(function() {"),
+            "{out}"
+        );
+        assert!(out.contains("=== 1;\n}, 3), _$statusFree);\n"), "{out}");
+    }
+
+    #[test]
+    fn proofs_survive_host_fusion_as_host_options() {
+        let out = proven_as(
+            r#"import { $, createMemo, createSignal } from "solid-js";
+const [count] = createSignal(1);
+const isOne = createMemo($(function* () { return (yield* count) === 1; }));
+"#,
+            "input.js",
+            true,
+        );
+        assert!(
+            out.contains(
+                "const isOne = createMemo(function() {\n\treturn count() === 1;\n}, _$statusFree);"
+            ),
+            "{out}"
+        );
+        assert!(!out.contains("$(function"), "{out}");
+    }
+
+    #[test]
+    fn proofs_are_off_by_default_and_skip_unlowered_blocks() {
+        let off = ssr(r#"import { $, createMemo, createSignal } from "solid-js";
+const [count] = createSignal(1);
+const isOne = createMemo($(function* () { return (yield* count) === 1; }));
+"#)
+        .unwrap();
+        assert!(!off.contains("statusFree"), "{off}");
+        assert!(off.contains("=== 1;\n}));"), "{off}");
+
+        let waits = proven(
+            r#"import { $, createMemo, createSignal, wait } from "solid-js";
+const [count] = createSignal(1);
+const later = createMemo($(function* () { return yield* wait(load(yield* count)); }));
+"#,
+        );
+        assert!(waits.contains("yield* wait("), "{waits}");
+        assert!(
+            !waits.contains("statusFree") && !waits.contains("syncOnly"),
+            "{waits}"
+        );
     }
 
     // --- host fusion -----------------------------------------------------------

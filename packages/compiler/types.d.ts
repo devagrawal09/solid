@@ -62,6 +62,16 @@ export interface TransformOptions {
    * transform fails with a `[STRICT_…]` diagnostic.
    */
   hostFusion?: boolean;
+  /**
+   * Experimental (Track A, stage 1): prove lowered `$` blocks synchronous
+   * and / or non-throwing and emit the proofs as block metadata
+   * (`$(fn, flags)`) and reactive-host options (`createMemo(…, statusFree)` /
+   * `syncOnly`), which select the runtime's status-free fast path. Proofs
+   * use local facts plus, in TypeScript modules, declared primitive signal
+   * types; development builds verify them at runtime. Requires `generators:
+   * true`. Default `false`.
+   */
+  blockProofs?: boolean;
 }
 
 export interface RendererOption {

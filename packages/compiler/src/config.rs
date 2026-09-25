@@ -71,6 +71,9 @@ pub struct TransformOptions {
     /// consumed by a statically known host (`createMemo`, `createEffect`, …).
     /// Default `false`. Requires `generators: true`.
     pub host_fusion: Option<bool>,
+    /// Experimental Track A stage-1 block proofs (status-free fast paths).
+    /// Default `false`. Requires `generators: true`.
+    pub block_proofs: Option<bool>,
 }
 
 #[napi(object)]

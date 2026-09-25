@@ -28,7 +28,8 @@ export {
   clearSnapshots,
   enforceLoadingBoundary,
   enableExternalSource,
-  resetErrorHalt
+  resetErrorHalt,
+  statusFree
 } from "./core/index.js";
 import { DEV as _DEV, OBSERVE as _OBSERVE, type Dev, type Observe } from "./core/index.js";
 /**
@@ -77,7 +78,8 @@ export {
   resolve,
   until,
   onSettled,
-  onCleanup
+  onCleanup,
+  syncOnly
 } from "./signals.js";
 export {
   $,
@@ -91,6 +93,9 @@ export {
   write,
   call,
   perform,
+  blockFlags,
+  BLOCK_SYNC,
+  BLOCK_NOTHROW,
   isBlock,
   renderBlock,
   dispatchBlock

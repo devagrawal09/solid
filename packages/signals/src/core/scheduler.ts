@@ -583,6 +583,11 @@ export class GlobalQueue extends Queue {
   static _recordFresh: ((el: OptimisticNode, value: any) => void) | null = null;
   static _applyReask: ((el: Computed<any>, hadReask: boolean) => boolean) | null = null;
   static _repollVerdicts: ((el: Computed<any>, snap?: boolean) => void) | null = null;
+  /** Status-free recompute (Track A stage 1), installed by `status-free.ts`
+   * when its `statusFree` options object is imported — the compiler's
+   * emission for proven `$` blocks. Returns false when the node is not in
+   * the plain world and the full path must run. Null = pay nothing. */
+  static _recomputeStatusFree: ((el: Computed<any>, create: boolean) => boolean) | null = null;
   static _witnessAffects: ((node: OptimisticNode) => void) | null = null;
   // Re-asks probes whose verdict was provisionally suppressed by a fresh read
   // of a held value, once the transaction gains an async blocker (#3028).

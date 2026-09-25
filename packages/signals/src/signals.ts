@@ -221,6 +221,15 @@ export interface EffectOptions extends BaseEffectOptions {
    */
   sync?: boolean;
   /**
+   * Advanced. When true, asserts the compute never throws and never reads a
+   * pending or errored source. With `sync`, the effect's compute takes the
+   * status-free recompute path (no pending / error bookkeeping). A throw
+   * that arrives anyway is routed normally and deoptimizes the node for
+   * good; dev builds report `[NOTHROW_NODE_THREW]`. Intended for compiler
+   * emissions (proven `$` blocks).
+   */
+  noThrow?: boolean;
+  /**
    * Advanced (integration tier). When true, the effect is invisible to the
    * hydration id scheme: it inherits its parent's id instead of consuming a
    * child slot, and during hydration its compute runs live instead of
@@ -309,6 +318,15 @@ export interface MemoOptions<T> {
    */
   sync?: boolean;
   /**
+   * Advanced. When true, asserts the compute never throws and never reads a
+   * pending or errored source. With `sync`, the memo takes the status-free
+   * recompute path (no pending / error bookkeeping on any run). A throw that
+   * arrives anyway is routed normally and deoptimizes the node for good;
+   * dev builds report `[NOTHROW_NODE_THREW]`. Intended for compiler
+   * emissions (proven `$` blocks).
+   */
+  noThrow?: boolean;
+  /**
    * Commit #0: a committed value the memo is born with, shown until the
    * compute's first real answer lands. While that first answer is in flight
    * the memo reads as a settled value everywhere — nothing suspends to a
@@ -333,6 +351,15 @@ export interface MemoOptions<T> {
    */
   loadingValue?: T;
 }
+
+/**
+ * Host options the compiler passes for a `$` block proven synchronous but
+ * not non-throwing (Track A stage 1): `createMemo(fn, syncOnly)`. Skips the
+ * async-shape probe (production) and verifies it (development); the node
+ * keeps its pending / error channels. One shared frozen object — compiled
+ * output allocates nothing per call site.
+ */
+export const syncOnly: { readonly sync: true } = Object.freeze({ sync: true } as const);
 
 // Magic type that when used at sites where generic types are inferred from, will prevent those sites from being involved in the inference.
 // https://github.com/microsoft/TypeScript/issues/14829

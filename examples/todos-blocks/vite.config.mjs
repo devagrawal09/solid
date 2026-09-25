@@ -10,9 +10,13 @@ import solid from "@solidjs/vite-plugin";
 // `vitest` — the A/B the host-fusion prototype's measurements and end-to-end
 // runs use; the default build is the plain lowering.
 const hostFusion = process.env.SOLID_HOST_FUSION === "1";
+// `SOLID_BLOCK_PROOFS=1` turns on the Track A stage-1 block proofs
+// (status-free fast paths): proven blocks carry `$(fn, flags)` metadata and
+// their reactive hosts receive `statusFree` / `syncOnly` options.
+const blockProofs = process.env.SOLID_BLOCK_PROOFS === "1";
 
 export default defineConfig({
-  plugins: [solid({ solid: { hostFusion } })],
+  plugins: [solid({ solid: { hostFusion, blockProofs } })],
   server: { port: 3012 },
   preview: { port: 3012 },
   test: {

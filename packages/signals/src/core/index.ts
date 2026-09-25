@@ -1,4 +1,5 @@
 export { ContextNotFoundError, NoOwnerError, NotReadyError, TimeoutError } from "./error.js";
+export { statusFree, NOTHROW_NODE_THREW_MESSAGE } from "./status-free.js";
 export {
   isEqual,
   untrack,
