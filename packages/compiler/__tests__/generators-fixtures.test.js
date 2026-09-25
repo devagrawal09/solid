@@ -175,8 +175,11 @@ describe("host fusion contract", () => {
       filename: "src/test.js",
       hostFusion: true
     });
-    expect(code).toContain("return store.user.name;");
-    expect(code).toContain("return props.count;");
+    // The member chain is the tracked walk; `readValue` keeps the one step
+    // the chain cannot express (reading through an accessor or block found
+    // at the path).
+    expect(code).toContain("return _$readValue(store.user.name);");
+    expect(code).toContain("return _$readValue(props.count);");
     expect(code).not.toContain("_$readPath(");
     expect(code).not.toContain("_$readProp(");
     expect(code).not.toContain("_$perform(");
