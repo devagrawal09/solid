@@ -619,7 +619,82 @@
           ]
         }
       ],
-      "propsEscapes": []
+      "propsEscapes": [],
+      "renders": [],
+      "creations": [
+        {
+          "callee": "createSignal",
+          "span": {
+            "start": 336,
+            "end": 352,
+            "line": 13,
+            "column": 29
+          }
+        },
+        {
+          "callee": "$",
+          "span": {
+            "start": 424,
+            "end": 665,
+            "line": 15,
+            "column": 18
+          }
+        },
+        {
+          "callee": "$",
+          "span": {
+            "start": 754,
+            "end": 856,
+            "line": 24,
+            "column": 19
+          }
+        },
+        {
+          "callee": "$",
+          "span": {
+            "start": 918,
+            "end": 966,
+            "line": 29,
+            "column": 20
+          }
+        },
+        {
+          "callee": "$",
+          "span": {
+            "start": 1016,
+            "end": 1052,
+            "line": 33,
+            "column": 16
+          }
+        },
+        {
+          "callee": "$",
+          "span": {
+            "start": 1117,
+            "end": 1211,
+            "line": 37,
+            "column": 15
+          }
+        },
+        {
+          "callee": "$",
+          "span": {
+            "start": 1281,
+            "end": 1362,
+            "line": 42,
+            "column": 17
+          }
+        },
+        {
+          "callee": "$",
+          "span": {
+            "start": 1380,
+            "end": 1441,
+            "line": 45,
+            "column": 17
+          }
+        }
+      ]
     }
   ],
   "eventBindings": [
@@ -1013,6 +1088,18 @@
           "importMeta": false
         },
         "nestedBlocks": 0,
+        "creations": [],
+        "externalCalls": [
+          "format",
+          "track",
+          "validate"
+        ],
+        "completeness": "bounded",
+        "completenessReasons": [
+          "externalCalls",
+          "attempt",
+          "valueOperand"
+        ],
         "dynamicImports": [],
         "event": {
           "preventDefault": 1,
@@ -1053,6 +1140,9 @@
           }
         }
       },
+      "hosts": [
+        "event"
+      ],
       "sites": [
         {
           "kind": "domEvent",
@@ -1162,6 +1252,12 @@
           "importMeta": false
         },
         "nestedBlocks": 0,
+        "creations": [],
+        "externalCalls": [],
+        "completeness": "bounded",
+        "completenessReasons": [
+          "valueOperand"
+        ],
         "dynamicImports": [],
         "event": {
           "preventDefault": 0,
@@ -1181,6 +1277,9 @@
           }
         }
       },
+      "hosts": [
+        "event"
+      ],
       "sites": [
         {
           "kind": "domEvent",
@@ -1280,6 +1379,14 @@
           "importMeta": false
         },
         "nestedBlocks": 0,
+        "creations": [],
+        "externalCalls": [
+          "track"
+        ],
+        "completeness": "bounded",
+        "completenessReasons": [
+          "externalCalls"
+        ],
         "dynamicImports": [],
         "event": {
           "preventDefault": 0,
@@ -1301,6 +1408,9 @@
           }
         }
       },
+      "hosts": [
+        "event"
+      ],
       "sites": [
         {
           "kind": "domEvent",
@@ -1400,9 +1510,16 @@
           "importMeta": false
         },
         "nestedBlocks": 0,
+        "creations": [],
+        "externalCalls": [],
+        "completeness": "exact",
+        "completenessReasons": [],
         "dynamicImports": [],
         "event": null
       },
+      "hosts": [
+        "event"
+      ],
       "sites": [
         {
           "kind": "domEvent",
@@ -1484,6 +1601,12 @@
           "importMeta": false
         },
         "nestedBlocks": 0,
+        "creations": [],
+        "externalCalls": [],
+        "completeness": "bounded",
+        "completenessReasons": [
+          "thisOrArguments"
+        ],
         "dynamicImports": [],
         "event": {
           "preventDefault": 0,
@@ -1505,6 +1628,9 @@
           }
         }
       },
+      "hosts": [
+        "event"
+      ],
       "sites": [
         {
           "kind": "domEvent",
@@ -1643,6 +1769,14 @@
           "importMeta": false
         },
         "nestedBlocks": 0,
+        "creations": [],
+        "externalCalls": [
+          "String"
+        ],
+        "completeness": "bounded",
+        "completenessReasons": [
+          "externalCalls"
+        ],
         "dynamicImports": [],
         "event": {
           "preventDefault": 0,
@@ -1664,6 +1798,9 @@
           }
         }
       },
+      "hosts": [
+        "delegated"
+      ],
       "sites": [
         {
           "kind": "delegated",
@@ -1784,6 +1921,12 @@
           "importMeta": false
         },
         "nestedBlocks": 0,
+        "creations": [],
+        "externalCalls": [],
+        "completeness": "bounded",
+        "completenessReasons": [
+          "delegation"
+        ],
         "dynamicImports": [],
         "event": {
           "preventDefault": 0,
@@ -1805,6 +1948,10 @@
           }
         }
       },
+      "hosts": [
+        "event",
+        "unknown"
+      ],
       "sites": [
         {
           "kind": "domEvent",
@@ -1834,5 +1981,6 @@
       ]
     }
   ],
+  "completeness": "exact",
   "unknowns": []
 }

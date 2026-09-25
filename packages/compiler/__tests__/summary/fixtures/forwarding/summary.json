@@ -517,7 +517,45 @@
           ]
         }
       ],
-      "propsEscapes": []
+      "propsEscapes": [],
+      "renders": [
+        {
+          "component": "Errored",
+          "boundaries": [],
+          "span": {
+            "start": 234,
+            "end": 307,
+            "line": 7,
+            "column": 5
+          }
+        },
+        {
+          "component": "Loading",
+          "boundaries": [
+            "Errored"
+          ],
+          "span": {
+            "start": 314,
+            "end": 323,
+            "line": 8,
+            "column": 7
+          }
+        },
+        {
+          "component": "Button",
+          "boundaries": [
+            "Loading",
+            "Errored"
+          ],
+          "span": {
+            "start": 332,
+            "end": 385,
+            "line": 9,
+            "column": 9
+          }
+        }
+      ],
+      "creations": []
     },
     {
       "name": "Spread",
@@ -531,7 +569,9 @@
       "propUses": [],
       "propsEscapes": [
         "jsxSpread"
-      ]
+      ],
+      "renders": [],
+      "creations": []
     },
     {
       "name": "Destructured",
@@ -543,7 +583,9 @@
       },
       "props": "destructured",
       "propUses": [],
-      "propsEscapes": []
+      "propsEscapes": [],
+      "renders": [],
+      "creations": []
     }
   ],
   "eventBindings": [
@@ -733,6 +775,10 @@
           "importMeta": false
         },
         "nestedBlocks": 0,
+        "creations": [],
+        "externalCalls": [],
+        "completeness": "exact",
+        "completenessReasons": [],
         "dynamicImports": [],
         "event": {
           "preventDefault": 0,
@@ -752,6 +798,9 @@
           }
         }
       },
+      "hosts": [
+        "exported"
+      ],
       "sites": [
         {
           "kind": "exported",
@@ -766,5 +815,6 @@
       ]
     }
   ],
+  "completeness": "exact",
   "unknowns": []
 }

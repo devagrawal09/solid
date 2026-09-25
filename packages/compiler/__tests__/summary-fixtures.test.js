@@ -116,6 +116,58 @@ describe("summarizeModule contract", () => {
     ]);
   });
 
+  it("records hosts, creations, external calls and completeness per block", () => {
+    expect(block("submit").hosts).toEqual(["event"]);
+    expect(block("inner").hosts).toEqual(["delegated"]);
+    expect(block("outer").hosts).toEqual(["event", "unknown"]);
+    // `attempt(() => validate(format(value)))` and `track(...)`: code this
+    // summary does not describe.
+    expect(block("submit").body.externalCalls).toEqual(["format", "track", "validate"]);
+    expect(block("submit").body.completeness).toBe("bounded");
+    expect(block("submit").body.completenessReasons).toEqual([
+      "externalCalls",
+      "attempt",
+      "valueOperand"
+    ]);
+    const unknowns = summarizeModule(source("unknowns").text, { filename: "src/code.js" });
+    expect(unknowns.blocks[0].body.completeness).toBe("unknown");
+    expect(unknowns.blocks[0].body.completenessReasons).toEqual(["newFunction"]);
+    expect(unknowns.completeness).toBe("unknown");
+    expect(summary.completeness).toBe("exact");
+    const exact = summarizeModule(
+      'import { $, write } from "solid-js";\nexport const b = $(function* () { yield* write(set, 1); });',
+      { filename: "a.ts" }
+    );
+    expect(exact.blocks[0].body.completeness).toBe("exact");
+    const hidden = summarizeModule(
+      'import { $ } from "solid-js";\nexport const b = $(function* () { yield* helper(); });',
+      { filename: "a.ts" }
+    );
+    expect(hidden.blocks[0].body.completeness).toBe("unknown");
+    expect(hidden.blocks[0].body.completenessReasons).toEqual(["unknownYield"]);
+  });
+
+  it("records owner edges: rendered components with their boundaries, and creations", () => {
+    const forwarding = summarizeModule(source("forwarding").text, { filename: "src/code.tsx" });
+    const toolbar = forwarding.components.find(c => c.name === "Toolbar");
+    expect(toolbar.renders.map(r => [r.component, r.boundaries])).toEqual([
+      ["Errored", []],
+      ["Loading", ["Errored"]],
+      ["Button", ["Loading", "Errored"]]
+    ]);
+    const form = summary.components.find(c => c.name === "Form");
+    expect(form.creations.map(c => c.callee)).toEqual([
+      "createSignal",
+      "$",
+      "$",
+      "$",
+      "$",
+      "$",
+      "$",
+      "$"
+    ]);
+  });
+
   it("reports positions as UTF-16 offsets", () => {
     const text = 'const s = "😀";\nexport const x = 1;\n';
     const result = summarizeModule(text, { filename: "a.ts" });

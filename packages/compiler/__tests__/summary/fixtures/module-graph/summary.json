@@ -436,6 +436,7 @@
   "components": [],
   "eventBindings": [],
   "blocks": [],
+  "completeness": "bounded",
   "unknowns": [
     {
       "kind": "exportStar",

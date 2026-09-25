@@ -341,9 +341,20 @@
           "importMeta": false
         },
         "nestedBlocks": 0,
+        "creations": [],
+        "externalCalls": [
+          "new Function(\"return 1\")"
+        ],
+        "completeness": "unknown",
+        "completenessReasons": [
+          "newFunction"
+        ],
         "dynamicImports": [],
         "event": null
       },
+      "hosts": [
+        "exported"
+      ],
       "sites": [
         {
           "kind": "exported",
@@ -358,6 +369,7 @@
       ]
     }
   ],
+  "completeness": "unknown",
   "unknowns": [
     {
       "kind": "topLevelAwait",

@@ -308,6 +308,8 @@ struct RuntimeSymbols {
     /// `action` (registered transaction factory) and `lazy`.
     action: Vec<SymbolId>,
     lazy: Vec<SymbolId>,
+    /// Every named runtime import, by imported name.
+    all: Vec<(SymbolId, String)>,
 }
 
 impl RuntimeSymbols {
@@ -332,6 +334,7 @@ impl RuntimeSymbols {
                 };
                 let name = specifier.imported.name();
                 let name = name.as_str();
+                symbols.all.push((symbol, name.to_string()));
                 match name {
                     "$" => symbols.adapter.push(symbol),
                     "raise" => symbols.ops.push((symbol, "raise")),
@@ -350,6 +353,23 @@ impl RuntimeSymbols {
             }
         }
         symbols
+    }
+
+    fn runtime_name(&self, symbol: SymbolId) -> Option<&str> {
+        self.all
+            .iter()
+            .find(|(candidate, _)| *candidate == symbol)
+            .map(|(_, name)| name.as_str())
+    }
+
+    /// Runtime functions that create reactive nodes, owners, blocks or
+    /// registered identities.
+    fn is_creator(name: &str) -> bool {
+        name.starts_with("create")
+            || matches!(
+                name,
+                "$" | "action" | "lazy" | "onSettled" | "onCleanup" | "render"
+            )
     }
 
     fn op(&self, symbol: SymbolId) -> Option<&'static str> {
@@ -679,6 +699,20 @@ impl<'s, 'p> Summarizer<'s, 'p> {
         self.collect_module_unknowns();
         let mut unknowns = std::mem::take(&mut self.unknowns);
         unknowns.sort_by_key(span_start);
+        let kinds: Vec<String> = unknowns.iter().filter_map(unknown_kind).collect();
+        let completeness = if kinds.iter().any(|kind| {
+            matches!(
+                kind.as_str(),
+                "eval" | "with" | "newFunction" | "require" | "dynamicImportNonLiteral"
+            )
+        }) {
+            "unknown"
+        } else if !kinds.is_empty() || self.count_server_functions() > 0 {
+            "bounded"
+        } else {
+            "exact"
+        };
+        summary.set("completeness", Json::str(completeness));
         summary.set("unknowns", Json::Arr(unknowns));
         summary
     }
@@ -887,9 +921,73 @@ impl<'s, 'p> Summarizer<'s, 'p> {
                 "propsEscapes",
                 Json::strings(escapes.iter().map(String::as_str)),
             );
+            let (renders, creations) = self.component_edges(component);
+            json.set("renders", renders);
+            json.set("creations", creations);
             out.push(json);
         }
         out
+    }
+
+    /// Owner edges of a component: the components it renders (with the
+    /// `Errored` / `Loading` boundaries between them, innermost first) and the
+    /// runtime creations in its own body (outside `$` bodies, which record
+    /// their own).
+    fn component_edges(&self, component: &Component) -> (Json, Json) {
+        struct Collector<'c, 's, 'p> {
+            summarizer: &'c Summarizer<'s, 'p>,
+            span: Span,
+            renders: Vec<Json>,
+            creations: Vec<Json>,
+        }
+        impl<'b> Visit<'b> for Collector<'_, '_, '_> {
+            fn visit_jsx_opening_element(&mut self, it: &JSXOpeningElement<'b>) {
+                let context = self.summarizer.context;
+                if self.span.contains_inclusive(it.span) {
+                    let (name, intrinsic) = jsx_element_name(it);
+                    if !intrinsic {
+                        let mut json = Json::obj();
+                        json.set("component", Json::str(name));
+                        let boundaries = context.boundaries_of(it.node_id.get());
+                        json.set(
+                            "boundaries",
+                            Json::strings(boundaries.iter().map(String::as_str)),
+                        );
+                        json.set("span", context.positions.span(it.span));
+                        self.renders.push(json);
+                    }
+                }
+                walk::walk_jsx_opening_element(self, it);
+            }
+            fn visit_call_expression(&mut self, it: &CallExpression<'b>) {
+                let context = self.summarizer.context;
+                if self.span.contains_inclusive(it.span)
+                    && let Some(name) = context
+                        .callee_symbol(it)
+                        .and_then(|symbol| context.runtime.runtime_name(symbol))
+                    && RuntimeSymbols::is_creator(name)
+                    && !self.summarizer.blocks.iter().any(|block| {
+                        block.call_span != it.span
+                            && block.call_span.start < it.span.start
+                            && it.span.end <= block.call_span.end
+                    })
+                {
+                    let mut json = Json::obj();
+                    json.set("callee", Json::str(name));
+                    json.set("span", context.positions.span(it.span));
+                    self.creations.push(json);
+                }
+                walk::walk_call_expression(self, it);
+            }
+        }
+        let mut collector = Collector {
+            summarizer: self,
+            span: component.span,
+            renders: Vec::new(),
+            creations: Vec::new(),
+        };
+        collector.visit_program(self.program);
+        (Json::Arr(collector.renders), Json::Arr(collector.creations))
     }
 
     /// How the value of a member chain rooted at a props parameter is used:
@@ -1107,7 +1205,12 @@ impl<'s, 'p> Summarizer<'s, 'p> {
                 json.set("body", analysis);
             }
         }
-        json.set("sites", self.sites_of(block));
+        let sites = self.sites_of(block);
+        json.set("hosts", hosts_of(&sites));
+        if block.body.is_none() {
+            json.set("completeness", Json::str("unknown"));
+        }
+        json.set("sites", sites);
         json
     }
 
@@ -1184,6 +1287,8 @@ impl<'s, 'p> Summarizer<'s, 'p> {
             event: EventUsage::default(),
             nested_blocks: 0,
             dynamic_imports: Vec::new(),
+            creations: Vec::new(),
+            external_calls: Vec::new(),
         };
         match body {
             BodyRef::Function(node) => {
@@ -1205,6 +1310,34 @@ impl<'s, 'p> Summarizer<'s, 'p> {
         json.set("captures", self.captures_json(&walker, block));
         json.set("escapes", walker.escapes.to_json());
         json.set("nestedBlocks", Json::Num(walker.nested_blocks as i64));
+        json.set(
+            "creations",
+            Json::Arr(
+                walker
+                    .creations
+                    .iter()
+                    .map(|(name, span)| {
+                        let mut entry = Json::obj();
+                        entry.set("callee", Json::str(name.clone()));
+                        entry.set("span", context.positions.span(*span));
+                        entry
+                    })
+                    .collect(),
+            ),
+        );
+        let mut external = walker.external_calls.clone();
+        external.sort();
+        external.dedup();
+        json.set(
+            "externalCalls",
+            Json::strings(external.iter().map(String::as_str)),
+        );
+        let (completeness, reasons) = block_completeness(&walker);
+        json.set("completeness", Json::str(completeness));
+        json.set(
+            "completenessReasons",
+            Json::strings(reasons.iter().copied()),
+        );
         json.set(
             "dynamicImports",
             Json::Arr(
@@ -2205,6 +2338,123 @@ impl<'s, 'p> Summarizer<'s, 'p> {
     }
 }
 
+fn unknown_kind(json: &Json) -> Option<String> {
+    if let Json::Obj(entries) = json
+        && let Some((_, Json::Str(kind))) = entries.iter().find(|(key, _)| key == "kind")
+    {
+        return Some(kind.clone());
+    }
+    None
+}
+
+/// The hosts a block value reaches, from its sites: `event` (a DOM sink),
+/// `prop:<Component>.<prop>` (forwarded; the linker resolves it),
+/// `reactive:<host>`, `jsx` (rendered), `delegated`, `exported`, or
+/// `unknown` for anything else.
+fn hosts_of(sites: &Json) -> Json {
+    let mut hosts: Vec<String> = Vec::new();
+    if let Json::Arr(items) = sites {
+        for site in items {
+            let Json::Obj(entries) = site else { continue };
+            let get = |key: &str| {
+                entries
+                    .iter()
+                    .find(|(k, _)| k == key)
+                    .and_then(|(_, value)| match value {
+                        Json::Str(text) => Some(text.clone()),
+                        Json::Bool(flag) => Some(flag.to_string()),
+                        _ => None,
+                    })
+            };
+            let host = match get("kind").as_deref() {
+                Some("domEvent") => "event".to_string(),
+                Some("componentProp") => format!(
+                    "prop:{}.{}",
+                    get("component").unwrap_or_default(),
+                    get("prop").unwrap_or_default()
+                ),
+                Some("host") => format!("reactive:{}", get("host").unwrap_or_default()),
+                Some("returned") if get("ownerIsComponent").as_deref() == Some("true") => {
+                    "jsx".to_string()
+                }
+                Some("jsxChild") => "jsx".to_string(),
+                Some("delegated") => "delegated".to_string(),
+                Some("exported") => "exported".to_string(),
+                Some("unused") => continue,
+                _ => "unknown".to_string(),
+            };
+            if !hosts.contains(&host) {
+                hosts.push(host);
+            }
+        }
+    }
+    hosts.sort();
+    Json::strings(hosts.iter().map(String::as_str))
+}
+
+/// `exact`: every effect is a direct operation of the body (reads, path
+/// reads, store reads, writes, waits, raises) and it calls nothing outside
+/// the runtime. `bounded`: the body's own effects are known but it calls
+/// code this summary does not describe (functions, attempts, delegations,
+/// value operands, `this`/`arguments`, awaits), so other summaries must
+/// bound the rest. `unknown`: something hides effects entirely (`eval`,
+/// `with`, `new Function`, an unrecognized `yield*`, a bare `yield`, a
+/// non-literal `import()`).
+fn block_completeness(walker: &BodyWalker<'_, '_>) -> (&'static str, Vec<&'static str>) {
+    let mut unknown = Vec::new();
+    if walker.escapes.eval {
+        unknown.push("eval");
+    }
+    if walker.escapes.with {
+        unknown.push("with");
+    }
+    if walker.escapes.new_function {
+        unknown.push("newFunction");
+    }
+    if !walker.ops.unknown_yields.is_empty() {
+        unknown.push("unknownYield");
+    }
+    if !walker.ops.plain_yields.is_empty() {
+        unknown.push("plainYield");
+    }
+    if walker
+        .dynamic_imports
+        .iter()
+        .any(|(source, _)| source.is_none())
+    {
+        unknown.push("dynamicImport");
+    }
+    if !unknown.is_empty() {
+        return ("unknown", unknown);
+    }
+    let mut bounded = Vec::new();
+    if !walker.external_calls.is_empty() {
+        bounded.push("externalCalls");
+    }
+    if !walker.ops.attempts.is_empty() {
+        bounded.push("attempt");
+    }
+    if !walker.ops.calls.is_empty() {
+        bounded.push("delegation");
+    }
+    if !walker.ops.values.is_empty() {
+        // `yield* x`: an accessor read, a block delegation or an op held in a
+        // binding: which one is a type fact, not a syntactic one.
+        bounded.push("valueOperand");
+    }
+    if walker.escapes.this || walker.escapes.arguments {
+        bounded.push("thisOrArguments");
+    }
+    if !walker.ops.awaits.is_empty() {
+        bounded.push("await");
+    }
+    if bounded.is_empty() {
+        ("exact", bounded)
+    } else {
+        ("bounded", bounded)
+    }
+}
+
 /// The `span.start` of a JSON entry (for sorting unknowns into source order).
 fn span_start(json: &Json) -> i64 {
     if let Json::Obj(entries) = json
@@ -2736,6 +2986,11 @@ struct BodyWalker<'c, 's> {
     event: EventUsage,
     nested_blocks: usize,
     dynamic_imports: Vec<(Option<String>, Span)>,
+    /// Runtime creator calls (`createSignal`, `$`, `createMemo`, …).
+    creations: Vec<(String, Span)>,
+    /// Calls to anything that is not a runtime import: their effects are not
+    /// in this summary (the block is at best `bounded`).
+    external_calls: Vec<String>,
 }
 
 impl<'c, 's> BodyWalker<'c, 's> {
@@ -2965,6 +3220,26 @@ impl<'b> Visit<'b> for BodyWalker<'_, '_> {
     fn visit_call_expression(&mut self, it: &CallExpression<'b>) {
         if self.context.is_adapter_call(it) {
             self.nested_blocks += 1;
+        }
+        let runtime = self.context.callee_symbol(it).and_then(|symbol| {
+            self.context
+                .runtime
+                .runtime_name(symbol)
+                .map(str::to_string)
+        });
+        match runtime {
+            Some(name) if RuntimeSymbols::is_creator(&name) => self.creations.push((name, it.span)),
+            Some(_) => {}
+            // `event.preventDefault()` & co. are recorded as event usage.
+            None if matches!(&it.callee, Expression::StaticMemberExpression(member)
+                if matches!(&member.object, Expression::Identifier(root)
+                    if self.input.is_some() && self.context.symbol_of(root) == self.input)) => {}
+            None => {
+                let text = self.context.text(it.callee.span());
+                if text != "_$perform" && text != "perform" {
+                    self.external_calls.push(text.to_string());
+                }
+            }
         }
         if let Expression::Identifier(callee) = &it.callee
             && self.context.symbol_of(callee).is_none()
