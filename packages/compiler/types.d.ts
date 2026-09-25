@@ -65,13 +65,54 @@ export interface TransformOptions {
   /**
    * Experimental (Track A, stage 1): prove lowered `$` blocks synchronous
    * and / or non-throwing and emit the proofs as block metadata
-   * (`$(fn, flags)`) and reactive-host options (`createMemo(…, statusFree)` /
-   * `syncOnly`), which select the runtime's status-free fast path. Proofs
+   * (`$(fn, flags)`) and `syncOnly` reactive-host options. Proofs
    * use local facts plus, in TypeScript modules, declared primitive signal
    * types; development builds verify them at runtime. Requires `generators:
    * true`. Default `false`.
    */
   blockProofs?: boolean;
+  /**
+   * Experimental (Track B slice 2, stage 2): hold module-local stores whose
+   * uses are lowered path reads as proxy-free handles (every other use gets
+   * the lazily materialized compatibility proxy), verify `Borrowed<T>` prop
+   * contracts, and return the module's `storeSummary`. Requires
+   * `generators: true`. Default `false`.
+   */
+  storeHandles?: boolean;
+  /** Linker facts for `storeHandles`: imported components' verified Borrowed props. */
+  storeLinkFacts?: StoreLinkFacts | null;
+}
+
+export interface StoreLinkFacts {
+  borrowed?: Record<string, Record<string, string[]>>;
+}
+
+/** Per-module store facts for a linker (see documentation/plans/track-b-slice-2-proxy-free-stores.md). */
+export interface StoreSummary {
+  version: 1;
+  module: string;
+  stores: {
+    binding: string;
+    loc: string;
+    handle: boolean;
+    refused: string | null;
+    reads: number;
+    setter: boolean;
+    proxyFree: boolean;
+    handoffs: { component: string; prop: string; via: string }[];
+    escapes: { kind: string; loc: string; detail: string }[];
+  }[];
+  components: {
+    name: string;
+    exported: boolean;
+    borrowed: {
+      prop: string;
+      verified: boolean;
+      reads: number;
+      violations: { kind: string; loc: string; detail: string }[];
+    }[];
+  }[];
+  requires: { source: string; export: string; prop: string; status: "linked" | "unknown" }[];
 }
 
 export interface RendererOption {
@@ -94,6 +135,8 @@ export interface TransformResult {
    * `[STRICT_…]` error instead.
    */
   strictBlocks?: StrictAnalysis;
+  /** The module's store summary, when `storeHandles` is on. */
+  storeSummary?: StoreSummary;
 }
 
 export function transform(code: string, options?: TransformOptions | null): TransformResult;

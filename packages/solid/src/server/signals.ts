@@ -1,7 +1,7 @@
 // Mock @solidjs/signals for server-side rendering
 // Re-exports infrastructure from the real package, reimplements reactive primitives as pull-based.
 
-import { $REFRESH } from "@solidjs/signals";
+import { $REFRESH, markHandle } from "@solidjs/signals";
 export { $REFRESH };
 
 // === Re-exports from @solidjs/signals (infrastructure — no reactive scheduling) ===
@@ -44,6 +44,13 @@ export {
   readPath3,
   readPath4,
   readPathN,
+  readHandle1,
+  readHandle2,
+  readHandle3,
+  readHandle4,
+  readHandleN,
+  readHandleChild,
+  readBorrowed,
   readProp,
   readValue,
   write,
@@ -143,6 +150,8 @@ export type {
   PathValue,
   PathResult,
   ReadThrough,
+  StoreHandle,
+  Borrowed,
   AsyncOp,
   RaiseOp,
   AttemptOp,
@@ -2981,6 +2990,26 @@ export function onSettled(callback: () => void | (() => void)): void {
 
 // NoInfer utility type (also re-exported from signals, but define for local use)
 type NoInfer<T extends any> = [T][T extends any ? 0 : never];
+
+/**
+ * Strict store handles on the server (Track B slice 2): server stores are
+ * plain objects, so a handle is a marked `{ v }` wrapper that the shared
+ * readers (`readHandleK`, `readBorrowed`, `readHandleChild`) walk as a plain
+ * object — the same reads the handwritten spelling makes.
+ */
+export function createStoreHandle<T extends object>(
+  initialValue: T,
+  options?: StoreOptions
+): [get: any, set: StoreSetter<T>] {
+  const [state, setState] = createStore(initialValue as any, options) as [T, StoreSetter<T>];
+  return [markHandle({ v: state }), setState];
+}
+export function storeHandle(value: any): any {
+  return markHandle({ v: value });
+}
+export function storeProxy(handle: any): any {
+  return handle.v;
+}
 
 export function storeIsShallow(_proxy: any): boolean {
   return false;

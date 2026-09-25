@@ -71,9 +71,15 @@ pub struct TransformOptions {
     /// consumed by a statically known host (`createMemo`, `createEffect`, …).
     /// Default `false`. Requires `generators: true`.
     pub host_fusion: Option<bool>,
-    /// Experimental Track A stage-1 block proofs (status-free fast paths).
+    /// Experimental Track A stage-1 block proofs (synchronous fast paths).
     /// Default `false`. Requires `generators: true`.
     pub block_proofs: Option<bool>,
+    /// Experimental: proxy-free store handles and the module store summary
+    /// (Track B slice 2, stage 2). Default `false`.
+    pub store_handles: Option<bool>,
+    /// Linker facts for `store_handles`, flattened by the JS wrapper to
+    /// `source\0export\0prop` strings.
+    pub store_link_facts: Option<Vec<String>>,
 }
 
 #[napi(object)]
@@ -87,6 +93,8 @@ pub struct TransformResult {
     /// JSON summary of the strict `$(fn)` callbacks the module compiled
     /// (`{ version, blocks, diagnostics }`). Absent when there were none.
     pub strict_blocks: Option<String>,
+    /// The module's store summary (JSON) when `storeHandles` is on.
+    pub store_summary: Option<String>,
 }
 
 pub(crate) fn source_type_for_filename(filename: Option<&str>) -> Result<SourceType> {

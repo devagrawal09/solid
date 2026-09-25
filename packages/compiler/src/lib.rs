@@ -34,6 +34,7 @@ mod refresh;
 mod shared;
 mod ssr;
 mod strict;
+mod store_handles;
 #[cfg(feature = "tsrx")]
 mod tsrx;
 mod universal;

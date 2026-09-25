@@ -118,10 +118,17 @@ pub struct CompileOptions {
     /// Experimental (Track A, stage 1): prove lowered `$` blocks synchronous
     /// and / or non-throwing from local facts (and, in TypeScript modules,
     /// declared primitive signal types), and emit the proofs as block
-    /// metadata (`$(fn, flags)`) and reactive-host options
-    /// (`createMemo(…, statusFree)`). Requires `generators: true`. Default
-    /// `false`. See `block_proofs.rs`.
+    /// metadata (`$(fn, flags)`) and synchronous reactive-host options.
+    /// Requires `generators: true`. Default `false`. See `block_proofs.rs`.
     pub block_proofs: bool,
+    /// Experimental (Track B slice 2, stage 2): hold module-local stores whose
+    /// uses are lowered path reads as proxy-free handles, verify `Borrowed`
+    /// prop contracts, and emit the module's store summary. Default `false`.
+    /// Requires `generators: true`.
+    pub store_handles: bool,
+    /// Linker facts for `store_handles`: `(import source, exported
+    /// component, verified Borrowed prop)` triples.
+    pub store_link_facts: Vec<crate::store_handles::LinkFact>,
 }
 
 impl Default for CompileOptions {
@@ -155,6 +162,8 @@ impl Default for CompileOptions {
             generators: true,
             host_fusion: false,
             block_proofs: false,
+            store_handles: false,
+            store_link_facts: Vec::new(),
         }
     }
 }
@@ -171,6 +180,8 @@ pub struct CompileOutput {
     /// The strict-callback graph summary (JSON, see `strict.rs`) when the
     /// module compiled at least one marked `$(fn)` callback; `None` otherwise.
     pub strict_blocks: Option<String>,
+    /// The module's store summary (JSON) when `store_handles` ran.
+    pub store_summary: Option<String>,
 }
 
 /// Compile one JavaScript or TypeScript module containing JSX.
@@ -264,6 +275,7 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
             css,
             css_hash,
             strict_blocks: None,
+            store_summary: None,
         });
     }
 
@@ -300,6 +312,23 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
         crate::generators::transform_generators(&allocator, &mut program, source, proofs)
             .map_err(CompileError::transform)?;
     }
+
+    // Experimental (Track B slice 2, stage 2): store handles and the
+    // module's store summary, over the stage-1 path readers.
+    let store_summary = if options.store_handles && options.generators {
+        Some(
+            crate::store_handles::transform_store_handles(
+                &allocator,
+                &mut program,
+                source,
+                options.filename.as_deref(),
+                &options.store_link_facts,
+            )
+            .map_err(CompileError::transform)?,
+        )
+    } else {
+        None
+    };
 
     // Experimental: fuse `$()` blocks with their statically known host
     // (`createMemo($(fn))` → `createMemo(fn)` with direct accessor calls).
@@ -425,6 +454,7 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
         css,
         css_hash,
         strict_blocks,
+        store_summary,
     })
 }
 

@@ -39,6 +39,7 @@ import { createStoreDerivedNext } from "./next/projection.js";
 
 export { createProjectionNext as createProjection } from "./next/projection.js";
 export { storeIsShallow, storeHasFamily, storeHasOptimisticFamily } from "./next/store.js";
+export { createStoreHandle, storeHandle, storeProxy } from "./next/store.js";
 export { createOptimisticStoreNext as createOptimisticStore } from "./next/optimistic.js";
 
 /** Public createStore: plain form `(initialValue, options?)` and derived writable

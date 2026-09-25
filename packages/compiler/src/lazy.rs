@@ -51,6 +51,7 @@ pub fn transform_lazy(
     let options = options.unwrap_or_default();
     let Some(filename) = options.filename.as_deref() else {
         return Ok(TransformResult {
+            store_summary: None,
             code,
             map: None,
             css: None,
@@ -78,6 +79,7 @@ pub fn transform_lazy(
         // reprint (the Babel support pass reprints regardless, but callers
         // only care about the placeholder injection).
         return Ok(TransformResult {
+            store_summary: None,
             code,
             map: None,
             css: None,
@@ -103,6 +105,7 @@ pub fn transform_lazy(
         .build(&program);
 
     Ok(TransformResult {
+        store_summary: None,
         code: build.code,
         map: build.map.map(|map| map.to_json_string()),
         css: None,

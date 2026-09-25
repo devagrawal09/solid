@@ -225,7 +225,7 @@
     "types:web": "tsc --project ./tsconfig.build.json",
     "types:copy-web": "node ./scripts/copy-types.mjs",
     "types:web-storage": "tsc --project ./storage/tsconfig.build.json",
-    "test": "vitest run && vitest run --config vite.config.server.mjs && vitest run --config vite.config.hydrate.mjs",
+    "test": "vitest run && vitest run --config vite.config.server.mjs && vitest run --config vite.config.hydrate.mjs && vitest run --config vite.config.store-handles.mjs && vitest run --config vite.config.store-handles-server.mjs",
     "test:server": "vitest run --config vite.config.server.mjs",
     "coverage": "vitest run --coverage",
     "bench": "vitest bench --run",
