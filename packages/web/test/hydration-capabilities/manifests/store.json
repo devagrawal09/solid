@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "graph": "store",
+  "producer": "fixture:store",
+  "capabilities": {
+    "streamLedger": false,
+    "loadingMarkers": false,
+    "errorMarkers": false,
+    "asyncResults": false,
+    "storeAdapters": true,
+    "lazyAssets": false,
+    "delegatedEvents": [
+      "click"
+    ],
+    "ssrSources": [],
+    "snapshots": true,
+    "resumableEvents": false
+  }
+}

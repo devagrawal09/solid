@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "graph": "sync",
+  "producer": "fixture:violation-sync-no-delegated-events",
+  "capabilities": {
+    "streamLedger": false,
+    "loadingMarkers": false,
+    "errorMarkers": false,
+    "asyncResults": false,
+    "storeAdapters": false,
+    "lazyAssets": false,
+    "delegatedEvents": [],
+    "ssrSources": [],
+    "snapshots": false,
+    "resumableEvents": false
+  }
+}

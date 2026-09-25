@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "graph": "streaming",
+  "producer": "fixture:invalid-missing-snapshots",
+  "capabilities": {
+    "streamLedger": true,
+    "loadingMarkers": true,
+    "errorMarkers": false,
+    "asyncResults": true,
+    "storeAdapters": false,
+    "lazyAssets": false,
+    "delegatedEvents": [
+      "click"
+    ],
+    "ssrSources": [],
+    "snapshots": false,
+    "resumableEvents": false
+  }
+}

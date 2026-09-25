@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "graph": "full",
+  "producer": "fixture:violation-full-no-ssr-sources",
+  "capabilities": {
+    "streamLedger": true,
+    "loadingMarkers": true,
+    "errorMarkers": true,
+    "asyncResults": true,
+    "storeAdapters": true,
+    "lazyAssets": true,
+    "delegatedEvents": [
+      "click",
+      "input"
+    ],
+    "ssrSources": [],
+    "snapshots": true,
+    "resumableEvents": false
+  }
+}

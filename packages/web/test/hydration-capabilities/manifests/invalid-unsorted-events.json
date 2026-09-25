@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "graph": "full",
+  "producer": "fixture:invalid-unsorted-events",
+  "capabilities": {
+    "streamLedger": true,
+    "loadingMarkers": true,
+    "errorMarkers": true,
+    "asyncResults": true,
+    "storeAdapters": true,
+    "lazyAssets": true,
+    "delegatedEvents": [
+      "input",
+      "click"
+    ],
+    "ssrSources": [
+      "client",
+      "hybrid"
+    ],
+    "snapshots": true,
+    "resumableEvents": false
+  }
+}

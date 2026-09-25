@@ -1,0 +1,9 @@
+{
+  "name": "async",
+  "records": [
+    "0",
+    "2"
+  ],
+  "shell": "<script>window._$HY||(e=>{let t=e=>e&&e.hasAttribute&&(e.hasAttribute(\"_hk\")?e:t(e.host&&e.host.nodeType?e.host:e.parentNode));[\"click\"].forEach((o=>document.addEventListener(o,(o=>{if(!e.events)return;let s=t(o.composedPath&&o.composedPath()[0]||o.target);s&&!e.completed.has(s)&&e.events.push([s,o])}))))})(_$HY={events:[],completed:new WeakSet,r:{},fe(){}});</script><!--xs--><main _hk=1><button id=\"inc\">inc</button><p>total <!--$-->41<!--/--></p><!--$--><b _hk=30>caught <!--$-->boom<!--/--></b><!--/--></main><script>(self.$R=self.$R||{})[\"\"]=[];_$HY.r[\"2\"]=$R[0]=new Error(\"boom\");_$HY.r[\"0\"]=$R[1]=($R[2]=($R[3]=() => {\n\tconst resolver = {\n\t\tp: 0,\n\t\ts: 0,\n\t\tf: 0\n\t};\n\tresolver.p = new Promise((resolve, reject) => {\n\t\tresolver.s = resolve;\n\t\tresolver.f = reject;\n\t});\n\treturn resolver;\n})()).p;($R[4]=(resolver, data) => {\n\tresolver.s(data);\n\tresolver.p.s = 1;\n\tresolver.p.v = data;\n})($R[2],40);</script>",
+  "rest": ""
+}

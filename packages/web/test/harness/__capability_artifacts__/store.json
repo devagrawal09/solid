@@ -1,0 +1,8 @@
+{
+  "name": "store",
+  "records": [
+    "1"
+  ],
+  "shell": "<script>window._$HY||(e=>{let t=e=>e&&e.hasAttribute&&(e.hasAttribute(\"_hk\")?e:t(e.host&&e.host.nodeType?e.host:e.parentNode));[\"click\"].forEach((o=>document.addEventListener(o,(o=>{if(!e.events)return;let s=t(o.composedPath&&o.composedPath()[0]||o.target);s&&!e.completed.has(s)&&e.events.push([s,o])}))))})(_$HY={events:[],completed:new WeakSet,r:{},fe(){}});</script><!--xs--><main _hk=2><button id=\"inc\">add</button><p>open <!--$-->1<!--/--></p><ul><li _hk=300>one</li><li _hk=310>two</li></ul><ol><li _hk=500>remote</li></ol></main><script>(self.$R=self.$R||{})[\"\"]=[];_$HY.r[\"1\"]=$R[0]=($R[1]=($R[2]=() => {\n\tconst resolver = {\n\t\tp: 0,\n\t\ts: 0,\n\t\tf: 0\n\t};\n\tresolver.p = new Promise((resolve, reject) => {\n\t\tresolver.s = resolve;\n\t\tresolver.f = reject;\n\t});\n\treturn resolver;\n})()).p;($R[5]=(resolver, data) => {\n\tresolver.s(data);\n\tresolver.p.s = 1;\n\tresolver.p.v = data;\n})($R[1],$R[3]=[$R[4]={id:10,label:\"remote\"}]);</script>",
+  "rest": ""
+}

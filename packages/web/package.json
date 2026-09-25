@@ -30,6 +30,9 @@
     "storage/dist",
     "storage/types",
     "storage/package.json",
+    "hydration-manifest/dist",
+    "hydration-manifest/types",
+    "hydration-manifest/package.json",
     "serialization/dist",
     "serialization/types",
     "serialization/package.json",
@@ -100,6 +103,10 @@
     "./storage": {
       "types": "./storage/types/index.d.ts",
       "default": "./storage/dist/storage.js"
+    },
+    "./hydration-manifest": {
+      "types": "./hydration-manifest/types/index.d.ts",
+      "default": "./hydration-manifest/dist/hydration-manifest.js"
     },
     "./serialization": {
       "types": "./serialization/types/index.d.ts",
@@ -216,14 +223,15 @@
     "build:clean": "rimraf dist/",
     "build:js": "rollup -c",
     "link": "symlink-dir . node_modules/@solidjs/web",
-    "types": "npm-run-all -nl types:clean types:copy-jsx types:web types:copy-web types:web-storage",
-    "types:clean": "rimraf types/ storage/types/ serialization/types/ frames/types/ .types-build/",
+    "types": "npm-run-all -nl types:clean types:copy-jsx types:web types:copy-web types:web-storage types:web-hydration-manifest",
+    "types:clean": "rimraf types/ storage/types/ hydration-manifest/types/ serialization/types/ frames/types/ .types-build/",
     "jsx-sync": "node ./scripts/jsx-sync.mjs --compile --element \"SolidElement | Node | ArrayElement\" --import \"import type { Element as SolidElement } from \\\"solid-js\\\";\"",
     "types:copy-jsx": "pnpm run jsx-sync",
     "types:web": "tsc --project ./tsconfig.build.json",
     "types:copy-web": "node ./scripts/copy-types.mjs",
     "types:web-storage": "tsc --project ./storage/tsconfig.build.json",
-    "test": "vitest run && vitest run --config vite.config.server.mjs && vitest run --config vite.config.hydrate.mjs",
+    "types:web-hydration-manifest": "tsc --project ./hydration-manifest/tsconfig.build.json",
+    "test": "vitest run && vitest run --config vite.config.server.mjs && vitest run --config vite.config.hydrate.mjs && vitest run --config vite.config.hydrate-prod.mjs",
     "test:server": "vitest run --config vite.config.server.mjs",
     "coverage": "vitest run --coverage",
     "bench": "vitest bench --run",

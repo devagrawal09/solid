@@ -1,0 +1,5 @@
+# Byte-for-byte output contracts, changed only through their update
+# commands (see packages/web/test/hydration-manifest.spec.ts):
+# composeHydrationEntry golden entries and canonical fixture manifests.
+packages/web/test/hydration-capabilities/generated/
+packages/web/test/hydration-capabilities/manifests/

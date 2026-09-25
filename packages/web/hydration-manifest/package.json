@@ -1,0 +1,14 @@
+{
+  "name": "@solidjs/web/hydration-manifest",
+  "main": "./dist/hydration-manifest.js",
+  "module": "./dist/hydration-manifest.js",
+  "types": "./types/index.d.ts",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "default": "./dist/hydration-manifest.js"
+    }
+  }
+}

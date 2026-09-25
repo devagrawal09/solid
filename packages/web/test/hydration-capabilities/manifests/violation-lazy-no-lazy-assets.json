@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "graph": "lazy",
+  "producer": "fixture:violation-lazy-no-lazy-assets",
+  "capabilities": {
+    "streamLedger": false,
+    "loadingMarkers": false,
+    "errorMarkers": false,
+    "asyncResults": false,
+    "storeAdapters": false,
+    "lazyAssets": false,
+    "delegatedEvents": [
+      "click"
+    ],
+    "ssrSources": [],
+    "snapshots": false,
+    "resumableEvents": false
+  }
+}

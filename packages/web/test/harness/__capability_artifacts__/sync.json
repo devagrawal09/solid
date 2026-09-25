@@ -1,0 +1,6 @@
+{
+  "name": "sync",
+  "records": [],
+  "shell": "<script>window._$HY||(e=>{let t=e=>e&&e.hasAttribute&&(e.hasAttribute(\"_hk\")?e:t(e.host&&e.host.nodeType?e.host:e.parentNode));[\"click\"].forEach((o=>document.addEventListener(o,(o=>{if(!e.events)return;let s=t(o.composedPath&&o.composedPath()[0]||o.target);s&&!e.completed.has(s)&&e.events.push([s,o])}))))})(_$HY={events:[],completed:new WeakSet,r:{},fe(){}});</script><!--xs--><main _hk=1><button id=\"inc\">inc</button><p>count <!--$-->1<!--/--> double <!--$-->2<!--/--></p><!--$--><i _hk=60>odd</i><!--/--><ul><li _hk=700>a</li><li _hk=710>b</li></ul></main>",
+  "rest": ""
+}

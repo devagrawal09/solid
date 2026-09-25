@@ -1,0 +1,19 @@
+{
+  "schema": 2,
+  "graph": "sync",
+  "producer": "fixture:invalid-schema-version",
+  "capabilities": {
+    "streamLedger": false,
+    "loadingMarkers": false,
+    "errorMarkers": false,
+    "asyncResults": false,
+    "storeAdapters": false,
+    "lazyAssets": false,
+    "delegatedEvents": [
+      "click"
+    ],
+    "ssrSources": [],
+    "snapshots": false,
+    "resumableEvents": false
+  }
+}

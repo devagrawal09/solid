@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "graph": "streaming",
+  "producer": "fixture:violation-streaming-no-loading-markers",
+  "capabilities": {
+    "streamLedger": false,
+    "loadingMarkers": false,
+    "errorMarkers": false,
+    "asyncResults": true,
+    "storeAdapters": false,
+    "lazyAssets": false,
+    "delegatedEvents": [
+      "click"
+    ],
+    "ssrSources": [],
+    "snapshots": true,
+    "resumableEvents": false
+  }
+}

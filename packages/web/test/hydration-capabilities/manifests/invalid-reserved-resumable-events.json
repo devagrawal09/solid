@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "graph": "sync",
+  "producer": "fixture:invalid-reserved-resumable-events",
+  "capabilities": {
+    "streamLedger": false,
+    "loadingMarkers": false,
+    "errorMarkers": false,
+    "asyncResults": false,
+    "storeAdapters": false,
+    "lazyAssets": false,
+    "delegatedEvents": [
+      "click"
+    ],
+    "ssrSources": [],
+    "snapshots": false,
+    "resumableEvents": true
+  }
+}

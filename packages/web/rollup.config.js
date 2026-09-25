@@ -183,6 +183,13 @@ export default [
     plugins
   },
   {
+    // Build-time consumer of the client hydration capability manifest
+    // (schema, validator, entry composer). Node-safe, no runtime imports.
+    input: "hydration-manifest/src/index.ts",
+    output: { file: "hydration-manifest/dist/hydration-manifest.js", format: "es" },
+    plugins
+  },
+  {
     input: "serialization/src/serializer.ts",
     output: { file: "serialization/dist/serialization.js", format: "es" },
     external: ["seroval", "seroval-plugins/web"],
