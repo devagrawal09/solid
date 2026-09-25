@@ -1,0 +1,5 @@
+{
+  "name": "linker-fixture-opaque-app",
+  "private": true,
+  "type": "module"
+}

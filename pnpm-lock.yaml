@@ -522,6 +522,46 @@ importers:
         specifier: workspace:*
         version: link:../solid
 
+  packages/linker:
+    dependencies:
+      '@solidjs/compiler':
+        specifier: workspace:*
+        version: link:../compiler
+      magic-string:
+        specifier: ^0.30.17
+        version: 0.30.21
+    devDependencies:
+      '@jridgewell/trace-mapping':
+        specifier: ^0.3.31
+        version: 0.3.31
+      '@rollup/plugin-node-resolve':
+        specifier: ^15.0.1
+        version: 15.0.1(rollup@4.59.0)
+      '@solidjs/typecheck':
+        specifier: workspace:*
+        version: link:../typecheck
+      '@solidjs/web':
+        specifier: workspace:*
+        version: link:../web
+      esbuild:
+        specifier: ^0.27.7
+        version: 0.27.7
+      jsdom:
+        specifier: ^25.0.1
+        version: 25.0.1
+      rollup:
+        specifier: ^4.24.0
+        version: 4.59.0
+      solid-js:
+        specifier: workspace:*
+        version: link:../solid
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.6
+        version: 4.1.6(@types/node@25.6.0)(@vitest/coverage-v8@4.1.6)(jsdom@25.0.1)(vite@8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0))
+
   packages/signals:
     devDependencies:
       '@codspeed/vitest-plugin':
@@ -5488,7 +5528,7 @@ snapshots:
   '@jridgewell/trace-mapping@0.3.31':
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
-      '@jridgewell/sourcemap-codec': 1.5.5
+      '@jridgewell/sourcemap-codec': 1.6.0
 
   '@manypkg/find-root@1.1.0':
     dependencies:
@@ -7022,7 +7062,7 @@ snapshots:
 
   magic-string@0.30.21:
     dependencies:
-      '@jridgewell/sourcemap-codec': 1.5.5
+      '@jridgewell/sourcemap-codec': 1.6.0
 
   magicast@0.5.2:
     dependencies:

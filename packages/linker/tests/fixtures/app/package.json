@@ -1,0 +1,5 @@
+{
+  "name": "linker-fixture-app",
+  "private": true,
+  "type": "module"
+}

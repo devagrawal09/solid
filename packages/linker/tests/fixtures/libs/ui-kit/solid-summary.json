@@ -1,0 +1,172 @@
+{
+  "schema": "solid-library-summary",
+  "version": 1,
+  "name": "ui-kit",
+  "modules": {
+    "dist/badge.js": {
+      "sourceHash": "sha256:d33214a15be67254d06d220a57374e5669071566f5490d5e6e46c188b0827b52",
+      "behavior": {
+        "schema": "solid-behavior-summary",
+        "version": 1,
+        "directives": [],
+        "serverFunctions": 0,
+        "imports": [],
+        "dynamicImports": [],
+        "exports": [
+          {
+            "exported": "badge",
+            "kind": "local",
+            "local": "badge",
+            "span": {
+              "start": 0,
+              "end": 53,
+              "line": 1,
+              "column": 1
+            }
+          }
+        ],
+        "bindings": [
+          {
+            "name": "badge",
+            "kind": "function",
+            "span": {
+              "start": 16,
+              "end": 21,
+              "line": 1,
+              "column": 17
+            },
+            "statement": 0,
+            "statementSpan": {
+              "start": 0,
+              "end": 53,
+              "line": 1,
+              "column": 1
+            },
+            "exported": true,
+            "mutated": false,
+            "refs": [],
+            "effects": false,
+            "component": false,
+            "block": null,
+            "action": false
+          }
+        ],
+        "topLevel": {
+          "effects": false,
+          "refs": [],
+          "sideEffectImports": []
+        },
+        "components": [],
+        "eventBindings": [],
+        "blocks": [],
+        "unknowns": []
+      }
+    },
+    "dist/format.js": {
+      "sourceHash": "sha256:43c0e117dcbcedca3ae7c754be28e2e1dd1d2254e577854a6dd53e83c043a754",
+      "behavior": {
+        "schema": "solid-behavior-summary",
+        "version": 1,
+        "directives": [],
+        "serverFunctions": 0,
+        "imports": [],
+        "dynamicImports": [],
+        "exports": [
+          {
+            "exported": "formatTitle",
+            "kind": "local",
+            "local": "formatTitle",
+            "span": {
+              "start": 0,
+              "end": 95,
+              "line": 1,
+              "column": 1
+            }
+          }
+        ],
+        "bindings": [
+          {
+            "name": "formatTitle",
+            "kind": "function",
+            "span": {
+              "start": 16,
+              "end": 27,
+              "line": 1,
+              "column": 17
+            },
+            "statement": 0,
+            "statementSpan": {
+              "start": 0,
+              "end": 95,
+              "line": 1,
+              "column": 1
+            },
+            "exported": true,
+            "mutated": false,
+            "refs": [],
+            "effects": false,
+            "component": false,
+            "block": null,
+            "action": false
+          }
+        ],
+        "topLevel": {
+          "effects": false,
+          "refs": [],
+          "sideEffectImports": []
+        },
+        "components": [],
+        "eventBindings": [],
+        "blocks": [],
+        "unknowns": []
+      }
+    },
+    "dist/index.js": {
+      "sourceHash": "sha256:0e59a0d3e01e5014438745472bb3f77c4421b430a5b0647b591242caff0fd085",
+      "behavior": {
+        "schema": "solid-behavior-summary",
+        "version": 1,
+        "directives": [],
+        "serverFunctions": 0,
+        "imports": [],
+        "dynamicImports": [],
+        "exports": [
+          {
+            "exported": "formatTitle",
+            "kind": "reexport",
+            "source": "./format.js",
+            "imported": "formatTitle",
+            "span": {
+              "start": 9,
+              "end": 20,
+              "line": 1,
+              "column": 10
+            }
+          },
+          {
+            "exported": "badge",
+            "kind": "reexport",
+            "source": "./badge.js",
+            "imported": "badge",
+            "span": {
+              "start": 52,
+              "end": 57,
+              "line": 2,
+              "column": 10
+            }
+          }
+        ],
+        "bindings": [],
+        "topLevel": {
+          "effects": false,
+          "refs": [],
+          "sideEffectImports": []
+        },
+        "components": [],
+        "eventBindings": [],
+        "blocks": [],
+        "unknowns": []
+      }
+    }
+  }
+}

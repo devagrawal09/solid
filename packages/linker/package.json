@@ -1,0 +1,37 @@
+{
+  "name": "@solidjs/linker",
+  "version": "0.0.0",
+  "description": "Strict-mode bundler/linker analysis for Solid (Track C): joins compiler behavioral summaries and solid-tsc typed summaries over complete server/client graphs, classifies code hot|cold|shared|unknown to a fixed point, and extracts cold event-domain chunks (slice 3)",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@solidjs/compiler": "workspace:*",
+    "magic-string": "^0.30.17"
+  },
+  "peerDependencies": {
+    "solid-js": "workspace:*"
+  },
+  "devDependencies": {
+    "@jridgewell/trace-mapping": "^0.3.31",
+    "@rollup/plugin-node-resolve": "^15.0.1",
+    "@solidjs/typecheck": "workspace:*",
+    "@solidjs/web": "workspace:*",
+    "esbuild": "^0.27.7",
+    "jsdom": "^25.0.1",
+    "rollup": "^4.24.0",
+    "solid-js": "workspace:*",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
+  }
+}
