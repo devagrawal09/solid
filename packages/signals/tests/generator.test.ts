@@ -678,12 +678,24 @@ describe("runtime driver vs lowered (call-form) blocks", () => {
 
   it("a lowered body is still strict, and async operations refuse call form", () => {
     const [count] = createSignal(1);
-    const direct = createRoot(() => createMemo($((() => count() + 1) as any) as any));
+    // Lowered bodies are `function` expressions (what the compiler emits);
+    // an arrow is the uncompiled strict marker and is refused below.
+    const direct = createRoot(() =>
+      createMemo(
+        $(function () {
+          return count() + 1;
+        } as any) as any
+      )
+    );
     expect(() => direct()).toThrow(/\[DIRECT_READ_IN_BLOCK\]/);
 
     const flight = deferred<number>();
     const asyncOp = createRoot(() =>
-      createMemo($((() => perform(wait(flight.promise))) as any) as any)
+      createMemo(
+        $(function () {
+          return perform(wait(flight.promise));
+        } as any) as any
+      )
     );
     expect(() => asyncOp()).toThrow(/\[ASYNC_OP_OUTSIDE_DRIVER\]/);
 
@@ -691,9 +703,35 @@ describe("runtime driver vs lowered (call-form) blocks", () => {
       return yield* wait(flight.promise);
     });
     const delegatedInCallForm = createRoot(() =>
-      createMemo($((() => perform(asyncBlock)) as any) as any)
+      createMemo(
+        $(function () {
+          return perform(asyncBlock);
+        } as any) as any
+      )
     );
     expect(() => delegatedInCallForm()).toThrow(/\[ASYNC_BLOCK_OUTSIDE_DRIVER\]/);
+  });
+
+  it("refuses an uncompiled strict marker (a plain arrow or async callback)", () => {
+    const [count] = createSignal(1);
+    // The marker is a compile-time request: reaching `$` at runtime means the
+    // module was not compiled, and the callback must not run as a block.
+    expect(() => $(() => count() + 1)).toThrow(/\[STRICT_NOT_COMPILED\]/);
+    expect(() => $(async () => count())).toThrow(/\[STRICT_NOT_COMPILED\]/);
+    expect(() =>
+      $(async function () {
+        return count();
+      })
+    ).toThrow(/\[STRICT_NOT_COMPILED\]/);
+    // A `function` body is the compiler's lowered form and still runs.
+    const lowered = createRoot(() =>
+      createMemo(
+        $(function () {
+          return perform(count) + 1;
+        } as any) as any
+      )
+    );
+    expect(lowered()).toBe(2);
   });
 });
 

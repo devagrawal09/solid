@@ -31,6 +31,7 @@ mod node_adapter;
 mod refresh;
 mod shared;
 mod ssr;
+mod strict;
 #[cfg(feature = "tsrx")]
 mod tsrx;
 mod universal;
@@ -40,6 +41,10 @@ pub use block_projection::{
 };
 pub use compiler::{CompileOptions, CompileOutput, Generate, Renderer, Syntax, Wrapper, compile};
 pub use error::{CompileError, CompileErrorKind};
+pub use strict::{
+    StrictAnalysis, StrictBlockSummary, StrictCall, StrictCreation, StrictDiagnostic, StrictEscape,
+    StrictHost, StrictOpaque, StrictRead, StrictSite, StrictWrite, analyze_strict_blocks,
+};
 #[cfg(feature = "tsrx")]
 pub use tsrx::{
     TsrxEmbeddedRegion, TsrxEmbeddedRegionKind, TsrxTypecheckMapping, TsrxTypecheckProjection,

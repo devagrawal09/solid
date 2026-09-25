@@ -1343,14 +1343,12 @@ const aliased = $(function* () { const sel = state => state.count; return yield*
 const a = $(function* () { const id = yield* userId; return yield* wait(fetchUser(id)); });
 const b = $(function* () { return yield* helper(); });
 const c = $(function* () { return yield* count?.value; });
-const d = $(() => count());
 "#;
         let out = ssr(source).unwrap();
         assert!(out.contains("yield* wait(fetchUser(id))"), "{out}");
         assert!(out.contains("const id = yield* userId;"), "{out}");
         assert!(out.contains("yield* helper()"), "{out}");
         assert!(out.contains("yield* count?.value"), "{out}");
-        assert!(out.contains("$(() => count())"), "{out}");
         assert!(!out.contains("_$perform"), "{out}");
         assert!(
             out.contains(r#"import { $, wait } from "solid-js";"#),

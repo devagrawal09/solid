@@ -50,7 +50,24 @@ Not supported: `--build` / `-b` (project references in build mode) and `--watch`
 
 The forms the native compiler lowers as paths, and only those: a `yield*` operand that is a member chain on an identifier root with static keys (`.name`, `["name"]`), numeric indices (`[0]`), `.length`, and bare-identifier keys (`[i]`, typed by `i`). Roots are recorded as written: an alias (`const u = store.user; yield* u.name`) is its own root of its own type; a destructured field is a plain value and not a read. A root that is the first parameter of a capitalized function is a component's props (`PropRead`); everything else is `StoreRead`.
 
-Left as written (TypeScript's own diagnosis of the authored code applies): optional chains (`store.user?.name`), calls (`store.items.filter(...)` — use `yield* readStore(store, s => s.items.filter(...))`), computed keys other than a literal or a bare identifier (`store.items[i + 1]` — bind the index first), `splitProps` / `mergeProps` results (ordinary objects; the compiler lowers reads on them as store paths, which track through their getters). A refused string operand is reported at the block (`TS2345`, the generator yields `string`), a refused non-iterable operand at the operand (`TS2488`).
+Left as written (TypeScript's own diagnosis of the authored code applies): optional chains (`store.user?.name`), calls (`store.items.filter(...)` — use `yield* readStore(store, s => s.items.filter(...))`), computed keys other than a literal or a bare identifier (`store.items[i + 1]` — bind the index first), `splitProps` / `mergeProps` results (ordinary objects; the compiler lowers reads on them as store paths, which track through their getters). A refused string operand is reported at the block (`TS2769`: the generator yields `string`, so no `$` overload accepts it), a refused non-iterable operand at the operand (`TS2488`).
+
+## Strict `$(fn)` callbacks
+
+A non-generator marker — `createMemo($(() => count() * 2))`, `<button onClick={$(() => setCount(v => v + 1))} />` — is ordinary TypeScript that stock `tsc` types by itself (`$(fn)` is `StrictCallback<Input, R>`). `solid-tsc` additionally runs the compiler's strict analysis (`analyzeStrictBlocks`) over every project file that may hold a marker and reports its diagnostics next to TypeScript's, at authored positions:
+
+```text
+src/bad.tsx(10,52): error SOLID90003: [STRICT_CAPABILITY_ESCAPE] `count` is an accessor and is passed to `register`, which has no strict summary; … read its value with `count()` and pass or store that
+```
+
+`check()` returns `strictBlocks`, a `Map` from file name to the graph summaries (host, reads, writes, owned creations, unsummarized calls, escapes, `exact` / `bounded` / `unknown` completeness) of that file's marked callbacks. Programmatically, per file:
+
+```js
+import { analyzeStrictFile } from "@solidjs/typecheck";
+const { blocks, diagnostics } = analyzeStrictFile(fileName, text);
+```
+
+`diagnostics` are TypeScript-shaped (`file`, `start`, `length`, `messageText`, `code`, `source: "solid-strict"`) on the authored text, and every `site` in `blocks` is an authored UTF-16 offset with 1-based line/column — the boundary a language-service plugin consumes without any position mapping. The syntax, diagnostics and summary contract are documented in `documentation/plans/strict-solid-tsx.md`.
 
 ## Editor limitation
 

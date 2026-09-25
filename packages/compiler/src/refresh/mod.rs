@@ -117,6 +117,7 @@ pub fn transform_refresh(
             map: None,
             css: None,
             css_hash: None,
+            strict_blocks: None,
         });
     }
 
@@ -134,5 +135,6 @@ pub fn transform_refresh(
         map: build.map.map(|map| map.to_json_string()),
         css: None,
         css_hash: None,
+        strict_blocks: None,
     })
 }

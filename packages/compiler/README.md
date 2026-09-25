@@ -47,6 +47,23 @@ const result = transform(source, {
 
 `contextToCustomElements` defaults to `true`. Use `dev: true` with `hydratable: true` to emit hydration walk helpers such as `getFirstChild` / `getNextSibling`.
 
+### Strict `$(fn)` callbacks (experimental)
+
+A non-generator callback marked with `$` from `solid-js` / `@solidjs/signals` is compiled strictly for its statically known host and the marker is erased:
+
+```js
+const { code, strictBlocks } = transform(
+  `import { $, createMemo, createSignal } from "solid-js";
+   const [count] = createSignal(1);
+   export const doubled = createMemo($(() => count() * 2));`,
+  { filename: "App.tsx" }
+);
+// code: … createMemo(() => count() * 2) …
+// strictBlocks.blocks[0]: { host: { kind: "memo" }, reads: [{ kind: "signal", root: "count", … }], completeness: "exact", … }
+```
+
+Hosts: the first argument of `createMemo` / `createSignal` / `createEffect` / `createRenderEffect`, a DOM `on*` attribute, or a `const` used only in those positions. A callback that cannot be compiled — an accessor, store or capturing closure handed to an unsummarized helper, a write in a reactive host, a reactive read after `await`, an unknown host — fails the transform with a `[STRICT_…]` diagnostic (line:column). `analyzeStrictBlocks(code, { filename })` returns the same summary and all diagnostics without rewriting. See `documentation/plans/strict-solid-tsx.md`.
+
 ### SSR
 
 SSR still imports runtime helpers from `@solidjs/web`. Set `generate: "ssr"` (and `hydratable: true` when the client will hydrate).

@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "blocks": [
+    {
+      "id": "src/mixed-generator.tsx#0",
+      "host": {
+        "kind": "memo",
+        "factory": "createMemo",
+        "events": [],
+        "sites": [
+          {
+            "start": 395,
+            "end": 415,
+            "line": 12,
+            "column": 37
+          }
+        ]
+      },
+      "marker": {
+        "start": 395,
+        "end": 415,
+        "line": 12,
+        "column": 37
+      },
+      "callback": {
+        "start": 397,
+        "end": 414,
+        "line": 12,
+        "column": 39
+      },
+      "async": false,
+      "awaits": [],
+      "reads": [
+        {
+          "kind": "signal",
+          "root": "count",
+          "path": [],
+          "access": "path",
+          "certainty": "exact",
+          "tracked": true,
+          "afterAwait": false,
+          "site": {
+            "start": 403,
+            "end": 410,
+            "line": 12,
+            "column": 45
+          }
+        }
+      ],
+      "writes": [],
+      "creations": [],
+      "calls": [],
+      "opaque": [],
+      "escapes": [],
+      "completeness": "exact",
+      "diagnostics": []
+    },
+    {
+      "id": "src/mixed-generator.tsx#1",
+      "host": {
+        "kind": "event",
+        "factory": null,
+        "events": [
+          "click"
+        ],
+        "sites": [
+          {
+            "start": 780,
+            "end": 800,
+            "line": 23,
+            "column": 24
+          }
+        ]
+      },
+      "marker": {
+        "start": 780,
+        "end": 800,
+        "line": 23,
+        "column": 24
+      },
+      "callback": {
+        "start": 782,
+        "end": 799,
+        "line": 23,
+        "column": 26
+      },
+      "async": false,
+      "awaits": [],
+      "reads": [],
+      "writes": [
+        {
+          "kind": "signal",
+          "target": "setCount",
+          "certainty": "exact",
+          "afterAwait": false,
+          "site": {
+            "start": 788,
+            "end": 799,
+            "line": 23,
+            "column": 32
+          }
+        }
+      ],
+      "creations": [],
+      "calls": [],
+      "opaque": [],
+      "escapes": [],
+      "completeness": "exact",
+      "diagnostics": []
+    }
+  ],
+  "diagnostics": []
+}
