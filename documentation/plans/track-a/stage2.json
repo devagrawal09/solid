@@ -1,0 +1,341 @@
+{
+  "env": {
+    "date": "2026-09-25T06:53:28.825Z",
+    "commit": "665e128e83424903a5a514ebd5c23573ee240704",
+    "node": "v22.22.2",
+    "gzip": "level 9",
+    "brotli": "quality 11"
+  },
+  "floor": {
+    "full": {
+      "raw": 54482,
+      "gzip": 19886,
+      "brotli": 17975,
+      "modules": {
+        "core/constants.js": 90,
+        "core/lanes.js": 772,
+        "core/scheduler.js": 6775,
+        "core/heap.js": 1202,
+        "core/owner.js": 1518,
+        "core/graph.js": 914,
+        "core/async.js": 4404,
+        "core/core.js": 7175,
+        "core/error.js": 441,
+        "core/context.js": 271,
+        "core/effect.js": 909,
+        "generator.js": 4300,
+        "signals.js": 378,
+        "boundaries.js": 2588,
+        "store/next/target.js": 208,
+        "store/store.js": 1149,
+        "store/next/store.js": 16338,
+        "store/next/reconcile.js": 3245,
+        "store/next/projection.js": 1567,
+        "store/index.js": 76
+      }
+    },
+    "sync": {
+      "raw": 45212,
+      "gzip": 16527,
+      "brotli": 14958,
+      "modules": {
+        "core/constants.js": 90,
+        "core/error.js": 340,
+        "core/owner.js": 1509,
+        "core/graph.js": 903,
+        "core/lanes.js": 42,
+        "core/scheduler.js": 4399,
+        "core/heap.js": 1178,
+        "core/async.js": 724,
+        "core/core.js": 5290,
+        "core/effect.js": 822,
+        "generator.js": 4300,
+        "store/store.js": 1114,
+        "store/next/target.js": 208,
+        "store/next/store.js": 16179,
+        "signals.js": 378,
+        "index.sync.js": 336,
+        "boundaries.js": 2388,
+        "store/next/reconcile.js": 3256,
+        "store/next/projection.js": 1518,
+        "store/index.js": 76
+      }
+    }
+  },
+  "apps": {
+    "sync-blocks client (linker)": {
+      "raw": 62976,
+      "gzip": 23033,
+      "brotli": 20756,
+      "buildMs": 1347,
+      "modules": 25,
+      "signalsModules": [
+        "packages/signals/dist/sync/boundaries.js",
+        "packages/signals/dist/sync/core/async.js",
+        "packages/signals/dist/sync/core/constants.js",
+        "packages/signals/dist/sync/core/core.js",
+        "packages/signals/dist/sync/core/effect.js",
+        "packages/signals/dist/sync/core/error.js",
+        "packages/signals/dist/sync/core/graph.js",
+        "packages/signals/dist/sync/core/heap.js",
+        "packages/signals/dist/sync/core/lanes.js",
+        "packages/signals/dist/sync/core/owner.js",
+        "packages/signals/dist/sync/core/scheduler.js",
+        "packages/signals/dist/sync/core/status-free.js",
+        "packages/signals/dist/sync/generator.js",
+        "packages/signals/dist/sync/map.js",
+        "packages/signals/dist/sync/signals.js",
+        "packages/signals/dist/sync/store/index.js",
+        "packages/signals/dist/sync/store/next/projection.js",
+        "packages/signals/dist/sync/store/next/reconcile.js",
+        "packages/signals/dist/sync/store/next/store.js",
+        "packages/signals/dist/sync/store/next/target.js",
+        "packages/signals/dist/sync/store/store.js"
+      ]
+    },
+    "sync-blocks client (full runtime)": {
+      "raw": 71931,
+      "gzip": 26260,
+      "brotli": 23679,
+      "buildMs": 1169,
+      "modules": 25,
+      "signalsModules": [
+        "packages/signals/dist/prod/boundaries.js",
+        "packages/signals/dist/prod/core/async.js",
+        "packages/signals/dist/prod/core/constants.js",
+        "packages/signals/dist/prod/core/core.js",
+        "packages/signals/dist/prod/core/effect.js",
+        "packages/signals/dist/prod/core/error.js",
+        "packages/signals/dist/prod/core/graph.js",
+        "packages/signals/dist/prod/core/heap.js",
+        "packages/signals/dist/prod/core/lanes.js",
+        "packages/signals/dist/prod/core/owner.js",
+        "packages/signals/dist/prod/core/scheduler.js",
+        "packages/signals/dist/prod/core/status-free.js",
+        "packages/signals/dist/prod/generator.js",
+        "packages/signals/dist/prod/map.js",
+        "packages/signals/dist/prod/signals.js",
+        "packages/signals/dist/prod/store/index.js",
+        "packages/signals/dist/prod/store/next/projection.js",
+        "packages/signals/dist/prod/store/next/reconcile.js",
+        "packages/signals/dist/prod/store/next/store.js",
+        "packages/signals/dist/prod/store/next/target.js",
+        "packages/signals/dist/prod/store/store.js"
+      ]
+    },
+    "sync-blocks server (linker)": {
+      "raw": 76664,
+      "gzip": 19171,
+      "brotli": 16967,
+      "buildMs": 1044,
+      "modules": 14,
+      "signalsModules": [
+        "packages/signals/dist/sync/core/async.js",
+        "packages/signals/dist/sync/core/constants.js",
+        "packages/signals/dist/sync/core/core.js",
+        "packages/signals/dist/sync/core/error.js",
+        "packages/signals/dist/sync/core/graph.js",
+        "packages/signals/dist/sync/core/heap.js",
+        "packages/signals/dist/sync/core/lanes.js",
+        "packages/signals/dist/sync/core/owner.js",
+        "packages/signals/dist/sync/core/scheduler.js",
+        "packages/signals/dist/sync/generator.js",
+        "packages/signals/dist/sync/store/store.js"
+      ]
+    },
+    "sync-blocks server (full runtime)": {
+      "raw": 96711,
+      "gzip": 23417,
+      "brotli": 20733,
+      "buildMs": 1064,
+      "modules": 14,
+      "signalsModules": [
+        "packages/signals/dist/prod/core/async.js",
+        "packages/signals/dist/prod/core/constants.js",
+        "packages/signals/dist/prod/core/core.js",
+        "packages/signals/dist/prod/core/error.js",
+        "packages/signals/dist/prod/core/graph.js",
+        "packages/signals/dist/prod/core/heap.js",
+        "packages/signals/dist/prod/core/lanes.js",
+        "packages/signals/dist/prod/core/owner.js",
+        "packages/signals/dist/prod/core/scheduler.js",
+        "packages/signals/dist/prod/generator.js",
+        "packages/signals/dist/prod/store/store.js"
+      ]
+    }
+  },
+  "linkerReport": {
+    "asyncFree": true,
+    "entry": "@solidjs/signals/sync",
+    "reasons": [],
+    "modules": [
+      "src/app.tsx"
+    ],
+    "libraries": {
+      "solid-js": [
+        "$",
+        "For",
+        "Show",
+        "createMemo",
+        "createSignal",
+        "createStore",
+        "readStore",
+        "write"
+      ]
+    },
+    "counts": {
+      "computes": 5,
+      "computesLocal": 3,
+      "computesTyped": 2,
+      "props": 2,
+      "propsChecked": 2,
+      "assets": 0,
+      "dynamicImports": 0
+    },
+    "graph": "server"
+  },
+  "controls": {
+    "examples/todos (handwritten)": {
+      "asyncFree": false,
+      "modules": 5,
+      "counts": {
+        "computes": 1,
+        "computesLocal": 0,
+        "computesTyped": 0,
+        "props": 7,
+        "propsChecked": 5,
+        "assets": 0,
+        "dynamicImports": 0
+      },
+      "reasons": [
+        {
+          "file": "src/app.tsx",
+          "line": null,
+          "reason": "imports async capability `Loading` from solid-js"
+        },
+        {
+          "file": "src/app.tsx",
+          "line": 50,
+          "reason": "<Show when> not proven synchronous"
+        },
+        {
+          "file": "src/app.tsx",
+          "line": 86,
+          "reason": "<For each> not proven synchronous"
+        },
+        {
+          "file": "src/todos.ts",
+          "line": null,
+          "reason": "imports async capability `action` from solid-js"
+        },
+        {
+          "file": "src/todos.ts",
+          "line": null,
+          "reason": "imports async capability `createOptimisticStore` from solid-js"
+        },
+        {
+          "file": "src/todos.ts",
+          "line": null,
+          "reason": "imports async capability `refresh` from solid-js"
+        },
+        {
+          "file": "src/filter.ts",
+          "line": 22,
+          "reason": "`createSignal` compute not proven synchronous (value-or-compute call argument; no typed summary)"
+        },
+        {
+          "file": null,
+          "line": null,
+          "reason": "@solidjs/signals ships no async-free entry"
+        }
+      ],
+      "proofMsMedian": 1.96
+    },
+    "examples/todos-blocks": {
+      "asyncFree": false,
+      "modules": 5,
+      "counts": {
+        "computes": 5,
+        "computesLocal": 1,
+        "computesTyped": 0,
+        "props": 7,
+        "propsChecked": 5,
+        "assets": 0,
+        "dynamicImports": 0
+      },
+      "reasons": [
+        {
+          "file": "src/app.tsx",
+          "line": null,
+          "reason": "imports async capability `Loading` from solid-js"
+        },
+        {
+          "file": "src/app.tsx",
+          "line": 106,
+          "reason": "`createMemo` compute not proven synchronous (block result not proven plain; no typed summary)"
+        },
+        {
+          "file": "src/app.tsx",
+          "line": 118,
+          "reason": "`createMemo` compute not proven synchronous (block result not proven plain; no typed summary)"
+        },
+        {
+          "file": "src/app.tsx",
+          "line": 152,
+          "reason": "`createMemo` compute not proven synchronous (block result not proven plain; no typed summary)"
+        },
+        {
+          "file": "src/app.tsx",
+          "line": 93,
+          "reason": "<Show when> not proven synchronous"
+        },
+        {
+          "file": "src/app.tsx",
+          "line": 141,
+          "reason": "<For each> not proven synchronous"
+        },
+        {
+          "file": "src/todos.ts",
+          "line": null,
+          "reason": "imports async capability `action` from solid-js"
+        },
+        {
+          "file": "src/todos.ts",
+          "line": null,
+          "reason": "imports async capability `createOptimisticStore` from solid-js"
+        },
+        {
+          "file": "src/todos.ts",
+          "line": null,
+          "reason": "imports async capability `refresh` from solid-js"
+        },
+        {
+          "file": "src/filter.ts",
+          "line": 26,
+          "reason": "`createSignal` compute not proven synchronous (value-or-compute call argument; no typed summary)"
+        },
+        {
+          "file": null,
+          "line": null,
+          "reason": "@solidjs/signals ships no async-free entry"
+        }
+      ],
+      "proofMsMedian": 1.69
+    },
+    "examples/sync-blocks": {
+      "asyncFree": true,
+      "modules": 2,
+      "counts": {
+        "computes": 5,
+        "computesLocal": 3,
+        "computesTyped": 2,
+        "props": 2,
+        "propsChecked": 2,
+        "assets": 0,
+        "dynamicImports": 0
+      },
+      "reasons": [],
+      "proofMsMedian": 0.56
+    }
+  }
+}

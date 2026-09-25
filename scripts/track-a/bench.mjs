@@ -43,7 +43,11 @@ const MODES = {
 // `--runtime <path>` measures against another signals build (e.g. a saved
 // stage-1 dist/prod snapshot) instead of packages/signals/dist/prod.
 const RUNTIME = args.runtime;
-const outDir = join(ROOT, "node_modules/.cache/track-a/modules");
+const outDir = join(
+  ROOT,
+  "node_modules/.cache/track-a/modules",
+  (RUNTIME ?? "prod").replace(/\W+/g, "-")
+);
 mkdirSync(outDir, { recursive: true });
 const modules = {};
 for (const scenario of SCENARIOS) {

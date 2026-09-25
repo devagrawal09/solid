@@ -1,0 +1,105 @@
+{
+  "env": {
+    "date": "2026-09-25T07:35:05.645Z",
+    "node": "v22.22.2",
+    "reps": 200
+  },
+  "results": {
+    "examples/todos-blocks/src/app.tsx": {
+      "sourceBytes": 7318,
+      "unfused": {
+        "medianUs": 698.3,
+        "p10Us": 609.9,
+        "p90Us": 898.2,
+        "emittedBytes": 10461
+      },
+      "fused": {
+        "medianUs": 803.4,
+        "p10Us": 726.8,
+        "p90Us": 923.5,
+        "emittedBytes": 10376
+      },
+      "fused+proofs": {
+        "medianUs": 784.3,
+        "p10Us": 717.6,
+        "p90Us": 937.2,
+        "emittedBytes": 10433
+      },
+      "unfused+proofs": {
+        "medianUs": 623.3,
+        "p10Us": 575,
+        "p90Us": 728.2,
+        "emittedBytes": 10521
+      },
+      "summarizeCapabilities": {
+        "medianUs": 142.1,
+        "p10Us": 131.4,
+        "p90Us": 179.1
+      }
+    },
+    "examples/sync-blocks/src/app.tsx": {
+      "sourceBytes": 3641,
+      "unfused": {
+        "medianUs": 294,
+        "p10Us": 260,
+        "p90Us": 378.9,
+        "emittedBytes": 5038
+      },
+      "fused": {
+        "medianUs": 373.8,
+        "p10Us": 327.7,
+        "p90Us": 460.7,
+        "emittedBytes": 4938
+      },
+      "fused+proofs": {
+        "medianUs": 395.4,
+        "p10Us": 347.1,
+        "p90Us": 569.5,
+        "emittedBytes": 5051
+      },
+      "unfused+proofs": {
+        "medianUs": 291.4,
+        "p10Us": 259.8,
+        "p90Us": 413,
+        "emittedBytes": 5160
+      },
+      "summarizeCapabilities": {
+        "medianUs": 62.4,
+        "p10Us": 60.6,
+        "p90Us": 76.5
+      }
+    },
+    "examples/sync-blocks/src/main.tsx": {
+      "sourceBytes": 126,
+      "unfused": {
+        "medianUs": 8.1,
+        "p10Us": 8,
+        "p90Us": 8.4,
+        "emittedBytes": 213
+      },
+      "fused": {
+        "medianUs": 8.3,
+        "p10Us": 8.2,
+        "p90Us": 8.6,
+        "emittedBytes": 213
+      },
+      "fused+proofs": {
+        "medianUs": 8.3,
+        "p10Us": 8.1,
+        "p90Us": 8.6,
+        "emittedBytes": 213
+      },
+      "unfused+proofs": {
+        "medianUs": 8.2,
+        "p10Us": 8,
+        "p90Us": 8.4,
+        "emittedBytes": 213
+      },
+      "summarizeCapabilities": {
+        "medianUs": 4.9,
+        "p10Us": 4.7,
+        "p90Us": 5.3
+      }
+    }
+  }
+}
