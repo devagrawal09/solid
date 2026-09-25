@@ -51,7 +51,10 @@ describe("classification (client graph)", () => {
       // Reached only from extracted bodies, including an import cycle.
       "src/utils/cycle-a.ts": "cold",
       "src/utils/cycle-b.ts": "cold",
-      "src/utils/describe.ts": "cold",
+      // Small, and reached by both domains: kept hot rather than becoming a
+      // shared chunk of its own.
+      "src/utils/describe.ts": "shared",
+      "src/utils/validate.ts": "cold",
       "src/utils/report.ts": "cold",
       // A library with a valid summary is analyzed like application code...
       "../libs/ui-kit/dist/index.js": "cold",
@@ -67,7 +70,7 @@ describe("classification (client graph)", () => {
   it("moves cold-only statements of hot modules to residues, pinning what cannot move (fixed point)", () => {
     const modules = byModule(client);
     expect(modules["src/features/editor.tsx"].residue).toEqual(["resetMessage"]);
-    expect(modules["src/utils/validate.ts"].residue).toEqual(["validate"]);
+    expect(modules["src/utils/validate.ts"].residue).toEqual([]);
     // Effectful module: the effect stays hot, the cold-only bindings move.
     expect(modules["src/utils/telemetry.ts"].residue).toEqual(["beacon", "beacons"]);
     // `LIMIT` is imported by a cold (non-generated) module: pinned and re-rooted hot.
@@ -76,7 +79,14 @@ describe("classification (client graph)", () => {
     );
     expect(limit).toMatchObject({ class: "shared", moved: false });
     expect(modules["src/features/stats.ts"].residue).toEqual([]);
-    expect(client.iterations).toBe(2);
+    expect(client.iterations).toBe(3);
+    expect(client.sharedRetained).toEqual([
+      {
+        dependency: "src/utils/describe.ts",
+        domains: client.domains.map(d => d.id).sort(),
+        bytes: 121
+      }
+    ]);
     // A registered action keeps its identity: created by module evaluation, never moved.
     const persist = client.bindings.find(b => b.module === "src/state.ts" && b.name === "persist");
     expect(persist).toMatchObject({ class: "shared", moved: false });

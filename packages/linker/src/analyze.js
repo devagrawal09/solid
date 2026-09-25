@@ -53,7 +53,13 @@ function within(inner, outer) {
  */
 export function analyze(
   graph,
-  { environment = "client", strict = true, maxDomainBytes = 48 * 1024, root } = {}
+  {
+    environment = "client",
+    strict = true,
+    maxDomainBytes = 48 * 1024,
+    sharedColdBytes = 4096,
+    root
+  } = {}
 ) {
   const started = performance.now();
   const modules = graph.modules;
@@ -690,55 +696,168 @@ export function analyze(
   // -- fixed point -------------------------------------------------------------------------
   let iterations = 0;
   let moved = new Map();
+  let domains;
+  let staticRoots;
+  const sharedRetained = new Map();
   for (;;) {
-    iterations++;
-    propagate();
-    let changed = false;
-    // A candidate whose shell would not be in hot code (its statement is not
-    // hot-evaluated) is not extracted.
-    for (const [key, candidate] of candidates) {
-      const entry = info.get(candidate.module);
-      const statement = containingStatement(entry, candidate.block.span);
-      const hot = statement
-        ? statement.bindings.some(name => labelOf(candidate.module, name) & (HOT | UNKNOWN))
-        : evaluatedHot(candidate.module);
-      if (!hot) {
-        candidates.delete(key);
-        candidate.reasons.push("shellNotHot");
-        changed = true;
-      }
-    }
-    if (changed) continue;
-    moved = new Map();
-    for (const [id, entry] of info) {
-      if (
-        entry.record.kind !== "app" ||
-        !entry.record.behavior ||
-        !evaluatedHot(id) ||
-        entry.opaque
-      )
-        continue;
-      for (const statement of entry.statements.values()) {
-        const labels = statement.bindings.map(name => labelOf(id, name));
-        if (!labels.some(label => label === COLD)) continue;
-        const pin = pinReason(id, entry, statement, labels);
-        if (pin) {
-          for (const name of statement.bindings) {
-            if (labelOf(id, name) === COLD) {
-              retained.add(node(id, name));
-              changed = true;
-            }
-          }
-          entry.pins ??= new Map();
-          for (const name of statement.bindings) entry.pins.set(name, pin);
-          continue;
+    for (;;) {
+      iterations++;
+      propagate();
+      let changed = false;
+      // A candidate whose shell would not be in hot code (its statement is not
+      // hot-evaluated) is not extracted.
+      for (const [key, candidate] of candidates) {
+        const entry = info.get(candidate.module);
+        const statement = containingStatement(entry, candidate.block.span);
+        const hot = statement
+          ? statement.bindings.some(name => labelOf(candidate.module, name) & (HOT | UNKNOWN))
+          : evaluatedHot(candidate.module);
+        if (!hot) {
+          candidates.delete(key);
+          candidate.reasons.push("shellNotHot");
+          changed = true;
         }
-        let list = moved.get(id);
-        if (!list) moved.set(id, (list = []));
-        list.push(statement);
+      }
+      if (changed) continue;
+      moved = new Map();
+      for (const [id, entry] of info) {
+        if (
+          entry.record.kind !== "app" ||
+          !entry.record.behavior ||
+          !evaluatedHot(id) ||
+          entry.opaque
+        )
+          continue;
+        for (const statement of entry.statements.values()) {
+          const labels = statement.bindings.map(name => labelOf(id, name));
+          if (!labels.some(label => label === COLD)) continue;
+          const pin = pinReason(id, entry, statement, labels);
+          if (pin) {
+            for (const name of statement.bindings) {
+              if (labelOf(id, name) === COLD) {
+                retained.add(node(id, name));
+                changed = true;
+              }
+            }
+            entry.pins ??= new Map();
+            for (const name of statement.bindings) entry.pins.set(name, pin);
+            continue;
+          }
+          let list = moved.get(id);
+          if (!list) moved.set(id, (list = []));
+          list.push(statement);
+        }
+      }
+      if (!changed) break;
+    }
+    staticRoots = computeRoots(graph, info, lazyRoots, resolvedId);
+    domains = cluster({
+      candidates,
+      info,
+      moved,
+      labelOf,
+      staticRoots,
+      resolveImportBinding,
+      maxDomainBytes,
+      modules
+    });
+    // A small cold dependency reached by several domains would become its own
+    // shared chunk (one more request on the first interaction of each domain
+    // for a few bytes): keep it hot instead, and re-run the fixed point.
+    const shared = sharedColdDependencies(domains);
+    let retainedMore = false;
+    for (const [dep, { domains: reached, bytes }] of shared) {
+      if (reached.size < 2 || bytes >= sharedColdBytes || sharedRetained.has(dep)) continue;
+      sharedRetained.set(dep, { domains: [...reached].sort(), bytes });
+      retainedMore = true;
+      if (dep.startsWith("residue:")) {
+        const id = dep.slice(8);
+        for (const statement of moved.get(id) ?? []) {
+          for (const name of statement.bindings) retained.add(node(id, name));
+          const entry = info.get(id);
+          entry.pins ??= new Map();
+          for (const name of statement.bindings) entry.pins.set(name, "sharedColdSmall");
+        }
+      } else {
+        retained.add(node(dep));
+        for (const name of info.get(dep).bindings.keys()) retained.add(node(dep, name));
       }
     }
-    if (!changed) break;
+    if (!retainedMore) break;
+  }
+
+  /**
+   * Transitive cold dependencies of every domain: residue modules
+   * (`residue:<id>`) and cold modules (`<id>`), with their source size and
+   * the domains reaching them.
+   */
+  function sharedColdDependencies(domainList) {
+    const result = new Map();
+    const movedNames = id =>
+      new Set((moved.get(id) ?? []).flatMap(statement => statement.bindings));
+    const residueBytes = id =>
+      (moved.get(id) ?? []).reduce(
+        (sum, statement) => sum + statement.span.end - statement.span.start,
+        0
+      );
+    for (const domain of domainList) {
+      const seen = new Set();
+      const stack = [];
+      const visitImportBinding = (id, local) => {
+        const linked = resolveImportBinding(id, local);
+        if (!linked?.module) return;
+        if (linked.binding && movedNames(linked.module).has(linked.binding))
+          stack.push(`residue:${linked.module}`);
+        else if (!evaluatedHot(linked.module)) stack.push(linked.module);
+      };
+      const visitRefs = (id, names) => {
+        const entry = info.get(id);
+        const movedHere = movedNames(id);
+        for (const name of names) {
+          const binding = entry.bindings.get(name);
+          if (!binding) continue;
+          if (binding.kind === "import") visitImportBinding(id, name);
+          else if (movedHere.has(name)) stack.push(`residue:${id}`);
+        }
+      };
+      for (const key of domain.blocks) {
+        const candidate = candidates.get(key);
+        visitRefs(
+          candidate.module,
+          candidate.block.body.captures
+            .filter(c => c.scope === "module" || c.scope === "import")
+            .map(c => c.name)
+        );
+      }
+      while (stack.length) {
+        const dep = stack.pop();
+        if (seen.has(dep)) continue;
+        seen.add(dep);
+        let entry = result.get(dep);
+        if (!entry) {
+          const bytes = dep.startsWith("residue:")
+            ? residueBytes(dep.slice(8))
+            : (info.get(dep)?.record.text?.length ?? Infinity);
+          result.set(dep, (entry = { domains: new Set(), bytes }));
+        }
+        entry.domains.add(domain.id);
+        if (dep.startsWith("residue:")) {
+          const id = dep.slice(8);
+          const names = new Set();
+          for (const statement of moved.get(id) ?? [])
+            for (const name of statement.refs.keys()) names.add(name);
+          visitRefs(id, names);
+        } else {
+          const record = info.get(dep)?.record;
+          if (!record?.behavior) continue;
+          visitRefs(
+            dep,
+            record.behavior.bindings.filter(b => b.kind === "import").map(b => b.name)
+          );
+        }
+      }
+    }
+    return result;
   }
 
   function pinReason(id, entry, statement, labels) {
@@ -766,19 +885,6 @@ export function analyze(
     }
     return null;
   }
-
-  // -- clustering -----------------------------------------------------------------------------
-  const staticRoots = computeRoots(graph, info, lazyRoots, resolvedId);
-  const domains = cluster({
-    candidates,
-    info,
-    moved,
-    labelOf,
-    staticRoots,
-    resolveImportBinding,
-    maxDomainBytes,
-    modules
-  });
 
   // -- results ------------------------------------------------------------------------------------
   const moduleClasses = [];
@@ -853,6 +959,12 @@ export function analyze(
     blocks,
     nonLiteralDynamicImport,
     iterations,
+    sharedRetained: [...sharedRetained].map(([dep, value]) => ({
+      dependency: dep.startsWith("residue:")
+        ? `residue:${modules.get(dep.slice(8)).rel}`
+        : modules.get(dep).rel,
+      ...value
+    })),
     lazyRoots: [...lazyRoots].map(id => modules.get(id).rel).sort(),
     time: performance.now() - started
   };

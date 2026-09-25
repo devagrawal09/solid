@@ -159,6 +159,16 @@ export function coldEvent(domain, key, env, prelude, snapshot) {
   });
 }
 
+/**
+ * Keep a module the linker retained hot (a small cold dependency shared by
+ * several domains) in the entry chunk: the entry passes its namespace here,
+ * a reference no bundler can tree-shake.
+ */
+const retained = (globalThis[Symbol.for("solid.cold.retained")] ??= []);
+export function coldRetain(namespace) {
+  retained.push(namespace);
+}
+
 /** Test helper: forget registered domains. */
 export function resetColdRuntime() {
   domains.clear();

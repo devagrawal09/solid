@@ -50,10 +50,13 @@ describe("chunking", () => {
     for (const marker of ["empty title", "save #", "function resetMessage", "__telemetryLoaded"]) {
       expect(baseMain.code).toContain(marker);
     }
-    // Cold-only helpers left the entry; the effectful module's effect did not.
-    for (const marker of ["empty title", "save #", "function resetMessage"])
+    // Cold-only helpers left the entry; the effectful module's effect did
+    // not, nor did the small helper both domains use (retained hot).
+    for (const marker of ["empty title", "function resetMessage", "function collapse"]) {
       expect(main.code).not.toContain(marker);
+    }
     expect(main.code).toContain("__telemetryLoaded");
+    expect(main.code).toContain("save #");
     // Domains are reached only dynamically.
     const coldFiles = cold.manifest.domains.map(d => d.chunk);
     for (const chunk of chunks(cold))
@@ -75,7 +78,6 @@ describe("chunking", () => {
       expect.arrayContaining([
         "src/utils/cycle-a.ts",
         "src/utils/cycle-b.ts",
-        "src/utils/describe.ts",
         "src/features/editor__solid_residue.tsx",
         "src/features/editor__solid_cold_b0.tsx"
       ])
@@ -148,8 +150,8 @@ describe("source maps", () => {
     const beacon = locate('beacon("submit")');
     expect(beacon.source).toMatch(/src\/features\/editor\.tsx$/);
     expect(editor[beacon.line - 1]).toContain('beacon("submit")');
-    const describe = locate("save #");
-    expect(describe.source).toMatch(/src\/utils\/describe\.ts$/);
+    const collapse = locate("replace(/\\s+/g");
+    expect(collapse.source).toMatch(/src\/utils\/cycle-b\.ts$/);
   });
 });
 

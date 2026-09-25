@@ -244,10 +244,38 @@ export function planExtraction(
   // Hot module rewrites.
   for (const plan of hot.values()) {
     plan.transform = code =>
-      transformHot(plan, code, { info, labelOf, evaluatedHot, prefetch, runtimeModule });
+      transformHot(plan, code, {
+        info,
+        labelOf,
+        resolveImportBinding,
+        prefetch,
+        runtimeModule
+      });
   }
 
-  return { hot, virtual, chunkOf, domains, domainIds, domainOfId };
+  // Modules the linker retained hot for chunking (small cold dependencies
+  // shared by several domains). No hot code references them once the
+  // handlers are extracted, so the entry pins them explicitly
+  // (`coldRetain(namespace)`), or a bundler would give them a chunk of
+  // their own after all.
+  const retainedModules = new Set();
+  for (const [id, entry] of info) {
+    if (analysis.sharedRetained.some(item => item.dependency === entry.record.rel))
+      retainedModules.add(id);
+  }
+  if (retainedModules.size && analysis.graph.entries.length) {
+    const entryPlan = hotPlan(analysis.graph.entries[0]);
+    entryPlan.retain = [...retainedModules].sort();
+    entryPlan.transform = code =>
+      transformHot(entryPlan, code, {
+        info,
+        labelOf,
+        resolveImportBinding,
+        prefetch,
+        runtimeModule
+      });
+  }
+  return { hot, virtual, chunkOf, domains, domainIds, domainOfId, retainedModules };
 }
 
 function runtimeSourceOf(record) {
@@ -265,7 +293,11 @@ function relativeSource(fromId, source) {
   return relativePath;
 }
 
-function transformHot(plan, code, { info, labelOf, prefetch, runtimeModule }) {
+function transformHot(
+  plan,
+  code,
+  { info, labelOf, resolveImportBinding, prefetch, runtimeModule }
+) {
   const entry = info.get(plan.id);
   const record = entry.record;
   if (code !== record.text) {
@@ -285,9 +317,15 @@ function transformHot(plan, code, { info, labelOf, prefetch, runtimeModule }) {
     let dropped = false;
     for (const specifier of declaration.specifiers) {
       const label = labelOf(plan.id, specifier.local);
-      if (specifier.type || !specifier.used || label & HOT_OR_UNKNOWN || label === 0)
+      // Keep it when the binding it resolves to is hot anyway (possibly only
+      // because the linker retained it): dropping the last hot import of a
+      // retained module would hand it to the cold chunks after all.
+      const linked = resolveImportBinding(plan.id, specifier.local);
+      const targetHot =
+        linked?.module && linked.binding && labelOf(linked.module, linked.binding) & HOT_OR_UNKNOWN;
+      if (specifier.type || !specifier.used || label & HOT_OR_UNKNOWN || label === 0 || targetHot) {
         kept.push(specifier);
-      else dropped = true;
+      } else dropped = true;
     }
     if (!dropped) continue;
     const target = record.resolved.get(declaration.source);
@@ -364,6 +402,20 @@ function transformHot(plan, code, { info, labelOf, prefetch, runtimeModule }) {
     header.push(
       `import { coldEvent as __solid_coldEvent, coldDomain as __solid_coldDomain } from ${JSON.stringify(runtimeModule)};`,
       ...domainLines
+    );
+  }
+  if (plan.retain?.length) {
+    header.push(
+      `import { coldRetain as __solid_coldRetain } from ${JSON.stringify(runtimeModule)};`,
+      ...plan.retain.map(
+        (id, index) =>
+          `import * as __solid_retained_${index} from ${JSON.stringify(relativeSource(plan.id, id))};`
+      )
+    );
+    ms.append(
+      "\n" +
+        plan.retain.map((_, index) => `__solid_coldRetain(__solid_retained_${index});`).join("\n") +
+        "\n"
     );
   }
   if (header.length) {

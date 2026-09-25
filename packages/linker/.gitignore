@@ -1,0 +1,4 @@
+# Generated benchmark apps and build outputs (recreated by bench/run.mjs).
+bench/.apps/
+bench/.out/
+bench/.out-run.log

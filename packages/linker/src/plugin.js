@@ -124,7 +124,8 @@ export function solidColdEvents(options = {}) {
 
     load(id) {
       const generated = plan?.virtual.get(id);
-      return generated ? { code: generated.code, map: generated.map } : null;
+      if (generated) return { code: generated.code, map: generated.map };
+      return null;
     },
 
     transform(code, id) {
