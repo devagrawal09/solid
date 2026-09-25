@@ -15,7 +15,8 @@
     "README.md"
   ],
   "scripts": {
-    "test": "vitest run"
+    "test": "vitest run",
+    "bench": "node --experimental-vm-modules bench/run.mjs"
   },
   "dependencies": {
     "@solidjs/compiler": "workspace:*",
