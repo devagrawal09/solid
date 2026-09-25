@@ -165,7 +165,8 @@ export type PathValue<R, P> = P extends readonly [infer K, ...infer Rest]
  * props.filter` with `filter: SourceAccessor<Filter>` is a `Filter`.
  */
 export type PathResult<R, P> = ReadThrough<PathValue<R, P>>;
-type ReadThrough<V> = V extends AnyBlock
+/** A value read through when readable: a block's value, an accessor's value, else itself. */
+export type ReadThrough<V> = V extends AnyBlock
   ? BlockValue<V>
   : V extends SourceAccessor<infer T>
     ? T
@@ -1026,6 +1027,35 @@ function isToken(value: unknown): boolean {
 }
 
 /**
+ * The fused form of a lowered path read. With the compiler's `hostFusion`
+ * option, a block that is the direct argument of a reactive host is erased
+ * into the host's own compute function (`createMemo($(fn))` →
+ * `createMemo(fn)`), and `perform(readPath(root, ["a", "b"]))` becomes
+ * `readValue(root.a.b)`: the member chain is the tracked walk itself (inside
+ * a computation the strict guard is down, so a store proxy answers with
+ * values, not path tokens), and this keeps the one step the chain cannot
+ * express — reading *through* a readable found at the path, an accessor or
+ * a block, as `yield*` does on that value — under the reactive host the
+ * erased block ran as. A block that waits cannot be read through in call
+ * form (`[ASYNC_BLOCK_OUTSIDE_DRIVER]`). Not a use-site helper.
+ */
+export function readValue<V>(value: V): ReadThrough<V> {
+  if (
+    typeof value === "function" &&
+    ((value as any)[BLOCK] || Symbol.iterator in (value as object))
+  ) {
+    // Between `runBlockAs` calls the pending host is unset, so a direct call
+    // runs a block under the reactive host — exactly what `delegateSync` does
+    // from a reactive block — and an accessor call is the tracked read
+    // (`readGuarded` is a no-op with the guard already down).
+    const result = (value as () => unknown)();
+    if ((value as any)[BLOCK] && isThenableValue(result)) throw asyncBlockError();
+    return result as ReadThrough<V>;
+  }
+  return value as ReadThrough<V>;
+}
+
+/**
  * Suspend the block on a promise (a Task). Declared rejection classes type
  * the failure union (`wait(fetchUser(id), HttpError)`); with none declared
  * the failure type is `unknown`. Undeclared rejections still propagate at
@@ -1293,12 +1323,14 @@ export function perform(target: unknown): unknown {
 /** Call-form delegation: the callee runs under the caller's host. */
 function delegateSync(block: AnyBlock, input: unknown): unknown {
   const value = readGuarded(() => runBlockAs(currentHost, block, input));
-  if (isThenableValue(value)) {
-    throw new TypeError(
-      "[ASYNC_BLOCK_OUTSIDE_DRIVER] A block that waits can only be delegated to from a generator block (`yield* block`); it cannot be lowered to call form"
-    );
-  }
+  if (isThenableValue(value)) throw asyncBlockError();
   return value;
+}
+
+function asyncBlockError(): TypeError {
+  return new TypeError(
+    "[ASYNC_BLOCK_OUTSIDE_DRIVER] A block that waits can only be delegated to from a generator block (`yield* block`); it cannot be lowered to call form"
+  );
 }
 
 function checkHost(host: Host, kind: Op[typeof OP]): void {

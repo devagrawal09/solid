@@ -93,6 +93,21 @@ Strict optimization includes both TypeScript and bundler/linker phases:
 
 Missing, incompatible, or escaped metadata becomes `unknown` and conservatively retains hot code, data, hydration, and general runtime capabilities. Published strict-compatible libraries must ship linkable summaries alongside declarations and JavaScript.
 
+### Optimization Prototype Slices
+
+The eight measured optimization slices are:
+
+1. **Synchronous status-free fast paths.** Skip async shape probes and erase pending/error channels for computations proven synchronous and non-throwing, with development verification. This begins with local compiler facts and gains cross-module precision from typed summaries.
+2. **Proxy-free strict stores.** Stage 1 lowers typed paths to allocation-free internal store-handle reads. Stage 2 uses TypeScript escape contracts and linker analysis to keep store handles across compiled modules, lazily materialize a compatibility proxy only at unknown boundaries, and omit proxy creation/runtime entirely when a store never escapes compiled operations. Structural reads, getters, identity, aliases, pending/optimistic views, writes, and tracking must remain equivalent or deoptimize.
+3. **Cold event-domain extraction.** Use linker hot/cold/shared reachability to move event-only blocks and their cold transitive dependencies into clustered interaction chunks with measured prefetch policies.
+4. **Async-free reactive core.** Aggregate synchronous capability proofs over a complete server or client graph, then remove Promise/async-iterator handling, pending-source tracking and propagation, cancellation, async transitions, `NotReadyError`, and related helpers. This applies independently of whether the graph hydrates.
+5. **Server-authoritative replay elimination.** Use source-authority, setter-escape, and server/client analysis to adopt proven server values and rendered branches without rerunning their fetches, projections, sorting, formatting, or binding setup on the client; retain hydration only for independently live descendants.
+6. **Inert-region hydration elimination.** When coordinated server/client analysis proves a rendered region has no client-live reads, writes, events, refs, directives, context, boundaries, cleanup, or interactive descendants, emit plain server HTML and omit its client component code, hydration keys, owner creation, and DOM claiming.
+7. **Capability-selected hydration runtime.** Generate a client hydration/bootstrap entry containing only the adapters and protocols required by the final client manifest, such as stream ledgers, loading/error marker adoption, store hydration adapters, lazy asset maps, delegated event types, and SSR-source adoption policies. This slice does not remove the underlying reactive implementations of those features.
+8. **Resumable event blocks.** Combine event chunking, addressable captures, registered actions, stable store/root paths, error-boundary coordinates, and server/client event manifests to run handlers without hydrating their creating components.
+
+Generator lowering, host fusion/block erasure to handwritten-equivalent Solid, and exclusion of the runtime generator fallback are strict-mode correctness and code-generation parity requirements, not optimization slices. Compat may retain block abstractions and fallback support where needed; strict must reject unsupported blocks and introduce no measurable overhead for qualifying code. Their transform cost, runtime parity, allocations, and compatibility bundle cost remain required acceptance measurements.
+
 ### Remaining Work
 
 - Independently review the accumulated experimental diff and public API naming.
@@ -735,7 +750,7 @@ Strict mode is a whole-application contract, not a per-file lint level:
 - Every reactive or effectful application boundary must use typed generator blocks with strict host and read/write rules.
 - All application modules, route chunks, workers, and participating libraries must be compiled in strict mode or provide a trusted strict capability manifest.
 - Unsupported generator forms, hidden effects, ordinary reactive reads inside blocks, unknown effectful callbacks, and unclassified dynamic imports are build errors.
-- Runtime generator fallback is not shipped. A block that cannot be lowered fails the build instead of deoptimizing.
+- As a baseline strict-mode requirement rather than an optimization slice, runtime generator fallback is not shipped. A block that cannot be lowered fails the build instead of deoptimizing.
 - Client and server graphs are checked and specialized independently.
 - Development builds verify compiler claims and fail loudly on metadata or capability mismatches.
 
@@ -1142,7 +1157,7 @@ The larger model is similar to algebraic effects: `$` blocks declare operations,
 - Runtime mode and transform mode must remain behaviorally identical.
 - Replacing actions entirely requires matching their transaction and cancellation semantics.
 
-## Prototype 1: Compiler Host Fusion and Block Erasure
+## Strict Baseline: Compiler Host Fusion and Block Erasure
 
 ### Design
 
@@ -1246,7 +1261,7 @@ Per fused block, the following runtime operations are eliminated at compile time
 
 ### Decision
 
-**KEEP** — prototype 1 demonstrates the core value proposition:
+**KEEP as a strict baseline** — the host-fusion prototype demonstrates the required code-generation parity:
 
 - The fused output is **identical** to handwritten Solid (ignoring import
   specifiers that tree-shaking removes).
