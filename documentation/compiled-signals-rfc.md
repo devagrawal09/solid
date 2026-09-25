@@ -2,173 +2,250 @@
 
 **Status:** Draft  
 **Target:** Solid 2 experimental API  
-**Reference implementation:** `experiment/iterable-signals`
+**Reference implementation:** `experiment/iterable-signals` at `65a94870`
 
-## Summary
+## Decision
 
-Add `$()` as a compiler-recognized boundary for reactive code. A strict block lets Solid analyze reads, writes, async work, errors, ownership, captures, and escapes while preserving normal fine-grained runtime semantics.
+Continue the non-generator `$(fn)` form as an experimental, compile-or-error marker for a small set of known hosts. Keep the existing generator block form. Do not accept whole-program strict mode, a public summary ABI, runtime specialization, or server resumability in this decision.
 
-```tsx
-const doubled = createMemo($(() => count() * 2));
-const user = createAsync($(async () => loadUser(userId())));
+## Terms
 
-<button onClick={$(() => setCount(value => value + 1))}>{doubled()}</button>;
+- A **strict callback** is a normal arrow or function expression passed to `$`, such as `$(() => count())`. It must be compiled.
+- A **generator block** is the existing `$(function* () { ... })` form. Yielded operations describe reads, waits, failures, and writes in its TypeScript type.
+- A **host** is the API or JSX position that runs the callback. The host decides whether reads are tracked and whether writes are allowed.
+- A **summary** is compiler data about one strict callback. It is not a static dependency list and does not replace Solid's runtime tracking.
+
+## Proposed Public API
+
+`$` keeps two overload families:
+
+```ts
+// New strict callback marker. The brand is compile-time only.
+$(fn: (input: Input) => Result): StrictCallback<Input, Result>;
+
+// Existing typed generator block.
+$(fn: (input: Input) => Generator<Operation, Result>): Block<...>;
 ```
 
-The immediate proposal is a strict frontend, shared analyzer, diagnostics, summaries, and handwritten-equivalent lowering. Whole-program runtime removal, server replay elimination, inert hydration, and resumable events are follow-up consumers of the same graph, not requirements for the initial API.
+For a strict callback, the compiler must:
 
-## Motivation
-
-Solid discovers dependencies efficiently at runtime, but the build cannot generally prove what a callback reads, writes, owns, imports, or leaks. That prevents safe removal of reactive machinery and makes server/client replay and resumability depend on conventions rather than checked contracts.
-
-`$()` provides an incremental boundary where unresolved behavior is a diagnostic instead of an optimizer guess. It should enable stronger tooling and smaller output without changing Solid's branch-sensitive tracking, scheduling, ownership, cleanup, errors, suspense, transitions, or equality semantics.
-
-## Goals
-
-- Compile qualifying callbacks to ordinary handwritten-equivalent Solid code.
-- Report reactive capabilities and escapes at authored source locations.
-- Preserve runtime dependency tracking whenever the active read set is conditional.
-- Support application and package summaries without exposing the full graph through TypeScript generics.
-- Permit conservative, separately measured optimizations over proven graphs.
-- Keep ordinary Solid and third-party JavaScript usable through explicit compatibility boundaries.
-
-## Non-Goals
-
-- Statically analyze arbitrary JavaScript.
-- Replace signals, owners, or runtime tracking with a static dependency array.
-- Make server components, resumability, or Wasm part of the first release.
-- Automatically split arbitrary JSX feature regions.
-- Change event, async, hydration, or error behavior to make an optimization easier.
-
-## API
-
-### Strict callbacks
-
-For a non-generator callback, `$` is a strict marker. Its statically resolved consumer determines the host.
-
-| Consumer                     | Host           | Semantics                                    |
-| ---------------------------- | -------------- | -------------------------------------------- |
-| `createMemo`, `createEffect` | Reactive       | Tracked for the computation                  |
-| `createAsync`                | Async reactive | Parent reads tracked before first suspension |
-| JSX insertion                | JSX            | Tracked by the insertion owner               |
-| JSX event attribute          | Event          | One-shot reads; writes permitted             |
-
-The marker has identity-like TypeScript behavior through a small branded callback type. It does not create a memo or effect by itself. A callback with no unique host, an unknown forwarding helper, or incompatible multiple uses is rejected in strict mode.
-
-### Generator compatibility
-
-The existing typed generator form remains supported:
+1. resolve one supported host;
+2. analyze reads, writes, calls, captures, escapes, owned creation, and `await`;
+3. report an error if the callback violates that host's rules; and
+4. erase the `$` call so the host receives the normal callback.
 
 ```tsx
-const label = createMemo(
-  $(function* () {
-    const user = yield* userSignal;
-    return yield* user.name;
+// Authored
+const doubled = createMemo($(() => count() * 2));
+
+// Output of the strict pass, before unrelated import cleanup
+const doubled = createMemo(() => count() * 2);
+```
+
+The normal Solid host still owns tracking, scheduling, equality, cleanup, errors, transitions, and suspense.
+
+### What `$` Does Not Do
+
+- It does not create a memo, effect, owner, or subscription.
+- It does not replace dynamic tracking with subscriptions to every possible read.
+- It does not make arbitrary JavaScript analyzable.
+- It does not restore an owner after `await`.
+- It does not make `createAsync` a host. Solid 2 uses an async `createMemo` in this experiment.
+- It does not make a non-generator callback valid as a JSX child.
+- It does not select a smaller runtime or remove fallback code by itself.
+- It is not a reliable runtime identity function. Stock TypeScript only sees a callable `StrictCallback` phantom brand. If compilation is skipped, development builds reject arrow and async callbacks with `[STRICT_NOT_COMPILED]`. Production has no equivalent guard, and ordinary function expressions cannot be identified reliably at runtime.
+
+## Implemented Experiment
+
+The compiler recognizes strict callbacks when `generators` is enabled. That compiler option defaults to `true`. These are the implemented hosts:
+
+| Authored position                       | Host                  | Reads                            | Writes   | `await` |
+| --------------------------------------- | --------------------- | -------------------------------- | -------- | ------- |
+| `createMemo($(fn))`                     | memo                  | tracked before the first `await` | rejected | allowed |
+| `createSignal($(fn))`                   | computed signal       | tracked before the first `await` | rejected | allowed |
+| `createEffect($(fn), effectFn)`         | effect compute        | tracked before the first `await` | rejected | allowed |
+| `createRenderEffect($(fn), effectFn)`   | render-effect compute | tracked before the first `await` | rejected | allowed |
+| `<button onClick={$(fn)}>` or `on:name` | intrinsic DOM event   | untracked and one-shot           | allowed  | allowed |
+
+The factories must be named imports from `solid-js` or `@solidjs/signals`. A `const` marker may be reused only by hosts of one kind. Component props, exports, unknown forwarding helpers, non-first factory arguments, and JSX children are not hosts.
+
+The second callback passed to `createEffect` or `createRenderEffect` is the ordinary effect phase. It may write, but it is not an implemented strict-callback host.
+
+### Memo And Conditional Reads
+
+```tsx
+const label = createMemo($(() => (enabled() ? name() : "hidden")));
+```
+
+The summary lists `enabled` and `name`. At runtime, Solid subscribes to `name` only while that branch runs. The compiler does not subscribe to both sources.
+
+### Async Memo
+
+```tsx
+const user = createMemo(
+  $(async () => {
+    const id = userId(); // tracked by the memo
+    const value = await fetchUser(id);
+    return formatUser(value); // only plain values after await
   })
 );
 ```
 
-Generator blocks remain useful for explicit typed operations and direct store/prop paths. Compat builds may retain their runtime driver where lowering is unavailable. Strict builds must lower or reject them and must not ship the fallback driver for an unsupported block.
+Direct reactive reads after the first `await` fail with `STRICT_READ_AFTER_AWAIT`. Owned creation after `await` fails with `STRICT_CREATION_AFTER_AWAIT` in every host. The current callback and generator drivers do not restore the captured owner on continuation. An event may read after `await`, but that read remains untracked.
 
-### Wider opt-in
+### Event
 
-`"use solid strict"` is reserved for a later lexical component/module opt-in after the single-callback contract and editor tooling stabilize.
+```tsx
+<button
+  onClick={$((event: MouseEvent) => {
+    const step = event.shiftKey ? 10 : 1;
+    setCount(value => value + step);
+  })}
+/>
+```
 
-## Semantics
+Event parameters need an annotation on the marked callback. The compiler erases the marker, then the normal JSX transform installs the handler.
 
-- Reactive reads before suspension belong to the parent computation. Parent reads after `await` are invalid.
-- Owned creation after suspension is allowed only when the environment restores the captured owner and stale or disposed flights cannot resume.
-- Event reads are untracked and one-shot; reading a pending source may wait without rerunning the event reactively.
-- Writes are rejected in memo, effect, and JSX hosts and permitted in event hosts.
-- Conditional reads retain normal runtime tracking. A bounded may-read set does not subscribe to every possible source.
-- Context is resolved with ordinary `useContext` during setup and captured by events. Event-time context lookup and `yield* Context` are outside the initial proposal.
-- Unknown calls, escapes, dynamic components, mutable captures, and unsummarized libraries either preserve compat behavior or fail the strict build.
+### JSX And Generator Compatibility
 
-## Analysis Contract
+Non-generator JSX insertion is not implemented:
 
-The compiler, `solid-tsc`, linker, and future language server share one analyzer. Each block records:
+```tsx
+<div>{$(() => count())}</div> // STRICT_HOST_UNKNOWN
+```
 
-- host and source sites;
-- reads, writes, paths, async work, and possible failures;
-- owned creations and owner edges;
-- captures, escapes, calls, imports, and render edges;
-- environment and server/client boundary facts where known; and
-- completeness: `exact`, `bounded`, or `unknown`.
+The existing generator form remains the typed JSX form:
 
-Detailed facts live in versioned sidecar summaries keyed by resolved symbols and source hashes. Public declarations expose only small brands that generic APIs genuinely constrain. Missing, stale, incompatible, or contradictory summaries become `unknown`.
+```tsx
+function View(props: { theme: string }) {
+  const [count] = createSignal(1);
 
-`solid-tsc` remains the TypeScript-facing command for projected direct-path checking, mapped diagnostics, declaration emit, and typed summary refinement. The bundler owns final module resolution and whole-graph reachability.
+  return $(function* () {
+    return <div class={yield* props.theme}>Count: {yield* count}</div>;
+  });
+}
+```
 
-## Build Modes
+For a JSX generator block, direct tasks, failures, and writes are refused. Reads may still surface pending or error state from the source being read. JSX `yield*` is compiler-only syntax: disabling generator lowering does not provide equivalent JSX behavior.
 
-### Compat
+Generator blocks otherwise keep their existing behavior. The default compiler pass lowers supported `yield*` operations to calls and keeps the runtime block wrapper. The off-by-default `hostFusion` option can erase the wrapper for a locally proven host. With `generators: false`, the runtime driver can execute ordinary generator operations, but it is not a universal fallback for compiler-only JSX or direct prop-path forms.
 
-- Lowers supported blocks.
-- Preserves ordinary JavaScript boundaries.
-- May retain generator/runtime fallback support.
-- Deoptimizes unknown edges rather than changing behavior.
+## Summary Meanings
 
-### Strict
+The implemented summary uses `exact`, `bounded`, and `unknown`:
 
-- Requires every relevant application edge to be exact or conservatively bounded.
-- Rejects unknown hosts, effects, escapes, imports, and incompatible summaries.
-- Erases `$` markers and unsupported fallback machinery.
-- Enables an optimization only when its separate semantic proof succeeds.
+| Result    | Meaning                                                                                                                                                                                             | Small example                              |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `exact`   | All recorded operations run on every normal path. There are no unsummarized calls or opaque accesses.                                                                                               | `$(() => count() * 2)`                     |
+| `bounded` | Known capability reads are listed, but a branch, loop, closure, early return, opaque value, or unsummarized call makes execution conditional or incomplete. Runtime tracking remains authoritative. | `$(() => enabled() ? format(name()) : "")` |
+| `unknown` | The callback has a diagnostic, such as an unknown host or an escaped capability. Analysis returns a partial graph, but transform fails.                                                             | Passing `count` itself to unknown code     |
 
-Strict is a build contract, not a faster runtime selected by a local annotation alone.
+An unsummarized helper is allowed only when its arguments are plain values. This is bounded:
 
-## Initial Scope
+```tsx
+const title = createMemo($(() => formatTitle(name())));
+```
 
-The first experimental release should include:
+Passing the accessor is an escape and is rejected:
 
-1. Non-generator strict markers for memo, effect, async, JSX, and event hosts.
-2. Existing generator blocks and direct typed store/prop paths.
-3. Shared compiler/`solid-tsc` analysis, diagnostics, and per-module summaries.
-4. Host fusion and block erasure for locally proven callbacks.
-5. The semantic conformance harness as a required regression gate.
-6. Off-by-default store handles and async-free runtime selection only for graphs that satisfy their published proof gates.
+```tsx
+const title = createMemo(
+  $(() => {
+    registerSource(count); // STRICT_CAPABILITY_ESCAPE
+    return count();
+  })
+);
+```
 
-The initial release does not include cold event extraction, replay elimination, inert-region removal, capability-selected hydration, or resumable events. Existing prototypes for those features exposed correctness and contract gaps and remain excluded until redesigned.
+There is no helper annotation that turns this unknown edge into a trusted one. Library summaries and any local escape mechanism are later work.
 
-## Server Components And Resumability
+## Tooling Today
 
-The end state is a coordinated graph with environment-specific nodes, not unrelated server and client graphs. Boundary edges include server-function IDs, client slots and frame scopes, SSR claims, serialized values and store traces, live holes, and error/suspense coordinates.
+| Tool                              | Implemented now                                                                                                                                                                                                    | Not implemented                                               |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------- |
+| `@solidjs/compiler`               | Erases valid strict markers; returns `strictBlocks`; exposes `analyzeStrictBlocks`; lowers generator blocks                                                                                                        | Stable cross-package summary ABI                              |
+| `solid-tsc`                       | Projects generator direct store/prop paths for TypeScript; maps diagnostics; runs TypeScript emit; emits declarations with projected path types; returns strict summaries from `check()` and `analyzeStrictFile()` | Per-module strict sidecar files and a language-service plugin |
+| `solid-tsc --capabilities <file>` | Optionally writes the separate Track A typed capability summary after a successful check                                                                                                                           | General strict library summaries                              |
+| Bundler prototype                 | Can link capability summaries for the async-free experiment                                                                                                                                                        | A production compat/strict build contract                     |
 
-That graph may eventually allow Solid to:
+Detailed strict summaries currently live in transform results or process memory. Published declarations contain generator path types, not the proposed versioned strict sidecars.
 
-1. execute server-only computations and stream authoritative HTML and values;
-2. adopt proven server results without replay;
-3. omit client code and hydration for inert regions;
-4. load an addressable event block with serialized/path-based captures; and
-5. hydrate the smallest owner region when direct resumption is not provable.
+## Compat And Strict Builds
 
-Before this work starts, the server `$` driver needs an environment-correct owner interface, server directives must be pinned through code motion, and the summary ABI must represent serialization and frame/slot edges.
+These are proposed whole-application contracts. They are not compiler modes today.
 
-## Validation
+| Proposed mode | Required behavior                                                                                                                                                                                                                                                                                            |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Compat        | Keep ordinary Solid and JavaScript boundaries on the general runtime. Lower supported generator blocks. Keep the generator driver where used. Deoptimize unmarked unknown code rather than changing behavior. A marked strict callback still compiles or errors; it never silently becomes a plain callback. |
+| Strict        | Require a complete linked application graph. Reject unknown edges needed by an optimization. Omit a runtime capability only after the linker proves it unused across application and library code. A local `$` marker alone is not that proof.                                                               |
 
-Every accepted lowering must pass the shared conformance oracle against handwritten Solid. Coverage includes values, rerun order, conditional subscriptions, equality, events, cleanup, ownership, async supersession, errors, stores, SSR, hydration, and deliberately planted semantic mutations.
+`"use solid strict"` is neither implemented nor reserved by the compiler. The spelling exists only in design notes, and another note uses `"use solid-strict"`. A lexical directive needs a separate decision.
 
-Optimization acceptance also requires reproducible measurements of minified/gzip size, runtime instructions or time, allocations, compiler cost, hydration work, and incremental build impact. A local microbenchmark win is insufficient when the complete application bundle regresses.
+## Experiment Status
 
-## Rollout
+| Area                                          | Status at the reference head                                                                                                             |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Generator blocks and direct paths             | Implemented experiment; default compiler lowering, with documented runtime-driver limits                                                 |
+| Non-generator strict callbacks                | Implemented for the five host positions listed above                                                                                     |
+| Host fusion                                   | Implemented, experimental, default `false`                                                                                               |
+| Store handles, Track B                        | Integrated as `storeHandles`, default `false`; proven paths can stay handle-backed, while unknown uses materialize a compatibility proxy |
+| Async-free runtime, Track A                   | `@solidjs/signals/sync`, summaries, linker, and selection plugin exist as a proof-gated experiment; no default build selects it          |
+| Local status-free path, Track A               | Measured negative and left unselected                                                                                                    |
+| Cold event extraction, Track C                | Excluded because of evaluation-order, code-generation, and event-queue correctness failures                                              |
+| Replay elimination and inert regions, Track D | Excluded; only the JSX-block hydration-ID scope prerequisite is integrated                                                               |
+| Capability-selected hydration, Track E        | Excluded pending safer selection, validation, and a shared manifest contract                                                             |
 
-1. Ship experimental compiler and `solid-tsc` flags with no default runtime change.
-2. Stabilize diagnostics, summary versioning, package publication, source maps, and editor integration.
-3. Enable proven local erasure and opt-in store/runtime specialization.
-4. Define the coordinated server/client boundary schema and server ownership contract.
-5. Prototype replay, inert regions, capability selection, and resumable events independently, each behind conformance and measurement gates.
+Store handles and the async-free runtime are not part of the initial public API. Their committed measurements are prototype results, not release claims. In particular, the local status-free hook matched none of the 14 measured real blocks and regressed size and update cost, so the integrated branch does not select it.
 
-## Open Questions
+## Initial Acceptance Scope
 
-- Final package/export location and public name for `$`.
-- Whether lexical `"use solid strict"` is valuable after callback-level adoption.
-- Summary ABI ownership and compatibility policy for precompiled libraries.
-- How editor services expose dependency, ownership, and deoptimization traces.
-- Which server/client coordinates remain stable across builds and deployments.
-- Whether resumable event captures use only serialized values and root/paths or also a registered action model.
+Accept only:
+
+1. the non-generator `$(fn)` marker as an experimental compile-or-error API;
+2. the implemented memo, computed-signal, effect-compute, render-effect-compute, and intrinsic-event hosts;
+3. source-located diagnostics and the current in-process summary for tooling experiments; and
+4. continued compatibility with the existing generator overload.
+
+Do not promise a stable summary file format, editor integration, whole-program mode, smaller runtime, server optimization, or new JSX callback host in this stage.
+
+## Validation Evidence
+
+- Compiler fixtures lock strict output, summaries, diagnostics, source maps, and coexistence with generator blocks.
+- `solid-tsc` fixtures cover projected direct paths, mapped strict diagnostics, declaration consumption, and capability output.
+- The web conformance harness contains 15 scenarios across client, SSR, and hydration matrices. It compares handwritten, runtime-generator, compiled, and host-fused traces where each mode applies. Its generated coverage file also records declared differences and `n/a` cells; it does not claim every mode is identical.
+- Track A and B measurements remain in the exploration plan with their benchmark inputs and gates. Correctness failures, not benchmark wins, determine why Tracks C, D, and E remain excluded.
+
+Before widening the accepted host set, add a fixture for the new syntax and a semantic trace against handwritten Solid. Before selecting a runtime or store representation, rerun its proof gate, conformance matrix, bundle-size measurement, and runtime benchmark on the integrated graph.
+
+## Staged Server End State
+
+Solid 2 server components already ship as an experimental preview. They use server functions and frame streams; `$` summaries do not currently participate. A request works as follows:
+
+1. The client calls a server function by ID and arguments. `dynamic` consumes the returned component.
+2. The server runs that component and streams frame records containing HTML, data, and coordinates for client slots.
+3. The client applies the frames to a stable per-call boundary, fills the slots, and morphs later results for the same call without remounting preserved client state.
+
+A later RFC may add cross-environment summary edges. Only then could a build separately prove that a result need not replay, a region needs no hydration, or an event can resume from serialized captures. That work needs an environment-correct server owner interface, serialization rules, stable frame and slot coordinates, and error routing. It is not part of this RFC.
+
+## Later Possibilities
+
+- Versioned library summaries with resolved symbol identity and stale-summary checks.
+- A language-service plugin for strict diagnostics and graph inspection.
+- A separately specified lexical strict directive.
+- More hosts, including non-generator JSX, after their ownership and error rules are defined.
+- Post-`await` owned creation after the runtime restores and validates the captured owner and excludes stale continuations.
+- Proof-gated store and runtime selection through separate RFCs.
+
+## Non-Goals
+
+- Static analysis of arbitrary JavaScript.
+- Automatic dependency arrays or replacement of Solid's dynamic subscriptions.
+- Automatic JSX feature splitting.
+- Cold event extraction, replay elimination, inert regions, or resumable events in the initial API.
+- Wasm lowering.
 
 ## Decision Requested
 
-Accept `$()` strict reactive blocks and the shared analysis contract as an experimental Solid 2 direction. Accept only the initial scope above. Treat server replay, hydration elimination, runtime selection, event extraction, and resumability as separate RFCs or amendments after their proofs and protocols are complete.
+Approve the initial acceptance scope as an experimental direction. Keep the summary ABI, whole-application modes, runtime selection, server replay, hydration removal, and resumability behind later decisions with their own correctness evidence.
 
 The full exploration history, measurements, rejected prototypes, and implementation inventory remain in [`plans/typed-generator-compiler.md`](./plans/typed-generator-compiler.md).
