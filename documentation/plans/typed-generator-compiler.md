@@ -1,5 +1,7 @@
 # `$()` Typed Reactive Blocks
 
+Compact proposal: [`Strict Reactive Blocks For Solid`](../compiled-signals-rfc.md). This document retains the full exploration history, implementation inventory, measurements, and rejected alternatives.
+
 ## Exploration Status
 
 Status as of 2026-09-25: the design remains experimental, but the baseline and optimization prototypes are now published on the fork. The end-to-end baseline covers typed blocks, host enforcement, direct typed store/prop paths, compiler lowering, projected TypeScript checking, block-derived signals/stores, DOM event dispatch, and a converted TodoMVC example. The reviewed integration includes Strict TSX, the safe Track A/B foundations, and Track D's hydration-ID prerequisite. Track C, D's replay/inert slices, and Track E remain excluded.
