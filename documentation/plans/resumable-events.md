@@ -427,9 +427,11 @@ work.
 - Web conformance: `resumable-counter` scenario across the 14 modes (12
   existing modes equivalent to their oracles; `server/resumable` and
   `hydrate/resumable` declared with exact traces); all other scenarios
-  unchanged. Web package suites: 831 passing (one pre-existing
-  server-functions adapter test is order-sensitive in the full run; it is
-  unrelated to this branch — see the report).
+  unchanged. Web package suites: 831 passing; the one failure
+  (`test/server/server-functions-adapter-request.spec.tsx`, "keeps a rebuild
+  failure's own error") reproduces in isolation with the base commit's
+  compiler and `solid-js` server sources in this environment, so it is
+  pre-existing and unrelated to this branch.
 
 ## Track C / D / E as negative evidence
 
