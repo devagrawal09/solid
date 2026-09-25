@@ -1,0 +1,131 @@
+{
+  "schema": "solid-linker-bench-todomvc",
+  "version": 1,
+  "node": "v22.22.2",
+  "typecheck": {
+    "errors": 0,
+    "plainMs": 1672,
+    "withSummariesMs": 1242,
+    "summaryPhaseMs": 81
+  },
+  "builds": {
+    "base": {
+      "buildMs": {
+        "median": 377,
+        "samples": [424, 377, 362, 413, 376]
+      },
+      "chunks": [
+        {
+          "file": "assets/index.js",
+          "isEntry": true,
+          "raw": 87740,
+          "gzip": 31662,
+          "brotli": 28448
+        }
+      ],
+      "blocks": null
+    },
+    "cold": {
+      "buildMs": {
+        "median": 411,
+        "samples": [404, 393, 411, 446, 438]
+      },
+      "chunks": [
+        {
+          "file": "assets/index.js",
+          "isEntry": true,
+          "raw": 90343,
+          "gzip": 32788,
+          "brotli": 29429
+        },
+        {
+          "file": "assets/cold-dea8468f3.js",
+          "isEntry": false,
+          "raw": 691,
+          "gzip": 390,
+          "brotli": 331
+        }
+      ],
+      "blocks": [
+        {
+          "key": "src/app.tsx#b0",
+          "name": "submit",
+          "class": "cold",
+          "reasons": []
+        },
+        {
+          "key": "src/app.tsx#b1",
+          "name": "toggle",
+          "class": "cold",
+          "reasons": []
+        },
+        {
+          "key": "src/app.tsx#b10",
+          "name": null,
+          "class": "hot",
+          "reasons": ["notEventOnly:site:host"]
+        },
+        {
+          "key": "src/app.tsx#b11",
+          "name": "clear",
+          "class": "cold",
+          "reasons": []
+        },
+        {
+          "key": "src/app.tsx#b12",
+          "name": null,
+          "class": "hot",
+          "reasons": ["notEventOnly:site:returned"]
+        },
+        {
+          "key": "src/app.tsx#b2",
+          "name": "remove",
+          "class": "cold",
+          "reasons": []
+        },
+        {
+          "key": "src/app.tsx#b3",
+          "name": "retry",
+          "class": "cold",
+          "reasons": []
+        },
+        {
+          "key": "src/app.tsx#b4",
+          "name": null,
+          "class": "hot",
+          "reasons": ["notEventOnly:site:returned"]
+        },
+        {
+          "key": "src/app.tsx#b5",
+          "name": null,
+          "class": "hot",
+          "reasons": ["notEventOnly:site:host"]
+        },
+        {
+          "key": "src/app.tsx#b6",
+          "name": null,
+          "class": "hot",
+          "reasons": ["notEventOnly:site:host"]
+        },
+        {
+          "key": "src/app.tsx#b7",
+          "name": "toggle",
+          "class": "cold",
+          "reasons": []
+        },
+        {
+          "key": "src/app.tsx#b8",
+          "name": null,
+          "class": "hot",
+          "reasons": ["notEventOnly:site:returned"]
+        },
+        {
+          "key": "src/app.tsx#b9",
+          "name": null,
+          "class": "hot",
+          "reasons": ["notEventOnly:site:host"]
+        }
+      ]
+    }
+  }
+}

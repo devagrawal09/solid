@@ -15,13 +15,13 @@ bundler buildStart ──► loadGraph (per environment: client, server)
                    ──► solid-link-manifest (emitted asset)
 ```
 
-| Piece | Location |
-| --- | --- |
-| Behavioral summary (Rust) | `packages/compiler/src/summary.rs`, `summarizeModule()` |
-| Typed summary | `packages/typecheck/src/summary.js`, `solid-tsc --solidSummaries <dir>` |
-| Linker analysis | `packages/linker/src/{load,analyze,manifest}.js` |
-| Extraction and runtime | `packages/linker/src/{extract,runtime,plugin}.js` |
-| Benchmarks | `packages/linker/bench/{generate,run,todomvc}.mjs`, results in `packages/linker/bench/results/` |
+| Piece                     | Location                                                                                        |
+| ------------------------- | ----------------------------------------------------------------------------------------------- |
+| Behavioral summary (Rust) | `packages/compiler/src/summary.rs`, `summarizeModule()`                                         |
+| Typed summary             | `packages/typecheck/src/summary.js`, `solid-tsc --solidSummaries <dir>`                         |
+| Linker analysis           | `packages/linker/src/{load,analyze,manifest}.js`                                                |
+| Extraction and runtime    | `packages/linker/src/{extract,runtime,plugin}.js`                                               |
+| Benchmarks                | `packages/linker/bench/{generate,run,todomvc}.mjs`, results in `packages/linker/bench/results/` |
 
 ## Schemas
 
@@ -119,6 +119,7 @@ Each environment graph (client, server) is loaded and classified independently, 
    - through an export whose every importer's uses are such sites.
 
    A proof requires valid typed facts (strict mode) with consistent block types, completeness other than `unknown`, no escapes, and no mutable captures. Every captured import must resolve to summarized code or the runtime; an unresolved import (`unresolvedImport:<name>`) or a library without a valid summary (`unknownLibrary:<name>`) keeps the handler inline. The event object must not escape and may only be accessed by name (no event methods, no computed members). Propagation control must be fully replayable as a prelude. A destructured event parameter or an expression body is refused. A module that is opaque, contains server functions, or where a non-literal dynamic import could reach an exported block makes its blocks unknown.
+
 4. **Fixed point.** The labels HOT, COLD, and UNKNOWN propagate over two kinds of edges. Module evaluation reaches effectful statements, top-level references, dependencies with effects, and literal dynamic imports, with lazy targets exposing their whole namespace. Binding references reach the declaring statement's references and resolved import targets, plus the barrels they pass through.
    - Phase A runs HOT and UNKNOWN from the roots: entries, entry exports, opaque modules, and every export when a non-literal dynamic import exists. Phase B runs COLD from the extracted bodies' captures.
    - References inside an extracted body carry only COLD. A module already evaluated hot does not pass COLD on through its evaluation edges.
@@ -127,6 +128,7 @@ Each environment graph (client, server) is loaded and classified independently, 
    - After clustering, a cold dependency that two or more domains reach and that is under `sharedColdBytes` (default 4 KiB) is retained hot. Otherwise it would become a chunk of its own, costing an extra round trip. The fixed point then re-runs.
 
    Classes: `unknown` means the label includes UNKNOWN, or the module is opaque. `shared` means both HOT and COLD, `hot` and `cold` mean only that label, and `unused` means neither.
+
 5. **Domains.** Seeds are the owning component per root set, which is the set of entries and lazy routes whose static graph contains the module. Seeds that share a cold dependency are merged, and merged groups are packed in path order up to `maxDomainBytes` (default 48 KiB of body source). A route's cold code never shares a chunk with another route's.
 
 ## Extraction semantics (slice 3)
@@ -152,6 +154,100 @@ Each environment graph (client, server) is loaded and classified independently, 
 
 ## Measurements
 
-See "Results" below. The raw data is in `packages/linker/bench/results/results.json` and `packages/linker/bench/results/todomvc.json`.
+See "Results" below. The raw data is in `packages/linker/bench/results/` (`results.json`, `results-thin.json`, `todomvc.json`).
 
-<!-- RESULTS -->
+## Results
+
+### Setup and reproduction
+
+- Machine: 4 × Intel Xeon @ 2.10 GHz, 16 GB, Linux 6.18, Node v22.22.2.
+- Code: commit `13cc4a04` with the benchmark harness from `0f7f0801`. The `dirty` flag in the results comes from unrelated uncommitted work outside the linker, not from the measured code.
+- Commands:
+
+```bash
+cd packages/linker
+node --experimental-vm-modules bench/run.mjs --sizes 500k,2m,10m --profiles default --runs 3 --out bench/results/results.json
+node --experimental-vm-modules bench/run.mjs --sizes 500k --profiles thin --runs 3 --out bench/results/results-thin.json
+node bench/todomvc.mjs --runs 5
+```
+
+- Raw per-run samples, with min and max, are in `packages/linker/bench/results/`.
+- Runs: 3 per size, 2 at 10 MB. Timings are medians after one unrecorded warm-up, and the variant order alternates between runs.
+- Sizes use the minified build (esbuild). Gzip is level 9 and Brotli is quality 11.
+- Execute, latency, and correctness run in jsdom. They are proxies for a browser, not browser measurements.
+
+### Generated apps
+
+| Profile      | Features | Routes | Source bytes | Share of source that is handler-only logic |
+| ------------ | -------- | ------ | ------------ | ------------------------------------------ |
+| default 500k | 47       | 5      | 512,887      | ≈52%                                       |
+| default 2m   | 185      | 18     | 2,028,136    | ≈52%                                       |
+| default 10m  | 917      | 92     | 10,094,114   | ≈52%                                       |
+| thin 500k    | 85       | 8      | 509,275      | 0%                                         |
+
+In the thin profile, handlers only call render-side helpers. Each feature has three extractable handlers and one refused handler (`stopPropagation` after a read). The entry renders 5 features; the rest are lazy routes of 10 features each.
+
+### Bytes (gzip; raw → raw where noted)
+
+| App            | Initial JS                        | Route chunks               | Cold domain chunks | Total                    | Chunks   | Duplicate bytes |
+| -------------- | --------------------------------- | -------------------------- | ------------------ | ------------------------ | -------- | --------------- |
+| default 500k   | 25,914 → 25,562 (−1.4%; raw −18%) | 18,280 → 10,386 (−43%)     | 15,016 in 6        | 44,194 → 50,964 (+15%)   | 7 → 13   | 0 → 0           |
+| default 2m     | 26,140 → 25,765 (−1.4%; raw −18%) | 74,984 → 41,891 (−44%)     | 56,643 in 19       | 101,124 → 124,299 (+23%) | 20 → 39  | 0 → 0           |
+| default 10m    | 27,316 → 26,903 (−1.5%; raw −17%) | 380,768 → 213,012 (−44%)   | 279,991 in 93      | 408,084 → 519,906 (+27%) | 94 → 187 | 0 → 0           |
+| thin 500k      | 24,987 → 25,851 (**+3.5%**)       | 18,947 → 21,923 (**+16%**) | 5,694 in 9         | 43,934 → 53,468 (+22%)   | 10 → 19  | 0 → 0           |
+| TodoMVC (Vite) | 31,662 → 32,788 (**+3.6%**)       | n/a                        | 390 in 1           | 31,662 → 33,178          | 1 → 2    | 0               |
+
+Brotli follows gzip. For default 10m, route chunks go from 206,001 to 146,734 and cold domains add 159,763. The initial chunk is dominated by the Solid runtime, about 23 KB gzip, so the entry barely moves. The savings show up in the code loaded at navigation (route chunks, about −44%), and that code now arrives on the first interaction instead. Total bytes grow because each extra chunk compresses separately and every handler gains a shell.
+
+### Build, typecheck, and compiler cost (median ms)
+
+| App          | solid-tsc → with summaries                | Summary phase | Summary JSON | `transform()` / `summarizeModule()`, all files | Build: base → extraction | Linker phases: crawl+summarize / analyze / plan |
+| ------------ | ----------------------------------------- | ------------- | ------------ | ---------------------------------------------- | ------------------------ | ----------------------------------------------- |
+| default 500k | 1,966 → 2,493 (+27%)                      | 545           | 3.5 MB       | 343 / 351 (102%)                               | 1,882 → 3,294 (+75%)     | 817 / 18 / 10                                   |
+| default 2m   | 6,053 → 8,598 (+42%)                      | 2,169         | 13.9 MB      | 1,197 / 1,411 (118%)                           | 6,297 → 11,866 (+88%)    | 3,220 / 77 / 32                                 |
+| default 10m  | 35,839 → 45,878 (+28%)                    | 10,971        | 69.1 MB      | 5,951 / 6,980 (117%)                           | 32,586 → 61,957 (+90%)   | 16,472 / 576 / 186                              |
+| thin 500k    | 2,375 → 3,543 (+49%)                      | 715           | 5.2 MB       | 357 / 391 (110%)                               | 2,087 → 4,119 (+97%)     | 908 / 27 / 15                                   |
+| TodoMVC      | 1,672 → 1,242 (single cold sample, noise) | 81            | n/a          | n/a                                            | 377 → 411 (+9%)          | n/a                                             |
+
+Noise: the with-summaries solid-tsc range was 2,415 to 2,910 ms at 500k and 43,344 to 48,411 ms at 10m. Build ranges were within ±4%.
+
+The linker's crawl re-summarizes every module (the `summarize` phase, 7.2 s at 10m) and resolves each import through the bundler. The fixed-point analysis itself is cheap: 0.6 s at 10m, with 2 iterations for every app.
+
+### Runtime (jsdom proxy)
+
+| App          | Compile of initial JS | Execute to first render | Click: baseline / miss / hit (prefetch `none`) | Miss network model: fast 4G / slow 4G |
+| ------------ | --------------------- | ----------------------- | ---------------------------------------------- | ------------------------------------- |
+| default 500k | 2.99 → 3.03 ms        | 31.6 → 25.3 ms          | 2.14 / 2.84 / 1.01 ms                          | +42 / +159 ms                         |
+| default 2m   | 3.03 → 2.69 ms        | 53.1 → 34.5 ms          | 2.87 / 3.72 / 1.77 ms                          | +42 / +159 ms                         |
+| default 10m  | 3.28 → 2.95 ms        | 189.7 → 98.2 ms         | 11.61 / 13.09 / 9.46 ms                        | +42 / +159 ms                         |
+| thin 500k    | 2.74 → 2.74 ms        | 30.8 → 29.9 ms          | 2.76 / 2.69 / 1.06 ms                          | +40 / +152 ms                         |
+
+- **Execute** starts when the entry is imported and ends when the home features are rendered. Lazy routes load concurrently, which is why smaller route chunks shorten it (10m: 190 → 98 ms). Spread was wide: 29 to 68 ms at 500k.
+- **Network model**: RTT plus the home domain's gzip bytes (≈1.8 KB) at 9 Mbps (fast 4G) or 1.6 Mbps (slow 4G).
+
+### Prefetch policies: first click right after mount / 300 ms later (median ms, misses out of 5)
+
+| App          | Baseline    | `none`              | `intent` (hover 30 ms before) | `idle`              | `load`              |
+| ------------ | ----------- | ------------------- | ----------------------------- | ------------------- | ------------------- |
+| default 500k | 47.8 / 1.6  | 59.9 (5) / 3.2 (5)  | 1.2 (0) / 1.7 (0)             | 49.0 (5) / 1.6 (0)  | 51.2 (5) / 1.9 (0)  |
+| default 2m   | 167.2 / 1.6 | 174.7 (5) / 3.3 (5) | 1.4 (0) / 1.7 (0)             | 181.1 (5) / 1.5 (0) | 204.6 (5) / 1.8 (0) |
+| default 10m  | 1,285 / 2.2 | 1,128 (5) / 3.2 (5) | 1.6 (0) / 1.7 (0)             | 1,345 (5) / 1.6 (0) | 1,572 (5) / 2.4 (0) |
+
+A click right after mount waits behind the lazy routes still evaluating, in the baseline too. By 300 ms, `idle`, `load`, and `intent` have always prefetched, so the click is a hit. With `none`, every first click in a domain misses. The `intent` numbers exclude the 30 ms hover head start.
+
+### Correctness and cache stability
+
+- **Correctness**: 60 interactions per app (15 features × type, submit, bump, and a refused click). The extracted build's transcript matched the baseline exactly on both the miss path (`none`) and the prefetched path (`idle`), in every app. `preventDefault()` held synchronously on all 15 submits, and the miss path recorded 2 misses and 43 hits.
+- **Cache stability**: rebuilding without changes produced identical chunk names every time. Any edit, whether hot-only (a label) or cold-only (handler logic), changed every chunk hash in both builds. Rollup hashes cascade through the entry, so the re-download is the whole app either way, and the extracted build has 15–27% more total bytes to re-download.
+
+### Decision
+
+- **Summaries, typed summaries, and the linker: KEEP.** They are deterministic, and they refuse what they cannot prove (the negative fixtures pass). Every graph reached its fixed point in 2 iterations, and analysis costs under 2% of build time. Iterate on cost: have the linker reuse the behavioral summary inside a typed summary whose hash matches, instead of re-summarizing (−7 s at 10m). Also write compact rather than pretty-printed summary JSON (69 MB at 10m).
+- **Slice 3 extraction: ITERATE, not on by default.**
+  - It is correct across every test and benchmark.
+  - In handler-heavy apps it cuts navigation-time route chunks by about 44% gzip and halves execute-to-first-render at 10m.
+  - It does not reduce initial JS meaningfully, where the entry is the runtime.
+  - It raises total bytes by 15–27% and build time by 75–97%.
+  - It regresses apps whose handlers are thin (thin profile: initial +3.5%, routes +16%; TodoMVC: entry +3.6%).
+  - **REJECT** extracting a domain whose cold gzip does not exceed its shell and runtime cost.
+  - Next iteration: gate each domain on estimated net bytes, shorten shell keys to per-domain indices, reuse summaries in the plugin, and measure in a real browser with network throttling.

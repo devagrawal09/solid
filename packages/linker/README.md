@@ -25,11 +25,16 @@ Programmatic analysis of any environment graph:
 
 ```js
 import { link, buildManifest } from "@solidjs/linker";
-const analysis = await link({ root, entries: [serverEntry], environment: "server", typedSummaries });
+const analysis = await link({
+  root,
+  entries: [serverEntry],
+  environment: "server",
+  typedSummaries
+});
 console.log(buildManifest(analysis));
 ```
 
-Libraries participate by shipping `solid-summary.json` (`summarizePackage(dir)`) and `"solidSummary": "solid-summary.json"` in `package.json`; without it (or with a stale one) their modules are `unknown` and retained.
+Libraries participate by shipping `solid-summary.json` (`summarizePackage(dir)`) and `"solidSummary": "solid-summary.json"` in `package.json`; without it (or with a stale one) their modules are `unknown` and retained, and any handler that captures one of their imports stays inline.
 
 ## What it does
 
