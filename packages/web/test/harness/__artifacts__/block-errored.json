@@ -1,0 +1,5 @@
+{
+  "name": "block-errored",
+  "shell": "<div _hk=0><!--$--><p _hk=20>caught</p><!--/--><span>tail</span></div><script>(self.$R=self.$R||{})[\"\"]=[];_$HY.r[\"1\"]=$R[0]=new Error(\"boom\");</script>",
+  "rest": ""
+}

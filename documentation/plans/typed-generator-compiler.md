@@ -13,10 +13,10 @@ Current exploration work:
 
 - Direct path implementation is complete and verified: `yield* store.user.name`, indexed store paths, and `yield* props.count` carry root/path metadata.
 - `solid-tsc` provides pre-typecheck source projection, mapped diagnostics, and declaration emit because stock TypeScript cannot type the authored direct-path syntax by itself.
-- Runtime-size and app-code partitioning prototypes are complete on Tracks A-E. Their measurements and decisions are recorded below, but none is accepted into the baseline yet.
-- The read-only strict-mode SSR/hydration investigation is complete. It found that current serialization is primarily async-result data, current hydration re-executes the full component tree, and JSX blocks currently have a hydration-id parity defect that must be fixed before strict SSR can be considered viable.
-- `packages/web/test/conformance/` now compares handwritten, runtime-generator, compiler-lowered, and host-fused behavior across client, SSR, and hydration traces. It pins the dynamic-index fusion, JSX hydration-key, and server accessor-iterator defects.
-- Required performance measurements are documented below; optimized mode is not ready to become the default until review blockers are fixed and measurements reproduce on an integrated graph.
+- Runtime-size and app-code partitioning prototypes are complete on Tracks A-E. Their measurements and integration decisions are recorded below.
+- The read-only strict-mode SSR/hydration investigation is complete. JSX blocks had a hydration-id parity defect; compiler-emitted creation scopes now fix it (Track D prerequisite, `track-d-hydration.md`).
+- `packages/web/test/conformance/` compares handwritten, runtime-generator, compiler-lowered, and host-fused behavior across client, SSR, and hydration traces.
+- Required performance measurements are documented below; optimized mode is not ready to become the default until remaining review blockers are fixed and measurements reproduce on the integrated graph.
 
 ## Recent Changes
 
@@ -82,7 +82,7 @@ Current exploration work:
 
 - Current SSR serializes async memo/signal results, async projections, iterable results, errors, loading/stream sentinels, and asset maps. Plain signals, synchronous memos, and plain stores are generally recreated by client execution rather than serialized as application state.
 - Current hydration re-runs the component tree, creates owners and computations, reconnects dependencies, and executes binding computations; it primarily avoids redundant DOM creation and writes.
-- Returned JSX `$` blocks currently consume hydration IDs differently on server and client. Strict mode makes these blocks pervasive, so hydration-id parity is a release blocker rather than an optional optimization issue.
+- Returned JSX `$` blocks consumed hydration IDs differently on server and client. Strict mode makes these blocks pervasive, so parity was a release blocker. It is fixed: every JSX-producing block reserves its id scope at creation on both sides (`blockScope`; see `track-d-hydration.md` and `hole-owner-id-matrix.md`).
 - Root/path metadata can help project async/store payloads and align cold code chunks with cold data segments, but it does not prove object identity, alias safety, serializability, or closure resumability.
 - Static components with no client-live behavior are candidates for omitted hydration code only after compiler reachability, refs/directives/context, boundary, and descendant-interactivity proofs are complete.
 - Resumable event blocks require every capture to be addressable by a stable root/path, constant, or registered action. Arbitrary closures, DOM nodes, owners, setters, and non-serializable objects remain blockers.
@@ -1456,7 +1456,7 @@ The larger model is similar to algebraic effects: `$` blocks declare operations,
 - JSX may erase generic block return types.
 - Direct prop/store paths require projected typechecking; editor language-service support is still missing.
 - Static root/path metadata cannot prove runtime aliases, shared-reference identity, or serializability.
-- JSX blocks currently break server/client hydration-id parity and must be fixed before strict SSR is viable.
+- JSX-block hydration-id parity is fixed for hydratable native-compiler builds. Babel-JSX mode and `generators: false` still carry the original drift.
 - Direct reads after native `await` cannot safely use global tracking.
 - Event errors occur after render and require captured boundary routing.
 - Event concurrency needs explicit defaults.

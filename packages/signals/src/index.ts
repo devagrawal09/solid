@@ -111,7 +111,8 @@ export {
   BLOCK_NOTHROW,
   isBlock,
   renderBlock,
-  dispatchBlock
+  dispatchBlock,
+  blockScope
 } from "./generator.js";
 export type {
   Block,

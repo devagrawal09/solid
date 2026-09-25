@@ -412,3 +412,147 @@ describe("ID Parity: ternary conditional memos", () => {
     expect(clientIds).toEqual(serverIds);
   });
 });
+
+/**
+ * JSX block id scopes (`blockScope`, compiler-emitted as `$(blockScope(body))`
+ * for every `$` block whose body contains JSX).
+ *
+ * A block defers its JSX to whichever sink runs it; the client and server
+ * sinks run at different times under different owners. The scope reserves
+ * one slot at block CREATION and runs every invocation under it with a zeroed
+ * counter, so the client (`@solidjs/signals`) and server (`solid-js` server
+ * runtime) twins must produce identical ids however late, often, or
+ * partially each side runs the body.
+ */
+describe("ID Parity: JSX block scopes", () => {
+  type Runtime = {
+    createRoot: typeof createRoot;
+    createOwner: () => { id?: string };
+    createMemo: typeof createMemo;
+    getOwner: typeof getOwner;
+    untrack: typeof untrack;
+    blockScope: <F extends (...args: any[]) => any>(body: F) => F;
+  };
+
+  async function runtimes(): Promise<Record<"client" | "server", Runtime>> {
+    const client = await import("@solidjs/signals");
+    const server = await import("../src/server/signals.js");
+    return {
+      client: client as unknown as Runtime,
+      server: server as unknown as Runtime
+    };
+  }
+
+  /**
+   * One component-shaped scenario: a memo, a JSX block (reserving its slot),
+   * a sibling memo; the block body is then run `runs` times AFTER the
+   * siblings, creating owners (stand-ins for templates/memos) inside it.
+   */
+  function scenario(rt: Runtime, opts: { throwFirst?: boolean; runs?: number } = {}) {
+    const ids: string[] = [];
+    rt.createRoot(
+      () => {
+        rt.untrack(rt.createMemo(() => ids.push("before:" + rt.getOwner()!.id)));
+        let attempt = 0;
+        const body = rt.blockScope(() => {
+          ids.push("content:" + rt.createOwner().id);
+          if (opts.throwFirst && attempt++ === 0) throw new Error("retry");
+          ids.push("content:" + rt.createOwner().id);
+          return "view";
+        });
+        rt.untrack(rt.createMemo(() => ids.push("after:" + rt.getOwner()!.id)));
+        for (let i = 0; i < (opts.runs ?? 1); i++) {
+          try {
+            body();
+          } catch {}
+        }
+        if (opts.throwFirst) body();
+        ids.push("next:" + rt.createOwner().id);
+      },
+      { id: "t" }
+    );
+    return ids;
+  }
+
+  test("content allocates under the slot reserved at creation, not at run time", async () => {
+    const { client, server } = await runtimes();
+    const expected = ["before:t0", "after:t2", "content:t10", "content:t11", "next:t3"];
+    expect(scenario(client)).toEqual(expected);
+    expect(scenario(server)).toEqual(expected);
+  });
+
+  test("reruns and a failed-then-retried run allocate the same ids on both sides", async () => {
+    const { client, server } = await runtimes();
+    expect(scenario(client, { runs: 3 })).toEqual(scenario(server, { runs: 3 }));
+    const retried = [
+      "before:t0",
+      "after:t2",
+      "content:t10",
+      "content:t10",
+      "content:t11",
+      "next:t3"
+    ];
+    expect(scenario(client, { throwFirst: true })).toEqual(retried);
+    expect(scenario(server, { throwFirst: true })).toEqual(retried);
+  });
+
+  test("a runtime-driven (generator) body keeps the scope across its steps", async () => {
+    const { client, server } = await runtimes();
+    const drive = (rt: Runtime) => {
+      const ids: string[] = [];
+      rt.createRoot(
+        () => {
+          const body = rt.blockScope(function* () {
+            ids.push(rt.createOwner().id!);
+            yield 1;
+            ids.push(rt.createOwner().id!);
+          });
+          rt.createOwner();
+          const it = body();
+          it.next();
+          rt.createOwner(); // an allocation between steps stays outside the scope
+          it.next();
+          ids.push("next:" + rt.createOwner().id);
+        },
+        { id: "t" }
+      );
+      return ids;
+    };
+    const expected = ["t00", "t01", "next:t3"];
+    expect(drive(client)).toEqual(expected);
+    expect(drive(server)).toEqual(expected);
+  });
+
+  test("nested block scopes nest their ids identically", async () => {
+    const { client, server } = await runtimes();
+    const nested = (rt: Runtime) => {
+      const ids: string[] = [];
+      rt.createRoot(
+        () => {
+          const outer = rt.blockScope(() => {
+            ids.push(rt.createOwner().id!);
+            const inner = rt.blockScope(() => ids.push(rt.createOwner().id!));
+            ids.push(rt.createOwner().id!);
+            inner();
+          });
+          rt.createOwner();
+          outer();
+        },
+        { id: "t" }
+      );
+      return ids;
+    };
+    const expected = ["t00", "t02", "t010"];
+    expect(nested(client)).toEqual(expected);
+    expect(nested(server)).toEqual(expected);
+  });
+
+  test("outside an id-carrying tree the body is returned untouched", async () => {
+    const { client, server } = await runtimes();
+    for (const rt of [client, server]) {
+      const body = () => 1;
+      expect(rt.blockScope(body)).toBe(body);
+      rt.createRoot(() => expect(rt.blockScope(body)).toBe(body));
+    }
+  });
+});

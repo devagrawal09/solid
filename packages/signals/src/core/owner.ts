@@ -194,6 +194,94 @@ export function peekNextChildId(owner: Owner): string {
   return childId(owner, false);
 }
 
+/*
+ * Hydration id scope for a JSX-producing `$` block body (compiler-emitted as
+ * `$(blockScope(body))` for every block whose body contains JSX).
+ *
+ * A block defers its JSX until it is *run*, and the run happens at whatever
+ * sink renders it: the client's `insert` effect or a flow control's flatten,
+ * the server's template-hole resolution. Those sinks run at different times
+ * and under different owners on each side, so content ids allocated from the
+ * sink's counter drift apart (the JSX-block hydration-id parity defect). A
+ * plain component has no such problem because its JSX is created at the
+ * component call — registration time on both sides.
+ *
+ * `blockScope` restores that invariant: one child-id slot is reserved from the
+ * current owner when the block is CREATED (the `$()` call inside the
+ * component body, in source order on both sides), and every run of the body
+ * allocates under that reserved id with a zeroed counter. Like the server's
+ * `ssrScope` hole owners the scope is virtual — the counter owner the run's
+ * allocations would hit has its `id` / `_childCount` swapped around the
+ * synchronous run and restored after — so ownership, disposal and tracking
+ * are unchanged: content still belongs to (and is tracked by) the sink.
+ * Runs reset the counter, so retries and re-renders are deterministic.
+ *
+ * Outside an id-carrying tree (client-only rendering) nothing is reserved and
+ * the body is returned as-is. The server twin lives in `solid-js`'s server
+ * runtime and must stay slot-for-slot identical.
+ *
+ * This file holds the two owner primitives; `blockScope` itself lives beside
+ * `$` in `generator.ts`.
+ */
+/**
+ * Reserve one child-id slot from the current owner's counter for a block id
+ * scope; `undefined` outside an id-carrying tree.
+ *
+ * @internal
+ */
+export function reserveIdScope(): string | undefined {
+  const owner = context;
+  if (!owner) return undefined;
+  let counter: Owner = owner;
+  while (counter._config & CONFIG_TRANSPARENT && counter._parent) counter = counter._parent;
+  if (counter.id == null) return undefined;
+  return formatId(counter.id, counter._childCount++);
+}
+
+let idScopeEnd = 0;
+
+/**
+ * Call `fn.call(self, arg)` with the allocations it makes landing under
+ * `scopeId`, starting at child index `start`. A virtual swap on the counter
+ * owner the allocations would hit — no owner is created. The index reached is
+ * readable through `idScopeEndCount()` right after the call (a multi-step run
+ * continues from it); argument passing instead of a closure keeps the common
+ * single-step run allocation-free.
+ *
+ * @internal
+ */
+export function runInIdScope<T>(
+  scopeId: string,
+  start: number,
+  fn: (this: unknown, arg?: unknown) => T,
+  self?: unknown,
+  arg?: unknown
+): T {
+  const current = context;
+  let target: Owner | null = current;
+  while (target && target._config & CONFIG_TRANSPARENT && target._parent) target = target._parent;
+  if (!target || target.id == null) {
+    idScopeEnd = start;
+    return fn.call(self, arg);
+  }
+  const prevId = target.id;
+  const prevCount = target._childCount;
+  target.id = scopeId;
+  target._childCount = start;
+  try {
+    return fn.call(self, arg);
+  } finally {
+    idScopeEnd = target._childCount;
+    target.id = prevId;
+    target._childCount = prevCount;
+  }
+}
+
+/** The child index the last `runInIdScope` call reached. @internal */
+export function idScopeEndCount(): number {
+  return idScopeEnd;
+}
+
 function formatId(prefix: string, id: number) {
   const num = id.toString(36),
     len = num.length - 1;

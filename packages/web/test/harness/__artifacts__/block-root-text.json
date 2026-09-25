@@ -1,0 +1,5 @@
+{
+  "name": "block-root-text",
+  "shell": "<div _hk=00><p>Count: <!--$-->1<!--/--></p><span>tail</span></div>",
+  "rest": ""
+}

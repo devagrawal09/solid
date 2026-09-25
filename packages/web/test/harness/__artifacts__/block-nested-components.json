@@ -1,0 +1,5 @@
+{
+  "name": "block-nested-components",
+  "shell": "<div _hk=00><!--$--><section _hk=010><!--$--><u _hk=0130>mid</u><!--/--><!--$--><i _hk=0140>L1</i><!--/--><span>end</span></section><!--/--><!--$--><i _hk=020>L1</i><!--/--></div>",
+  "rest": ""
+}

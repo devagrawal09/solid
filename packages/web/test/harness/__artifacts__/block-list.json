@@ -1,0 +1,5 @@
+{
+  "name": "block-list",
+  "shell": "<ul _hk=00><li _hk=01000><!--$-->a<!--/-->:<!--$-->0<!--/--></li><!--!$--><li _hk=01100><!--$-->b<!--/-->:<!--$-->0<!--/--></li></ul><button _hk=03 id=\"after-list\">after</button>",
+  "rest": ""
+}

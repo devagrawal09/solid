@@ -36,6 +36,7 @@ import {
   Repeat
 } from "solid-js";
 import { Portal, httpStatus, httpHeader, clientOnly, isServer } from "@solidjs/web";
+import { blockScenarios } from "./block-scenarios.jsx";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
@@ -2163,5 +2164,7 @@ export const scenarios: Scenario[] = [
     update: () => setTeamId(undefined),
     expectedTextAfterUpdate: "Some Team",
     stableSelector: "main, div, h1"
-  }
+  },
+  // `$` typed blocks rendered as JSX — see ./block-scenarios.tsx.
+  ...blockScenarios
 ];
