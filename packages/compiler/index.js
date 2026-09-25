@@ -29,6 +29,9 @@ function transform(code, options) {
     output.cssHash = result.cssHash ?? null;
   }
   if (result.storeSummary != null) output.storeSummary = JSON.parse(result.storeSummary);
+  // Experimental, private: the module's resumable-event manifest (with the
+  // generated event module) when `resumableEvents` is on.
+  if (result.resumable != null) output.resumable = JSON.parse(result.resumable);
   return output;
 }
 
@@ -363,6 +366,10 @@ function validateOptions(code, options) {
       nativeOptions.storeLinkFacts = flattenStoreLinkFacts(value);
       continue;
     }
+    if (key === "resumableEvents") {
+      Object.assign(nativeOptions, flattenResumableEvents(value));
+      continue;
+    }
     if (key === "validate") {
       if (typeof value !== "boolean") {
         throw new TypeError("@solidjs/compiler `validate` option must be boolean");
@@ -397,6 +404,56 @@ function flattenStoreLinkFacts(facts) {
         );
       }
       for (const prop of props) out.push(`${source}\0${name}\0${prop}`);
+    }
+  }
+  return out;
+}
+
+// Experimental, private: resumable event blocks. `true` or
+// `{ require?, root?, serverModule?, imports?: [{ source, imported, kind:
+// "action" | "trusted", id? }] }`, flattened for the native side.
+function flattenResumableEvents(value) {
+  if (value === false || value == null) return { resumableEvents: false };
+  if (value === true) return { resumableEvents: true };
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(
+      "@solidjs/compiler `resumableEvents` option must be a boolean or an object"
+    );
+  }
+  const out = { resumableEvents: true };
+  for (const [key, option] of Object.entries(value)) {
+    if (key === "require") {
+      if (typeof option !== "boolean") {
+        throw new TypeError("@solidjs/compiler `resumableEvents.require` must be boolean");
+      }
+      out.resumableRequire = option;
+    } else if (key === "root" || key === "serverModule") {
+      if (typeof option !== "string") {
+        throw new TypeError(`@solidjs/compiler \`resumableEvents.${key}\` must be a string`);
+      }
+      out[key === "root" ? "resumableRoot" : "resumableServerModule"] = option;
+    } else if (key === "imports") {
+      if (!Array.isArray(option)) {
+        throw new TypeError("@solidjs/compiler `resumableEvents.imports` must be an array");
+      }
+      out.resumableImports = option.map(fact => {
+        if (
+          typeof fact !== "object" ||
+          fact == null ||
+          typeof fact.source !== "string" ||
+          typeof fact.imported !== "string" ||
+          (fact.kind !== "action" && fact.kind !== "trusted") ||
+          (fact.kind === "action" && typeof fact.id !== "string") ||
+          [fact.source, fact.imported, fact.kind, fact.id ?? ""].some(part => part.includes("\0"))
+        ) {
+          throw new TypeError(
+            '@solidjs/compiler `resumableEvents.imports[]` entries are `{ source, imported, kind: "action" | "trusted", id? }` (an action needs its id)'
+          );
+        }
+        return `${fact.source}\0${fact.imported}\0${fact.kind}\0${fact.id ?? ""}`;
+      });
+    } else {
+      throw new Error(`@solidjs/compiler received unknown resumableEvents option \`${key}\``);
     }
   }
   return out;

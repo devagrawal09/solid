@@ -13,7 +13,8 @@ import type { CompileOptions, LoweringStats } from "./module.js";
  * - `reference`: handwritten ordinary Solid (accessor calls, plain
  *   callbacks) — the oracle.
  * - `generator`: the same program written with `$` blocks.
- * - `strict` (reserved): the future non-generator strict frontend.
+ * - `strict`: the non-generator strict frontend (`$(fn)` markers), consumed
+ *   by the resumable-event modes.
  */
 export type SourceKind = "reference" | "generator" | "strict";
 
@@ -54,6 +55,12 @@ export interface ModeAdapter {
   reference?: ModeId;
   pairedWith?: ModeId;
   available?(): string | undefined;
+  /**
+   * Hydrate-environment mode that does not hydrate: it installs the
+   * resumable-events bootstrap over the paired server mode's markup and
+   * drives events through it (`observeResume`), never running the component.
+   */
+  resume?: boolean;
 }
 
 export type ModeId = string;

@@ -234,7 +234,7 @@ pub fn analyze_strict_blocks(
     let allocator = Allocator::default();
     let source_type = source_type_for_filename(filename)?;
     let program = parse_program(&allocator, source, source_type)?;
-    let (analysis, _) = analyze(&program, source, filename.unwrap_or("input"));
+    let (analysis, _, _) = analyze(&program, source, filename.unwrap_or("input"));
     Ok(analysis)
 }
 
@@ -247,11 +247,12 @@ pub(crate) fn transform_strict_blocks<'a>(
     program: &mut Program<'a>,
     source: &'a str,
     filename: Option<&str>,
-) -> Result<Option<StrictAnalysis>, String> {
+    resumable: Option<&crate::resumable::ResumableConfig>,
+) -> Result<(Option<StrictAnalysis>, Option<crate::resumable::Plan>), String> {
     if !imports_marker(program) {
-        return Ok(None);
+        return Ok((None, None));
     }
-    let (analysis, markers) = analyze(program, source, filename.unwrap_or("input"));
+    let (analysis, markers, block_spans) = analyze(program, source, filename.unwrap_or("input"));
     if let Some(diagnostic) = analysis.diagnostics.first() {
         return Err(format!(
             "[{}] {} ({}:{})",
@@ -259,11 +260,24 @@ pub(crate) fn transform_strict_blocks<'a>(
         ));
     }
     if markers.is_empty() {
-        return Ok(None);
+        return Ok((None, None));
     }
+    // Resumable events plan against the authored program (markers intact,
+    // callbacks and host sites at their analyzed spans), before erasure.
+    let plan = match resumable {
+        Some(config) => Some(crate::resumable::analyze(
+            program,
+            source,
+            filename.unwrap_or("input"),
+            &analysis,
+            &block_spans,
+            config,
+        )?),
+        None => None,
+    };
     let mut rewriter = Eraser { allocator, markers };
     rewriter.visit_program(program);
-    Ok(Some(analysis))
+    Ok((Some(analysis), plan))
 }
 
 /// Cheap syntactic gate: is `$` imported by name from a runtime source?
@@ -338,7 +352,7 @@ fn write_strings(out: &mut String, strings: &[String]) {
 }
 
 impl StrictSite {
-    fn write_json(&self, out: &mut String) {
+    pub(crate) fn write_json(&self, out: &mut String) {
         out.push_str(&format!(
             "{{\"start\":{},\"end\":{},\"line\":{},\"column\":{}}}",
             self.start, self.end, self.line, self.column
@@ -465,7 +479,7 @@ impl StrictBlockSummary {
     }
 }
 
-fn json_string(out: &mut String, text: &str) {
+pub(crate) fn json_string(out: &mut String, text: &str) {
     out.push('"');
     for c in text.chars() {
         match c {
@@ -484,7 +498,7 @@ fn json_string(out: &mut String, text: &str) {
 // --- positions -------------------------------------------------------------------------
 
 /// Byte offsets → UTF-16 offsets and 1-based line/column.
-struct Positions {
+pub(crate) struct Positions {
     /// `utf16[i]` = UTF-16 length of `source[..i]` for every byte index.
     utf16: Vec<u32>,
     /// Byte offset of every line start.
@@ -492,7 +506,7 @@ struct Positions {
 }
 
 impl Positions {
-    fn new(source: &str) -> Self {
+    pub(crate) fn new(source: &str) -> Self {
         let mut utf16 = vec![0u32; source.len() + 1];
         let mut count = 0u32;
         let mut lines = vec![0u32];
@@ -511,7 +525,7 @@ impl Positions {
         Self { utf16, lines }
     }
 
-    fn site(&self, source: &str, span: Span) -> StrictSite {
+    pub(crate) fn site(&self, source: &str, span: Span) -> StrictSite {
         let start = (span.start as usize).min(source.len());
         let end = (span.end as usize).min(source.len());
         let line_index = match self.lines.binary_search(&(start as u32)) {
@@ -533,7 +547,7 @@ impl Positions {
 
 /// A function literal, by reference into the AST.
 #[derive(Clone, Copy)]
-enum FnRef<'b, 'a> {
+pub(crate) enum FnRef<'b, 'a> {
     Function(&'b Function<'a>),
     Arrow(&'b ArrowFunctionExpression<'a>),
 }
@@ -555,7 +569,7 @@ impl FnRef<'_, '_> {
 }
 
 #[derive(Clone)]
-enum BindingKind<'a> {
+pub(crate) enum BindingKind<'a> {
     /// A signal / memo accessor: `count()` is a read.
     Accessor,
     /// A signal setter: `setCount(v)` is a write.
@@ -585,7 +599,7 @@ enum BindingKind<'a> {
 }
 
 impl BindingKind<'_> {
-    fn is_capability(&self) -> bool {
+    pub(crate) fn is_capability(&self) -> bool {
         matches!(
             self,
             BindingKind::Accessor
@@ -613,7 +627,7 @@ impl BindingKind<'_> {
             )
     }
 
-    fn describe(&self) -> &'static str {
+    pub(crate) fn describe(&self) -> &'static str {
         match self {
             BindingKind::Accessor => "an accessor",
             BindingKind::Setter => "a setter",
@@ -647,7 +661,7 @@ impl BindingKind<'_> {
 }
 
 /// Shared, memoized classification of every binding the walkers touch.
-struct Classifier<'b, 'a> {
+pub(crate) struct Classifier<'b, 'a> {
     scoping: &'b Scoping,
     nodes: &'b AstNodes<'a>,
     /// Local symbol → imported name for runtime imports.
@@ -657,7 +671,7 @@ struct Classifier<'b, 'a> {
 }
 
 impl<'b, 'a> Classifier<'b, 'a> {
-    fn new(scoping: &'b Scoping, nodes: &'b AstNodes<'a>, program: &Program<'a>) -> Self {
+    pub(crate) fn new(scoping: &'b Scoping, nodes: &'b AstNodes<'a>, program: &Program<'a>) -> Self {
         let mut runtime_imports = HashMap::new();
         for statement in &program.body {
             let Statement::ImportDeclaration(import) = statement else {
@@ -693,7 +707,7 @@ impl<'b, 'a> Classifier<'b, 'a> {
         self.runtime_imports.values().any(|name| name == "$")
     }
 
-    fn symbol_of(&self, reference: &IdentifierReference<'_>) -> Option<SymbolId> {
+    pub(crate) fn symbol_of(&self, reference: &IdentifierReference<'_>) -> Option<SymbolId> {
         reference
             .reference_id
             .get()
@@ -705,7 +719,7 @@ impl<'b, 'a> Classifier<'b, 'a> {
     }
 
     /// Classify a reference: unresolved (global) references are plain values.
-    fn classify_reference(
+    pub(crate) fn classify_reference(
         &mut self,
         reference: &IdentifierReference<'_>,
         block: Span,
@@ -719,7 +733,7 @@ impl<'b, 'a> Classifier<'b, 'a> {
     /// `block` is the span of the marked callback being analyzed: bindings
     /// declared inside it are locals (values by construction), bindings
     /// outside it are classified conservatively.
-    fn classify(&mut self, symbol: SymbolId, block: Span) -> BindingKind<'a> {
+    pub(crate) fn classify(&mut self, symbol: SymbolId, block: Span) -> BindingKind<'a> {
         if let Some(kind) = self.cache.get(&symbol) {
             return kind.clone();
         }
@@ -967,7 +981,7 @@ impl<'b, 'a> Classifier<'b, 'a> {
     }
 
     /// A literal-shaped expression whose identifiers are all plain.
-    fn is_plain_expression(&mut self, expression: &Expression<'a>, block: Span) -> bool {
+    pub(crate) fn is_plain_expression(&mut self, expression: &Expression<'a>, block: Span) -> bool {
         match strip_ts(expression) {
             Expression::BooleanLiteral(_)
             | Expression::NullLiteral(_)
@@ -1103,7 +1117,7 @@ impl<'a> Visit<'a> for Captures<'_, '_, 'a> {
     }
 }
 
-fn strip_ts<'b, 'a>(expression: &'b Expression<'a>) -> &'b Expression<'a> {
+pub(crate) fn strip_ts<'b, 'a>(expression: &'b Expression<'a>) -> &'b Expression<'a> {
     match expression {
         Expression::TSAsExpression(e) => strip_ts(&e.expression),
         Expression::TSSatisfiesExpression(e) => strip_ts(&e.expression),
@@ -1138,7 +1152,7 @@ fn is_literal_key(expression: &Expression<'_>) -> bool {
 /// including a bare identifier (no keys). Optional links are allowed (the
 /// read is bounded); computed keys other than literals and identifiers are
 /// recorded as `[…]`.
-fn chain_root<'b, 'a>(
+pub(crate) fn chain_root<'b, 'a>(
     expression: &'b Expression<'a>,
 ) -> Option<(&'b IdentifierReference<'a>, Vec<String>)> {
     let mut keys = Vec::new();
@@ -1244,6 +1258,20 @@ struct HostUse {
     span: Span,
 }
 
+/// Byte spans of one analyzed block, aligned with `StrictAnalysis::blocks`:
+/// what a later pass (resumable events) needs to find the callback and its
+/// host sites in the AST without re-deriving host resolution.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct BlockSpans {
+    /// The `$(fn)` call.
+    pub call: Span,
+    /// The callback function expression.
+    pub callback: Span,
+    /// Every host use site (the `$()` call or the reference to the marked
+    /// binding) with its DOM event name for event hosts.
+    pub uses: Vec<(Span, Option<String>)>,
+}
+
 /// A `$(fn)` call found in the program.
 struct Marked<'a> {
     node_id: NodeId,
@@ -1255,7 +1283,7 @@ fn analyze<'a>(
     program: &'a Program<'a>,
     source: &str,
     filename: &str,
-) -> (StrictAnalysis, Vec<Span>) {
+) -> (StrictAnalysis, Vec<Span>, Vec<BlockSpans>) {
     let semantic = SemanticBuilder::new()
         .with_build_nodes(true)
         .build(program)
@@ -1266,8 +1294,9 @@ fn analyze<'a>(
     let positions = Positions::new(source);
     let mut analysis = StrictAnalysis::default();
     let mut markers = Vec::new();
+    let mut block_spans = Vec::new();
     if !classifier.imports_marker() {
-        return (analysis, markers);
+        return (analysis, markers, block_spans);
     }
 
     // Every marked call, in source order.
@@ -1537,12 +1566,17 @@ fn analyze<'a>(
                 markers.push(item.call.span);
             }
         }
+        block_spans.push(BlockSpans {
+            call: item.call.span,
+            callback: callback_span,
+            uses: uses.iter().map(|u| (u.span, u.event.clone())).collect(),
+        });
         analysis.blocks.push(summary);
     }
     analysis
         .diagnostics
         .sort_by_key(|d| (d.site.start, d.site.end));
-    (analysis, markers)
+    (analysis, markers, block_spans)
 }
 
 /// The host that consumes the expression at `node_id` (a `$` call or a

@@ -52,6 +52,7 @@ pub fn transform_lazy(
     let Some(filename) = options.filename.as_deref() else {
         return Ok(TransformResult {
             store_summary: None,
+            resumable: None,
             code,
             map: None,
             css: None,
@@ -80,6 +81,7 @@ pub fn transform_lazy(
         // only care about the placeholder injection).
         return Ok(TransformResult {
             store_summary: None,
+            resumable: None,
             code,
             map: None,
             css: None,
@@ -106,6 +108,7 @@ pub fn transform_lazy(
 
     Ok(TransformResult {
         store_summary: None,
+        resumable: None,
         code: build.code,
         map: build.map.map(|map| map.to_json_string()),
         css: None,

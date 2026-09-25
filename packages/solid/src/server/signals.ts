@@ -2851,6 +2851,10 @@ export function createErrorBoundary<T, U>(
   // runs, and an error surfacing from inside that run reaches the handler
   // with the swap still in place.
   const boundaryId = owner.id;
+  // Resumable events (`@solidjs/resumable/server`, experimental): the server
+  // runtime records the nearest boundary's hydration id as the error route
+  // of a resumed handler, by walking the owner chain for this stamp.
+  (owner as unknown as { _boundary?: string })._boundary = boundaryId;
   const serializeError = (err: any) => {
     if (ctx && boundaryId && !runWithOwner(owner, () => getContext(NoHydrateContext))) {
       ctx.serialize(boundaryId, err);

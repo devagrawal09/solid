@@ -1,0 +1,5 @@
+{
+  "resumableEvents": {
+    "imports": [{ "source": "./actions", "imported": "track", "kind": "action", "id": "track-abc12345" }]
+  }
+}

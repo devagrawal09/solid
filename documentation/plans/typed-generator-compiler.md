@@ -4,7 +4,7 @@ Compact proposal: [`Strict Reactive Blocks For Solid`](../compiled-signals-rfc.m
 
 ## Exploration Status
 
-Status as of 2026-09-25: the design remains experimental, but the baseline and optimization prototypes are now published on the fork. The end-to-end baseline covers typed blocks, host enforcement, direct typed store/prop paths, compiler lowering, projected TypeScript checking, block-derived signals/stores, DOM event dispatch, and a converted TodoMVC example. The reviewed integration includes Strict TSX, the safe Track A/B foundations, and Track D's hydration-ID prerequisite. Track C, D's replay/inert slices, and Track E remain excluded.
+Status as of 2026-09-25: the design remains experimental, but the baseline and optimization prototypes are now published on the fork. The end-to-end baseline covers typed blocks, host enforcement, direct typed store/prop paths, compiler lowering, projected TypeScript checking, block-derived signals/stores, DOM event dispatch, and a converted TodoMVC example. The reviewed integration includes Strict TSX, the safe Track A/B foundations, and Track D's hydration-ID prerequisite. Track C, D's replay/inert slices, and Track E remain excluded. A separate private branch, `experiment/resumable-event-first-interaction`, holds a first-interaction-correct vertical slice of resumable event blocks (optimization slice 8) behind an off-by-default compiler option; see [resumable-events.md](./resumable-events.md). It is not merged here and does not widen the RFC.
 
 The production proposal has two modes only:
 
@@ -21,6 +21,11 @@ Current exploration work:
 - Required performance measurements are documented below; optimized mode is not ready to become the default until remaining review blockers are fixed and measurements reproduce on the integrated graph.
 
 ## Recent Changes
+
+### 2026-09-25 (resumable-event-first-interaction, separate branch)
+
+- Built the resumable-event vertical slice as a private prototype on `experiment/resumable-event-first-interaction` (from `f1ee7fd6`): a compiler pass over the strict `$(fn)` analysis that plans, per module, which event handlers can resume from serialized captures (reason-coded: component consts, props-path values, module literal constants, link-verified server actions, signals of the same component), cuts them into a separate event module with source maps, and rewrites the SSR output to emit stable coordinates (`_hk`, `data-sr="<key>/<n>"`) and one instance record per scope through the hydration serializer; a 2.9 KB gzip inline bootstrap that snapshots approved event fields, runs the compiled prelude synchronously, queues cold events in order, loads the runtime and the module, verifies schema / module id / handler source hashes / action ids, and runs each event exactly once; a runtime that reconstructs a signal plus existing text bindings without running the component. Both required fixtures pass, with mutation tests for a swallowed and a duplicated first click, and the conformance harness gained `server/resumable` and `hydrate/resumable` modes with the timing difference declared exactly.
+- Measured (see the document): initial JavaScript falls from 19.6–30.6 KB gzip (hydration entry) to ~3.3–3.5 KB (bootstrap + manifest), but the first interaction then loads the 10.7 KB gzip reactive core even for scopes without signals, and action handlers load the server-function client either way; by first interaction the action fixture is not a win. Verdict: keep private and off; split the runtime by scope capability and add prefetch before re-measuring.
 
 ### 2026-09-25 (strict-solid-tsx)
 
@@ -139,6 +144,7 @@ All optimization tracks published reviewable branches from baseline `1fc0b873`. 
 | D           | `f855369a` | Hydration-ID parity, replay elimination, and inert regions | Only source `49f0d4d9` integrated as `6cf748ca`; slices 5-6 excluded                    |
 | E           | `44abd1eb` | Capability-selected hydration runtime                      | Excluded                                                                                |
 | Conformance | `fe6bd41f` | Cross-mode semantic oracle                                 | Content-equivalent harness at `d3f6a42b`; repaired defects are unpinned                 |
+| Resumable   | branch     | Resumable event blocks, first-interaction slice (slice 8)  | Private, off by default, on `experiment/resumable-event-first-interaction`; not merged  |
 
 Track A's local status-free hook fired on none of 14 real blocks, made updates slower, and cost 374 B gzip; the shape needs another iteration. Its complete-graph async-free runtime reduced the measured client gzip by 12.3%, server gzip by 18.1%, and update instruction counts by 12-19%, while refusing graphs that touch async capabilities.
 
@@ -185,7 +191,7 @@ Wasm is deferred rather than added as a ninth optimization slice. A future opt-i
 - Keep the component/setup host, yielded creation, direct yielded context, and provider-dominance diagnostics deferred until render/owner summaries and child-slot contracts exist.
 - If post-suspension creation is implemented, restore the captured owner on continuation, preserve stale-flight exclusion, and decide immediate versus commit-atomic child visibility.
 - Extend the conformance harness with streamed shell/chunk hydration, transitions, optimistic writes, keyed lists, concurrent event adapters, `call()` composition, projections, and server-component frames.
-- Redesign and remeasure cold event-domain extraction after fixing evaluation order, AST guard lowering, queued-event semantics, and server-directive pinning; keep resumable events deferred.
+- Redesign and remeasure cold event-domain extraction after fixing evaluation order, AST guard lowering, queued-event semantics, and server-directive pinning; keep resumable events deferred from the accepted scope. The first-interaction slice on `experiment/resumable-event-first-interaction` ([resumable-events.md](./resumable-events.md)) is the reference for the exactly-once, fail-closed semantics; its open items are runtime splitting by scope capability, prefetch, a hydrated/resumed boundary receiver, streaming, and browser measurements.
 - Define the coordinated server/client boundary graph and environment-correct server ownership interface before enabling whole-graph SSR or server-component optimizations.
 - Decide which runtime slicing, SSR serialization, and hydration specializations earn integration after fixes reproduce under the combined harness and benchmark matrix.
 - Define compatibility and publication policy for libraries that cannot provide strict capability manifests.

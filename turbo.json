@@ -95,6 +95,13 @@
     "@solidjs/compiler#test": {
       "cache": false
     },
+    "@solidjs/resumable#test": {
+      "dependsOn": ["@solidjs/signals#build", "solid-js#build", "@solidjs/web#build"],
+      "outputs": []
+    },
+    "@solidjs/resumable#build": {
+      "outputs": ["dist/**"]
+    },
     "diagnostics-example#test": {
       "dependsOn": ["solid-js#build", "@solidjs/web#build", "@solidjs/diagnostics#build"],
       "outputs": []

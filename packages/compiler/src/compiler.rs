@@ -129,6 +129,10 @@ pub struct CompileOptions {
     /// Linker facts for `store_handles`: `(import source, exported
     /// component, verified Borrowed prop)` triples.
     pub store_link_facts: Vec<crate::store_handles::LinkFact>,
+    /// Experimental, private: resumable event blocks (see `resumable.rs`).
+    /// `None` (the default) leaves every generate untouched. Requires
+    /// `generators: true`; an SSR generate also requires `hydratable`.
+    pub resumable_events: Option<crate::resumable::ResumableConfig>,
 }
 
 impl Default for CompileOptions {
@@ -164,6 +168,7 @@ impl Default for CompileOptions {
             block_proofs: false,
             store_handles: false,
             store_link_facts: Vec::new(),
+            resumable_events: None,
         }
     }
 }
@@ -182,6 +187,10 @@ pub struct CompileOutput {
     pub strict_blocks: Option<String>,
     /// The module's store summary (JSON) when `store_handles` ran.
     pub store_summary: Option<String>,
+    /// The module's resumable-event manifest (JSON, with the generated event
+    /// module) when `resumable_events` ran and the module has strict event
+    /// handlers; `None` otherwise.
+    pub resumable: Option<String>,
 }
 
 /// Compile one JavaScript or TypeScript module containing JSX.
@@ -276,6 +285,7 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
             css_hash,
             strict_blocks: None,
             store_summary: None,
+            resumable: None,
         });
     }
 
@@ -294,15 +304,31 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
     // Strict (non-generator) `$(fn)` markers go first, so the generator pass
     // only ever sees authored generator blocks.
     let mut strict_blocks = None;
+    let mut resumable_plan = None;
+    if let Some(config) = options.resumable_events.as_ref() {
+        if !options.generators {
+            return Err(CompileError::configuration(
+                "resumableEvents requires `generators: true`",
+            ));
+        }
+        if matches!(options.generate, Generate::Ssr) && !options.hydratable {
+            return Err(CompileError::configuration(
+                "resumableEvents requires `hydratable: true` on an SSR generate",
+            ));
+        }
+        let _ = config;
+    }
     if options.generators {
-        strict_blocks = crate::strict::transform_strict_blocks(
+        let (analysis, plan) = crate::strict::transform_strict_blocks(
             &allocator,
             &mut program,
             source,
             options.filename.as_deref(),
+            options.resumable_events.as_ref(),
         )
-        .map_err(CompileError::transform)?
-        .map(|analysis| analysis.to_json());
+        .map_err(CompileError::transform)?;
+        strict_blocks = analysis.map(|analysis| analysis.to_json());
+        resumable_plan = plan;
         let proofs = options
             .block_proofs
             .then(|| crate::generators::ProofConfig {
@@ -343,6 +369,24 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
     if options.generators && options.hydratable {
         crate::block_scope::scope_jsx_blocks(&allocator, &mut program);
     }
+
+    // Resumable events: the event module is cut from the program before JSX
+    // lowering drops the handler attributes; the SSR rewrite then marks the
+    // template so the server runtime emits coordinates and instance records.
+    let resumable = resumable_plan.as_ref().map(|plan| {
+        let module = crate::resumable::emit_module(
+            &allocator,
+            &program,
+            plan,
+            source,
+            options.filename.as_deref().unwrap_or("input.jsx"),
+            options.source_map,
+        );
+        if matches!(options.generate, Generate::Ssr) {
+            crate::resumable::rewrite(&allocator, &mut program, plan);
+        }
+        plan.to_json(module.as_ref())
+    });
 
     match options.generate {
         Generate::Dom => {
@@ -462,6 +506,7 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
         css_hash,
         strict_blocks,
         store_summary,
+        resumable,
     })
 }
 

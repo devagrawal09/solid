@@ -81,6 +81,100 @@ export interface TransformOptions {
   storeHandles?: boolean;
   /** Linker facts for `storeHandles`: imported components' verified Borrowed props. */
   storeLinkFacts?: StoreLinkFacts | null;
+  /**
+   * Experimental, private (resumable event blocks, see
+   * documentation/plans/resumable-events.md): plan which strict `$(fn)` DOM
+   * event handlers can resume from serialized captures without hydrating
+   * their component, cut them into a separate event module, and on an SSR
+   * generate mark the template so the server runtime emits coordinates.
+   * Requires `generators: true`; SSR also requires `hydratable`. Default
+   * `false`. The DOM generate is never rewritten.
+   */
+  resumableEvents?: boolean | ResumableEventsOptions;
+}
+
+export interface ResumableEventsOptions {
+  /** Fail the build instead of leaving a marked handler hydrated. */
+  require?: boolean;
+  /** Project root the module id hashes the filename against. */
+  root?: string;
+  /** SSR helper import source. Default `"@solidjs/resumable/server"`. */
+  serverModule?: string;
+  /** Link facts: imports a handler may capture. */
+  imports?: ResumableImportFact[];
+}
+
+export interface ResumableImportFact {
+  source: string;
+  imported: string;
+  /** `action`: a registered server function (with its wire `id`); `trusted`: a plain value. */
+  kind: "action" | "trusted";
+  id?: string;
+}
+
+/** The per-module resumable-event manifest (schema 1). */
+export interface ResumableManifest {
+  schema: 1;
+  /** xxhash32 of the root-relative filename. */
+  module: string;
+  file: string;
+  scopes: ResumableScope[];
+  handlers: ResumableHandler[];
+  diagnostics: ResumableDiagnostic[];
+  eventModule: { name: string; code: string; map: object | null } | null;
+}
+
+export interface ResumableScope {
+  id: string;
+  component: string;
+  /** Keys of the per-instance values object the server serializes, in order. */
+  values: string[];
+  /** Signals the client reconstructs (their current value is in `values`). */
+  signals: string[];
+  bindings: { kind: "text"; path: number[]; hole: number | null; signal: string }[];
+  elements: { path: number[]; on: Record<string, string> }[];
+}
+
+export type ResumableCapture =
+  | { name: string; kind: "value"; reason: "component-const" | "props-path" }
+  | { name: string; kind: "constant"; value: string | number | boolean | null }
+  | { name: string; kind: "signal-setter"; signal: string }
+  | { name: string; kind: "signal-accessor"; signal: string }
+  | {
+      name: string;
+      kind: "import";
+      source: string;
+      imported: string;
+      import: "action" | "trusted";
+      id?: string;
+    };
+
+export type ResumablePreludeOp =
+  | { op: "preventDefault" | "stopPropagation" | "stopImmediatePropagation" }
+  | { op: "guard"; path: string[]; test: "truthy" | "falsy" }
+  | { op: "guard"; path: string[]; test: "eq" | "neq"; value: string | number | boolean | null };
+
+export interface ResumableHandler {
+  id: string;
+  scope: string;
+  block: string;
+  event: string;
+  export: string;
+  /** xxhash32 of the authored callback source. */
+  source: string;
+  async: boolean;
+  captures: ResumableCapture[];
+  prelude: ResumablePreludeOp[];
+  snapshot: string[][];
+}
+
+export interface ResumableDiagnostic {
+  block?: string;
+  scope?: string;
+  status: "resumable" | "hydrated";
+  reason?: string;
+  message: string;
+  site: StrictSite;
 }
 
 export interface StoreLinkFacts {
@@ -137,6 +231,8 @@ export interface TransformResult {
   strictBlocks?: StrictAnalysis;
   /** The module's store summary, when `storeHandles` is on. */
   storeSummary?: StoreSummary;
+  /** The module's resumable-event manifest, when `resumableEvents` is on and the module has strict event handlers. */
+  resumable?: ResumableManifest;
 }
 
 export function transform(code: string, options?: TransformOptions | null): TransformResult;
@@ -377,6 +473,25 @@ export interface TransformDirectivesResult {
   valid: boolean;
   functions: ServerFunctionMeta[];
 }
+
+/**
+ * Track A stage 2: a module's capability summary (`schema: 1`) — its import
+ * and re-export edges, every reactive host compute with its local synchrony
+ * proof, and the props of library components — for the capability linker.
+ */
+export interface CapabilitySummary {
+  schema: 1;
+  imports: { source: string; typeOnly: boolean; names: string[] }[];
+  reexports: { source: string; names: string[] }[];
+  computes: unknown[];
+  componentProps: unknown[];
+  dynamicImports: { source: string }[];
+}
+
+export function summarizeCapabilities(
+  code: string,
+  options?: { filename?: string } | null
+): CapabilitySummary;
 
 export function transformDirectives(
   code: string,

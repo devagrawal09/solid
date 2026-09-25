@@ -80,6 +80,17 @@ pub struct TransformOptions {
     /// Linker facts for `store_handles`, flattened by the JS wrapper to
     /// `source\0export\0prop` strings.
     pub store_link_facts: Option<Vec<String>>,
+    /// Experimental, private: resumable event blocks. Default `false`.
+    pub resumable_events: Option<bool>,
+    /// `resumableEvents.require`: refuse the build on a non-resumable handler.
+    pub resumable_require: Option<bool>,
+    /// `resumableEvents.root`: project root the module id hashes against.
+    pub resumable_root: Option<String>,
+    /// `resumableEvents.serverModule`: SSR helper import source.
+    pub resumable_server_module: Option<String>,
+    /// `resumableEvents.imports`, flattened by the JS wrapper to
+    /// `source\0imported\0kind\0id` strings.
+    pub resumable_imports: Option<Vec<String>>,
 }
 
 #[napi(object)]
@@ -95,6 +106,9 @@ pub struct TransformResult {
     pub strict_blocks: Option<String>,
     /// The module's store summary (JSON) when `storeHandles` is on.
     pub store_summary: Option<String>,
+    /// The module's resumable-event manifest (JSON) when `resumableEvents`
+    /// is on and the module has strict event handlers.
+    pub resumable: Option<String>,
 }
 
 pub(crate) fn source_type_for_filename(filename: Option<&str>) -> Result<SourceType> {

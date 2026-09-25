@@ -1,0 +1,189 @@
+{
+  "schema": 1,
+  "module": "1f2594d1",
+  "file": "src/refused.tsx",
+  "scopes": [],
+  "handlers": [],
+  "diagnostics": [
+    {
+      "block": "src/refused.tsx#0",
+      "scope": "Refused",
+      "status": "hydrated",
+      "reason": "mutable-closure-state",
+      "message": "`clicks` is assigned inside the handler; a resumed handler receives serialized snapshots of its captures, not shared mutable closure state",
+      "site": {
+        "start": 565,
+        "end": 571,
+        "line": 17,
+        "column": 50
+      }
+    },
+    {
+      "block": "src/refused.tsx#8",
+      "scope": "Refused",
+      "status": "hydrated",
+      "reason": "scope-refused",
+      "message": "the handler is sound but its scope `Refused` is not resumable: a handler of `Refused` is not resumable (mutable-closure-state) (handler-refused)",
+      "site": {
+        "start": 565,
+        "end": 571,
+        "line": 17,
+        "column": 50
+      }
+    },
+    {
+      "scope": "Refused",
+      "status": "hydrated",
+      "reason": "handler-refused",
+      "message": "a handler of `Refused` is not resumable (mutable-closure-state)",
+      "site": {
+        "start": 565,
+        "end": 571,
+        "line": 17,
+        "column": 50
+      }
+    },
+    {
+      "block": "src/refused.tsx#1",
+      "scope": "Refused",
+      "status": "hydrated",
+      "reason": "event-escape",
+      "message": "the event object itself is used as a value; a resumed handler receives a snapshot of approved fields, not the live event",
+      "site": {
+        "start": 661,
+        "end": 662,
+        "line": 18,
+        "column": 72
+      }
+    },
+    {
+      "block": "src/refused.tsx#2",
+      "scope": "Refused",
+      "status": "hydrated",
+      "reason": "function-capture",
+      "message": "`local` is a module-level function; only registered actions and the handler's own closures can run on resume (an unsummarized module function would drag its module graph into the event chunk)",
+      "site": {
+        "start": 719,
+        "end": 724,
+        "line": 19,
+        "column": 43
+      }
+    },
+    {
+      "block": "src/refused.tsx#3",
+      "scope": "Refused",
+      "status": "hydrated",
+      "reason": "signal-not-in-scope",
+      "message": "`double` belongs to a signal the scope cannot reconstruct (declared in another component, as a memo, or as a computed signal)",
+      "site": {
+        "start": 796,
+        "end": 802,
+        "line": 20,
+        "column": 57
+      }
+    },
+    {
+      "block": "src/refused.tsx#4",
+      "scope": "Refused",
+      "status": "hydrated",
+      "reason": "unresolved-import",
+      "message": "`helper` is imported from `./helper` and no link fact vouches for it (a registered server action or a trusted plain value); the event module cannot import an unsummarized library",
+      "site": {
+        "start": 865,
+        "end": 871,
+        "line": 21,
+        "column": 47
+      }
+    },
+    {
+      "block": "src/refused.tsx#5",
+      "scope": "Refused",
+      "status": "hydrated",
+      "reason": "event-field",
+      "message": "`relatedTarget` is not an approved event field for a snapshot (scalar event fields, and `value`/`checked`/`name`/`id`/`type`/`selectedIndex` of `target`/`currentTarget`)",
+      "site": {
+        "start": 958,
+        "end": 973,
+        "line": 22,
+        "column": 71
+      }
+    },
+    {
+      "block": "src/refused.tsx#6",
+      "scope": "Refused",
+      "status": "hydrated",
+      "reason": "event-method-outside-prelude",
+      "message": "`preventDefault()` is called outside the synchronous prelude (the leading `preventDefault()` / `stopPropagation()` calls and `if (...) return;` guards); a cold resumed handler runs after the native dispatch, when the call would have no effect",
+      "site": {
+        "start": 1063,
+        "end": 1081,
+        "line": 23,
+        "column": 76
+      }
+    },
+    {
+      "block": "src/refused.tsx#7",
+      "scope": "Refused",
+      "status": "hydrated",
+      "reason": "store-capture",
+      "message": "`setStore` is a store capability; stores are not addressable in this slice",
+      "site": {
+        "start": 1143,
+        "end": 1151,
+        "line": 24,
+        "column": 46
+      }
+    },
+    {
+      "block": "src/refused.tsx#9",
+      "scope": "Dynamic",
+      "status": "hydrated",
+      "reason": "scope-refused",
+      "message": "the handler is sound but its scope `Dynamic` is not resumable: the template renders a component; the narrow resume-scope IR covers static intrinsic elements and exact text bindings only (template-dynamic:component)",
+      "site": {
+        "start": 1474,
+        "end": 1503,
+        "line": 35,
+        "column": 7
+      }
+    },
+    {
+      "scope": "Dynamic",
+      "status": "hydrated",
+      "reason": "template-dynamic:component",
+      "message": "the template renders a component; the narrow resume-scope IR covers static intrinsic elements and exact text bindings only",
+      "site": {
+        "start": 1474,
+        "end": 1503,
+        "line": 35,
+        "column": 7
+      }
+    },
+    {
+      "block": "src/refused.tsx#10",
+      "scope": "Escapes",
+      "status": "hydrated",
+      "reason": "scope-refused",
+      "message": "the handler is sound but its scope `Escapes` is not resumable: `count` is read outside the resumable handlers and exact text bindings of `Escapes`; the client cannot reconstruct a signal whose other readers it never runs (signal-escapes)",
+      "site": {
+        "start": 1704,
+        "end": 1709,
+        "line": 44,
+        "column": 22
+      }
+    },
+    {
+      "scope": "Escapes",
+      "status": "hydrated",
+      "reason": "signal-escapes",
+      "message": "`count` is read outside the resumable handlers and exact text bindings of `Escapes`; the client cannot reconstruct a signal whose other readers it never runs",
+      "site": {
+        "start": 1704,
+        "end": 1709,
+        "line": 44,
+        "column": 22
+      }
+    }
+  ],
+  "eventModule": null
+}

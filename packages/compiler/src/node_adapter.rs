@@ -301,6 +301,7 @@ pub fn transform(code: String, options: Option<TransformOptions>) -> Result<Tran
         css_hash: output.css_hash,
         strict_blocks: output.strict_blocks,
         store_summary: output.store_summary,
+        resumable: output.resumable,
     })
 }
 
@@ -374,6 +375,27 @@ fn core_options(options: TransformOptions) -> Result<CompileOptions> {
                 ))
             })
             .collect(),
+        resumable_events: options.resumable_events.unwrap_or(false).then(|| {
+            crate::resumable::ResumableConfig {
+                require: options.resumable_require.unwrap_or(false),
+                root: options.resumable_root,
+                server_module: options.resumable_server_module,
+                imports: options
+                    .resumable_imports
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|fact| {
+                        let mut parts = fact.split('\0');
+                        Some(crate::resumable::ImportFact {
+                            source: parts.next()?.to_string(),
+                            imported: parts.next()?.to_string(),
+                            kind: parts.next()?.to_string(),
+                            id: parts.next().filter(|id| !id.is_empty()).map(str::to_string),
+                        })
+                    })
+                    .collect(),
+            }
+        }),
     })
 }
 
@@ -413,6 +435,7 @@ fn legacy_preflight(
             css_hash: None,
             strict_blocks: None,
             store_summary: None,
+            resumable: None,
         });
     }
     Err(Error::from_reason(validation_error))

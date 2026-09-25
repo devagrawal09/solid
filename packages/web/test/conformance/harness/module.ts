@@ -17,7 +17,7 @@ const require = createRequire(import.meta.url);
 // The workspace compiler (built compiler.node), the same one the vite
 // plugin uses for the rest of this package's tests.
 const compiler = require("../../../../compiler/index.js") as {
-  transform(code: string, options: Record<string, unknown>): { code: string };
+  transform(code: string, options: Record<string, unknown>): { code: string; resumable?: any };
 };
 
 export type CompileOptions = Record<string, unknown>;
@@ -26,6 +26,8 @@ export interface CompiledModule {
   code: string;
   /** Static facts about the emitted code, reported in the coverage matrix. */
   stats: LoweringStats;
+  /** The resumable-events manifest (with the event module) when the compile asked for it. */
+  resumable?: any;
 }
 
 export interface LoweringStats {
@@ -51,8 +53,8 @@ export function compile(
   options: CompileOptions,
   filename = "scenario.jsx"
 ): CompiledModule {
-  const { code } = compiler.transform(source, { filename, ...options });
-  return { code, stats: lowering(code) };
+  const { code, resumable } = compiler.transform(source, { filename, ...options });
+  return { code, stats: lowering(code), resumable };
 }
 
 const IMPORT = /^import\s+(.+?)\s+from\s+"([^"]+)";?\s*$/;

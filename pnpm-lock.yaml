@@ -552,6 +552,40 @@ importers:
         specifier: workspace:*
         version: link:../solid
 
+  packages/resumable:
+    dependencies:
+      '@solidjs/compiler':
+        specifier: workspace:*
+        version: link:../compiler
+      '@solidjs/signals':
+        specifier: workspace:*
+        version: link:../signals
+      '@solidjs/web':
+        specifier: workspace:*
+        version: link:../web
+      solid-js:
+        specifier: workspace:*
+        version: link:../solid
+    devDependencies:
+      '@rollup/plugin-node-resolve':
+        specifier: ^15.0.1
+        version: 15.0.1(rollup@4.59.0)
+      esbuild:
+        specifier: ^0.27.7
+        version: 0.27.7
+      jsdom:
+        specifier: ^25.0.1
+        version: 25.0.1
+      rollup:
+        specifier: ^4.24.0
+        version: 4.59.0
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.6
+        version: 4.1.6(@types/node@25.6.0)(@vitest/coverage-v8@4.1.6)(jsdom@25.0.1)(vite@8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0))
+
   packages/signals:
     devDependencies:
       '@codspeed/vitest-plugin':

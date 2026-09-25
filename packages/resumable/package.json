@@ -1,0 +1,52 @@
+{
+  "name": "@solidjs/resumable",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Experimental, private prototype: resumable strict event blocks for Solid (server coordinates, inline bootstrap, event-domain runtime, build driver). Not published.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    "./server": {
+      "types": "./types.d.ts",
+      "default": "./src/server.js"
+    },
+    "./bootstrap": {
+      "types": "./types.d.ts",
+      "default": "./src/bootstrap.js"
+    },
+    "./runtime": {
+      "types": "./types.d.ts",
+      "default": "./src/runtime.js"
+    },
+    "./build": {
+      "types": "./types.d.ts",
+      "default": "./src/build.js"
+    },
+    "./rollup": {
+      "types": "./types.d.ts",
+      "default": "./src/rollup.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "node scripts/build-bootstrap.mjs",
+    "test": "pnpm run build && vitest run --config vite.config.server.mjs && vitest run --config vite.config.client.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "measure": "pnpm run build && node scripts/measure.mjs"
+  },
+  "dependencies": {
+    "@solidjs/compiler": "workspace:*",
+    "@solidjs/signals": "workspace:*",
+    "@solidjs/web": "workspace:*",
+    "solid-js": "workspace:*"
+  },
+  "devDependencies": {
+    "@rollup/plugin-node-resolve": "^15.0.1",
+    "esbuild": "^0.27.7",
+    "jsdom": "^25.0.1",
+    "rollup": "^4.24.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
+  }
+}

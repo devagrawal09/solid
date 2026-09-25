@@ -1,0 +1,222 @@
+{
+  "commit": null,
+  "node": "v22.22.2",
+  "date": "2026-09-25T17:17:30.061Z",
+  "bootstrap": {
+    "minified": {
+      "raw": 7059,
+      "gzip": 2924,
+      "brotli": 2603
+    },
+    "unminified": {
+      "raw": 13752,
+      "gzip": 3967,
+      "brotli": 3486
+    }
+  },
+  "fixtures": {
+    "buy": {
+      "compileAndBundleMs": 216,
+      "eventChunks": {
+        "f38bbd1d": {
+          "raw": 11400,
+          "gzip": 4594,
+          "brotli": 4145
+        }
+      },
+      "runtime": {
+        "raw": 26504,
+        "gzip": 10673,
+        "brotli": 9691
+      },
+      "sharedChunks": {
+        "chunk-BOUTWQED.js": {
+          "raw": 1599,
+          "gzip": 802,
+          "brotli": 713
+        },
+        "chunk-GII6DEE6.js": {
+          "raw": 47850,
+          "gzip": 13962,
+          "brotli": 12494
+        },
+        "chunk-NJUWVQNR.js": {
+          "raw": 253,
+          "gzip": 207,
+          "brotli": 189
+        }
+      },
+      "html": {
+        "withResume": {
+          "raw": 1394,
+          "gzip": 395,
+          "brotli": 305
+        },
+        "withoutResume": {
+          "raw": 876,
+          "gzip": 218,
+          "brotli": 161
+        },
+        "coordinatesAndRecordsBytes": 518,
+        "recordsScriptBytes": 288,
+        "manifestBytes": 2382,
+        "inlineBootstrapWithManifest": {
+          "raw": 9481,
+          "gzip": 3488,
+          "brotli": 3091
+        }
+      },
+      "handlers": 5,
+      "scopes": 1,
+      "latency": {
+        "cold": {
+          "medianMs": 7.53,
+          "samples": [
+            11.07,
+            21.53,
+            26.8,
+            4.28,
+            6.08,
+            7.53,
+            4.84
+          ]
+        },
+        "warm": {
+          "medianMs": 0.31,
+          "samples": [
+            0.32,
+            0.32,
+            0.41,
+            0.25,
+            0.26,
+            0.31,
+            0.26
+          ]
+        },
+        "prefetched": {
+          "medianMs": 0.92,
+          "samples": [
+            1.76,
+            0.9,
+            1.04,
+            1.1,
+            0.92,
+            0.88,
+            0.86
+          ]
+        }
+      }
+    },
+    "counter": {
+      "compileAndBundleMs": 75,
+      "eventChunks": {
+        "58464007": {
+          "raw": 296,
+          "gzip": 207,
+          "brotli": 170
+        }
+      },
+      "runtime": {
+        "raw": 26504,
+        "gzip": 10673,
+        "brotli": 9691
+      },
+      "sharedChunks": {},
+      "html": {
+        "withResume": {
+          "raw": 679,
+          "gzip": 295,
+          "brotli": 236
+        },
+        "withoutResume": {
+          "raw": 342,
+          "gzip": 161,
+          "brotli": 119
+        },
+        "coordinatesAndRecordsBytes": 337,
+        "recordsScriptBytes": 281,
+        "manifestBytes": 1521,
+        "inlineBootstrapWithManifest": {
+          "raw": 8620,
+          "gzip": 3324,
+          "brotli": 2949
+        }
+      },
+      "handlers": 3,
+      "scopes": 2,
+      "latency": {
+        "cold": {
+          "medianMs": 7.42,
+          "samples": [
+            5.95,
+            6.22,
+            21.26,
+            8.11,
+            6.38,
+            7.42,
+            7.63
+          ]
+        },
+        "warm": {
+          "medianMs": 1.52,
+          "samples": [
+            1.47,
+            1.52,
+            1.82,
+            1.48,
+            1.42,
+            1.59,
+            1.6
+          ]
+        },
+        "prefetched": {
+          "medianMs": 3.73,
+          "samples": [
+            3.57,
+            3.73,
+            53.44,
+            3.73,
+            3.72,
+            14.77,
+            4.49
+          ]
+        }
+      }
+    }
+  },
+  "baseline": {
+    "buy": {
+      "hydrationEntry": {
+        "raw": 86245,
+        "gzip": 30577,
+        "brotli": 27336,
+        "rawUnminified": null
+      }
+    },
+    "counter": {
+      "hydrationEntry": {
+        "raw": 51874,
+        "gzip": 19584,
+        "brotli": 17801,
+        "rawUnminified": null
+      }
+    },
+    "hydrationScript": {
+      "raw": 387,
+      "gzip": 290,
+      "brotli": 229
+    }
+  },
+  "compile": {
+    "buy": {
+      "ssrMs": 1.863,
+      "ssrWithResumableMs": 2.51,
+      "ssrWithResumableAndSourceMapMs": 2.94
+    },
+    "counter": {
+      "ssrMs": 1.525,
+      "ssrWithResumableMs": 2.129,
+      "ssrWithResumableAndSourceMapMs": 2.55
+    }
+  }
+}

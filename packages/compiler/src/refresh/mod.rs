@@ -114,6 +114,7 @@ pub fn transform_refresh(
         // register come back untouched.
         return Ok(TransformResult {
             store_summary: None,
+            resumable: None,
             code,
             map: None,
             css: None,
@@ -133,6 +134,7 @@ pub fn transform_refresh(
 
     Ok(TransformResult {
         store_summary: None,
+        resumable: None,
         code: build.code,
         map: build.map.map(|map| map.to_json_string()),
         css: None,

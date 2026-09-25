@@ -1,0 +1,146 @@
+{
+  "schema": 1,
+  "module": "45814130",
+  "file": "src/buy.tsx",
+  "scopes": [
+    {
+      "id": "45814130.s0",
+      "component": "Buy",
+      "values": [
+        "sku"
+      ],
+      "signals": [],
+      "bindings": [],
+      "elements": [
+        {
+          "path": [],
+          "on": {
+            "click": "45814130.h0",
+            "input": "45814130.h1"
+          }
+        }
+      ]
+    }
+  ],
+  "handlers": [
+    {
+      "id": "45814130.h0",
+      "scope": "45814130.s0",
+      "block": "src/buy.tsx#0",
+      "event": "click",
+      "export": "h0",
+      "source": "e7e60777",
+      "async": false,
+      "captures": [
+        {
+          "name": "track",
+          "kind": "import",
+          "source": "./actions",
+          "imported": "track",
+          "import": "action",
+          "id": "track-abc12345"
+        },
+        {
+          "name": "sku",
+          "kind": "value",
+          "reason": "props-path"
+        },
+        {
+          "name": "STEP",
+          "kind": "constant",
+          "value": 5
+        }
+      ],
+      "prelude": [
+        {
+          "op": "preventDefault"
+        },
+        {
+          "op": "guard",
+          "path": [
+            "button"
+          ],
+          "test": "neq",
+          "value": 0
+        }
+      ],
+      "snapshot": [
+        [
+          "button"
+        ],
+        [
+          "clientX"
+        ],
+        [
+          "currentTarget",
+          "id"
+        ]
+      ]
+    },
+    {
+      "id": "45814130.h1",
+      "scope": "45814130.s0",
+      "block": "src/buy.tsx#1",
+      "event": "input",
+      "export": "h1",
+      "source": "cea1a705",
+      "async": false,
+      "captures": [
+        {
+          "name": "track",
+          "kind": "import",
+          "source": "./actions",
+          "imported": "track",
+          "import": "action",
+          "id": "track-abc12345"
+        },
+        {
+          "name": "sku",
+          "kind": "value",
+          "reason": "props-path"
+        },
+        {
+          "name": "STEP",
+          "kind": "constant",
+          "value": 5
+        }
+      ],
+      "prelude": [],
+      "snapshot": [
+        [
+          "currentTarget",
+          "value"
+        ]
+      ]
+    }
+  ],
+  "diagnostics": [
+    {
+      "block": "src/buy.tsx#0",
+      "scope": "45814130.s0",
+      "status": "resumable",
+      "message": "`click` handler resumes from serialized captures (track: action import, sku: value[props-path], STEP: constant)",
+      "site": {
+        "start": 455,
+        "end": 604,
+        "line": 15,
+        "column": 18
+      }
+    },
+    {
+      "block": "src/buy.tsx#1",
+      "scope": "45814130.s0",
+      "status": "resumable",
+      "message": "`input` handler resumes from serialized captures (track: action import, sku: value[props-path], STEP: constant)",
+      "site": {
+        "start": 624,
+        "end": 688,
+        "line": 20,
+        "column": 18
+      }
+    }
+  ],
+  "eventModule": {
+    "name": "src/buy.resume.tsx"
+  }
+}

@@ -1647,7 +1647,21 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
         let mut child_do_not_escape = tag_name == "script" || tag_name == "style";
         let mut template = SsrTemplate::new(format!("<{tag_name}"));
         if top_level && self.hydratable {
-            let key_call = self.ssr_hydration_key_call(element.span);
+            // Resumable events (`resumable.rs`): a `$sr={instance}` marker on
+            // the template root turns the hydration-key hole into
+            // `_$srRoot(instance)`, which records the instance under the key
+            // it returns.
+            let key_call = match resumable_root_instance(element, self.allocator) {
+                Some(instance) => self.call_expression(
+                    element.span,
+                    self.ast().expression_identifier(
+                        element.span,
+                        self.ast().ident("_$srRoot"),
+                    ),
+                    vec![instance],
+                ),
+                None => self.ssr_hydration_key_call(element.span),
+            };
             let hole = self.hoist_expression(&mut template, element.span, key_call, false, false);
             template.push_expr(hole);
         }
@@ -1739,6 +1753,18 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
             }
             PlanValue::Expr(expression) => expression,
         };
+
+        // Resumable events (`resumable.rs`): the root marker was consumed by
+        // the hydration-key hole; the element marker is a whole-attribute
+        // hole (` data-sr="<hk>/<n>"`, rendered by the server runtime).
+        if key == crate::resumable::ROOT_ATTRIBUTE {
+            return Ok(());
+        }
+        if key == crate::resumable::ELEMENT_ATTRIBUTE {
+            let hole = self.hoist_expression(template, span, expression, false, false);
+            template.push_expr(hole);
+            return Ok(());
+        }
 
         let is_literal_container = matches!(
             expression,
@@ -3324,4 +3350,33 @@ fn record_statement_jsx_spans(statement: &Statement<'_>, spans: &mut std::vec::V
         _ => {}
     }
     count
+}
+
+
+/// The `$sr={instance}` marker expression on a resumable template root
+/// (see `resumable.rs`), cloned for the hydration-key hole.
+fn resumable_root_instance<'a>(
+    element: &JSXElement<'a>,
+    allocator: &'a oxc_allocator::Allocator,
+) -> Option<Expression<'a>> {
+    element.opening_element.attributes.iter().find_map(|attribute| {
+        let JSXAttributeItem::Attribute(attribute) = attribute else {
+            return None;
+        };
+        let oxc_ast::ast::JSXAttributeName::Identifier(name) = &attribute.name else {
+            return None;
+        };
+        if name.name != crate::resumable::ROOT_ATTRIBUTE {
+            return None;
+        }
+        let Some(oxc_ast::ast::JSXAttributeValue::ExpressionContainer(container)) =
+            &attribute.value
+        else {
+            return None;
+        };
+        container
+            .expression
+            .as_expression()
+            .map(|expression| expression.clone_in(allocator))
+    })
 }

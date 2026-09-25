@@ -1,0 +1,14 @@
+## mount
+run App
+## initial
+html = <div><button class="inc">+</button><p class="count">0</p></div>
+## first click, then settle
+run inc
+owner inc handler = none
+html = <div><button class="inc">+</button><p class="count">1</p></div>
+html = <div><button class="inc">+</button><p class="count">1</p></div>
+## second click
+run inc
+owner inc handler = none
+html = <div><button class="inc">+</button><p class="count">2</p></div>
+## teardown

@@ -16,9 +16,18 @@ import { registerEnvironment } from "../conformance/harness/register.js";
 import { observeServer } from "../conformance/harness/runner.js";
 import { writeArtifact } from "../conformance/harness/artifacts.js";
 import { scenarios } from "../conformance/scenarios/index.js";
+// The resumable-events server helpers (experimental, private) a
+// `server/resumable` compile imports; resolved from source so its `solid-js`
+// and `@solidjs/web` imports hit this project's aliases.
+import * as resumableServer from "../../../resumable/src/server.js";
 
 registerEnvironment("server", scenarios, async (scenario, mode) => {
-  const observation = await observeServer(scenario, mode, { solid, web }, hydrationRecordKeys);
+  const observation = await observeServer(
+    scenario,
+    mode,
+    { solid, web, modules: { "@solidjs/resumable/server": resumableServer } },
+    hydrationRecordKeys
+  );
   writeArtifact(scenario.name, mode.id, observation.artifact);
   return observation;
 });

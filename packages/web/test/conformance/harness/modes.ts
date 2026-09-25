@@ -15,6 +15,17 @@ function compilerSupports(option: string): string | undefined {
   }
 }
 
+/** SSR compile of a strict source with resumable events; `h` is a trusted import. */
+const RESUMABLE_COMPILE = {
+  generate: "ssr",
+  hydratable: true,
+  resumableEvents: {
+    root: "/",
+    serverModule: "@solidjs/resumable/server",
+    imports: [{ source: "conformance", imported: "h", kind: "trusted" }]
+  }
+};
+
 export const modes: ModeAdapter[] = [
   // --- client: fresh render in jsdom ------------------------------------------
   {
@@ -118,6 +129,31 @@ export const modes: ModeAdapter[] = [
     reference: "hydrate/reference",
     pairedWith: "server/fused",
     available: () => compilerSupports("hostFusion")
+  },
+  // --- resumable events (experimental, private): strict `$(fn)` handlers that
+  // run from serialized captures without hydrating their component ----------
+  {
+    id: "server/resumable",
+    title: "strict `$(fn)` handlers compiled resumable, SSR (coordinates + instance records)",
+    environment: "server",
+    source: "strict",
+    compile: RESUMABLE_COMPILE,
+    reference: "server/reference",
+    available: () => compilerSupports("resumableEvents")
+  },
+  {
+    id: "hydrate/resumable",
+    title:
+      "resumable events: inline bootstrap over the server markup, no hydration, no component run",
+    environment: "hydrate",
+    source: "strict",
+    // The same SSR compile: the hydrate side needs the manifest and the
+    // event module, never a client build of the component.
+    compile: RESUMABLE_COMPILE,
+    reference: "hydrate/reference",
+    pairedWith: "server/resumable",
+    resume: true,
+    available: () => compilerSupports("resumableEvents")
   }
 ];
 
@@ -143,8 +179,9 @@ export const plannedModes: { id: ModeId; title: string; blocker: string }[] = [
   },
   {
     id: "hydrate/runtime-selected",
-    title: "runtime-selected / resumable hydration",
-    blocker: "hydration always re-executes the component tree; no selection manifest exists"
+    title: "runtime-selected hydration (capability-selected client entries)",
+    blocker:
+      "hydration always re-executes the component tree; no capability-selection manifest exists (Track E excluded). Resumable event scopes are a separate, narrower experiment: see `hydrate/resumable`"
   },
   {
     id: "server/server-components",

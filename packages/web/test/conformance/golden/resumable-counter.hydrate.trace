@@ -1,0 +1,15 @@
+## hydrate
+run App
+hydration server-nodes 1/1 kept, 0 client-inserted
+## initial
+html = <div _hk="0"><button class="inc">+</button><p class="count">0</p></div>
+## first click, then settle
+run inc
+owner inc handler = none
+html = <div _hk="0"><button class="inc">+</button><p class="count">1</p></div>
+html = <div _hk="0"><button class="inc">+</button><p class="count">1</p></div>
+## second click
+run inc
+owner inc handler = none
+html = <div _hk="0"><button class="inc">+</button><p class="count">2</p></div>
+## teardown

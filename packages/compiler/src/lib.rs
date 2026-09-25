@@ -32,6 +32,7 @@ mod lazy;
 mod node_adapter;
 #[cfg(feature = "node")]
 mod refresh;
+mod resumable;
 mod shared;
 mod ssr;
 mod strict;
@@ -46,6 +47,7 @@ pub use block_projection::{
 pub use capabilities::summarize_capabilities;
 pub use compiler::{CompileOptions, CompileOutput, Generate, Renderer, Syntax, Wrapper, compile};
 pub use error::{CompileError, CompileErrorKind};
+pub use resumable::{EventModule, ImportFact, Plan as ResumablePlan, ResumableConfig};
 pub use strict::{
     StrictAnalysis, StrictBlockSummary, StrictCall, StrictCreation, StrictDiagnostic, StrictEscape,
     StrictHost, StrictOpaque, StrictRead, StrictSite, StrictWrite, analyze_strict_blocks,

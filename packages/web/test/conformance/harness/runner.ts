@@ -11,6 +11,8 @@ import type { DriverContext, ModeAdapter, Observation, Scenario } from "./types.
 export interface Runtime {
   solid: any;
   web: any;
+  /** Extra modules a compiled scenario may import (e.g. `@solidjs/resumable/server`). */
+  modules?: Record<string, unknown>;
 }
 
 /** The server markup a hydrate mode consumes (written by the server spec). */
@@ -27,11 +29,12 @@ function load(scenario: Scenario, mode: ModeAdapter, runtime: Runtime, recorder:
   const compiled = compile(source, mode.compile);
   const h = probe(recorder, runtime.solid);
   const app = evaluate(compiled.code, {
+    ...(runtime.modules ?? {}),
     "solid-js": runtime.solid,
     "@solidjs/web": runtime.web,
     conformance: { h, NotFound, Forbidden }
   });
-  return { app, stats: compiled.stats, code: compiled.code };
+  return { app, stats: compiled.stats, code: compiled.code, resumable: compiled.resumable, h };
 }
 
 /**
@@ -340,6 +343,144 @@ export async function observeHydrate(
     const pending = controller(recorder).pending();
     if (pending.length) recorder.raw(`unsettled = ${pending.join(", ")}`);
     return { scenario: scenario.name, mode: mode.id, trace: recorder.events, stats };
+  } finally {
+    restore();
+    await drain();
+    container.remove();
+    delete (globalThis as any)._$HY;
+    solid.resetErrorHalt?.();
+  }
+}
+
+/** The resumable-events client pieces a resume mode runs with. */
+export interface ResumeRuntime {
+  /** `@solidjs/resumable/bootstrap`'s `install`. */
+  install: (manifest: any, options: any) => any;
+  /** The `@solidjs/resumable/runtime` namespace. */
+  runtime: any;
+}
+
+/**
+ * Resume environment: apply the paired server mode's output like the hydrate
+ * environment does, but never hydrate. The compiled scenario's resumable
+ * manifest and event module (the same SSR compile the server mode used)
+ * feed the inline bootstrap; the event module is evaluated against the same
+ * injected modules as the scenario, so its `h` calls land in this trace.
+ * The component is never evaluated as code that runs: only the event module
+ * and the runtime are "loaded", on the first dispatch.
+ */
+export async function observeResume(
+  scenario: Scenario,
+  mode: ModeAdapter,
+  runtime: Runtime,
+  resume: ResumeRuntime,
+  artifact: ServerArtifact
+): Promise<Observation> {
+  const { solid } = runtime;
+  if (!("component" in scenario.entry)) throw new Error(`${scenario.name} is not a component`);
+  const recorder = new Recorder();
+  const restore = captureConsole(recorder);
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  let controller: any = null;
+  let disposed = false;
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    controller?.uninstall();
+    solid.flush();
+  };
+  (globalThis as any)._$HY = { r: {} };
+  try {
+    const source = scenario.sources[mode.source];
+    if (source === undefined) {
+      throw new Error(`[conformance] ${scenario.name} has no ${mode.source} source for ${mode.id}`);
+    }
+    const compiled = compile(source, mode.compile);
+    const h = probe(recorder, solid);
+    const modules = {
+      ...(runtime.modules ?? {}),
+      "solid-js": runtime.solid,
+      "@solidjs/web": runtime.web,
+      conformance: { h, NotFound, Forbidden }
+    };
+    const plan = compiled.resumable;
+    const manifest = {
+      schema: 1,
+      build: "conformance",
+      runtime: "runtime",
+      modules: plan?.eventModule
+        ? { [plan.module]: { url: plan.module, file: "scenario.jsx" } }
+        : {},
+      scopes: plan?.scopes ?? [],
+      handlers: plan?.handlers ?? []
+    };
+    recorder.raw("## resume");
+    recorder.raw(
+      `resume manifest = ${manifest.scopes.length} scope(s), ${manifest.handlers.length} handler(s)` +
+        (plan
+          ? `, ${plan.diagnostics.filter((d: any) => d.status === "hydrated").length} hydrated`
+          : "")
+    );
+    const scriptRe = /<script(?:[^>]*)>([\s\S]*?)<\/script>/g;
+    container.innerHTML = artifact.output.replace(scriptRe, "");
+    const serverNodes = container.querySelectorAll("[_hk]").length;
+    controller = resume.install(manifest, {
+      window: globalThis,
+      document,
+      dev: true,
+      report: (failure: any) =>
+        recorder.raw(
+          `resume failure = ${failure.kind}: ${String(failure.message).split("\n", 1)[0]}`
+        ),
+      load: (url: string) => {
+        if (url === "runtime") return Promise.resolve(resume.runtime);
+        if (plan?.eventModule && url === plan.module) {
+          // The event module: the compiler's separate program, evaluated
+          // against the same modules as a scenario (never the component).
+          return Promise.resolve(evaluate(plan.eventModule.code, modules));
+        }
+        return Promise.reject(new Error(`no module ${url}`));
+      }
+    });
+    for (const [, script] of artifact.output.matchAll(scriptRe)) (0, eval)(script);
+    recorder.raw(`resume server-nodes ${serverNodes} kept, 0 client-inserted, component runs 0`);
+    const base = context(scenario, runtime, recorder, {}, container, "hydrate", dispose);
+    const ctx: DriverContext = {
+      ...base,
+      click(selector) {
+        // A warm handler runs inside the dispatch, so its own trace lines
+        // land between these two; a cold one lands after the load settles.
+        recorder.raw(`resume dispatch = ${selector}`);
+        const before = { ...controller.stats };
+        base.click(selector);
+        const after = controller.stats;
+        const kind =
+          after.cold > before.cold
+            ? "cold"
+            : after.warm > before.warm
+              ? "warm"
+              : after.guarded > before.guarded
+                ? "guarded"
+                : "unbound";
+        recorder.raw(`resume dispatched = ${selector} ${kind}`);
+      },
+      async settle() {
+        await controller.settled();
+        await base.settle();
+      }
+    };
+    await drive(scenario, recorder, ctx);
+    if (!disposed) {
+      recorder.raw("## teardown");
+      dispose();
+    }
+    return {
+      scenario: scenario.name,
+      mode: mode.id,
+      trace: recorder.events,
+      stats: compiled.stats
+    };
   } finally {
     restore();
     await drain();

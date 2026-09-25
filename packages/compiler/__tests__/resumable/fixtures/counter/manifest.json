@@ -1,0 +1,183 @@
+{
+  "schema": 1,
+  "module": "a3ac9868",
+  "file": "src/counter.tsx",
+  "scopes": [
+    {
+      "id": "a3ac9868.s0",
+      "component": "Counter",
+      "values": [
+        "count"
+      ],
+      "signals": [
+        "count"
+      ],
+      "bindings": [
+        {
+          "kind": "text",
+          "path": [],
+          "hole": null,
+          "signal": "count"
+        }
+      ],
+      "elements": [
+        {
+          "path": [],
+          "on": {
+            "click": "a3ac9868.h0"
+          }
+        }
+      ]
+    },
+    {
+      "id": "a3ac9868.s1",
+      "component": "Labeled",
+      "values": [
+        "count"
+      ],
+      "signals": [
+        "count"
+      ],
+      "bindings": [
+        {
+          "kind": "text",
+          "path": [
+            2
+          ],
+          "hole": 0,
+          "signal": "count"
+        }
+      ],
+      "elements": [
+        {
+          "path": [
+            0
+          ],
+          "on": {
+            "click": "a3ac9868.h1"
+          }
+        },
+        {
+          "path": [
+            1
+          ],
+          "on": {
+            "click": "a3ac9868.h2"
+          }
+        }
+      ]
+    }
+  ],
+  "handlers": [
+    {
+      "id": "a3ac9868.h0",
+      "scope": "a3ac9868.s0",
+      "block": "src/counter.tsx#0",
+      "event": "click",
+      "export": "h0",
+      "source": "74d2e280",
+      "async": false,
+      "captures": [
+        {
+          "name": "setCount",
+          "kind": "signal-setter",
+          "signal": "count"
+        },
+        {
+          "name": "count",
+          "kind": "signal-accessor",
+          "signal": "count"
+        }
+      ],
+      "prelude": [],
+      "snapshot": []
+    },
+    {
+      "id": "a3ac9868.h1",
+      "scope": "a3ac9868.s1",
+      "block": "src/counter.tsx#1",
+      "event": "click",
+      "export": "h1",
+      "source": "74d2e280",
+      "async": false,
+      "captures": [
+        {
+          "name": "setCount",
+          "kind": "signal-setter",
+          "signal": "count"
+        },
+        {
+          "name": "count",
+          "kind": "signal-accessor",
+          "signal": "count"
+        }
+      ],
+      "prelude": [],
+      "snapshot": []
+    },
+    {
+      "id": "a3ac9868.h2",
+      "scope": "a3ac9868.s1",
+      "block": "src/counter.tsx#2",
+      "event": "click",
+      "export": "h2",
+      "source": "964b99c8",
+      "async": false,
+      "captures": [
+        {
+          "name": "setCount",
+          "kind": "signal-setter",
+          "signal": "count"
+        },
+        {
+          "name": "count",
+          "kind": "signal-accessor",
+          "signal": "count"
+        }
+      ],
+      "prelude": [],
+      "snapshot": []
+    }
+  ],
+  "diagnostics": [
+    {
+      "block": "src/counter.tsx#0",
+      "scope": "a3ac9868.s0",
+      "status": "resumable",
+      "message": "`click` handler resumes from serialized captures (setCount: setter of count, count: accessor of count)",
+      "site": {
+        "start": 310,
+        "end": 337,
+        "line": 8,
+        "column": 54
+      }
+    },
+    {
+      "block": "src/counter.tsx#1",
+      "scope": "a3ac9868.s1",
+      "status": "resumable",
+      "message": "`click` handler resumes from serialized captures (setCount: setter of count, count: accessor of count)",
+      "site": {
+        "start": 580,
+        "end": 607,
+        "line": 17,
+        "column": 17
+      }
+    },
+    {
+      "block": "src/counter.tsx#2",
+      "scope": "a3ac9868.s1",
+      "status": "resumable",
+      "message": "`click` handler resumes from serialized captures (setCount: setter of count, count: accessor of count)",
+      "site": {
+        "start": 739,
+        "end": 766,
+        "line": 21,
+        "column": 40
+      }
+    }
+  ],
+  "eventModule": {
+    "name": "src/counter.resume.tsx"
+  }
+}
