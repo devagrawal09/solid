@@ -17,12 +17,18 @@
       "types": "./types.d.ts",
       "require": "./index.js",
       "default": "./index.js"
+    },
+    "./capabilities": {
+      "types": "./capabilities.d.ts",
+      "default": "./capabilities.js"
     }
   },
   "files": [
     "index.js",
     "types.d.ts",
-    "README.md"
+    "README.md",
+    "capabilities.js",
+    "capabilities.d.ts"
   ],
   "scripts": {
     "build": "napi build --release --strip --manifest-path ./Cargo.toml",

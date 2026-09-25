@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "package": "@solidjs/web",
+  "description": "Track A stage 2 capability manifest (client and server entries). The renderer's own computations are compiled with `sync: true`; its async capabilities are the re-exported async components and the streaming / async server renderers.",
+  "runtimeDependency": "solid-js",
+  "asyncExports": ["Loading", "Reveal", "renderToStream", "renderToStringAsync"],
+  "hosts": [],
+  "componentComputeProps": {
+    "Show": ["when"],
+    "Match": ["when"],
+    "For": ["each"],
+    "Repeat": ["count", "from"],
+    "Dynamic": ["component"]
+  }
+}

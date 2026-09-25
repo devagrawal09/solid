@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { check, formatDiagnostics, mapToSource, run } from "../src/index.js";
+import { summarizeProgram } from "../src/capabilities.js";
 
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const project = name => path.join(fixtures, name, "tsconfig.json");
@@ -87,5 +88,40 @@ describe("solid-tsc", () => {
     expect(logs.join("\n")).toMatch(/bad\.tsx\(7,28\): error TS2339/);
     expect(run(["-b"], { log, cwd: fixtures })).toBe(1);
     expect(logs.at(-1)).toMatch(/--build and --watch are not supported/);
+  });
+
+  it("--capabilities: typed verdicts for host computes and component props", () => {
+    const result = check({ project: project("capabilities") });
+    expect(messages(result, fixtures)).toBe("");
+    const summary = summarizeProgram(result.program, result.projections);
+    const file = path.join(fixtures, "capabilities/src/app.tsx");
+    const source = fs.readFileSync(file, "utf8");
+    const { computes, props } = summary.files[file];
+    const at = text => String(source.indexOf(text));
+    expect(computes[at("() => rows().length")]).toBe("sync");
+    expect(computes[at("() => rows().map")]).toBe("sync");
+    expect(computes[at("async () =>")]).toBe("async");
+    expect(computes[at("() => loose")]).toBe("unknown");
+    // A `$` block: its call signature returns the block value.
+    expect(computes[at("$(function*")]).toBe("sync");
+    // `createSignal(value)` is a value, not a compute.
+    expect(computes[String(source.indexOf("([])") + 1)]).toBe("sync");
+    expect(props[at("flag()")]).toBe("sync");
+    expect(props[at("rows()}")]).toBe("sync");
+  });
+
+  it("--capabilities writes the summary only for a program that typechecks", () => {
+    const out = path.join(fixtures, "capabilities/.summary.json");
+    fs.rmSync(out, { force: true });
+    const code = run(["-p", project("capabilities"), "--capabilities", out], { log: () => {} });
+    expect(code).toBe(0);
+    const written = JSON.parse(fs.readFileSync(out, "utf8"));
+    expect(written.schema).toBe(1);
+    fs.rmSync(out);
+    const failing = path.join(fixtures, "paths-error/.summary.json");
+    expect(run(["-p", project("paths-error"), "--capabilities", failing], { log: () => {} })).toBe(
+      1
+    );
+    expect(fs.existsSync(failing)).toBe(false);
   });
 });

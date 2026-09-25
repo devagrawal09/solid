@@ -41,6 +41,21 @@ function projectBlocksForTypecheck(code, options) {
   return { code: result.code, edits: result.edits, rewrites: result.rewrites };
 }
 
+/**
+ * Track A stage 2: a module's capability summary — its import edges, every
+ * reactive host compute with its local synchrony proof, and the props of
+ * library components — for the capability linker's whole-graph proof.
+ */
+function summarizeCapabilities(code, options) {
+  if (typeof code !== "string") {
+    throw new TypeError(
+      "@solidjs/compiler summarizeCapabilities() expects source code as a string"
+    );
+  }
+  const nativeOptions = validateTypecheckProjectionOptions(options);
+  return JSON.parse(native.summarizeCapabilities(code, nativeOptions));
+}
+
 function projectTsrxForTypecheck(code, options) {
   if (typeof code !== "string") {
     throw new TypeError(
@@ -472,6 +487,7 @@ module.exports = {
   transformAsync,
   projectTsrxForTypecheck,
   projectBlocksForTypecheck,
+  summarizeCapabilities,
   transformDirectives,
   transformDirectivesAsync,
   transformLazy,

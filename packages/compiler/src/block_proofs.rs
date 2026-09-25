@@ -47,7 +47,7 @@ use oxc_ast::ast::{
     TSType, UnaryOperator, VariableDeclarationKind,
 };
 use oxc_semantic::{AstNodes, NodeId, Scoping, SymbolId};
-use oxc_span::Span;
+use oxc_span::{GetSpan, Span};
 use oxc_syntax::scope::ScopeId;
 
 /// The body's result is never a thenable / async iterable / generator.
@@ -232,6 +232,66 @@ impl<'s> Prover<'s> {
         };
         self.proven.push((call.span, proof));
         proof
+    }
+
+    /// SYNC for a plain (non-generator) compute function handed to a host:
+    /// every returned value is plain. An `async` function never is.
+    pub(crate) fn function_returns_plain(&self, host_start: u32, function: &Function<'_>) -> bool {
+        if function.r#async || function.generator {
+            return false;
+        }
+        let (Some(body), Some(scope_id)) = (function.body.as_ref(), function.scope_id.get()) else {
+            return false;
+        };
+        let scope = self.scope_for(scope_id, host_start);
+        let mut returns = Vec::new();
+        let mut bare = false;
+        collect_returns(&body.statements, &mut returns, &mut bare);
+        returns
+            .into_iter()
+            .all(|argument| self.fact(&scope, argument, 0).domain.is_plain())
+    }
+
+    /// SYNC for an arrow compute (an expression body is its return).
+    pub(crate) fn arrow_returns_plain(
+        &self,
+        host_start: u32,
+        arrow: &oxc_ast::ast::ArrowFunctionExpression<'_>,
+    ) -> bool {
+        if arrow.r#async {
+            return false;
+        }
+        let Some(scope_id) = arrow.scope_id.get() else {
+            return false;
+        };
+        let scope = self.scope_for(scope_id, host_start);
+        if let Some(expression) = arrow.get_expression() {
+            return self.fact(&scope, expression, 0).domain.is_plain();
+        }
+        let oxc_ast::ast::ArrowFunctionBody::FunctionBody(body) = &arrow.body else {
+            return false;
+        };
+        let mut returns = Vec::new();
+        let mut bare = false;
+        collect_returns(&body.statements, &mut returns, &mut bare);
+        returns
+            .into_iter()
+            .all(|argument| self.fact(&scope, argument, 0).domain.is_plain())
+    }
+
+    /// Whether an expression evaluated in `scope_id` is proven plain (never
+    /// a thenable / async iterable / generator).
+    pub(crate) fn expression_plain(&self, scope_id: ScopeId, expression: &Expression<'_>) -> bool {
+        let scope = self.scope_for(scope_id, expression.span().start);
+        self.fact(&scope, expression, 0).domain.is_plain()
+    }
+
+    fn scope_for(&self, scope_id: ScopeId, start: u32) -> Scope {
+        Scope {
+            block_scope: scope_id,
+            call_scope: self.scoping.scope_parent_id(scope_id).unwrap_or(scope_id),
+            call_start: start,
+        }
     }
 
     // --- statements -----------------------------------------------------------
@@ -723,7 +783,11 @@ impl<'s> Prover<'s> {
                 return true;
             }
             if self.scoping.scope_flags(current).is_function() {
-                match self.nodes.get_node(self.scoping.get_node_id(current)).kind() {
+                match self
+                    .nodes
+                    .get_node(self.scoping.get_node_id(current))
+                    .kind()
+                {
                     AstKind::Function(function)
                         if function.is_expression() && function.span.start >= span.end => {}
                     AstKind::ArrowFunctionExpression(arrow) if arrow.span.start >= span.end => {}

@@ -16,6 +16,7 @@
 
 mod block_projection;
 mod block_proofs;
+mod capabilities;
 mod compiler;
 #[cfg(feature = "node")]
 mod config;
@@ -39,6 +40,7 @@ mod universal;
 pub use block_projection::{
     BlockProjectionEdit, BlockTypecheckProjection, project_blocks_for_typecheck,
 };
+pub use capabilities::summarize_capabilities;
 pub use compiler::{CompileOptions, CompileOutput, Generate, Renderer, Syntax, Wrapper, compile};
 pub use error::{CompileError, CompileErrorKind};
 #[cfg(feature = "tsrx")]
