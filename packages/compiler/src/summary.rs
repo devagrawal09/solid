@@ -2869,7 +2869,10 @@ impl<'b> Visit<'b> for BodyWalker<'_, '_> {
     }
 
     fn visit_this_expression(&mut self, _it: &oxc_ast::ast::ThisExpression) {
-        if !self.arrow && self.function_depth == 0 {
+        // A `function` body's own `this` (how the host calls it), or an
+        // arrow body's lexical `this` (the enclosing scope's): neither is a
+        // nameable capture.
+        if self.function_depth == 0 {
             self.escapes.this = true;
         }
     }
