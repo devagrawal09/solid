@@ -1,0 +1,164 @@
+{
+  "env": {
+    "date": "2026-09-25T06:08:32.353Z",
+    "commit": "95858452386d0258691976237988de1671b12175",
+    "node": "v22.22.2",
+    "esbuild": "minify, esm, es2022",
+    "gzip": "level 9",
+    "brotli": "quality 11"
+  },
+  "micro": {
+    "flags/handwritten": {
+      "raw": 23941,
+      "gzip": 9563,
+      "brotli": 8670
+    },
+    "flags/transformed": {
+      "raw": 29193,
+      "gzip": 11613,
+      "brotli": 10490
+    },
+    "flags/fused": {
+      "raw": 23971,
+      "gzip": 9568,
+      "brotli": 8673
+    },
+    "flags/optimized": {
+      "raw": 25170,
+      "gzip": 9942,
+      "brotli": 9013
+    },
+    "flags/optimizedSyncOnly": {
+      "raw": 23977,
+      "gzip": 9572,
+      "brotli": 8705
+    },
+    "flags/optimizedUnfused": {
+      "raw": 30399,
+      "gzip": 11990,
+      "brotli": 10833
+    },
+    "typed-arith/handwritten": {
+      "raw": 23953,
+      "gzip": 9569,
+      "brotli": 8686
+    },
+    "typed-arith/transformed": {
+      "raw": 29225,
+      "gzip": 11622,
+      "brotli": 10501
+    },
+    "typed-arith/fused": {
+      "raw": 23997,
+      "gzip": 9577,
+      "brotli": 8687
+    },
+    "typed-arith/optimized": {
+      "raw": 25199,
+      "gzip": 9953,
+      "brotli": 9052
+    },
+    "typed-arith/optimizedSyncOnly": {
+      "raw": 24006,
+      "gzip": 9580,
+      "brotli": 8710
+    },
+    "typed-arith/optimizedUnfused": {
+      "raw": 30436,
+      "gzip": 11997,
+      "brotli": 10841
+    },
+    "objects/handwritten": {
+      "raw": 23952,
+      "gzip": 9567,
+      "brotli": 8671
+    },
+    "objects/transformed": {
+      "raw": 29205,
+      "gzip": 11618,
+      "brotli": 10508
+    },
+    "objects/fused": {
+      "raw": 23981,
+      "gzip": 9572,
+      "brotli": 8703
+    },
+    "objects/optimized": {
+      "raw": 25180,
+      "gzip": 9947,
+      "brotli": 9013
+    },
+    "objects/optimizedSyncOnly": {
+      "raw": 23987,
+      "gzip": 9573,
+      "brotli": 8677
+    },
+    "objects/optimizedUnfused": {
+      "raw": 30411,
+      "gzip": 11992,
+      "brotli": 10820
+    },
+    "unprovable/handwritten": {
+      "raw": 23948,
+      "gzip": 9566,
+      "brotli": 8701
+    },
+    "unprovable/transformed": {
+      "raw": 29200,
+      "gzip": 11612,
+      "brotli": 10495
+    },
+    "unprovable/fused": {
+      "raw": 23978,
+      "gzip": 9570,
+      "brotli": 8671
+    },
+    "unprovable/optimized": {
+      "raw": 23978,
+      "gzip": 9570,
+      "brotli": 8671
+    },
+    "unprovable/optimizedSyncOnly": {
+      "raw": 23978,
+      "gzip": 9570,
+      "brotli": 8671
+    },
+    "unprovable/optimizedUnfused": {
+      "raw": 29200,
+      "gzip": 11612,
+      "brotli": 10495
+    }
+  },
+  "app": {
+    "todos (handwritten)": {
+      "chunks": 1,
+      "raw": 84550,
+      "gzip": 30578,
+      "brotli": 27466
+    },
+    "todos-blocks transformed": {
+      "chunks": 1,
+      "raw": 87926,
+      "gzip": 31786,
+      "brotli": 28475
+    },
+    "todos-blocks fused": {
+      "chunks": 1,
+      "raw": 87853,
+      "gzip": 31765,
+      "brotli": 28488
+    },
+    "todos-blocks optimized": {
+      "chunks": 1,
+      "raw": 87904,
+      "gzip": 31797,
+      "brotli": 28570
+    },
+    "todos-blocks optimizedUnfused": {
+      "chunks": 1,
+      "raw": 87979,
+      "gzip": 31812,
+      "brotli": 28530
+    }
+  }
+}

@@ -1,0 +1,258 @@
+{
+  "env": {
+    "date": "2026-09-25T06:28:25.757Z",
+    "commit": "665e128e83424903a5a514ebd5c23573ee240704",
+    "node": "v22.22.2",
+    "valgrind": "valgrind-3.22.0",
+    "nodeFlags": "--predictable --single-threaded",
+    "runtime": "packages/signals/dist/prod",
+    "n": 200,
+    "ops": 20,
+    "warmup": {
+      "mount": 20,
+      "update": 100
+    }
+  },
+  "results": {
+    "flags/mount/handwritten": {
+      "irPerOp": 1286064.35,
+      "irOnce": 600597235,
+      "irTwice": 626318522
+    },
+    "flags/mount/transformed": {
+      "irPerOp": 1476353.45,
+      "irOnce": 733054501,
+      "irTwice": 762581570
+    },
+    "flags/mount/fused": {
+      "irPerOp": 1214762.6,
+      "irOnce": 601702291,
+      "irTwice": 625997543
+    },
+    "flags/mount/optimized": {
+      "irPerOp": 1450140.35,
+      "irOnce": 604165081,
+      "irTwice": 633167888
+    },
+    "flags/mount/optimizedSyncOnly": {
+      "irPerOp": 1240946.85,
+      "irOnce": 612831191,
+      "irTwice": 637650128
+    },
+    "flags/mount/optimizedUnfused": {
+      "irPerOp": 1619841.3,
+      "irOnce": 694298656,
+      "irTwice": 726695482
+    },
+    "flags/update/handwritten": {
+      "irPerOp": 445400.85,
+      "irOnce": 553913803,
+      "irTwice": 562821820
+    },
+    "flags/update/transformed": {
+      "irPerOp": 522298.5,
+      "irOnce": 597878330,
+      "irTwice": 608324300
+    },
+    "flags/update/fused": {
+      "irPerOp": 445423.3,
+      "irOnce": 553971636,
+      "irTwice": 562880102
+    },
+    "flags/update/optimized": {
+      "irPerOp": 494192.85,
+      "irOnce": 530985705,
+      "irTwice": 540869562
+    },
+    "flags/update/optimizedSyncOnly": {
+      "irPerOp": 434994,
+      "irOnce": 550237539,
+      "irTwice": 558937419
+    },
+    "flags/update/optimizedUnfused": {
+      "irPerOp": 573325.45,
+      "irOnce": 565075928,
+      "irTwice": 576542437
+    },
+    "typed-arith/mount/handwritten": {
+      "irPerOp": 1998037.7,
+      "irOnce": 642696545,
+      "irTwice": 682657299
+    },
+    "typed-arith/mount/transformed": {
+      "irPerOp": 2168994.2,
+      "irOnce": 795260511,
+      "irTwice": 838640395
+    },
+    "typed-arith/mount/fused": {
+      "irPerOp": 1966866.85,
+      "irOnce": 643070673,
+      "irTwice": 682408010
+    },
+    "typed-arith/mount/optimized": {
+      "irPerOp": 2262908,
+      "irOnce": 652809809,
+      "irTwice": 698067969
+    },
+    "typed-arith/mount/optimizedSyncOnly": {
+      "irPerOp": 2003661.35,
+      "irOnce": 656337847,
+      "irTwice": 696411074
+    },
+    "typed-arith/mount/optimizedUnfused": {
+      "irPerOp": 2501238.9,
+      "irOnce": 792759727,
+      "irTwice": 842784505
+    },
+    "typed-arith/update/handwritten": {
+      "irPerOp": 1738692.8,
+      "irOnce": 861048357,
+      "irTwice": 895822213
+    },
+    "typed-arith/update/transformed": {
+      "irPerOp": 1971548.6,
+      "irOnce": 948987845,
+      "irTwice": 988418817
+    },
+    "typed-arith/update/fused": {
+      "irPerOp": 1738074.45,
+      "irOnce": 860887878,
+      "irTwice": 895649367
+    },
+    "typed-arith/update/optimized": {
+      "irPerOp": 1842598.95,
+      "irOnce": 802398082,
+      "irTwice": 839250061
+    },
+    "typed-arith/update/optimizedSyncOnly": {
+      "irPerOp": 1705148.85,
+      "irOnce": 851895996,
+      "irTwice": 885998973
+    },
+    "typed-arith/update/optimizedUnfused": {
+      "irPerOp": 2037392.2,
+      "irOnce": 874556752,
+      "irTwice": 915304596
+    },
+    "objects/mount/handwritten": {
+      "irPerOp": 1495414.75,
+      "irOnce": 648670660,
+      "irTwice": 678578955
+    },
+    "objects/mount/transformed": {
+      "irPerOp": 1926779.5,
+      "irOnce": 816702011,
+      "irTwice": 855237601
+    },
+    "objects/mount/fused": {
+      "irPerOp": 1429646.65,
+      "irOnce": 648418055,
+      "irTwice": 677010988
+    },
+    "objects/mount/optimized": {
+      "irPerOp": 1567550.75,
+      "irOnce": 624809077,
+      "irTwice": 656160092
+    },
+    "objects/mount/optimizedSyncOnly": {
+      "irPerOp": 1424504.6,
+      "irOnce": 629625769,
+      "irTwice": 658115861
+    },
+    "objects/mount/optimizedUnfused": {
+      "irPerOp": 1759113.65,
+      "irOnce": 756718563,
+      "irTwice": 791900836
+    },
+    "objects/update/handwritten": {
+      "irPerOp": 1296429,
+      "irOnce": 738782922,
+      "irTwice": 764711502
+    },
+    "objects/update/transformed": {
+      "irPerOp": 1771503.95,
+      "irOnce": 861714933,
+      "irTwice": 897145012
+    },
+    "objects/update/fused": {
+      "irPerOp": 1296450.3,
+      "irOnce": 738808747,
+      "irTwice": 764737753
+    },
+    "objects/update/optimized": {
+      "irPerOp": 1299687.2,
+      "irOnce": 679250130,
+      "irTwice": 705243874
+    },
+    "objects/update/optimizedSyncOnly": {
+      "irPerOp": 1211033,
+      "irOnce": 694928023,
+      "irTwice": 719148683
+    },
+    "objects/update/optimizedUnfused": {
+      "irPerOp": 1511937.85,
+      "irOnce": 823245318,
+      "irTwice": 853484075
+    },
+    "unprovable/mount/handwritten": {
+      "irPerOp": 1238558.6,
+      "irOnce": 603247776,
+      "irTwice": 628018948
+    },
+    "unprovable/mount/transformed": {
+      "irPerOp": 1436775.05,
+      "irOnce": 736983400,
+      "irTwice": 765718901
+    },
+    "unprovable/mount/fused": {
+      "irPerOp": 1279151.55,
+      "irOnce": 603359468,
+      "irTwice": 628942499
+    },
+    "unprovable/mount/optimized": {
+      "irPerOp": 1279237.7,
+      "irOnce": 603521021,
+      "irTwice": 629105775
+    },
+    "unprovable/mount/optimizedSyncOnly": {
+      "irPerOp": 1279220.5,
+      "irOnce": 603368766,
+      "irTwice": 628953176
+    },
+    "unprovable/mount/optimizedUnfused": {
+      "irPerOp": 1436696.65,
+      "irOnce": 736782795,
+      "irTwice": 765516728
+    },
+    "unprovable/update/handwritten": {
+      "irPerOp": 1306451.65,
+      "irOnce": 680594551,
+      "irTwice": 706723584
+    },
+    "unprovable/update/transformed": {
+      "irPerOp": 1373842.45,
+      "irOnce": 741851259,
+      "irTwice": 769328108
+    },
+    "unprovable/update/fused": {
+      "irPerOp": 1308987.1,
+      "irOnce": 680547705,
+      "irTwice": 706727447
+    },
+    "unprovable/update/optimized": {
+      "irPerOp": 1308889.75,
+      "irOnce": 680603282,
+      "irTwice": 706781077
+    },
+    "unprovable/update/optimizedSyncOnly": {
+      "irPerOp": 1308753.55,
+      "irOnce": 680444370,
+      "irTwice": 706619441
+    },
+    "unprovable/update/optimizedUnfused": {
+      "irPerOp": 1374530.8,
+      "irOnce": 741718090,
+      "irTwice": 769208706
+    }
+  }
+}
