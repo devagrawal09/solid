@@ -1,7 +1,8 @@
 import { $, createMemo, createSignal, readStore } from "solid-js";
 
-// Direct property syntax: `yield* root.a[0][k]` lowers to a path read
-// (`readPath`; `readProp` when the root is a component's props parameter).
+// Direct property syntax: `yield* root.a[0][k]` lowers to one proxy-free
+// handle read (`readPath1`–`readPath4` by key count, `readPathN` beyond);
+// store and prop roots share the readers.
 export function Counter(props: { count: number; user: { name: string } }) {
   const [index] = createSignal(0);
   const total = createMemo(

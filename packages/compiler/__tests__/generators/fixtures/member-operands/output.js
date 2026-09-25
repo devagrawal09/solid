@@ -1,4 +1,4 @@
-import { $, perform as _$perform, readPath as _$readPath, readProp as _$readProp } from "solid-js";
+import { $, perform as _$perform, readPath1 as _$readPath1 } from "solid-js";
 export const summary = $(function() {
-	return `${_$perform(_$readPath(props, ["count"]))} ${_$perform(_$readPath(state, ["label"]))} ${_$perform(this.total)}`;
+	return `${_$readPath1(props, "count")} ${_$readPath1(state, "label")} ${_$perform(this.total)}`;
 });

@@ -14,6 +14,11 @@ import {
   perform,
   raise,
   readPath,
+  readPath1,
+  readPath2,
+  readPath3,
+  readPath4,
+  readPathN,
   readProp,
   readStore,
   wait,
@@ -286,6 +291,34 @@ type _paths = [
   Expect<Equal<BlockAsync<typeof paths>, false>>,
   Expect<Equal<Admits<typeof paths>, true>>
 ];
+// The lowered readers (what the compiler emits for the spelling above) carry
+// the same selected-value types as the projected op: `readPathK` for K keys,
+// `readPathN` beyond. They return the value directly (no op, no `perform`).
+type _handleReaders = [
+  Expect<Equal<ReturnType<typeof readHandle1>, { name: string }>>,
+  Expect<Equal<ReturnType<typeof readHandle2>, string>>,
+  Expect<Equal<ReturnType<typeof readHandle3>, string>>,
+  Expect<Equal<ReturnType<typeof readHandleIndex>, { id: number; name: string }>>,
+  Expect<Equal<ReturnType<typeof readHandleLength>, number>>,
+  Expect<Equal<ReturnType<typeof readHandle4>, string>>,
+  Expect<Equal<ReturnType<typeof readHandleN>, string>>
+];
+const readHandle1 = () => readPath1(store, "user");
+const readHandle2 = () => readPath2(store, "user", "name");
+const readHandle3 = () => readPath3(store, "items", 0, "name");
+const readHandleIndex = () => readPath2(store, "items", idx);
+const readHandleLength = () => readPath2(store, "items", "length");
+declare const deepStore: { a: { b: { c: { d: { e: string } } } } };
+const readHandle4 = () => readPath4(deepStore.a, "b", "c", "d", "e");
+const readHandleN = () => readPathN(deepStore, ["a", "b", "c", "d", "e"]);
+// A readable found at the path is read through, as `yield*` does.
+declare const withAccessor: { filter: () => "all" | "done" };
+type _handleReadThrough = Expect<
+  Equal<ReturnType<typeof readHandleThrough>, ReturnType<typeof withAccessor.filter>>
+>;
+const [filterAccessor] = createSignal<"all" | "done">("all");
+const holder = { filter: filterAccessor };
+const readHandleThrough = () => readPath1(holder, "filter");
 declare const props: { count: number; user: { name: string } };
 const propPaths = $(function* () {
   return `${yield* readProp(props, ["count"])}:${yield* readProp(props, ["user", "name"])}`;

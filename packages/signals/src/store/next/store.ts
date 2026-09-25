@@ -65,7 +65,7 @@ import {
 } from "../../core/scheduler.js";
 import type { Signal } from "../../core/types.js";
 import { blockGuard, pendingCheckActive, strictRead } from "../../core/core.js";
-import { pathToken } from "../../generator.js";
+import { pathToken, setStoreGet } from "../../generator.js";
 import {
   DEV,
   registerGraph,
@@ -193,25 +193,39 @@ function createTarget(
   return t;
 }
 
+/** The target that serves `value` under `fam` (created on first wrap), or
+ * null for a raw-marked value, which every store serves verbatim. `wrapNext`
+ * is this plus `.px`; the serve paths keep the target (the node wrap cache,
+ * the path walk's `lastServed`). */
+function wrapTarget(
+  value: Record<PropertyKey, any>,
+  parent: StoreNextTarget | null,
+  parentKey: PropertyKey | null,
+  fam: StoreNextFamily | null
+): StoreNextTarget | null {
+  // markRaw'd values never wrap through ANY store (R42; sticky raw-marking
+  // is one half of the never-both-wrapped-and-raw invariant, RUL-12).
+  if (rawValuesUsed && isRawValue(value)) return null;
+  const existing = lookupTarget(value, fam);
+  if (existing !== undefined) return existing;
+  const t: StoreNextTarget | undefined = (value as any)[$TARGET];
+  if (t !== undefined && t.px === value) {
+    // Foreign-family proxies re-wrap into THIS family (writes stay isolated);
+    // same-family and plain-store proxies pass through.
+    if (fam === null || t.fam === fam) return t;
+    return createTarget(value as any, parent, parentKey, fam);
+  }
+  return createTarget(value, parent, parentKey, fam);
+}
+
 export function wrapNext<T extends Record<PropertyKey, any>>(
   value: T,
   parent: StoreNextTarget | null = null,
   parentKey: PropertyKey | null = null,
   fam: StoreNextFamily | null = parent?.fam ?? null
 ): T {
-  // markRaw'd values never wrap through ANY store (R42; sticky raw-marking
-  // is one half of the never-both-wrapped-and-raw invariant, RUL-12).
-  if (rawValuesUsed && isRawValue(value)) return value;
-  const existing = lookupTarget(value, fam);
-  if (existing !== undefined) return existing.px;
-  const t: StoreNextTarget | undefined = (value as any)[$TARGET];
-  if (t !== undefined && t.px === value) {
-    // Foreign-family proxies re-wrap into THIS family (writes stay isolated);
-    // same-family and plain-store proxies pass through.
-    if (fam === null || t.fam === fam) return value;
-    return createTarget(value as any, parent, parentKey, fam).px;
-  }
-  return createTarget(value, parent, parentKey, fam).px;
+  const t = wrapTarget(value, parent, parentKey, fam);
+  return t === null ? value : t.px;
 }
 
 /** Unwrap our own proxies to their current backing; leave everything else. */
@@ -1460,19 +1474,55 @@ function inDraft(target: StoreNextTarget): boolean {
  * upstream). markRawOne skips proxies for exactly this reason. */
 function serveShallow(target: StoreNextTarget, key: PropertyKey, v: any): any {
   if (v !== null && typeof v === "object" && (v as any)[$TARGET] !== undefined)
-    return draftServe(target, wrapNext(v, target, key as any));
+    return serveChild(target, key, v);
   return v;
 }
 
-/** Draft reads extend write permission to reachable stores (legacy Writing
- * semantics: wrapping a child through a draft get admits it — cross-store
- * writes like `s.inner.a = 10` work when `inner` is another store's proxy). */
-function draftServe(target: StoreNextTarget, proxy: any): any {
-  if (writeScopes !== null && inDraft(target)) {
-    const ct: StoreNextTarget | undefined = proxy?.[$TARGET];
-    if (ct !== undefined && ct.v !== undefined) writeScopes.add(scopeKey(ct));
+/**
+ * The child target a read most recently served (any read, any store). The
+ * strict path walk (generator.ts, `hop`) reads it through the getter
+ * installed below: the value a read returned is that child exactly when it
+ * is `lastServed.px` (a proxy has one target), so the next hop runs the trap
+ * on the target directly instead of through the proxy. A plain variable
+ * write keeps the trap's own cost to one store per served child.
+ */
+let lastServed: StoreNextTarget | null = null;
+
+/** Hand a served child out as its proxy, recording its target (above). */
+function served(ct: StoreNextTarget): any {
+  lastServed = ct;
+  return ct.px;
+}
+
+/** Serve a wrappable child `v` of `target[key]`: its proxy, or `v` verbatim
+ * when raw-marked. Draft reads extend write permission to reachable stores
+ * (legacy Writing semantics: wrapping a child through a draft get admits it —
+ * cross-store writes like `s.inner.a = 10` work when `inner` is another
+ * store's proxy). */
+function serveChild(target: StoreNextTarget, key: PropertyKey, v: any): any {
+  const ct = wrapTarget(v, target, key, target.fam);
+  if (ct === null) return v;
+  if (writeScopes !== null && inDraft(target)) writeScopes.add(scopeKey(ct));
+  return served(ct);
+}
+
+/** Serve a wrapped child through the node's wrap cache (see getNode): `px`
+ * is the child TARGET last served for this key and `pxv` the raw it wraps —
+ * a pointer compare replaces the family lookup, `isWrappable`, and the
+ * `[$TARGET]` round trip on every repeat read. */
+function serveCached(target: StoreNextTarget, key: PropertyKey, node: any, v: any): any {
+  let ct: StoreNextTarget | null;
+  if (node.pxv === v) ct = node.px;
+  else {
+    if (!isWrappable(v)) return v;
+    // Raw-marked children cache as null: served verbatim on every read.
+    ct = wrapTarget(v, target, key, target.fam);
+    node.px = ct;
+    node.pxv = v;
   }
-  return proxy;
+  if (ct === null) return v;
+  if (writeScopes !== null && inDraft(target)) writeScopes.add(scopeKey(ct));
+  return served(ct);
 }
 
 /** Targets written during the current (outermost) setter — notified at exit. */
@@ -1803,18 +1853,12 @@ function serveDataKey(
   if (target.s) return serveShallow(target, key, v);
   if (target.ch && !chained && v !== null && typeof v === "object" && v[$TARGET] === undefined)
     v = resolveChainedRaw(target, key, v);
-  if (node !== undefined) {
-    // Wrap cache (see getNode): only wrappables are ever cached, so a hit
-    // skips isWrappable too — pointer-compare replaces both checks.
-    if ((node as any).pxv === v && v !== undefined) return draftServe(target, (node as any).px);
-    if (!isWrappable(v)) return v;
-    const p = wrapNext(v, target, key as any);
-    (node as any).px = p;
-    (node as any).pxv = v;
-    return draftServe(target, p);
-  }
+  if (v === null || typeof v !== "object") return v;
+  // Wrap cache (see getNode): only wrappables are ever cached, so a hit
+  // skips isWrappable too — pointer-compare replaces both checks.
+  if (node !== undefined) return serveCached(target, key, node, v);
   if (!isWrappable(v)) return v;
-  return draftServe(target, wrapNext(v, target, key as any));
+  return serveChild(target, key, v);
 }
 
 /** §6c store-wide status gate for reads that DON'T flow through a node:
@@ -1860,8 +1904,15 @@ function pullProjectionForLatest(target: StoreNextTarget): void {
   }
 }
 
-const traps: ProxyHandler<StoreNextTarget> = {
-  get(target, key, receiver) {
+/**
+ * The proxy `get` trap. The strict path walk (generator.ts, `hop`) also
+ * calls it directly, with the proxy as the receiver, for lowered
+ * `yield* store.a.b` reads: the walk executes exactly the trap's logic
+ * without a Proxy [[Get]]. Keep the three-parameter shape — an extra
+ * declared parameter measurably slowed every trap call (deep reads ~15%).
+ */
+function getKey(target: StoreNextTarget, key: PropertyKey, receiver: any): any {
+  {
     // Inside a `$` block body (strict guard raised) a string-keyed read is
     // deferred into a path token: `yield*` performs it through this same
     // proxy with the guard lowered (see generator.ts, "direct property
@@ -1920,12 +1971,20 @@ const traps: ProxyHandler<StoreNextTarget> = {
         if (nv === READ_SLOW) nv = readNode(nodeH);
         if (nv === null || typeof nv !== "object") return nv;
         if (target.s) return serveShallow(target, key, nv);
-        if ((nodeH as any).pxv === nv) return (nodeH as any).px;
+        // Wrap cache hit: `px` is the child target, null for a raw-marked
+        // child served verbatim (see serveCached).
+        if ((nodeH as any).pxv === nv) {
+          const ct: StoreNextTarget | null = (nodeH as any).px;
+          if (ct === null) return nv;
+          lastServed = ct;
+          return ct.px;
+        }
         if (isWrappable(nv)) {
-          const p = wrapNext(nv, target, key);
-          (nodeH as any).px = p;
+          const ct = wrapTarget(nv, target, key, target.fam);
+          (nodeH as any).px = ct;
           (nodeH as any).pxv = nv;
-          return p;
+          if (ct === null) return nv;
+          return served(ct);
         }
         return nv;
       }
@@ -1985,7 +2044,7 @@ const traps: ProxyHandler<StoreNextTarget> = {
           readNode(node0 ?? getNode(target, key, undefined, accProbe));
         const v = Reflect.get(src, key, receiver);
         if (target.s) return serveShallow(target, key, v);
-        return isWrappable(v) ? draftServe(target, wrapNext(v, target, key)) : v;
+        return isWrappable(v) ? serveChild(target, key, v) : v;
       }
     }
     // Plain-data fast path: no descriptor allocation per read.
@@ -2017,7 +2076,7 @@ const traps: ProxyHandler<StoreNextTarget> = {
         if (node) {
           const nv = nodeValue(node, undefined);
           if (target.s) return serveShallow(target, key, nv);
-          return isWrappable(nv) ? draftServe(target, wrapNext(nv, target, key)) : nv;
+          return isWrappable(nv) ? serveChild(target, key, nv) : nv;
         }
       } else if (
         v === undefined &&
@@ -2033,7 +2092,7 @@ const traps: ProxyHandler<StoreNextTarget> = {
           v = unwrapOverride(node._x?._overrideValue);
       }
       if (target.s) return serveShallow(target, key, v);
-      return isWrappable(v) ? draftServe(target, wrapNext(v, target, key)) : v;
+      return isWrappable(v) ? serveChild(target, key, v) : v;
     }
     if (
       typeof v === "function" &&
@@ -2042,7 +2101,15 @@ const traps: ProxyHandler<StoreNextTarget> = {
     )
       return v; // proto method
     return serveDataKey(target, key, v, src, node0, accProbe);
-  },
+  }
+}
+
+// Path reads in `$` blocks (generator.ts, `hop`) execute this module's
+// `get` trap as a plain call.
+setStoreGet(getKey, () => lastServed);
+
+const traps: ProxyHandler<StoreNextTarget> = {
+  get: getKey,
 
   has(target, key) {
     if (key === $TARGET || key === $PROXY || key === $TRACK) return true;

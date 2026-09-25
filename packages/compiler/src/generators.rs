@@ -95,9 +95,29 @@ use crate::shared::ast_builder::AstBuilder;
 const RUNTIME_SOURCES: &[&str] = &["solid-js", "@solidjs/signals"];
 /// The local name the lowered reads call.
 const PERFORM_LOCAL: &str = "_$perform";
-/// The local names of the path-read ops (`yield* root.a.b`).
-const READ_PATH_LOCAL: &str = "_$readPath";
-const READ_PROP_LOCAL: &str = "_$readProp";
+/// The path readers `yield* root.a.b` lowers to, by key count (index 0 is
+/// the generic reader, which takes the keys as an array): `(imported, local)`.
+/// Store and prop paths share them — the runtime read is the same; the
+/// `StoreRead` / `PropRead` distinction lives only in the typecheck
+/// projection (`block_projection.rs`).
+const PATH_READERS: [(&str, &str); 5] = [
+    ("readPathN", "_$readPathN"),
+    ("readPath1", "_$readPath1"),
+    ("readPath2", "_$readPath2"),
+    ("readPath3", "_$readPath3"),
+    ("readPath4", "_$readPath4"),
+];
+/// Longest path a fixed-arity reader takes; longer paths use `readPathN`.
+const MAX_FIXED_PATH: usize = 4;
+
+/// The reader index (into `PATH_READERS`) for a path of `keys` keys.
+fn path_reader(keys: usize) -> usize {
+    if (1..=MAX_FIXED_PATH).contains(&keys) {
+        keys
+    } else {
+        0
+    }
+}
 
 /// Lower every eligible `$(function* …)` in `program`, or report the first
 /// forbidden construct inside a `$` body. A program that does not import `$`
@@ -148,12 +168,12 @@ struct Plan {
     calls: Vec<Span>,
     /// `yield* x` expressions (inside those calls) to lower to `_$perform(x)`.
     yields: Vec<Span>,
-    /// `yield* root.a[0][k]` member chains to lower to
-    /// `_$perform(_$readPath(root, ["a", 0, k]))` (or `_$readProp` for a
-    /// component's props parameter).
+    /// `yield* root.a[0][k]` member chains to lower to one handle read,
+    /// `_$readPath3(root, "a", 0, k)` (`_$readPathN(root, [...])` beyond four
+    /// keys).
     paths: Vec<PathYield>,
-    /// Whether any path was lowered (imports `readPath` / `readProp`).
-    needs_path_import: bool,
+    /// Which readers the lowered paths use (indices into `PATH_READERS`).
+    path_readers: [bool; 5],
     /// The runtime import declaration that receives the `perform` specifier.
     import_span: Option<Span>,
     /// Track A block proofs: `$` call span → metadata flags, appended as
@@ -187,9 +207,8 @@ const SYNC_ONLY_LOCAL: &str = "_$syncOnly";
 /// A `yield*` over a member chain, with its lowering plan.
 struct PathYield {
     span: Span,
-    /// The prop form (`readProp`) when the root is the first parameter of a
-    /// capitalized function — a component's props — else `readPath`.
-    prop: bool,
+    /// Number of keys in the chain (selects the reader).
+    keys: usize,
 }
 
 /// Named imports from the runtime sources that the pass recognizes.
@@ -282,7 +301,6 @@ fn build_plan(
 
     struct Collector<'s> {
         scoping: &'s Scoping,
-        nodes: &'s AstNodes<'s>,
         symbols: &'s RuntimeSymbols,
         source: &'s str,
         plan: Plan,
@@ -371,7 +389,6 @@ fn build_plan(
             };
             let mut yields = YieldCollector {
                 scoping: self.scoping,
-                nodes: self.nodes,
                 symbols: self.symbols,
                 source: self.source,
                 spans: Vec::new(),
@@ -401,8 +418,8 @@ fn build_plan(
                 }
                 self.plan.calls.push(call.span);
                 self.plan.yields.extend(yields.spans);
-                if !yields.paths.is_empty() {
-                    self.plan.needs_path_import = true;
+                for path in &yields.paths {
+                    self.plan.path_readers[path_reader(path.keys)] = true;
                 }
                 self.plan.paths.extend(yields.paths);
             }
@@ -412,7 +429,6 @@ fn build_plan(
 
     let mut collector = Collector {
         scoping,
-        nodes: semantic.nodes(),
         symbols: &symbols,
         source,
         plan: Plan::default(),
@@ -445,7 +461,6 @@ fn resolve_callee(scoping: &Scoping, call: &CallExpression<'_>) -> Option<Symbol
 /// constructs.
 struct YieldCollector<'s> {
     scoping: &'s Scoping,
-    nodes: &'s AstNodes<'s>,
     symbols: &'s RuntimeSymbols,
     source: &'s str,
     spans: Vec<Span>,
@@ -489,12 +504,11 @@ impl<'b> Visit<'b> for YieldCollector<'_> {
         }
         if it.delegate
             && let Some(operand) = it.argument.as_ref()
-            && let Some(root) = member_chain_root(operand)
+            && member_chain_root(operand).is_some()
         {
-            let prop = is_component_props(self.scoping, self.nodes, root);
             self.paths.push(PathYield {
                 span: it.span,
-                prop,
+                keys: member_chain_keys(operand, self.source).len(),
             });
             walk::walk_yield_expression(self, it);
             return;
@@ -711,9 +725,11 @@ impl<'a> VisitMut<'a> for Rewriter<'a> {
             }
             let span = Span::new(0, 0);
             let mut needed = vec![("perform", PERFORM_LOCAL)];
-            if self.plan.needs_path_import {
-                needed.push(("readPath", READ_PATH_LOCAL));
-                needed.push(("readProp", READ_PROP_LOCAL));
+            // Fixed arities in order, then the generic reader.
+            for index in (1..PATH_READERS.len()).chain([0]) {
+                if self.plan.path_readers[index] {
+                    needed.push(PATH_READERS[index]);
+                }
             }
             let options = |wanted| self.plan.host_options.iter().any(|(_, o)| *o == wanted);
             if options(HostOption::SyncOnly) {
@@ -785,7 +801,9 @@ impl<'a> VisitMut<'a> for Rewriter<'a> {
                     .iter()
                     .position(|path| path.span == yield_expression.span) =>
             {
-                // `yield* root.a[0][k]` → `_$perform(_$readPath(root, ["a", 0, k]))`.
+                // `yield* root.a[0][k]` → `_$readPath3(root, "a", 0, k)`: one
+                // proxy-free handle read (store/generator.ts), no operation
+                // object, no path array, no `perform` dispatch.
                 let path = self.plan.paths.remove(index);
                 let span = yield_expression.span;
                 let operand = yield_expression
@@ -793,6 +811,7 @@ impl<'a> VisitMut<'a> for Rewriter<'a> {
                     .take()
                     .expect("eligibility checked the operand");
                 let keys = member_chain_keys(&operand, self.source);
+                debug_assert_eq!(keys.len(), path.keys);
                 let root_name = member_chain_root(&operand)
                     .expect("eligibility checked the chain")
                     .name;
@@ -800,10 +819,8 @@ impl<'a> VisitMut<'a> for Rewriter<'a> {
                 // literal output off spans); the outer call keeps the yield's.
                 let synth = Span::new(0, 0);
                 let root = ast.expression_identifier(synth, root_name);
-                let key_elements = ast.vec_from_iter(keys.iter().map(|key| {
-                    let expression = if let Some(text) =
-                        key.strip_prefix('"').and_then(|k| k.strip_suffix('"'))
-                    {
+                let key_expressions = keys.iter().map(|key| {
+                    if let Some(text) = key.strip_prefix('"').and_then(|k| k.strip_suffix('"')) {
                         ast.expression_string_literal(synth, ast.str(text), None)
                     } else if let Ok(number) = key.parse::<f64>() {
                         ast.expression_numeric_literal(
@@ -814,32 +831,27 @@ impl<'a> VisitMut<'a> for Rewriter<'a> {
                         )
                     } else {
                         ast.expression_identifier(synth, ast.ident(key))
-                    };
-                    oxc_ast::ast::ArrayExpressionElement::from(expression)
-                }));
-                let path_array = ast.expression_array(synth, key_elements);
-                let op = ast.expression_call(
-                    span,
-                    ast.expression_identifier(
-                        span,
-                        ast.ident(if path.prop {
-                            READ_PROP_LOCAL
-                        } else {
-                            READ_PATH_LOCAL
-                        }),
-                    ),
-                    None,
-                    ast.vec_from_array([
-                        crate::shared::ast::expression_to_argument(root),
-                        crate::shared::ast::expression_to_argument(path_array),
-                    ]),
-                    false,
-                );
+                    }
+                });
+                let reader = path_reader(path.keys);
+                let mut arguments = ast.vec1(crate::shared::ast::expression_to_argument(root));
+                if reader == 0 {
+                    let elements = ast.vec_from_iter(
+                        key_expressions.map(oxc_ast::ast::ArrayExpressionElement::from),
+                    );
+                    arguments.push(crate::shared::ast::expression_to_argument(
+                        ast.expression_array(synth, elements),
+                    ));
+                } else {
+                    for key in key_expressions {
+                        arguments.push(crate::shared::ast::expression_to_argument(key));
+                    }
+                }
                 *expression = ast.expression_call(
                     span,
-                    ast.expression_identifier(span, ast.ident(PERFORM_LOCAL)),
+                    ast.expression_identifier(span, ast.ident(PATH_READERS[reader].1)),
                     None,
-                    ast.vec1(crate::shared::ast::expression_to_argument(op)),
+                    arguments,
                     false,
                 );
             }
@@ -1722,16 +1734,10 @@ export const view = $(function* () {
         );
         // Member chains are path reads (`props` here is not a component's
         // parameter, so the store form).
+        assert!(out.contains(r#"_$readPath1(props, "count")"#), "{out}");
+        assert!(out.contains(r#"_$readPath1(state, "label")"#), "{out}");
         assert!(
-            out.contains(r#"_$perform(_$readPath(props, ["count"]))"#),
-            "{out}"
-        );
-        assert!(
-            out.contains(r#"_$perform(_$readPath(state, ["label"]))"#),
-            "{out}"
-        );
-        assert!(
-            out.contains(r#"perform as _$perform, readPath as _$readPath, readProp as _$readProp"#),
+            out.contains(r#"perform as _$perform, readPath1 as _$readPath1"#),
             "{out}"
         );
         assert!(!out.contains("yield"), "{out}");
@@ -1756,42 +1762,51 @@ const called = $(function* () { return yield* store.items.map(x => x); });
 "#)
         .unwrap();
         assert!(
-            out.contains(r#"_$perform(_$readPath(store, ["user", "name"]))"#),
+            out.contains(r#"_$readPath2(store, "user", "name")"#),
             "{out}"
         );
         // Arrays with more than two elements print multi-line.
         let flat = out.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(
-            flat.contains(r#"_$perform(_$readPath(store, [ "items", 0, "name" ]))"#),
+            flat.contains(r#"_$readPath3(store, "items", 0, "name")"#),
             "{out}"
         );
+        assert!(out.contains(r#"_$readPath2(store, "items", i)"#), "{out}");
         assert!(
-            out.contains(r#"_$perform(_$readPath(store, ["items", i]))"#),
+            out.contains(r#"_$readPath2(store, "items", "length")"#),
             "{out}"
         );
+        assert!(out.contains(r#"_$readPath1(props, "count")"#), "{out}");
         assert!(
-            out.contains(r#"_$perform(_$readPath(store, ["items", "length"]))"#),
-            "{out}"
-        );
-        assert!(
-            out.contains(r#"_$perform(_$readProp(props, ["count"]))"#),
-            "{out}"
-        );
-        assert!(
-            out.contains(r#"_$perform(_$readProp(props, ["user", "name"]))"#),
+            out.contains(r#"_$readPath2(props, "user", "name")"#),
             "{out}"
         );
         assert!(
             out.contains(r#"const Arrow = (props) => $(function() {"#),
             "{out}"
         );
-        assert!(
-            out.contains(r#"return _$perform(_$readProp(props, ["label"]));"#),
+        // A component's props and any other root lower to the same reader
+        // (the runtime read is identical; only the projection's phantom
+        // `PropRead` / `StoreRead` differ).
+        assert_eq!(
+            out.matches(r#"return _$readPath1(props, "label");"#)
+                .count(),
+            2,
             "{out}"
         );
+        // Five keys and more: the generic reader with the keys as an array.
+        let deep = ssr(r#"import { $ } from "solid-js";
+const d = $(function* () { return yield* s.a.b.c.d.e; });
+"#)
+        .unwrap();
+        let flat_deep = deep.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(
-            out.contains(r#"return _$perform(_$readPath(props, ["label"]));"#),
-            "{out}"
+            flat_deep.contains(r#"_$readPathN(s, [ "a", "b", "c", "d", "e" ])"#),
+            "{deep}"
+        );
+        assert!(
+            deep.contains("perform as _$perform, readPathN as _$readPathN"),
+            "{deep}"
         );
         assert!(out.contains("yield* store.user?.name"), "{out}");
         // A computed key with an arbitrary expression is not a path the
@@ -2294,7 +2309,7 @@ const b = createMemo($(function () { return perform(count); }));
     }
 
     #[test]
-    fn fuses_path_reads_through_read_value() {
+    fn fuses_blocks_around_handle_path_reads() {
         let out = fused(r#"import { $, createMemo, createStore } from "solid-js";
 function Counter(props) {
   const [store] = createStore({ user: { name: "Ada" }, items: [], "data-x": 1 });
@@ -2308,21 +2323,20 @@ function Counter(props) {
 }
 "#)
         .unwrap();
-        assert!(out.contains("return _$readValue(store.user.name);"), "{out}");
-        assert!(out.contains("_$readValue(store.items[0].name)"), "{out}");
-        assert!(out.contains("_$readValue(store.items[i])"), "{out}");
-        assert!(out.contains("_$readValue(store.items.length)"), "{out}");
-        assert!(out.contains("return _$readValue(props.count);"), "{out}");
-        assert!(out.contains(r#"_$readValue(store["data-x"])"#), "{out}");
-        assert!(out.contains("_$readValue(state.label)"), "{out}");
-        assert!(!out.contains("_$perform"), "{out}");
-        assert!(!out.contains("_$readPath"), "{out}");
-        assert!(!out.contains("_$readProp"), "{out}");
-        assert!(!out.contains("$(function"), "{out}");
+        // The block is erased; path reads stay one handle read each. The
+        // reader lowers the strict guard itself and reads through an
+        // accessor or block at the path, so it is exact outside a block too
+        // (a bare member chain would hand back the accessor itself).
+        assert!(out.contains("createMemo(function() {"), "{out}");
         assert!(
-            out.contains(r#"import { $, createMemo, createStore, readValue as _$readValue } from "solid-js";"#),
+            out.contains(r#"return _$readPath2(store, "user", "name");"#),
             "{out}"
         );
+        assert!(
+            out.contains(r#"return _$readPath1(props, "count");"#),
+            "{out}"
+        );
+        assert!(!out.contains("_$perform("), "{out}");
     }
 
     #[test]
