@@ -1,0 +1,13 @@
+## hydrate
+run value
+read ok = false
+caught boundary = NotFound(missing)
+hydration server-nodes 2/2 kept, 0 client-inserted
+## initial
+html = <div _hk="1"><p _hk="30" class="err">NotFound</p></div>
+## fix and reset
+write ok = true
+run value
+read ok = true
+html = <div _hk="1"><p class="ok">fine</p></div>
+## teardown

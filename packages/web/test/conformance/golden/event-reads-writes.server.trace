@@ -1,0 +1,5 @@
+## render
+read count = 0
+markup = <div _hk=0><button class="inc">+</button><p class="count">0</p></div>
+hydration-keys = ["0"]
+serialized = []

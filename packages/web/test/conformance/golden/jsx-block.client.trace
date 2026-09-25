@@ -1,0 +1,10 @@
+## mount
+run Counter
+read count = 1
+## initial
+html = <main><p class="count">n=1</p><!----><b class="label">x</b><span class="after">after</span><b class="label">y</b><!----></main>
+## update
+write count = 2
+read count = 2
+html = <main><p class="count">n=2</p><!----><b class="label">x</b><span class="after">after</span><b class="label">y</b><!----></main>
+## teardown

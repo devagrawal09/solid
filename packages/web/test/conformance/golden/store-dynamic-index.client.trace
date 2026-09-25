@@ -1,0 +1,15 @@
+## mount
+run picked
+read index = 0
+value picked = "a"
+## move index to 2
+write index = 2
+run picked
+read index = 2
+value picked = "c"
+## write old index (no rerun)
+## write new index
+run picked
+read index = 2
+value picked = "C"
+## teardown

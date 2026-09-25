@@ -61,6 +61,7 @@ Current exploration work:
 - `examples/todos-blocks` exercises transformed blocks, JSX reads, events, stores, direct paths, structural selectors, loading, errors, and runtime fallback coverage.
 - The direct-path pass reported green signals, compiler Rust/fixture, Solid, web client, SSR, hydration, `packages/typecheck`, TodoMVC typecheck/test/build, and formatting suites.
 - Runtime/transform equivalence, host rejection, root/path inference, diagnostic remapping, declaration emit, and separate consumer compilation have focused coverage.
+- `packages/web/test/conformance/` is a semantic conformance harness: canonical scenarios run through handwritten Solid, the `$` runtime driver, compiler-lowered and host-fused output, SSR and hydration, compared as structured traces with explicit per-mode expectations. Its generated `COVERAGE.md` lists pinned baseline defects (dynamic-index host fusion, JSX-block hydration keys, the server accessor iterator).
 
 ### Strict SSR And Hydration Findings
 

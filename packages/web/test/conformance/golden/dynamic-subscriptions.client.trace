@@ -1,0 +1,60 @@
+## mount
+run pick
+read flag = true
+read a = 1
+run sum
+read a = 1
+read b = 10
+value pick = 1
+value sum = 11
+## write b while flag (pick not subscribed to b)
+write b = 11
+run sum
+read a = 1
+read b = 11
+value sum = 12
+## write a while flag
+write a = 2
+run pick
+read flag = true
+read a = 2
+run sum
+read a = 2
+read b = 11
+value pick = 2
+value sum = 13
+## flip flag off (unsubscribe a, subscribe b)
+write flag = false
+run pick
+read flag = false
+read b = 11
+value pick = 11
+## write a after unsubscribe
+write a = 3
+run sum
+read a = 3
+read b = 11
+value sum = 14
+## write b after subscribe
+write b = 12
+run sum
+read a = 3
+read b = 12
+run pick
+read flag = false
+read b = 12
+value sum = 15
+value pick = 12
+## flip flag on (resubscribe a)
+write flag = true
+run pick
+read flag = true
+read a = 3
+value pick = 3
+## write b after unsubscribe
+write b = 13
+run sum
+read a = 3
+read b = 13
+value sum = 16
+## teardown

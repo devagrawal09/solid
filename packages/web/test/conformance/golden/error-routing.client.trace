@@ -1,0 +1,28 @@
+## mount
+read mode = "ok"
+run value(ok)
+## initial
+html = <p>ok</p>
+## recover locally
+write mode = "recover"
+read mode = "recover"
+run value(recover)
+html = <p>recovered NotFound</p>
+## typed failure routes to boundary
+write mode = "typed"
+read mode = "typed"
+run value(typed)
+caught boundary = NotFound(typed)
+html = <p class="err">NotFound</p>
+## fix source and reset boundary
+write mode = "ok"
+read mode = "ok"
+run value(ok)
+html = <p>ok</p>
+## synchronous throw routes to boundary
+write mode = "sync"
+read mode = "sync"
+run value(sync)
+caught boundary = SyntaxError(cannot parse {)
+html = <p class="err">SyntaxError</p>
+## teardown

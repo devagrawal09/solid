@@ -1,0 +1,6 @@
+## render
+run shown
+read label = "a"
+markup = <div _hk=0><p _hk=2 class="child">[a]</p></div>
+hydration-keys = ["0","2"]
+serialized = []

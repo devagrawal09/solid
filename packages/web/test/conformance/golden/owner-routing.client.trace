@@ -1,0 +1,19 @@
+## mount
+owner setup = root
+owner memo body = memo
+read n = 1
+owner memo untrack = memo
+value theme in memo = "default"
+owner effect compute = effect
+owner effect callback = none
+value m = 1
+## rerun
+write n = 2
+owner memo body = memo
+read n = 2
+owner memo untrack = memo
+value theme in memo = "default"
+owner effect compute = effect
+owner effect callback = none
+value m = 2
+## teardown
