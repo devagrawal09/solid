@@ -25,6 +25,7 @@
   "sideEffects": false,
   "files": [
     "dist",
+    "capabilities.json",
     "package.json"
   ],
   "exports": {
@@ -35,6 +36,12 @@
       "observe": "./dist/observe/index.js",
       "default": "./dist/prod/index.js"
     },
+    "./sync": {
+      "types": "./dist/types/index.sync.d.ts",
+      "development": "./dist/sync.dev.js",
+      "default": "./dist/sync/index.sync.js"
+    },
+    "./capabilities.json": "./capabilities.json",
     "./attribution": {
       "types": "./dist/types/attribution.d.ts",
       "test": "./dist/dev.attribution.js",
@@ -46,8 +53,8 @@
   },
   "scripts": {
     "build": "npm-run-all -nl build:* && pnpm types",
-    "build:clean": "rimraf dist/dev dist/prod dist/observe dist/*.js",
-    "build:js": "rollup -c && node ./scripts/mangle-props.mjs dist/prod dist/observe && node ./scripts/check-pure.mjs dist/prod && node ./scripts/check-pure.mjs dist/observe",
+    "build:clean": "rimraf dist/dev dist/prod dist/observe dist/sync dist/*.js",
+    "build:js": "rollup -c && node ./scripts/mangle-props.mjs dist/prod dist/observe dist/sync && node ./scripts/check-pure.mjs dist/prod && node ./scripts/check-pure.mjs dist/observe && node ./scripts/check-pure.mjs dist/sync",
     "types": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "test:watch": "vitest watch tests",

@@ -1,3 +1,4 @@
+import { markAsyncCapability } from "./core/dev.js";
 import { forEachDependent } from "./core/async.js";
 import { ext, statusNotifierOf } from "./core/core.js";
 import { STATUS_PENDING } from "./core/constants.js";
@@ -156,6 +157,7 @@ GlobalQueue._releaseAffectsMark = releaseAffectsMark;
 export function affects(target: Accessor<unknown> | Store<object>): void;
 export function affects<T extends object>(target: Store<T>, key: keyof T): void;
 export function affects(target: any, key?: PropertyKey): void {
+  if (__TEST__) markAsyncCapability();
   if (__DEV__ && arguments.length > 2) {
     const message =
       "[INVALID_AFFECTS_TARGET] affects() takes a single optional key — extra keys are " +

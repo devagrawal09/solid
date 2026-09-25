@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "package": "@solidjs/signals",
+  "description": "Track A stage 2 capability manifest: which exports are async capabilities, which are reactive hosts (their first argument is a compute), and the async-free runtime entry the capability linker may select when a whole graph is proven async-free. Kept equal to src/index.sync.ts (tests/sync-entry.test.ts).",
+  "asyncFreeEntry": "@solidjs/signals/sync",
+  "asyncExports": [
+    "action",
+    "isPending",
+    "latest",
+    "resolve",
+    "until",
+    "refresh",
+    "affects",
+    "createOptimistic",
+    "createOptimisticStore",
+    "createLoadingBoundary",
+    "createRevealOrder",
+    "wait",
+    "loading"
+  ],
+  "hosts": [
+    "createMemo",
+    "createSignal",
+    "createEffect",
+    "createRenderEffect",
+    "createStore",
+    "createProjection"
+  ],
+  "componentComputeProps": {}
+}

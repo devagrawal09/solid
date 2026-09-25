@@ -1,3 +1,4 @@
+import { markAsyncCapability } from "./dev.js";
 /**
  * Thrown by a tracked read whose value is currently pending (an async memo /
  * `createSignal(asyncFn)` / projection / store derivation that hasn't settled
@@ -32,6 +33,7 @@ export class NotReadyError extends Error {
   declare _markVisual?: boolean;
   source: any;
   constructor(source: any) {
+    if (__TEST__) markAsyncCapability();
     // Control-flow throw: it happens on every read of a pending source, so in
     // production skip V8's eager stack capture (proportional to stack depth —
     // real cost under SSR) by zeroing the V8-specific stackTraceLimit around

@@ -15,6 +15,7 @@ const DEFINE = {
   __DEV__: "false",
   __OBSERVE__: "false",
   __TEST__: "false",
+  __ASYNC__: "true",
   "globalThis.__DEV__": "false"
 };
 

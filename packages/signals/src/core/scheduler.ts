@@ -1,3 +1,4 @@
+import { markAsyncCapability } from "./dev.js";
 import {
   CONFIG_AUTHORITATIVE_READ,
   CONFIG_HELD_TRUTH,
@@ -114,8 +115,7 @@ const transientStoreNodes = new Set<Signal<any>>();
 function canUseSimpleSyncFlush(queue: GlobalQueue): boolean {
   const batch = queue._batch;
   return (
-    transitions.size === 0 &&
-    activeLanes.size === 0 &&
+    (!__ASYNC__ || (transitions.size === 0 && activeLanes.size === 0)) &&
     queue._children.length === 0 &&
     batch._optimisticNodes.length === 0 &&
     batch._affectsNodes.length === 0 &&
@@ -696,7 +696,9 @@ export class GlobalQueue extends Queue {
       // which is the pay-for-use contract.
       sweepDormant();
       runHeap(dirtyQueue, GlobalQueue._update);
-      if (activeTransition) {
+      // The async-free runtime never opens a transaction (no async, no
+      // actions, no optimistic writes): the whole held-transaction arm folds.
+      if (__ASYNC__ && activeTransition) {
         const isComplete = transitionComplete(activeTransition);
         if (!isComplete) {
           const stashedTransition = activeTransition!;
@@ -765,7 +767,7 @@ export class GlobalQueue extends Queue {
             commitPendingNodes();
           }
         } else {
-          if (transitions.size) runHeap(zombieQueue, GlobalQueue._update);
+          if (__ASYNC__ && transitions.size) runHeap(zombieQueue, GlobalQueue._update);
           finalizePureQueue();
         }
       }
@@ -778,9 +780,9 @@ export class GlobalQueue extends Queue {
       // mainline applies now.
       scheduled = dirtyQueue._max >= dirtyQueue._min || activeTransition !== null;
       // Run lane effects first (for ready lanes), then regular effects
-      activeLanes.size && GlobalQueue._runLaneEffects!(EFFECT_RENDER);
+      __ASYNC__ && activeLanes.size && GlobalQueue._runLaneEffects!(EFFECT_RENDER);
       this.run(EFFECT_RENDER);
-      activeLanes.size && GlobalQueue._runLaneEffects!(EFFECT_USER);
+      __ASYNC__ && activeLanes.size && GlobalQueue._runLaneEffects!(EFFECT_USER);
       this.run(EFFECT_USER);
       if (__DEV__) {
         devCheckActiveOverrides(n => {
@@ -810,7 +812,8 @@ export class GlobalQueue extends Queue {
   notify(node: Computed<any>, mask: number, flags: number, error?: any): boolean {
     // Only track async if the boundary is propagating STATUS_PENDING (not caught by boundary)
     if (mask & STATUS_PENDING) {
-      if (flags & STATUS_PENDING) {
+      // Pending registration is async-only; the dimension is still consumed.
+      if (__ASYNC__ && flags & STATUS_PENDING) {
         // Callers pass either nothing or this node's own `_x._error`, so `??`
         // is exact (a null error falls back to the same null).
         const actualError = error ?? node._x?._error;
@@ -850,6 +853,8 @@ export class GlobalQueue extends Queue {
     return false;
   }
   initTransition(transition?: Transition | null): void {
+    // Unreachable in the async-free runtime (every caller is async-gated).
+    if (!__ASYNC__) return;
     if (transition) {
       transition = currentTransition(transition);
       // A finished transaction cannot be re-entered: its state is committed
@@ -862,6 +867,7 @@ export class GlobalQueue extends Queue {
       if (transition._done === true || transition === activeTransition) return;
     }
     if (!transition && activeTransition && activeTransition._time === clock) return;
+    if (__TEST__) markAsyncCapability();
     if (!activeTransition) {
       activeTransition = transition ?? createBatch();
     } else if (transition) {
@@ -1010,7 +1016,7 @@ export function insertSubs(node: Signal<any> | Computed<any>, optimistic: boolea
       continue;
     }
 
-    if (optimistic && sourceLane) {
+    if (__ASYNC__ && optimistic && sourceLane) {
       sub._flags |= REACTIVE_OPTIMISTIC_DIRTY;
       assignOrMergeLane(sub as any, sourceLane);
     } else if (optimistic) {
@@ -1214,7 +1220,7 @@ export function finalizePureQueue(
     }
     sweepTransientStoreNodes();
     // Lanes only enter activeLanes through the engine's getOrCreateLane.
-    if (activeLanes.size) GlobalQueue._cleanupLanes!(completingTransition);
+    if (__ASYNC__ && activeLanes.size) GlobalQueue._cleanupLanes!(completingTransition);
   }
 }
 
