@@ -1,0 +1,770 @@
+{
+  "schema": "solid-behavior-summary",
+  "version": 1,
+  "directives": [],
+  "serverFunctions": 0,
+  "imports": [
+    {
+      "source": "solid-js",
+      "kind": "static",
+      "specifiers": [
+        {
+          "imported": "$",
+          "local": "$",
+          "type": false,
+          "used": true,
+          "span": {
+            "start": 9,
+            "end": 10,
+            "line": 1,
+            "column": 10
+          }
+        },
+        {
+          "imported": "Errored",
+          "local": "Errored",
+          "type": false,
+          "used": true,
+          "span": {
+            "start": 12,
+            "end": 19,
+            "line": 1,
+            "column": 13
+          }
+        },
+        {
+          "imported": "Loading",
+          "local": "Loading",
+          "type": false,
+          "used": true,
+          "span": {
+            "start": 21,
+            "end": 28,
+            "line": 1,
+            "column": 22
+          }
+        },
+        {
+          "imported": "EventBlock",
+          "local": "EventBlock",
+          "type": true,
+          "used": true,
+          "span": {
+            "start": 30,
+            "end": 45,
+            "line": 1,
+            "column": 31
+          }
+        }
+      ],
+      "span": {
+        "start": 0,
+        "end": 64,
+        "line": 1,
+        "column": 1
+      }
+    },
+    {
+      "source": "./Button",
+      "kind": "static",
+      "specifiers": [
+        {
+          "imported": "Button",
+          "local": "Button",
+          "type": false,
+          "used": true,
+          "span": {
+            "start": 74,
+            "end": 80,
+            "line": 2,
+            "column": 10
+          }
+        }
+      ],
+      "span": {
+        "start": 65,
+        "end": 99,
+        "line": 2,
+        "column": 1
+      }
+    },
+    {
+      "source": "./actions",
+      "kind": "static",
+      "specifiers": [
+        {
+          "imported": "save",
+          "local": "save",
+          "type": false,
+          "used": true,
+          "span": {
+            "start": 109,
+            "end": 113,
+            "line": 3,
+            "column": 10
+          }
+        }
+      ],
+      "span": {
+        "start": 100,
+        "end": 133,
+        "line": 3,
+        "column": 1
+      }
+    }
+  ],
+  "dynamicImports": [],
+  "exports": [
+    {
+      "exported": "Toolbar",
+      "kind": "local",
+      "local": "Toolbar",
+      "span": {
+        "start": 135,
+        "end": 469,
+        "line": 5,
+        "column": 1
+      }
+    },
+    {
+      "exported": "Spread",
+      "kind": "local",
+      "local": "Spread",
+      "span": {
+        "start": 471,
+        "end": 573,
+        "line": 16,
+        "column": 1
+      }
+    },
+    {
+      "exported": "Destructured",
+      "kind": "local",
+      "local": "Destructured",
+      "span": {
+        "start": 575,
+        "end": 696,
+        "line": 20,
+        "column": 1
+      }
+    },
+    {
+      "exported": "exported",
+      "kind": "local",
+      "local": "exported",
+      "span": {
+        "start": 698,
+        "end": 755,
+        "line": 24,
+        "column": 1
+      }
+    }
+  ],
+  "bindings": [
+    {
+      "name": "$",
+      "kind": "import",
+      "span": {
+        "start": 9,
+        "end": 10,
+        "line": 1,
+        "column": 10
+      },
+      "statement": 0,
+      "statementSpan": {
+        "start": 0,
+        "end": 64,
+        "line": 1,
+        "column": 1
+      },
+      "exported": false,
+      "mutated": false,
+      "refs": [],
+      "effects": false,
+      "component": false,
+      "block": null,
+      "action": false,
+      "sites": [
+        {
+          "kind": "invoked",
+          "span": {
+            "start": 722,
+            "end": 723,
+            "line": 24,
+            "column": 25
+          }
+        }
+      ]
+    },
+    {
+      "name": "Errored",
+      "kind": "import",
+      "span": {
+        "start": 12,
+        "end": 19,
+        "line": 1,
+        "column": 13
+      },
+      "statement": 0,
+      "statementSpan": {
+        "start": 0,
+        "end": 64,
+        "line": 1,
+        "column": 1
+      },
+      "exported": false,
+      "mutated": false,
+      "refs": [],
+      "effects": false,
+      "component": false,
+      "block": null,
+      "action": false,
+      "sites": [
+        {
+          "kind": "escape",
+          "how": "JSXOpeningElement",
+          "span": {
+            "start": 235,
+            "end": 242,
+            "line": 7,
+            "column": 6
+          }
+        },
+        {
+          "kind": "escape",
+          "how": "JSXClosingElement",
+          "span": {
+            "start": 454,
+            "end": 461,
+            "line": 12,
+            "column": 7
+          }
+        }
+      ]
+    },
+    {
+      "name": "Loading",
+      "kind": "import",
+      "span": {
+        "start": 21,
+        "end": 28,
+        "line": 1,
+        "column": 22
+      },
+      "statement": 0,
+      "statementSpan": {
+        "start": 0,
+        "end": 64,
+        "line": 1,
+        "column": 1
+      },
+      "exported": false,
+      "mutated": false,
+      "refs": [],
+      "effects": false,
+      "component": false,
+      "block": null,
+      "action": false,
+      "sites": [
+        {
+          "kind": "escape",
+          "how": "JSXOpeningElement",
+          "span": {
+            "start": 315,
+            "end": 322,
+            "line": 8,
+            "column": 8
+          }
+        },
+        {
+          "kind": "escape",
+          "how": "JSXClosingElement",
+          "span": {
+            "start": 439,
+            "end": 446,
+            "line": 11,
+            "column": 9
+          }
+        }
+      ]
+    },
+    {
+      "name": "Button",
+      "kind": "import",
+      "span": {
+        "start": 74,
+        "end": 80,
+        "line": 2,
+        "column": 10
+      },
+      "statement": 1,
+      "statementSpan": {
+        "start": 65,
+        "end": 99,
+        "line": 2,
+        "column": 1
+      },
+      "exported": false,
+      "mutated": false,
+      "refs": [],
+      "effects": false,
+      "component": false,
+      "block": null,
+      "action": false,
+      "sites": [
+        {
+          "kind": "escape",
+          "how": "JSXOpeningElement",
+          "span": {
+            "start": 333,
+            "end": 339,
+            "line": 9,
+            "column": 10
+          }
+        }
+      ]
+    },
+    {
+      "name": "save",
+      "kind": "import",
+      "span": {
+        "start": 109,
+        "end": 113,
+        "line": 3,
+        "column": 10
+      },
+      "statement": 2,
+      "statementSpan": {
+        "start": 100,
+        "end": 133,
+        "line": 3,
+        "column": 1
+      },
+      "exported": false,
+      "mutated": false,
+      "refs": [],
+      "effects": false,
+      "component": false,
+      "block": null,
+      "action": false,
+      "sites": [
+        {
+          "kind": "domEvent",
+          "element": "button",
+          "attribute": "onClick",
+          "event": "click",
+          "capture": false,
+          "delegated": true,
+          "boundaries": [
+            "Loading",
+            "Errored"
+          ],
+          "span": {
+            "start": 411,
+            "end": 415,
+            "line": 10,
+            "column": 26
+          }
+        }
+      ]
+    },
+    {
+      "name": "Toolbar",
+      "kind": "function",
+      "span": {
+        "start": 151,
+        "end": 158,
+        "line": 5,
+        "column": 17
+      },
+      "statement": 3,
+      "statementSpan": {
+        "start": 135,
+        "end": 469,
+        "line": 5,
+        "column": 1
+      },
+      "exported": true,
+      "mutated": false,
+      "refs": [
+        {
+          "name": "Errored",
+          "count": 2
+        },
+        {
+          "name": "Loading",
+          "count": 2
+        },
+        {
+          "name": "Button",
+          "count": 1
+        },
+        {
+          "name": "save",
+          "count": 1
+        }
+      ],
+      "effects": false,
+      "component": true,
+      "block": null,
+      "action": false
+    },
+    {
+      "name": "Spread",
+      "kind": "function",
+      "span": {
+        "start": 487,
+        "end": 493,
+        "line": 16,
+        "column": 17
+      },
+      "statement": 4,
+      "statementSpan": {
+        "start": 471,
+        "end": 573,
+        "line": 16,
+        "column": 1
+      },
+      "exported": true,
+      "mutated": false,
+      "refs": [],
+      "effects": false,
+      "component": true,
+      "block": null,
+      "action": false
+    },
+    {
+      "name": "Destructured",
+      "kind": "function",
+      "span": {
+        "start": 591,
+        "end": 603,
+        "line": 20,
+        "column": 17
+      },
+      "statement": 5,
+      "statementSpan": {
+        "start": 575,
+        "end": 696,
+        "line": 20,
+        "column": 1
+      },
+      "exported": true,
+      "mutated": false,
+      "refs": [],
+      "effects": false,
+      "component": true,
+      "block": null,
+      "action": false
+    },
+    {
+      "name": "exported",
+      "kind": "const",
+      "span": {
+        "start": 711,
+        "end": 719,
+        "line": 24,
+        "column": 14
+      },
+      "statement": 6,
+      "statementSpan": {
+        "start": 698,
+        "end": 755,
+        "line": 24,
+        "column": 1
+      },
+      "exported": true,
+      "mutated": false,
+      "refs": [
+        {
+          "name": "$",
+          "count": 1
+        }
+      ],
+      "effects": true,
+      "component": false,
+      "block": "b0",
+      "action": false
+    }
+  ],
+  "topLevel": {
+    "effects": true,
+    "refs": [],
+    "sideEffectImports": []
+  },
+  "components": [
+    {
+      "name": "Toolbar",
+      "span": {
+        "start": 142,
+        "end": 469,
+        "line": 5,
+        "column": 8
+      },
+      "props": "identifier",
+      "propUses": [
+        {
+          "name": "label",
+          "uses": [
+            "componentProp:Button.label"
+          ]
+        },
+        {
+          "name": "onSave",
+          "uses": [
+            "componentProp:Button.onPress",
+            "domEvent:click"
+          ]
+        }
+      ],
+      "propsEscapes": []
+    },
+    {
+      "name": "Spread",
+      "span": {
+        "start": 478,
+        "end": 573,
+        "line": 16,
+        "column": 8
+      },
+      "props": "identifier",
+      "propUses": [],
+      "propsEscapes": [
+        "jsxSpread"
+      ]
+    },
+    {
+      "name": "Destructured",
+      "span": {
+        "start": 582,
+        "end": 696,
+        "line": 20,
+        "column": 8
+      },
+      "props": "destructured",
+      "propUses": [],
+      "propsEscapes": []
+    }
+  ],
+  "eventBindings": [
+    {
+      "element": "button",
+      "intrinsic": true,
+      "attribute": "onClick",
+      "event": "click",
+      "capture": false,
+      "delegated": true,
+      "value": {
+        "kind": "propMember",
+        "root": "props",
+        "path": [
+          "onSave"
+        ],
+        "component": "Toolbar"
+      },
+      "owner": "Toolbar",
+      "ownerIsComponent": true,
+      "boundaries": [],
+      "span": {
+        "start": 268,
+        "end": 290,
+        "line": 7,
+        "column": 39
+      }
+    },
+    {
+      "element": "Button",
+      "intrinsic": false,
+      "attribute": "onPress",
+      "event": "press",
+      "capture": false,
+      "delegated": false,
+      "value": {
+        "kind": "propMember",
+        "root": "props",
+        "path": [
+          "onSave"
+        ],
+        "component": "Toolbar"
+      },
+      "owner": "Toolbar",
+      "ownerIsComponent": true,
+      "boundaries": [
+        "Loading",
+        "Errored"
+      ],
+      "span": {
+        "start": 340,
+        "end": 362,
+        "line": 9,
+        "column": 17
+      }
+    },
+    {
+      "element": "button",
+      "intrinsic": true,
+      "attribute": "onClick",
+      "event": "click",
+      "capture": false,
+      "delegated": true,
+      "value": {
+        "kind": "binding",
+        "name": "save",
+        "scope": "import"
+      },
+      "owner": "Toolbar",
+      "ownerIsComponent": true,
+      "boundaries": [
+        "Loading",
+        "Errored"
+      ],
+      "span": {
+        "start": 402,
+        "end": 416,
+        "line": 10,
+        "column": 17
+      }
+    },
+    {
+      "element": "button",
+      "intrinsic": true,
+      "attribute": "...spread",
+      "event": null,
+      "capture": false,
+      "delegated": false,
+      "value": {
+        "kind": "spread",
+        "text": "props"
+      },
+      "owner": "Spread",
+      "ownerIsComponent": true,
+      "boundaries": [],
+      "span": {
+        "start": 557,
+        "end": 567,
+        "line": 17,
+        "column": 18
+      }
+    },
+    {
+      "element": "button",
+      "intrinsic": true,
+      "attribute": "onClick",
+      "event": "click",
+      "capture": false,
+      "delegated": true,
+      "value": {
+        "kind": "binding",
+        "name": "onPress",
+        "scope": "param"
+      },
+      "owner": "Destructured",
+      "ownerIsComponent": true,
+      "boundaries": [],
+      "span": {
+        "start": 673,
+        "end": 690,
+        "line": 21,
+        "column": 18
+      }
+    }
+  ],
+  "blocks": [
+    {
+      "id": "b0",
+      "span": {
+        "start": 722,
+        "end": 754,
+        "line": 24,
+        "column": 25
+      },
+      "name": "exported",
+      "owner": "exported",
+      "ownerIsComponent": false,
+      "nestedIn": [],
+      "opaque": false,
+      "body": {
+        "span": {
+          "start": 724,
+          "end": 753,
+          "line": 24,
+          "column": 27
+        },
+        "bodySpan": {
+          "start": 751,
+          "end": 753,
+          "line": 24,
+          "column": 54
+        },
+        "paramsSpan": {
+          "start": 734,
+          "end": 750,
+          "line": 24,
+          "column": 37
+        },
+        "generator": true,
+        "async": false,
+        "arrow": false,
+        "paramCount": 1,
+        "input": "_e",
+        "ops": {
+          "values": [],
+          "paths": [],
+          "storeReads": [],
+          "waits": [],
+          "raises": [],
+          "attempts": [],
+          "writes": [],
+          "calls": [],
+          "unknownYields": [],
+          "plainYields": [],
+          "performs": [],
+          "awaits": [],
+          "throws": []
+        },
+        "captures": [],
+        "escapes": {
+          "this": false,
+          "arguments": false,
+          "eval": false,
+          "newFunction": false,
+          "with": false,
+          "assignsCapture": false,
+          "importMeta": false
+        },
+        "nestedBlocks": 0,
+        "dynamicImports": [],
+        "event": {
+          "preventDefault": 0,
+          "stopPropagation": 0,
+          "stopImmediatePropagation": 0,
+          "returnValue": 0,
+          "currentTarget": 0,
+          "target": 0,
+          "members": [],
+          "methods": [],
+          "escapes": [],
+          "deferredUses": 0,
+          "propagationSensitive": false,
+          "prelude": {
+            "statements": [],
+            "end": null
+          }
+        }
+      },
+      "sites": [
+        {
+          "kind": "exported",
+          "name": "exported",
+          "span": {
+            "start": 711,
+            "end": 754,
+            "line": 24,
+            "column": 14
+          }
+        }
+      ]
+    }
+  ],
+  "unknowns": []
+}

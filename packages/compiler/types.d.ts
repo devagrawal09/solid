@@ -281,3 +281,73 @@ export function transformRefreshAsync(
   code: string,
   options?: TransformRefreshOptions | null
 ): Promise<TransformResult>;
+
+/** A source range: UTF-16 offsets plus the 1-based line/column of `start`. */
+export interface SummarySpan {
+  start: number;
+  end: number;
+  line: number;
+  column: number;
+}
+/**
+ * Behavioral module summary (schema `solid-behavior-summary`, version 1):
+ * imports/exports/re-exports, module-level bindings and their references,
+ * top-level effects, `$` blocks (operations, captures, escapes, event
+ * usage, sites), component prop usage, JSX event bindings with enclosing
+ * boundaries, and constructs the linker must treat as unknown. The shape
+ * is documented in `documentation/plans/strict-linker-summaries.md`;
+ * consumers must check `schema` and `version`.
+ */
+export interface BehaviorSummary {
+  schema: "solid-behavior-summary";
+  version: 1;
+  imports: Array<{
+    source: string;
+    kind: "static" | "type";
+    specifiers: Array<{ imported: string; local: string; type: boolean; used: boolean }>;
+    span: SummarySpan;
+  }>;
+  dynamicImports: Array<{
+    source: string | null;
+    lazy: boolean;
+    owner: string | null;
+    span: SummarySpan;
+  }>;
+  exports: Array<{
+    exported: string | null;
+    kind: "local" | "reexport" | "namespace" | "star";
+    local?: string | null;
+    source?: string;
+    imported?: string;
+    span: SummarySpan;
+  }>;
+  bindings: Array<{
+    name: string;
+    kind: string;
+    span: SummarySpan;
+    statement: number | null;
+    statementSpan: SummarySpan | null;
+    exported: boolean;
+    mutated: boolean;
+    refs: string[];
+    effects: boolean;
+    component: boolean;
+    block: string | null;
+    action: boolean;
+  }>;
+  topLevel: { effects: boolean; refs: string[]; sideEffectImports: string[] };
+  components: Array<{
+    name: string;
+    span: SummarySpan;
+    props: "identifier" | "destructured" | "none";
+    propUses: Array<{ name: string; uses: string[] }>;
+    propsEscapes: string[];
+  }>;
+  eventBindings: Array<Record<string, unknown>>;
+  blocks: Array<Record<string, unknown>>;
+  unknowns: Array<{ kind: string; span: SummarySpan; source?: string }>;
+}
+export function summarizeModule(
+  code: string,
+  options?: { filename?: string } | null
+): BehaviorSummary;

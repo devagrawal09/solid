@@ -1,0 +1,417 @@
+{
+  "schema": "solid-behavior-summary",
+  "version": 1,
+  "directives": [
+    "use client"
+  ],
+  "serverFunctions": 1,
+  "imports": [
+    {
+      "source": "solid-js",
+      "kind": "static",
+      "specifiers": [
+        {
+          "imported": "$",
+          "local": "$",
+          "type": false,
+          "used": true,
+          "span": {
+            "start": 23,
+            "end": 24,
+            "line": 2,
+            "column": 10
+          }
+        }
+      ],
+      "span": {
+        "start": 14,
+        "end": 43,
+        "line": 2,
+        "column": 1
+      }
+    }
+  ],
+  "dynamicImports": [
+    {
+      "source": null,
+      "lazy": false,
+      "owner": "mod",
+      "span": {
+        "start": 63,
+        "end": 75,
+        "line": 4,
+        "column": 19
+      }
+    }
+  ],
+  "exports": [
+    {
+      "exported": "v",
+      "kind": "local",
+      "local": "v",
+      "span": {
+        "start": 77,
+        "end": 104,
+        "line": 5,
+        "column": 1
+      }
+    },
+    {
+      "exported": "meta",
+      "kind": "local",
+      "local": "meta",
+      "span": {
+        "start": 105,
+        "end": 141,
+        "line": 6,
+        "column": 1
+      }
+    },
+    {
+      "exported": "save",
+      "kind": "local",
+      "local": "save",
+      "span": {
+        "start": 142,
+        "end": 202,
+        "line": 7,
+        "column": 1
+      }
+    },
+    {
+      "exported": "block",
+      "kind": "local",
+      "local": "block",
+      "span": {
+        "start": 233,
+        "end": 311,
+        "line": 14,
+        "column": 1
+      }
+    }
+  ],
+  "bindings": [
+    {
+      "name": "$",
+      "kind": "import",
+      "span": {
+        "start": 23,
+        "end": 24,
+        "line": 2,
+        "column": 10
+      },
+      "statement": 0,
+      "statementSpan": {
+        "start": 14,
+        "end": 43,
+        "line": 2,
+        "column": 1
+      },
+      "exported": false,
+      "mutated": false,
+      "refs": [],
+      "effects": false,
+      "component": false,
+      "block": null,
+      "action": false,
+      "sites": [
+        {
+          "kind": "invoked",
+          "span": {
+            "start": 254,
+            "end": 255,
+            "line": 14,
+            "column": 22
+          }
+        }
+      ]
+    },
+    {
+      "name": "mod",
+      "kind": "const",
+      "span": {
+        "start": 51,
+        "end": 54,
+        "line": 4,
+        "column": 7
+      },
+      "statement": 1,
+      "statementSpan": {
+        "start": 45,
+        "end": 76,
+        "line": 4,
+        "column": 1
+      },
+      "exported": false,
+      "mutated": false,
+      "refs": [],
+      "effects": true,
+      "component": false,
+      "block": null,
+      "action": false
+    },
+    {
+      "name": "v",
+      "kind": "const",
+      "span": {
+        "start": 90,
+        "end": 91,
+        "line": 5,
+        "column": 14
+      },
+      "statement": 2,
+      "statementSpan": {
+        "start": 77,
+        "end": 104,
+        "line": 5,
+        "column": 1
+      },
+      "exported": true,
+      "mutated": false,
+      "refs": [],
+      "effects": true,
+      "component": false,
+      "block": null,
+      "action": false
+    },
+    {
+      "name": "meta",
+      "kind": "const",
+      "span": {
+        "start": 118,
+        "end": 122,
+        "line": 6,
+        "column": 14
+      },
+      "statement": 3,
+      "statementSpan": {
+        "start": 105,
+        "end": 141,
+        "line": 6,
+        "column": 1
+      },
+      "exported": true,
+      "mutated": false,
+      "refs": [],
+      "effects": true,
+      "component": false,
+      "block": null,
+      "action": false
+    },
+    {
+      "name": "save",
+      "kind": "function",
+      "span": {
+        "start": 164,
+        "end": 168,
+        "line": 7,
+        "column": 23
+      },
+      "statement": 4,
+      "statementSpan": {
+        "start": 142,
+        "end": 202,
+        "line": 7,
+        "column": 1
+      },
+      "exported": true,
+      "mutated": false,
+      "refs": [],
+      "effects": false,
+      "component": false,
+      "block": null,
+      "action": false
+    },
+    {
+      "name": "block",
+      "kind": "const",
+      "span": {
+        "start": 246,
+        "end": 251,
+        "line": 14,
+        "column": 14
+      },
+      "statement": 6,
+      "statementSpan": {
+        "start": 233,
+        "end": 311,
+        "line": 14,
+        "column": 1
+      },
+      "exported": true,
+      "mutated": false,
+      "refs": [
+        {
+          "name": "$",
+          "count": 1
+        }
+      ],
+      "effects": true,
+      "component": false,
+      "block": "b0",
+      "action": false
+    }
+  ],
+  "topLevel": {
+    "effects": true,
+    "refs": [
+      {
+        "name": "mod",
+        "count": 1
+      }
+    ],
+    "sideEffectImports": []
+  },
+  "components": [],
+  "eventBindings": [],
+  "blocks": [
+    {
+      "id": "b0",
+      "span": {
+        "start": 254,
+        "end": 310,
+        "line": 14,
+        "column": 22
+      },
+      "name": "block",
+      "owner": "block",
+      "ownerIsComponent": false,
+      "nestedIn": [],
+      "opaque": false,
+      "body": {
+        "span": {
+          "start": 256,
+          "end": 309,
+          "line": 14,
+          "column": 24
+        },
+        "bodySpan": {
+          "start": 269,
+          "end": 309,
+          "line": 14,
+          "column": 37
+        },
+        "paramsSpan": {
+          "start": 266,
+          "end": 268,
+          "line": 14,
+          "column": 34
+        },
+        "generator": true,
+        "async": false,
+        "arrow": false,
+        "paramCount": 0,
+        "input": null,
+        "ops": {
+          "values": [],
+          "paths": [],
+          "storeReads": [],
+          "waits": [],
+          "raises": [],
+          "attempts": [],
+          "writes": [],
+          "calls": [],
+          "unknownYields": [],
+          "plainYields": [],
+          "performs": [],
+          "awaits": [],
+          "throws": []
+        },
+        "captures": [
+          {
+            "name": "Function",
+            "scope": "global",
+            "kind": "global",
+            "declaration": null,
+            "declaredIn": null,
+            "props": false,
+            "assigned": false,
+            "mutatedElsewhere": false,
+            "uses": 1,
+            "block": null
+          }
+        ],
+        "escapes": {
+          "this": false,
+          "arguments": false,
+          "eval": false,
+          "newFunction": true,
+          "with": false,
+          "assignsCapture": false,
+          "importMeta": false
+        },
+        "nestedBlocks": 0,
+        "dynamicImports": [],
+        "event": null
+      },
+      "sites": [
+        {
+          "kind": "exported",
+          "name": "block",
+          "span": {
+            "start": 246,
+            "end": 310,
+            "line": 14,
+            "column": 14
+          }
+        }
+      ]
+    }
+  ],
+  "unknowns": [
+    {
+      "kind": "topLevelAwait",
+      "span": {
+        "start": 57,
+        "end": 75,
+        "line": 4,
+        "column": 13
+      }
+    },
+    {
+      "kind": "dynamicImportNonLiteral",
+      "span": {
+        "start": 63,
+        "end": 75,
+        "line": 4,
+        "column": 19
+      }
+    },
+    {
+      "kind": "eval",
+      "span": {
+        "start": 94,
+        "end": 103,
+        "line": 5,
+        "column": 18
+      }
+    },
+    {
+      "kind": "importMeta",
+      "span": {
+        "start": 125,
+        "end": 136,
+        "line": 6,
+        "column": 21
+      }
+    },
+    {
+      "kind": "with",
+      "span": {
+        "start": 203,
+        "end": 232,
+        "line": 11,
+        "column": 1
+      }
+    },
+    {
+      "kind": "newFunction",
+      "span": {
+        "start": 280,
+        "end": 304,
+        "line": 15,
+        "column": 10
+      }
+    }
+  ]
+}

@@ -1,0 +1,451 @@
+{
+  "schema": "solid-behavior-summary",
+  "version": 1,
+  "directives": [],
+  "serverFunctions": 0,
+  "imports": [
+    {
+      "source": "./types",
+      "kind": "type",
+      "specifiers": [
+        {
+          "imported": "Item",
+          "local": "Item",
+          "type": false,
+          "used": true,
+          "span": {
+            "start": 14,
+            "end": 18,
+            "line": 1,
+            "column": 15
+          }
+        }
+      ],
+      "span": {
+        "start": 0,
+        "end": 36,
+        "line": 1,
+        "column": 1
+      }
+    },
+    {
+      "source": "./polyfill",
+      "kind": "static",
+      "specifiers": [],
+      "span": {
+        "start": 37,
+        "end": 57,
+        "line": 2,
+        "column": 1
+      }
+    },
+    {
+      "source": "./ns",
+      "kind": "static",
+      "specifiers": [
+        {
+          "imported": "default",
+          "local": "def",
+          "type": false,
+          "used": true,
+          "span": {
+            "start": 65,
+            "end": 68,
+            "line": 3,
+            "column": 8
+          }
+        },
+        {
+          "imported": "*",
+          "local": "ns",
+          "type": false,
+          "used": true,
+          "span": {
+            "start": 70,
+            "end": 77,
+            "line": 3,
+            "column": 13
+          }
+        }
+      ],
+      "span": {
+        "start": 58,
+        "end": 90,
+        "line": 3,
+        "column": 1
+      }
+    },
+    {
+      "source": "solid-js",
+      "kind": "static",
+      "specifiers": [
+        {
+          "imported": "lazy",
+          "local": "lazy",
+          "type": false,
+          "used": true,
+          "span": {
+            "start": 100,
+            "end": 104,
+            "line": 4,
+            "column": 10
+          }
+        }
+      ],
+      "span": {
+        "start": 91,
+        "end": 123,
+        "line": 4,
+        "column": 1
+      }
+    }
+  ],
+  "dynamicImports": [
+    {
+      "source": "./Page",
+      "lazy": true,
+      "owner": "Page",
+      "span": {
+        "start": 262,
+        "end": 278,
+        "line": 11,
+        "column": 25
+      }
+    },
+    {
+      "source": "./later",
+      "lazy": false,
+      "owner": "later",
+      "span": {
+        "start": 301,
+        "end": 318,
+        "line": 12,
+        "column": 21
+      }
+    }
+  ],
+  "exports": [
+    {
+      "exported": "a",
+      "kind": "reexport",
+      "source": "./ab",
+      "imported": "a",
+      "span": {
+        "start": 134,
+        "end": 135,
+        "line": 6,
+        "column": 10
+      }
+    },
+    {
+      "exported": "bee",
+      "kind": "reexport",
+      "source": "./ab",
+      "imported": "b",
+      "span": {
+        "start": 137,
+        "end": 145,
+        "line": 6,
+        "column": 13
+      }
+    },
+    {
+      "exported": null,
+      "kind": "star",
+      "source": "./star",
+      "span": {
+        "start": 161,
+        "end": 184,
+        "line": 7,
+        "column": 1
+      }
+    },
+    {
+      "exported": "all",
+      "kind": "namespace",
+      "source": "./all",
+      "span": {
+        "start": 185,
+        "end": 214,
+        "line": 8,
+        "column": 1
+      }
+    },
+    {
+      "exported": "registry",
+      "kind": "local",
+      "local": "registry",
+      "span": {
+        "start": 321,
+        "end": 369,
+        "line": 14,
+        "column": 1
+      }
+    },
+    {
+      "exported": "default",
+      "kind": "local",
+      "local": "run",
+      "span": {
+        "start": 409,
+        "end": 481,
+        "line": 17,
+        "column": 1
+      }
+    }
+  ],
+  "bindings": [
+    {
+      "name": "def",
+      "kind": "import",
+      "span": {
+        "start": 65,
+        "end": 68,
+        "line": 3,
+        "column": 8
+      },
+      "statement": 2,
+      "statementSpan": {
+        "start": 58,
+        "end": 90,
+        "line": 3,
+        "column": 1
+      },
+      "exported": false,
+      "mutated": false,
+      "refs": [],
+      "effects": false,
+      "component": false,
+      "block": null,
+      "action": false,
+      "sites": [
+        {
+          "kind": "escape",
+          "how": "literal",
+          "span": {
+            "start": 451,
+            "end": 454,
+            "line": 18,
+            "column": 11
+          }
+        }
+      ]
+    },
+    {
+      "name": "ns",
+      "kind": "import",
+      "span": {
+        "start": 75,
+        "end": 77,
+        "line": 3,
+        "column": 18
+      },
+      "statement": 2,
+      "statementSpan": {
+        "start": 58,
+        "end": 90,
+        "line": 3,
+        "column": 1
+      },
+      "exported": false,
+      "mutated": false,
+      "refs": [],
+      "effects": false,
+      "component": false,
+      "block": null,
+      "action": false,
+      "sites": [
+        {
+          "kind": "escape",
+          "how": "StaticMemberExpression",
+          "span": {
+            "start": 456,
+            "end": 458,
+            "line": 18,
+            "column": 16
+          }
+        }
+      ]
+    },
+    {
+      "name": "lazy",
+      "kind": "import",
+      "span": {
+        "start": 100,
+        "end": 104,
+        "line": 4,
+        "column": 10
+      },
+      "statement": 3,
+      "statementSpan": {
+        "start": 91,
+        "end": 123,
+        "line": 4,
+        "column": 1
+      },
+      "exported": false,
+      "mutated": false,
+      "refs": [],
+      "effects": false,
+      "component": false,
+      "block": null,
+      "action": false,
+      "sites": [
+        {
+          "kind": "invoked",
+          "span": {
+            "start": 251,
+            "end": 255,
+            "line": 11,
+            "column": 14
+          }
+        }
+      ]
+    },
+    {
+      "name": "Page",
+      "kind": "const",
+      "span": {
+        "start": 244,
+        "end": 248,
+        "line": 11,
+        "column": 7
+      },
+      "statement": 8,
+      "statementSpan": {
+        "start": 238,
+        "end": 280,
+        "line": 11,
+        "column": 1
+      },
+      "exported": false,
+      "mutated": false,
+      "refs": [
+        {
+          "name": "lazy",
+          "count": 1
+        }
+      ],
+      "effects": true,
+      "component": false,
+      "block": null,
+      "action": false
+    },
+    {
+      "name": "later",
+      "kind": "const",
+      "span": {
+        "start": 287,
+        "end": 292,
+        "line": 12,
+        "column": 7
+      },
+      "statement": 9,
+      "statementSpan": {
+        "start": 281,
+        "end": 319,
+        "line": 12,
+        "column": 1
+      },
+      "exported": false,
+      "mutated": false,
+      "refs": [],
+      "effects": false,
+      "component": false,
+      "block": null,
+      "action": false
+    },
+    {
+      "name": "registry",
+      "kind": "const",
+      "span": {
+        "start": 334,
+        "end": 342,
+        "line": 14,
+        "column": 14
+      },
+      "statement": 10,
+      "statementSpan": {
+        "start": 321,
+        "end": 369,
+        "line": 14,
+        "column": 1
+      },
+      "exported": true,
+      "mutated": false,
+      "refs": [],
+      "effects": true,
+      "component": false,
+      "block": null,
+      "action": false
+    },
+    {
+      "name": "run",
+      "kind": "function",
+      "span": {
+        "start": 433,
+        "end": 436,
+        "line": 17,
+        "column": 25
+      },
+      "statement": 12,
+      "statementSpan": {
+        "start": 409,
+        "end": 481,
+        "line": 17,
+        "column": 1
+      },
+      "exported": true,
+      "mutated": false,
+      "refs": [
+        {
+          "name": "def",
+          "count": 1
+        },
+        {
+          "name": "ns",
+          "count": 1
+        },
+        {
+          "name": "Page",
+          "count": 1
+        },
+        {
+          "name": "later",
+          "count": 1
+        }
+      ],
+      "effects": false,
+      "component": false,
+      "block": null,
+      "action": false
+    }
+  ],
+  "topLevel": {
+    "effects": true,
+    "refs": [
+      {
+        "name": "registry",
+        "count": 1
+      }
+    ],
+    "sideEffectImports": [
+      "./polyfill"
+    ]
+  },
+  "components": [],
+  "eventBindings": [],
+  "blocks": [],
+  "unknowns": [
+    {
+      "kind": "exportStar",
+      "source": "./star",
+      "span": {
+        "start": 161,
+        "end": 184,
+        "line": 7,
+        "column": 1
+      }
+    }
+  ]
+}

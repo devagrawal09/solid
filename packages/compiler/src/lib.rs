@@ -31,12 +31,16 @@ mod node_adapter;
 mod refresh;
 mod shared;
 mod ssr;
+mod summary;
 #[cfg(feature = "tsrx")]
 mod tsrx;
 mod universal;
 
 pub use block_projection::{
     BlockProjectionEdit, BlockTypecheckProjection, project_blocks_for_typecheck,
+};
+pub use summary::{
+    SCHEMA as BEHAVIOR_SUMMARY_SCHEMA, VERSION as BEHAVIOR_SUMMARY_VERSION, summarize_module,
 };
 pub use compiler::{CompileOptions, CompileOutput, Generate, Renderer, Syntax, Wrapper, compile};
 pub use error::{CompileError, CompileErrorKind};

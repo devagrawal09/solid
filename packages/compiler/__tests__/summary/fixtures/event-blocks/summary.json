@@ -1,0 +1,1838 @@
+{
+  "schema": "solid-behavior-summary",
+  "version": 1,
+  "directives": [],
+  "serverFunctions": 0,
+  "imports": [
+    {
+      "source": "solid-js",
+      "kind": "static",
+      "specifiers": [
+        {
+          "imported": "$",
+          "local": "$",
+          "type": false,
+          "used": true,
+          "span": {
+            "start": 9,
+            "end": 10,
+            "line": 1,
+            "column": 10
+          }
+        },
+        {
+          "imported": "attempt",
+          "local": "attempt",
+          "type": false,
+          "used": true,
+          "span": {
+            "start": 12,
+            "end": 19,
+            "line": 1,
+            "column": 13
+          }
+        },
+        {
+          "imported": "call",
+          "local": "call",
+          "type": false,
+          "used": true,
+          "span": {
+            "start": 21,
+            "end": 25,
+            "line": 1,
+            "column": 22
+          }
+        },
+        {
+          "imported": "createSignal",
+          "local": "createSignal",
+          "type": false,
+          "used": true,
+          "span": {
+            "start": 27,
+            "end": 39,
+            "line": 1,
+            "column": 28
+          }
+        },
+        {
+          "imported": "write",
+          "local": "write",
+          "type": false,
+          "used": true,
+          "span": {
+            "start": 41,
+            "end": 46,
+            "line": 1,
+            "column": 42
+          }
+        }
+      ],
+      "span": {
+        "start": 0,
+        "end": 65,
+        "line": 1,
+        "column": 1
+      }
+    },
+    {
+      "source": "./analytics",
+      "kind": "static",
+      "specifiers": [
+        {
+          "imported": "track",
+          "local": "track",
+          "type": false,
+          "used": true,
+          "span": {
+            "start": 75,
+            "end": 80,
+            "line": 2,
+            "column": 10
+          }
+        }
+      ],
+      "span": {
+        "start": 66,
+        "end": 102,
+        "line": 2,
+        "column": 1
+      }
+    },
+    {
+      "source": "./validate",
+      "kind": "static",
+      "specifiers": [
+        {
+          "imported": "validate",
+          "local": "validate",
+          "type": false,
+          "used": true,
+          "span": {
+            "start": 112,
+            "end": 120,
+            "line": 3,
+            "column": 10
+          }
+        }
+      ],
+      "span": {
+        "start": 103,
+        "end": 141,
+        "line": 3,
+        "column": 1
+      }
+    }
+  ],
+  "dynamicImports": [],
+  "exports": [
+    {
+      "exported": "Form",
+      "kind": "local",
+      "local": "Form",
+      "span": {
+        "start": 254,
+        "end": 1756,
+        "line": 12,
+        "column": 1
+      }
+    }
+  ],
+  "bindings": [
+    {
+      "name": "$",
+      "kind": "import",
+      "span": {
+        "start": 9,
+        "end": 10,
+        "line": 1,
+        "column": 10
+      },
+      "statement": 0,
+      "statementSpan": {
+        "start": 0,
+        "end": 65,
+        "line": 1,
+        "column": 1
+      },
+      "exported": false,
+      "mutated": false,
+      "refs": [],
+      "effects": false,
+      "component": false,
+      "block": null,
+      "action": false,
+      "sites": [
+        {
+          "kind": "invoked",
+          "span": {
+            "start": 424,
+            "end": 425,
+            "line": 15,
+            "column": 18
+          }
+        },
+        {
+          "kind": "invoked",
+          "span": {
+            "start": 754,
+            "end": 755,
+            "line": 24,
+            "column": 19
+          }
+        },
+        {
+          "kind": "invoked",
+          "span": {
+            "start": 918,
+            "end": 919,
+            "line": 29,
+            "column": 20
+          }
+        },
+        {
+          "kind": "invoked",
+          "span": {
+            "start": 1016,
+            "end": 1017,
+            "line": 33,
+            "column": 16
+          }
+        },
+        {
+          "kind": "invoked",
+          "span": {
+            "start": 1117,
+            "end": 1118,
+            "line": 37,
+            "column": 15
+          }
+        },
+        {
+          "kind": "invoked",
+          "span": {
+            "start": 1281,
+            "end": 1282,
+            "line": 42,
+            "column": 17
+          }
+        },
+        {
+          "kind": "invoked",
+          "span": {
+            "start": 1380,
+            "end": 1381,
+            "line": 45,
+            "column": 17
+          }
+        }
+      ]
+    },
+    {
+      "name": "attempt",
+      "kind": "import",
+      "span": {
+        "start": 12,
+        "end": 19,
+        "line": 1,
+        "column": 13
+      },
+      "statement": 0,
+      "statementSpan": {
+        "start": 0,
+        "end": 65,
+        "line": 1,
+        "column": 1
+      },
+      "exported": false,
+      "mutated": false,
+      "refs": [],
+      "effects": false,
+      "component": false,
+      "block": null,
+      "action": false,
+      "sites": [
+        {
+          "kind": "invoked",
+          "span": {
+            "start": 568,
+            "end": 575,
+            "line": 19,
+            "column": 12
+          }
+        }
+      ]
+    },
+    {
+      "name": "call",
+      "kind": "import",
+      "span": {
+        "start": 21,
+        "end": 25,
+        "line": 1,
+        "column": 22
+      },
+      "statement": 0,
+      "statementSpan": {
+        "start": 0,
+        "end": 65,
+        "line": 1,
+        "column": 1
+      },
+      "exported": false,
+      "mutated": false,
+      "refs": [],
+      "effects": false,
+      "component": false,
+      "block": null,
+      "action": false,
+      "sites": [
+        {
+          "kind": "invoked",
+          "span": {
+            "start": 1421,
+            "end": 1425,
+            "line": 46,
+            "column": 12
+          }
+        }
+      ]
+    },
+    {
+      "name": "createSignal",
+      "kind": "import",
+      "span": {
+        "start": 27,
+        "end": 39,
+        "line": 1,
+        "column": 28
+      },
+      "statement": 0,
+      "statementSpan": {
+        "start": 0,
+        "end": 65,
+        "line": 1,
+        "column": 1
+      },
+      "exported": false,
+      "mutated": false,
+      "refs": [],
+      "effects": false,
+      "component": false,
+      "block": null,
+      "action": false,
+      "sites": [
+        {
+          "kind": "invoked",
+          "span": {
+            "start": 336,
+            "end": 348,
+            "line": 13,
+            "column": 29
+          }
+        }
+      ]
+    },
+    {
+      "name": "write",
+      "kind": "import",
+      "span": {
+        "start": 41,
+        "end": 46,
+        "line": 1,
+        "column": 42
+      },
+      "statement": 0,
+      "statementSpan": {
+        "start": 0,
+        "end": 65,
+        "line": 1,
+        "column": 1
+      },
+      "exported": false,
+      "mutated": false,
+      "refs": [],
+      "effects": false,
+      "component": false,
+      "block": null,
+      "action": false,
+      "sites": [
+        {
+          "kind": "invoked",
+          "span": {
+            "start": 619,
+            "end": 624,
+            "line": 20,
+            "column": 12
+          }
+        },
+        {
+          "kind": "invoked",
+          "span": {
+            "start": 1322,
+            "end": 1327,
+            "line": 43,
+            "column": 12
+          }
+        }
+      ]
+    },
+    {
+      "name": "track",
+      "kind": "import",
+      "span": {
+        "start": 75,
+        "end": 80,
+        "line": 2,
+        "column": 10
+      },
+      "statement": 1,
+      "statementSpan": {
+        "start": 66,
+        "end": 102,
+        "line": 2,
+        "column": 1
+      },
+      "exported": false,
+      "mutated": false,
+      "refs": [],
+      "effects": false,
+      "component": false,
+      "block": null,
+      "action": false,
+      "sites": [
+        {
+          "kind": "invoked",
+          "span": {
+            "start": 644,
+            "end": 649,
+            "line": 21,
+            "column": 5
+          }
+        },
+        {
+          "kind": "invoked",
+          "span": {
+            "start": 952,
+            "end": 957,
+            "line": 30,
+            "column": 5
+          }
+        }
+      ]
+    },
+    {
+      "name": "validate",
+      "kind": "import",
+      "span": {
+        "start": 112,
+        "end": 120,
+        "line": 3,
+        "column": 10
+      },
+      "statement": 2,
+      "statementSpan": {
+        "start": 103,
+        "end": 141,
+        "line": 3,
+        "column": 1
+      },
+      "exported": false,
+      "mutated": false,
+      "refs": [],
+      "effects": false,
+      "component": false,
+      "block": null,
+      "action": false,
+      "sites": [
+        {
+          "kind": "invoked",
+          "span": {
+            "start": 582,
+            "end": 590,
+            "line": 19,
+            "column": 26
+          }
+        }
+      ]
+    },
+    {
+      "name": "counter",
+      "kind": "let",
+      "span": {
+        "start": 147,
+        "end": 154,
+        "line": 5,
+        "column": 5
+      },
+      "statement": 3,
+      "statementSpan": {
+        "start": 143,
+        "end": 159,
+        "line": 5,
+        "column": 1
+      },
+      "exported": false,
+      "mutated": true,
+      "refs": [],
+      "effects": false,
+      "component": false,
+      "block": null,
+      "action": false
+    },
+    {
+      "name": "LIMIT",
+      "kind": "const",
+      "span": {
+        "start": 166,
+        "end": 171,
+        "line": 6,
+        "column": 7
+      },
+      "statement": 4,
+      "statementSpan": {
+        "start": 160,
+        "end": 177,
+        "line": 6,
+        "column": 1
+      },
+      "exported": false,
+      "mutated": false,
+      "refs": [],
+      "effects": false,
+      "component": false,
+      "block": null,
+      "action": false
+    },
+    {
+      "name": "format",
+      "kind": "function",
+      "span": {
+        "start": 188,
+        "end": 194,
+        "line": 8,
+        "column": 10
+      },
+      "statement": 5,
+      "statementSpan": {
+        "start": 179,
+        "end": 252,
+        "line": 8,
+        "column": 1
+      },
+      "exported": false,
+      "mutated": false,
+      "refs": [
+        {
+          "name": "LIMIT",
+          "count": 1
+        }
+      ],
+      "effects": false,
+      "component": false,
+      "block": null,
+      "action": false
+    },
+    {
+      "name": "Form",
+      "kind": "function",
+      "span": {
+        "start": 270,
+        "end": 274,
+        "line": 12,
+        "column": 17
+      },
+      "statement": 6,
+      "statementSpan": {
+        "start": 254,
+        "end": 1756,
+        "line": 12,
+        "column": 1
+      },
+      "exported": true,
+      "mutated": false,
+      "refs": [
+        {
+          "name": "$",
+          "count": 7
+        },
+        {
+          "name": "attempt",
+          "count": 1
+        },
+        {
+          "name": "call",
+          "count": 1
+        },
+        {
+          "name": "createSignal",
+          "count": 1
+        },
+        {
+          "name": "write",
+          "count": 2
+        },
+        {
+          "name": "track",
+          "count": 2
+        },
+        {
+          "name": "validate",
+          "count": 1
+        },
+        {
+          "name": "counter",
+          "count": 1
+        },
+        {
+          "name": "format",
+          "count": 1
+        }
+      ],
+      "effects": false,
+      "component": true,
+      "block": null,
+      "action": false
+    }
+  ],
+  "topLevel": {
+    "effects": false,
+    "refs": [],
+    "sideEffectImports": []
+  },
+  "components": [
+    {
+      "name": "Form",
+      "span": {
+        "start": 261,
+        "end": 1756,
+        "line": 12,
+        "column": 8
+      },
+      "props": "identifier",
+      "propUses": [
+        {
+          "name": "onDone",
+          "uses": [
+            "domEvent:custom"
+          ]
+        }
+      ],
+      "propsEscapes": []
+    }
+  ],
+  "eventBindings": [
+    {
+      "element": "form",
+      "intrinsic": true,
+      "attribute": "onSubmit",
+      "event": "submit",
+      "capture": false,
+      "delegated": false,
+      "value": {
+        "kind": "block",
+        "block": "b0"
+      },
+      "owner": "Form",
+      "ownerIsComponent": true,
+      "boundaries": [],
+      "span": {
+        "start": 1464,
+        "end": 1481,
+        "line": 49,
+        "column": 11
+      }
+    },
+    {
+      "element": "button",
+      "intrinsic": true,
+      "attribute": "onClick",
+      "event": "click",
+      "capture": false,
+      "delegated": true,
+      "value": {
+        "kind": "block",
+        "block": "b1"
+      },
+      "owner": "Form",
+      "ownerIsComponent": true,
+      "boundaries": [],
+      "span": {
+        "start": 1497,
+        "end": 1514,
+        "line": 50,
+        "column": 15
+      }
+    },
+    {
+      "element": "button",
+      "intrinsic": true,
+      "attribute": "onClick",
+      "event": "click",
+      "capture": false,
+      "delegated": true,
+      "value": {
+        "kind": "block",
+        "block": "b2"
+      },
+      "owner": "Form",
+      "ownerIsComponent": true,
+      "boundaries": [],
+      "span": {
+        "start": 1532,
+        "end": 1550,
+        "line": 51,
+        "column": 15
+      }
+    },
+    {
+      "element": "button",
+      "intrinsic": true,
+      "attribute": "onClick",
+      "event": "click",
+      "capture": false,
+      "delegated": true,
+      "value": {
+        "kind": "block",
+        "block": "b3"
+      },
+      "owner": "Form",
+      "ownerIsComponent": true,
+      "boundaries": [],
+      "span": {
+        "start": 1568,
+        "end": 1582,
+        "line": 52,
+        "column": 15
+      }
+    },
+    {
+      "element": "button",
+      "intrinsic": true,
+      "attribute": "onClick",
+      "event": "click",
+      "capture": false,
+      "delegated": true,
+      "value": {
+        "kind": "block",
+        "block": "b4"
+      },
+      "owner": "Form",
+      "ownerIsComponent": true,
+      "boundaries": [],
+      "span": {
+        "start": 1600,
+        "end": 1613,
+        "line": 53,
+        "column": 15
+      }
+    },
+    {
+      "element": "button",
+      "intrinsic": true,
+      "attribute": "onClick",
+      "event": "click",
+      "capture": false,
+      "delegated": true,
+      "value": {
+        "kind": "block",
+        "block": "b6"
+      },
+      "owner": "Form",
+      "ownerIsComponent": true,
+      "boundaries": [],
+      "span": {
+        "start": 1631,
+        "end": 1646,
+        "line": 54,
+        "column": 15
+      }
+    },
+    {
+      "element": "button",
+      "intrinsic": true,
+      "attribute": "oncapture:click",
+      "event": "click",
+      "capture": true,
+      "delegated": false,
+      "value": {
+        "kind": "tuple",
+        "handler": {
+          "kind": "block",
+          "block": "b6"
+        }
+      },
+      "owner": "Form",
+      "ownerIsComponent": true,
+      "boundaries": [],
+      "span": {
+        "start": 1664,
+        "end": 1692,
+        "line": 55,
+        "column": 15
+      }
+    },
+    {
+      "element": "button",
+      "intrinsic": true,
+      "attribute": "on:custom",
+      "event": "custom",
+      "capture": false,
+      "delegated": false,
+      "value": {
+        "kind": "propMember",
+        "root": "props",
+        "path": [
+          "onDone"
+        ],
+        "component": "Form"
+      },
+      "owner": "Form",
+      "ownerIsComponent": true,
+      "boundaries": [],
+      "span": {
+        "start": 1710,
+        "end": 1734,
+        "line": 56,
+        "column": 15
+      }
+    }
+  ],
+  "blocks": [
+    {
+      "id": "b0",
+      "span": {
+        "start": 424,
+        "end": 665,
+        "line": 15,
+        "column": 18
+      },
+      "name": "submit",
+      "owner": "Form",
+      "ownerIsComponent": true,
+      "nestedIn": [],
+      "opaque": false,
+      "body": {
+        "span": {
+          "start": 426,
+          "end": 664,
+          "line": 15,
+          "column": 20
+        },
+        "bodySpan": {
+          "start": 453,
+          "end": 664,
+          "line": 15,
+          "column": 47
+        },
+        "paramsSpan": {
+          "start": 436,
+          "end": 452,
+          "line": 15,
+          "column": 30
+        },
+        "generator": true,
+        "async": false,
+        "arrow": false,
+        "paramCount": 1,
+        "input": "e",
+        "ops": {
+          "values": [
+            {
+              "name": "draft",
+              "span": {
+                "start": 543,
+                "end": 555,
+                "line": 18,
+                "column": 19
+              }
+            }
+          ],
+          "paths": [],
+          "storeReads": [],
+          "waits": [],
+          "raises": [],
+          "attempts": [
+            {
+              "run": "() => validate(format(value))",
+              "span": {
+                "start": 561,
+                "end": 606,
+                "line": 19,
+                "column": 5
+              }
+            }
+          ],
+          "writes": [
+            {
+              "target": "setDraft",
+              "span": {
+                "start": 612,
+                "end": 638,
+                "line": 20,
+                "column": 5
+              }
+            }
+          ],
+          "calls": [],
+          "unknownYields": [],
+          "plainYields": [],
+          "performs": [],
+          "awaits": [],
+          "throws": []
+        },
+        "captures": [
+          {
+            "name": "attempt",
+            "scope": "import",
+            "kind": "import",
+            "declaration": {
+              "start": 12,
+              "end": 19,
+              "line": 1,
+              "column": 13
+            },
+            "declaredIn": null,
+            "props": false,
+            "assigned": false,
+            "mutatedElsewhere": false,
+            "uses": 1,
+            "block": null
+          },
+          {
+            "name": "write",
+            "scope": "import",
+            "kind": "import",
+            "declaration": {
+              "start": 41,
+              "end": 46,
+              "line": 1,
+              "column": 42
+            },
+            "declaredIn": null,
+            "props": false,
+            "assigned": false,
+            "mutatedElsewhere": false,
+            "uses": 1,
+            "block": null
+          },
+          {
+            "name": "track",
+            "scope": "import",
+            "kind": "import",
+            "declaration": {
+              "start": 75,
+              "end": 80,
+              "line": 2,
+              "column": 10
+            },
+            "declaredIn": null,
+            "props": false,
+            "assigned": false,
+            "mutatedElsewhere": false,
+            "uses": 1,
+            "block": null
+          },
+          {
+            "name": "validate",
+            "scope": "import",
+            "kind": "import",
+            "declaration": {
+              "start": 112,
+              "end": 120,
+              "line": 3,
+              "column": 10
+            },
+            "declaredIn": null,
+            "props": false,
+            "assigned": false,
+            "mutatedElsewhere": false,
+            "uses": 1,
+            "block": null
+          },
+          {
+            "name": "format",
+            "scope": "module",
+            "kind": "function",
+            "declaration": {
+              "start": 188,
+              "end": 194,
+              "line": 8,
+              "column": 10
+            },
+            "declaredIn": null,
+            "props": false,
+            "assigned": false,
+            "mutatedElsewhere": false,
+            "uses": 1,
+            "block": null
+          },
+          {
+            "name": "draft",
+            "scope": "local",
+            "kind": "const",
+            "declaration": {
+              "start": 317,
+              "end": 322,
+              "line": 13,
+              "column": 10
+            },
+            "declaredIn": "Form",
+            "props": false,
+            "assigned": false,
+            "mutatedElsewhere": false,
+            "uses": 1,
+            "block": null
+          },
+          {
+            "name": "setDraft",
+            "scope": "local",
+            "kind": "const",
+            "declaration": {
+              "start": 324,
+              "end": 332,
+              "line": 13,
+              "column": 17
+            },
+            "declaredIn": "Form",
+            "props": false,
+            "assigned": false,
+            "mutatedElsewhere": false,
+            "uses": 1,
+            "block": null
+          }
+        ],
+        "escapes": {
+          "this": false,
+          "arguments": false,
+          "eval": false,
+          "newFunction": false,
+          "with": false,
+          "assignsCapture": false,
+          "importMeta": false
+        },
+        "nestedBlocks": 0,
+        "dynamicImports": [],
+        "event": {
+          "preventDefault": 1,
+          "stopPropagation": 0,
+          "stopImmediatePropagation": 0,
+          "returnValue": 0,
+          "currentTarget": 0,
+          "target": 0,
+          "members": [
+            "defaultPrevented"
+          ],
+          "methods": [],
+          "escapes": [],
+          "deferredUses": 0,
+          "propagationSensitive": true,
+          "prelude": {
+            "statements": [
+              {
+                "kind": "preventDefault",
+                "span": {
+                  "start": 459,
+                  "end": 478,
+                  "line": 16,
+                  "column": 5
+                }
+              },
+              {
+                "kind": "guardReturn",
+                "span": {
+                  "start": 483,
+                  "end": 524,
+                  "line": 17,
+                  "column": 5
+                }
+              }
+            ],
+            "end": 524
+          }
+        }
+      },
+      "sites": [
+        {
+          "kind": "domEvent",
+          "element": "form",
+          "attribute": "onSubmit",
+          "event": "submit",
+          "capture": false,
+          "delegated": false,
+          "boundaries": [],
+          "span": {
+            "start": 1474,
+            "end": 1480,
+            "line": 49,
+            "column": 21
+          }
+        }
+      ]
+    },
+    {
+      "id": "b1",
+      "span": {
+        "start": 754,
+        "end": 856,
+        "line": 24,
+        "column": 19
+      },
+      "name": "guarded",
+      "owner": "Form",
+      "ownerIsComponent": true,
+      "nestedIn": [],
+      "opaque": false,
+      "body": {
+        "span": {
+          "start": 756,
+          "end": 855,
+          "line": 24,
+          "column": 21
+        },
+        "bodySpan": {
+          "start": 782,
+          "end": 855,
+          "line": 24,
+          "column": 47
+        },
+        "paramsSpan": {
+          "start": 766,
+          "end": 781,
+          "line": 24,
+          "column": 31
+        },
+        "generator": true,
+        "async": false,
+        "arrow": false,
+        "paramCount": 1,
+        "input": "e",
+        "ops": {
+          "values": [
+            {
+              "name": "draft",
+              "span": {
+                "start": 802,
+                "end": 814,
+                "line": 25,
+                "column": 19
+              }
+            }
+          ],
+          "paths": [],
+          "storeReads": [],
+          "waits": [],
+          "raises": [],
+          "attempts": [],
+          "writes": [],
+          "calls": [],
+          "unknownYields": [],
+          "plainYields": [],
+          "performs": [],
+          "awaits": [],
+          "throws": []
+        },
+        "captures": [
+          {
+            "name": "draft",
+            "scope": "local",
+            "kind": "const",
+            "declaration": {
+              "start": 317,
+              "end": 322,
+              "line": 13,
+              "column": 10
+            },
+            "declaredIn": "Form",
+            "props": false,
+            "assigned": false,
+            "mutatedElsewhere": false,
+            "uses": 1,
+            "block": null
+          }
+        ],
+        "escapes": {
+          "this": false,
+          "arguments": false,
+          "eval": false,
+          "newFunction": false,
+          "with": false,
+          "assignsCapture": false,
+          "importMeta": false
+        },
+        "nestedBlocks": 0,
+        "dynamicImports": [],
+        "event": {
+          "preventDefault": 0,
+          "stopPropagation": 1,
+          "stopImmediatePropagation": 0,
+          "returnValue": 0,
+          "currentTarget": 0,
+          "target": 0,
+          "members": [],
+          "methods": [],
+          "escapes": [],
+          "deferredUses": 0,
+          "propagationSensitive": true,
+          "prelude": {
+            "statements": [],
+            "end": null
+          }
+        }
+      },
+      "sites": [
+        {
+          "kind": "domEvent",
+          "element": "button",
+          "attribute": "onClick",
+          "event": "click",
+          "capture": false,
+          "delegated": true,
+          "boundaries": [],
+          "span": {
+            "start": 1506,
+            "end": 1513,
+            "line": 50,
+            "column": 24
+          }
+        }
+      ]
+    },
+    {
+      "id": "b2",
+      "span": {
+        "start": 918,
+        "end": 966,
+        "line": 29,
+        "column": 20
+      },
+      "name": "escaping",
+      "owner": "Form",
+      "ownerIsComponent": true,
+      "nestedIn": [],
+      "opaque": false,
+      "body": {
+        "span": {
+          "start": 920,
+          "end": 965,
+          "line": 29,
+          "column": 22
+        },
+        "bodySpan": {
+          "start": 946,
+          "end": 965,
+          "line": 29,
+          "column": 48
+        },
+        "paramsSpan": {
+          "start": 930,
+          "end": 945,
+          "line": 29,
+          "column": 32
+        },
+        "generator": true,
+        "async": false,
+        "arrow": false,
+        "paramCount": 1,
+        "input": "e",
+        "ops": {
+          "values": [],
+          "paths": [],
+          "storeReads": [],
+          "waits": [],
+          "raises": [],
+          "attempts": [],
+          "writes": [],
+          "calls": [],
+          "unknownYields": [],
+          "plainYields": [],
+          "performs": [],
+          "awaits": [],
+          "throws": []
+        },
+        "captures": [
+          {
+            "name": "track",
+            "scope": "import",
+            "kind": "import",
+            "declaration": {
+              "start": 75,
+              "end": 80,
+              "line": 2,
+              "column": 10
+            },
+            "declaredIn": null,
+            "props": false,
+            "assigned": false,
+            "mutatedElsewhere": false,
+            "uses": 1,
+            "block": null
+          }
+        ],
+        "escapes": {
+          "this": false,
+          "arguments": false,
+          "eval": false,
+          "newFunction": false,
+          "with": false,
+          "assignsCapture": false,
+          "importMeta": false
+        },
+        "nestedBlocks": 0,
+        "dynamicImports": [],
+        "event": {
+          "preventDefault": 0,
+          "stopPropagation": 0,
+          "stopImmediatePropagation": 0,
+          "returnValue": 0,
+          "currentTarget": 0,
+          "target": 0,
+          "members": [],
+          "methods": [],
+          "escapes": [
+            "argument:track"
+          ],
+          "deferredUses": 0,
+          "propagationSensitive": true,
+          "prelude": {
+            "statements": [],
+            "end": null
+          }
+        }
+      },
+      "sites": [
+        {
+          "kind": "domEvent",
+          "element": "button",
+          "attribute": "onClick",
+          "event": "click",
+          "capture": false,
+          "delegated": true,
+          "boundaries": [],
+          "span": {
+            "start": 1541,
+            "end": 1549,
+            "line": 51,
+            "column": 24
+          }
+        }
+      ]
+    },
+    {
+      "id": "b3",
+      "span": {
+        "start": 1016,
+        "end": 1052,
+        "line": 33,
+        "column": 16
+      },
+      "name": "bump",
+      "owner": "Form",
+      "ownerIsComponent": true,
+      "nestedIn": [],
+      "opaque": false,
+      "body": {
+        "span": {
+          "start": 1018,
+          "end": 1051,
+          "line": 33,
+          "column": 18
+        },
+        "bodySpan": {
+          "start": 1031,
+          "end": 1051,
+          "line": 33,
+          "column": 31
+        },
+        "paramsSpan": {
+          "start": 1028,
+          "end": 1030,
+          "line": 33,
+          "column": 28
+        },
+        "generator": true,
+        "async": false,
+        "arrow": false,
+        "paramCount": 0,
+        "input": null,
+        "ops": {
+          "values": [],
+          "paths": [],
+          "storeReads": [],
+          "waits": [],
+          "raises": [],
+          "attempts": [],
+          "writes": [],
+          "calls": [],
+          "unknownYields": [],
+          "plainYields": [],
+          "performs": [],
+          "awaits": [],
+          "throws": []
+        },
+        "captures": [
+          {
+            "name": "counter",
+            "scope": "module",
+            "kind": "let",
+            "declaration": {
+              "start": 147,
+              "end": 154,
+              "line": 5,
+              "column": 5
+            },
+            "declaredIn": null,
+            "props": false,
+            "assigned": true,
+            "mutatedElsewhere": true,
+            "uses": 1,
+            "block": null
+          }
+        ],
+        "escapes": {
+          "this": false,
+          "arguments": false,
+          "eval": false,
+          "newFunction": false,
+          "with": false,
+          "assignsCapture": true,
+          "importMeta": false
+        },
+        "nestedBlocks": 0,
+        "dynamicImports": [],
+        "event": null
+      },
+      "sites": [
+        {
+          "kind": "domEvent",
+          "element": "button",
+          "attribute": "onClick",
+          "event": "click",
+          "capture": false,
+          "delegated": true,
+          "boundaries": [],
+          "span": {
+            "start": 1577,
+            "end": 1581,
+            "line": 52,
+            "column": 24
+          }
+        }
+      ]
+    },
+    {
+      "id": "b4",
+      "span": {
+        "start": 1117,
+        "end": 1211,
+        "line": 37,
+        "column": 15
+      },
+      "name": "odd",
+      "owner": "Form",
+      "ownerIsComponent": true,
+      "nestedIn": [],
+      "opaque": false,
+      "body": {
+        "span": {
+          "start": 1119,
+          "end": 1210,
+          "line": 37,
+          "column": 17
+        },
+        "bodySpan": {
+          "start": 1145,
+          "end": 1210,
+          "line": 37,
+          "column": 43
+        },
+        "paramsSpan": {
+          "start": 1129,
+          "end": 1144,
+          "line": 37,
+          "column": 27
+        },
+        "generator": true,
+        "async": false,
+        "arrow": false,
+        "paramCount": 1,
+        "input": "e",
+        "ops": {
+          "values": [],
+          "paths": [],
+          "storeReads": [],
+          "waits": [],
+          "raises": [],
+          "attempts": [],
+          "writes": [],
+          "calls": [],
+          "unknownYields": [],
+          "plainYields": [],
+          "performs": [],
+          "awaits": [],
+          "throws": []
+        },
+        "captures": [],
+        "escapes": {
+          "this": true,
+          "arguments": false,
+          "eval": false,
+          "newFunction": false,
+          "with": false,
+          "assignsCapture": false,
+          "importMeta": false
+        },
+        "nestedBlocks": 0,
+        "dynamicImports": [],
+        "event": {
+          "preventDefault": 0,
+          "stopPropagation": 0,
+          "stopImmediatePropagation": 0,
+          "returnValue": 0,
+          "currentTarget": 0,
+          "target": 0,
+          "members": [],
+          "methods": [
+            "composedPath"
+          ],
+          "escapes": [],
+          "deferredUses": 0,
+          "propagationSensitive": false,
+          "prelude": {
+            "statements": [],
+            "end": null
+          }
+        }
+      },
+      "sites": [
+        {
+          "kind": "domEvent",
+          "element": "button",
+          "attribute": "onClick",
+          "event": "click",
+          "capture": false,
+          "delegated": true,
+          "boundaries": [],
+          "span": {
+            "start": 1609,
+            "end": 1612,
+            "line": 53,
+            "column": 24
+          }
+        }
+      ]
+    },
+    {
+      "id": "b5",
+      "span": {
+        "start": 1281,
+        "end": 1362,
+        "line": 42,
+        "column": 17
+      },
+      "name": "inner",
+      "owner": "Form",
+      "ownerIsComponent": true,
+      "nestedIn": [],
+      "opaque": false,
+      "body": {
+        "span": {
+          "start": 1283,
+          "end": 1361,
+          "line": 42,
+          "column": 19
+        },
+        "bodySpan": {
+          "start": 1309,
+          "end": 1361,
+          "line": 42,
+          "column": 45
+        },
+        "paramsSpan": {
+          "start": 1293,
+          "end": 1308,
+          "line": 42,
+          "column": 29
+        },
+        "generator": true,
+        "async": false,
+        "arrow": false,
+        "paramCount": 1,
+        "input": "e",
+        "ops": {
+          "values": [],
+          "paths": [],
+          "storeReads": [],
+          "waits": [],
+          "raises": [],
+          "attempts": [],
+          "writes": [
+            {
+              "target": "setDraft",
+              "span": {
+                "start": 1315,
+                "end": 1356,
+                "line": 43,
+                "column": 5
+              }
+            }
+          ],
+          "calls": [],
+          "unknownYields": [],
+          "plainYields": [],
+          "performs": [],
+          "awaits": [],
+          "throws": []
+        },
+        "captures": [
+          {
+            "name": "write",
+            "scope": "import",
+            "kind": "import",
+            "declaration": {
+              "start": 41,
+              "end": 46,
+              "line": 1,
+              "column": 42
+            },
+            "declaredIn": null,
+            "props": false,
+            "assigned": false,
+            "mutatedElsewhere": false,
+            "uses": 1,
+            "block": null
+          },
+          {
+            "name": "setDraft",
+            "scope": "local",
+            "kind": "const",
+            "declaration": {
+              "start": 324,
+              "end": 332,
+              "line": 13,
+              "column": 17
+            },
+            "declaredIn": "Form",
+            "props": false,
+            "assigned": false,
+            "mutatedElsewhere": false,
+            "uses": 1,
+            "block": null
+          },
+          {
+            "name": "String",
+            "scope": "global",
+            "kind": "global",
+            "declaration": null,
+            "declaredIn": null,
+            "props": false,
+            "assigned": false,
+            "mutatedElsewhere": false,
+            "uses": 1,
+            "block": null
+          }
+        ],
+        "escapes": {
+          "this": false,
+          "arguments": false,
+          "eval": false,
+          "newFunction": false,
+          "with": false,
+          "assignsCapture": false,
+          "importMeta": false
+        },
+        "nestedBlocks": 0,
+        "dynamicImports": [],
+        "event": {
+          "preventDefault": 0,
+          "stopPropagation": 0,
+          "stopImmediatePropagation": 0,
+          "returnValue": 0,
+          "currentTarget": 0,
+          "target": 0,
+          "members": [
+            "clientX"
+          ],
+          "methods": [],
+          "escapes": [],
+          "deferredUses": 0,
+          "propagationSensitive": false,
+          "prelude": {
+            "statements": [],
+            "end": null
+          }
+        }
+      },
+      "sites": [
+        {
+          "kind": "delegated",
+          "span": {
+            "start": 1426,
+            "end": 1431,
+            "line": 46,
+            "column": 17
+          }
+        }
+      ]
+    },
+    {
+      "id": "b6",
+      "span": {
+        "start": 1380,
+        "end": 1441,
+        "line": 45,
+        "column": 17
+      },
+      "name": "outer",
+      "owner": "Form",
+      "ownerIsComponent": true,
+      "nestedIn": [],
+      "opaque": false,
+      "body": {
+        "span": {
+          "start": 1382,
+          "end": 1440,
+          "line": 45,
+          "column": 19
+        },
+        "bodySpan": {
+          "start": 1408,
+          "end": 1440,
+          "line": 45,
+          "column": 45
+        },
+        "paramsSpan": {
+          "start": 1392,
+          "end": 1407,
+          "line": 45,
+          "column": 29
+        },
+        "generator": true,
+        "async": false,
+        "arrow": false,
+        "paramCount": 1,
+        "input": "e",
+        "ops": {
+          "values": [],
+          "paths": [],
+          "storeReads": [],
+          "waits": [],
+          "raises": [],
+          "attempts": [],
+          "writes": [],
+          "calls": [
+            {
+              "block": "inner",
+              "span": {
+                "start": 1414,
+                "end": 1435,
+                "line": 46,
+                "column": 5
+              }
+            }
+          ],
+          "unknownYields": [],
+          "plainYields": [],
+          "performs": [],
+          "awaits": [],
+          "throws": []
+        },
+        "captures": [
+          {
+            "name": "call",
+            "scope": "import",
+            "kind": "import",
+            "declaration": {
+              "start": 21,
+              "end": 25,
+              "line": 1,
+              "column": 22
+            },
+            "declaredIn": null,
+            "props": false,
+            "assigned": false,
+            "mutatedElsewhere": false,
+            "uses": 1,
+            "block": null
+          },
+          {
+            "name": "inner",
+            "scope": "local",
+            "kind": "const",
+            "declaration": {
+              "start": 1273,
+              "end": 1278,
+              "line": 42,
+              "column": 9
+            },
+            "declaredIn": "Form",
+            "props": false,
+            "assigned": false,
+            "mutatedElsewhere": false,
+            "uses": 1,
+            "block": "b5"
+          }
+        ],
+        "escapes": {
+          "this": false,
+          "arguments": false,
+          "eval": false,
+          "newFunction": false,
+          "with": false,
+          "assignsCapture": false,
+          "importMeta": false
+        },
+        "nestedBlocks": 0,
+        "dynamicImports": [],
+        "event": {
+          "preventDefault": 0,
+          "stopPropagation": 0,
+          "stopImmediatePropagation": 0,
+          "returnValue": 0,
+          "currentTarget": 0,
+          "target": 0,
+          "members": [],
+          "methods": [],
+          "escapes": [
+            "argument:call"
+          ],
+          "deferredUses": 0,
+          "propagationSensitive": true,
+          "prelude": {
+            "statements": [],
+            "end": null
+          }
+        }
+      },
+      "sites": [
+        {
+          "kind": "domEvent",
+          "element": "button",
+          "attribute": "onClick",
+          "event": "click",
+          "capture": false,
+          "delegated": true,
+          "boundaries": [],
+          "span": {
+            "start": 1640,
+            "end": 1645,
+            "line": 54,
+            "column": 24
+          }
+        },
+        {
+          "kind": "escape",
+          "how": "literal",
+          "span": {
+            "start": 1682,
+            "end": 1687,
+            "line": 55,
+            "column": 33
+          }
+        }
+      ]
+    }
+  ],
+  "unknowns": []
+}

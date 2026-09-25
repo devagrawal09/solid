@@ -41,6 +41,14 @@ function projectBlocksForTypecheck(code, options) {
   return { code: result.code, edits: result.edits, rewrites: result.rewrites };
 }
 
+function summarizeModule(code, options) {
+  if (typeof code !== "string") {
+    throw new TypeError("@solidjs/compiler summarizeModule() expects source code as a string");
+  }
+  const nativeOptions = validateTypecheckProjectionOptions(options);
+  return JSON.parse(native.summarizeModule(code, nativeOptions));
+}
+
 function projectTsrxForTypecheck(code, options) {
   if (typeof code !== "string") {
     throw new TypeError(
@@ -471,6 +479,7 @@ module.exports = {
   transformAsync,
   projectTsrxForTypecheck,
   projectBlocksForTypecheck,
+  summarizeModule,
   transformDirectives,
   transformDirectivesAsync,
   transformLazy,

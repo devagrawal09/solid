@@ -73,6 +73,21 @@ pub fn project_blocks_for_typecheck(
     })
 }
 
+#[napi(object)]
+#[derive(Default)]
+pub struct SummarizeModuleOptions {
+    pub filename: Option<String>,
+}
+
+/// Behavioral module summary (schema `solid-behavior-summary`) as JSON text.
+/// See `summary.rs` for the facts recorded; positions are UTF-16 offsets.
+#[napi]
+pub fn summarize_module(code: String, options: Option<SummarizeModuleOptions>) -> Result<String> {
+    let options = options.unwrap_or_default();
+    crate::summary::summarize_module(&code, options.filename.as_deref())
+        .map_err(|error| Error::from_reason(error.to_string()))
+}
+
 #[cfg(feature = "tsrx")]
 #[napi(object)]
 pub struct TsrxTypecheckEmbeddedRegion {
