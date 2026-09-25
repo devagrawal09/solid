@@ -325,6 +325,25 @@ fn core_options(options: TransformOptions) -> Result<CompileOptions> {
             .collect(),
         generators: options.generators.unwrap_or(true),
         host_fusion: options.host_fusion.unwrap_or(false),
+        server_authority: options.server_authority.unwrap_or(false),
+        authority_summary: crate::server_authority::AuthoritySummary {
+            entries: options
+                .authority_summary
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|entry| {
+                    let kind = match entry.kind.as_str() {
+                        "pure" => crate::server_authority::AuthorityKind::Pure,
+                        "server" => crate::server_authority::AuthorityKind::Server,
+                        "readonly-component" => {
+                            crate::server_authority::AuthorityKind::ReadonlyComponent
+                        }
+                        _ => return None,
+                    };
+                    Some((entry.module, entry.export_name, kind))
+                })
+                .collect(),
+        },
     })
 }
 

@@ -22,6 +22,7 @@ import {
   markSnapshotScope,
   releaseSnapshotScope,
   clearSnapshots,
+  constantAccessor,
   type Accessor,
   type AnyBlock,
   type BlockAccessor,
@@ -1079,7 +1080,47 @@ function hydratedCreateMemo(compute: any, options?: any) {
   if (!sharedConfig.hydrating || options?.transparent) {
     return coreMemo(compute, options);
   }
+  const sealed = options?.$sealed;
+  if (sealed) {
+    const adopted = adoptSealed();
+    if (adopted !== undefined) return adopted;
+    // Compute-only (`$sealed: 2`): every reader is a sealed compute the
+    // client never runs, so the server did not ship a synchronous value.
+    // Create the node lazily: it computes (through the ordinary hydrated
+    // path) only if some reader falls back and actually reads it.
+    if (sealed === 2) return hydrateSignalLike(coreMemo, compute, { ...options, lazy: true });
+  }
   return hydrateSignalLike(coreMemo, compute, options);
+}
+
+/**
+ * Track D slice 5 — adopt a compiler-proven server-authoritative memo
+ * (`$sealed`, see the compiler's server_authority.rs) as a constant.
+ *
+ * The proof guarantees nothing on the client can ever invalidate the memo and
+ * nothing depends on re-running its compute, so the serialized server value
+ * is final: no computation node, no compute run (no fetch, no `subFetch`
+ * dependency trace, no sorting/formatting), no links for any consumer. The
+ * memo's child-id slot is still consumed — the server memo owned it — but no
+ * owner is created: the compute never runs here, so nothing allocates under
+ * it.
+ *
+ * Adoption needs the value NOW. A missing record (not serialized — errored,
+ * NoHydration, a mismatched build) or a still-pending / rejected async
+ * record falls back to the ordinary hydrated memo, which is always correct.
+ */
+function adoptSealed(): SourceAccessor<unknown> | undefined {
+  const owner = getOwner();
+  if (!owner || owner.id == null || getContext(NoHydrateContext)) return undefined;
+  const id = peekNextChildId(owner);
+  if (!sharedConfig.has!(id)) return undefined;
+  let value = sharedConfig.load!(id);
+  if (value != null && typeof value === "object" && typeof value.then === "function") {
+    if (value.s !== 1) return undefined;
+    value = value.v;
+  }
+  getNextChildId(owner);
+  return constantAccessor(value);
 }
 
 function hydratedCreateSignal(fn?: any, second?: any) {

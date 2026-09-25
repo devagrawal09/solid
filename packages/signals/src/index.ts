@@ -77,7 +77,8 @@ export {
   resolve,
   until,
   onSettled,
-  onCleanup
+  onCleanup,
+  constantAccessor
 } from "./signals.js";
 export {
   $,

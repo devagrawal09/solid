@@ -6,6 +6,17 @@ import { defineConfig } from "vitest/config";
 import solidPlugin from "@solidjs/vite-plugin";
 
 const compiler = process.env.JSX_COMPILER === "babel" ? "babel" : "native";
+// Track D slice 5: server-authoritative memo sealing (on by default for the
+// harness; `SOLID_SERVER_AUTHORITY=0` is the A/B baseline). Both configs must
+// agree, and share the cross-module authority summary.
+const serverAuthority = process.env.SOLID_SERVER_AUTHORITY !== "0";
+const authoritySummary = {
+  "./track-d-api.js": {
+    fetchCatalog: "server",
+    byPrice: "pure",
+    formatPrice: "pure"
+  }
+};
 import { resolve } from "path";
 
 const rootDir = resolve(__dirname);
@@ -14,7 +25,13 @@ export default defineConfig({
   // hot: false — solid-refresh wraps top-level components (e.g. the shared
   // parity-harness scenarios) in HMR wrappers that add owners and break
   // hydration id parity.
-  plugins: [solidPlugin({ compiler, hot: false, solid: { dev: true, hydratable: true } })],
+  plugins: [
+    solidPlugin({
+      compiler,
+      hot: false,
+      solid: { dev: true, hydratable: true, serverAuthority, authoritySummary }
+    })
+  ],
   test: {
     environment: "jsdom",
     pool: "threads",

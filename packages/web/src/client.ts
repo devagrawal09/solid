@@ -1046,6 +1046,12 @@ export function insert(parent, accessor, marker, initial, options) {
   const host = options && options.host;
   if (multi && !initial) initial = [];
   if (hydrationRt !== null) initial = hydrationRt.claimInitial(parent, multi, initial);
+  // An adopted server-authoritative value (Track D slice 5, `$sealed`) can
+  // never change: insert it once — claiming the server's nodes while
+  // hydrating — with no binding effect. Never tagged `$s`: the compiler
+  // re-wraps bare getters for id-allocating holes, so only text holes pass
+  // the accessor itself.
+  if (typeof accessor === "function" && accessor.$sealed) accessor = accessor();
   if (typeof accessor !== "function") {
     accessor = normalize(accessor, initial, multi, true);
     if (typeof accessor !== "function") {

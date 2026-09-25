@@ -292,7 +292,9 @@ const nativeOptionKeys = new Set([
   "builtIns",
   "renderers",
   "generators",
-  "hostFusion"
+  "hostFusion",
+  "serverAuthority",
+  "authoritySummary"
 ]);
 
 function validateOptions(code, options) {
@@ -335,6 +337,10 @@ function validateOptions(code, options) {
       nativeOptions.validate = value;
       continue;
     }
+    if (key === "authoritySummary") {
+      nativeOptions.authoritySummary = flattenAuthoritySummary(value);
+      continue;
+    }
     if (nativeOptionKeys.has(key)) {
       if (key === "renderers") validateRenderers(value);
       nativeOptions[key] = value;
@@ -343,6 +349,27 @@ function validateOptions(code, options) {
     throw new Error(`@solidjs/compiler received unknown option \`${key}\``);
   }
   return nativeOptions;
+}
+
+// `{ "<module>": { "<export>": "pure" | "server" | "readonly-component" } }`
+// → the flat entry list the native binding takes.
+function flattenAuthoritySummary(summary) {
+  if (summary == null) return undefined;
+  if (typeof summary !== "object" || Array.isArray(summary)) {
+    throw new TypeError("@solidjs/compiler `authoritySummary` option must be an object");
+  }
+  const entries = [];
+  for (const [module, exports] of Object.entries(summary)) {
+    for (const [exportName, kind] of Object.entries(exports || {})) {
+      if (kind !== "pure" && kind !== "server" && kind !== "readonly-component") {
+        throw new TypeError(
+          `@solidjs/compiler \`authoritySummary\` kind for ${module}#${exportName} must be "pure", "server" or "readonly-component"`
+        );
+      }
+      entries.push({ module, exportName, kind });
+    }
+  }
+  return entries;
 }
 
 function validateRenderers(renderers) {

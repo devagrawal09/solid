@@ -30,6 +30,7 @@ mod lazy;
 mod node_adapter;
 #[cfg(feature = "node")]
 mod refresh;
+mod server_authority;
 mod shared;
 mod ssr;
 #[cfg(feature = "tsrx")]
@@ -41,6 +42,7 @@ pub use block_projection::{
 };
 pub use compiler::{CompileOptions, CompileOutput, Generate, Renderer, Syntax, Wrapper, compile};
 pub use error::{CompileError, CompileErrorKind};
+pub use server_authority::{AuthorityKind, AuthoritySummary};
 #[cfg(feature = "tsrx")]
 pub use tsrx::{
     TsrxEmbeddedRegion, TsrxEmbeddedRegionKind, TsrxTypecheckMapping, TsrxTypecheckProjection,

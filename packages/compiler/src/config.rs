@@ -10,6 +10,16 @@ pub struct RendererOption {
     pub elements: Vec<String>,
 }
 
+/// One entry of the cross-module authority summary (`serverAuthority`).
+#[napi(object)]
+#[derive(Default)]
+pub struct AuthoritySummaryEntry {
+    pub module: String,
+    pub export_name: String,
+    /// `"pure"` | `"server"` | `"readonly-component"`.
+    pub kind: String,
+}
+
 #[napi(object)]
 #[derive(Default)]
 pub struct TransformOptions {
@@ -71,6 +81,11 @@ pub struct TransformOptions {
     /// consumed by a statically known host (`createMemo`, `createEffect`, …).
     /// Default `false`. Requires `generators: true`.
     pub host_fusion: Option<bool>,
+    /// Track D slice 5: seal proven server-authoritative memos (hydratable
+    /// builds). Default `false`.
+    pub server_authority: Option<bool>,
+    /// The cross-module summary `serverAuthority` consults for imports.
+    pub authority_summary: Option<Vec<AuthoritySummaryEntry>>,
 }
 
 #[napi(object)]

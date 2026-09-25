@@ -115,6 +115,14 @@ pub struct CompileOptions {
     /// hand-written Solid accessors. Requires `generators: true`. Default
     /// `false`.
     pub host_fusion: bool,
+    /// Track D slice 5: prove `ssrSource: "server"` memos server-authoritative
+    /// (see `server_authority.rs`) and mark them `$sealed` so the client
+    /// adopts their serialized value instead of re-running them. Hydratable
+    /// builds only. Default `false`.
+    pub server_authority: bool,
+    /// The cross-module summary interface the proof consults for imports
+    /// (supplied identically to the server and client compiles).
+    pub authority_summary: crate::server_authority::AuthoritySummary,
 }
 
 impl Default for CompileOptions {
@@ -147,6 +155,8 @@ impl Default for CompileOptions {
             renderers: Vec::new(),
             generators: true,
             host_fusion: false,
+            server_authority: false,
+            authority_summary: Default::default(),
         }
     }
 }
@@ -284,6 +294,28 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
     // `block_scope.rs`).
     if options.generators && options.hydratable {
         crate::block_scope::scope_jsx_blocks(&allocator, &mut program);
+    }
+
+    // Track D slice 5: seal proven server-authoritative memos — identical on
+    // every generate, before JSX lowering (see `server_authority.rs`).
+    if options.server_authority && options.hydratable {
+        let decisions = crate::server_authority::seal_server_authority(
+            &allocator,
+            &mut program,
+            &options.authority_summary,
+        );
+        // Diagnostic channel: `SOLID_AUTHORITY_REPORT=1` prints every
+        // decision (and why a memo was not sealed) to stderr.
+        if std::env::var_os("SOLID_AUTHORITY_REPORT").is_some() {
+            for decision in decisions {
+                eprintln!(
+                    "[solid authority] {} {}: {}",
+                    options.filename.as_deref().unwrap_or("<input>"),
+                    decision.name,
+                    decision.reason.as_deref().unwrap_or("sealed")
+                );
+            }
+        }
     }
 
     match options.generate {

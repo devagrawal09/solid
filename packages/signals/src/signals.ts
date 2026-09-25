@@ -143,6 +143,23 @@ export function accessor<T>(node: any): SourceAccessor<T> {
 }
 
 /**
+ * A constant accessor over an adopted server value (Track D slice 5): no
+ * node, no tracking, no links — reading it never subscribes. Carries the
+ * same iterable shape as a signal accessor (`yield* value` works in blocks)
+ * and the `$sealed` brand renderers use to skip a binding effect (the value
+ * can never change, and the server-rendered DOM already shows it). Only the
+ * hydration adapter creates these, for compiler-proven `$sealed` memos.
+ *
+ * @internal
+ */
+export function constantAccessor<T>(value: T): SourceAccessor<T> {
+  const fn = (() => value) as unknown as SourceAccessor<T>;
+  (fn as any)[Symbol.iterator] = accessorIterator;
+  (fn as any).$sealed = true;
+  return fn;
+}
+
+/**
  * A signal setter. Accepts either a new value or an updater `(prev) => next`.
  *
  * If the type permits `undefined`, `setState()` (no args) clears to `undefined`.

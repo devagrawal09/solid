@@ -1033,7 +1033,11 @@ export function createMemo<T>(
         options?.ssrSource,
         run,
         (options as any)?.serialize,
-        loadingState
+        loadingState,
+        // `$sealed: 1` ships its synchronous value; `2` is compute-only (its
+        // readers are all sealed computes the client never runs) and ships
+        // nothing, async included.
+        (options as any)?.$sealed
       );
     } catch (err) {
       if (err instanceof NotReadyError) {
@@ -1291,7 +1295,8 @@ function processResult<T>(
   ssrSource?: SsrSourceMode,
   rerun?: () => any,
   serialize?: boolean,
-  loadingState?: { value: T; served: boolean }
+  loadingState?: { value: T; served: boolean },
+  sealed?: 1 | 2
 ) {
   if (comp.disposed) return;
   const id = owner.id;
@@ -1305,7 +1310,10 @@ function processResult<T>(
   // so it is only correct where recomputation is intended: dynamic() re-runs
   // its source and lazy() re-imports its module. Both resolve to component
   // functions, which are not serializable in the first place.
-  const noHydrate = serialize === false || getContext(NoHydrateContext, owner);
+  // A compute-only sealed memo (`$sealed: 2`) ships no value at all: no
+  // client reader runs, and a reader that falls back recomputes through the
+  // client's lazy memo (the same contract as `serialize: false`).
+  const noHydrate = serialize === false || sealed === 2 || getContext(NoHydrateContext, owner);
 
   // Async-iterable takes precedence over thenable, mirroring the client
   // runtime's detection order (`handleAsync` in @solidjs/signals core/async.ts).
@@ -1765,6 +1773,12 @@ function processResult<T>(
   comp.value = result;
   comp.sync = true;
   comp.epoch = ctx?.commitEpoch?.();
+  // Track D slice 5: a compiler-proven server-authoritative memo (`$sealed`,
+  // see the compiler's server_authority.rs) ships its synchronous value too,
+  // so the hydrating client adopts it as a constant instead of re-running
+  // the compute (sorting, formatting, projection). Async sealed values
+  // already travel through the serialized deferred above.
+  if (sealed === 1 && ctx?.serialize && id && !noHydrate) ctx.serialize(id, result);
 }
 
 function closeAsyncIterator(iter: any, value?: any) {

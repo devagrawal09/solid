@@ -57,6 +57,19 @@ export interface TransformOptions {
    * true`. Default `false`.
    */
   hostFusion?: boolean;
+  /**
+   * Track D slice 5 (experimental, hydratable builds): prove `createMemo`
+   * calls with an explicit `ssrSource: "server"` server-authoritative and mark
+   * them so the hydrating client adopts their serialized value instead of
+   * re-running them. Compile the server and client with the same setting.
+   * Default `false`.
+   */
+  serverAuthority?: boolean;
+  /**
+   * The cross-module summary `serverAuthority` consults for imports:
+   * `{ "<module specifier>": { "<export>": "pure" | "server" | "readonly-component" } }`.
+   */
+  authoritySummary?: Record<string, Record<string, "pure" | "server" | "readonly-component">>;
 }
 
 export interface RendererOption {

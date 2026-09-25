@@ -1,0 +1,6 @@
+[track-d census] {"scenario":"authority-catalog","serverAuthority":false,"available":true,"owners":12,"computations":26,"effects":14,"links":16,"fetches":1,"sorts":5,"formats":4}
+[track-d census] {"scenario":"authority-bulk","serverAuthority":false,"available":true,"owners":208,"computations":418,"effects":406,"links":16,"fetches":1,"sorts":1266,"formats":200}
+[track-d census] {"scenario":"authority-sync","serverAuthority":false,"available":true,"owners":2,"computations":5,"effects":3,"links":19,"fetches":0,"sorts":0,"formats":0}
+[track-d census] {"scenario":"authority-catalog","serverAuthority":true,"available":true,"owners":12,"computations":15,"effects":5,"links":10,"fetches":0,"sorts":0,"formats":0}
+[track-d census] {"scenario":"authority-bulk","serverAuthority":true,"available":true,"owners":208,"computations":15,"effects":5,"links":10,"fetches":0,"sorts":0,"formats":0}
+[track-d census] {"scenario":"authority-sync","serverAuthority":true,"available":true,"owners":2,"computations":3,"effects":2,"links":0,"fetches":0,"sorts":0,"formats":0}

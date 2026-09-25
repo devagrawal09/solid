@@ -189,3 +189,212 @@ arguments instead. The overhead is negligible next to one template claim.
 **KEEP.** Strict SSR is unblocked, and slices 5 and 6 build on it.
 
 ---
+
+## Slice 5: server-authoritative replay elimination
+
+### Baseline behavior
+
+A hydrating client re-ran every `ssrSource: "server"` memo.
+
+- **Async memos.** The client adopted the serialized value but still ran the
+  compute through `subFetch`, with `fetch` and `Promise` mocked, to trace
+  dependencies. Sorting or formatting inside the compute ran again.
+- **Sync memos.** They were never serialized, so the client recomputed them.
+- **Consumers.** Every consumer linked to the memo node, and every rendered
+  read got a binding effect.
+
+### Mechanism
+
+The compiler pass `packages/compiler/src/server_authority.rs` runs only with
+the `serverAuthority` option on hydratable builds. It runs before JSX lowering
+on the shared AST, so the dom and ssr generates make identical decisions.
+
+A `const X = createMemo(fn, opts)` is **sealed** only when all of these hold.
+Anything the pass cannot classify is rejected.
+
+1. **Explicit authority.** `opts` is an object literal with a literal
+   `ssrSource: "server"`, no spread or computed key, and no `transparent`.
+   `"hybrid"` and `"client"` are rejected as revalidating or client-specific.
+   A memo relying on the implicit default is not a candidate.
+2. **Client-independent inputs.** Every free variable in `fn` must be one of:
+   - another sealed memo, read as `Y()`;
+   - a frozen signal or store: created from literal data, with its setter
+     never referenced (the setter-escape proof);
+   - a module-level primitive `const`;
+   - a same-module function proven pure;
+   - an import the cross-module summary declares `pure` or `server` (`server`
+     only in call position);
+   - an allowlisted pure global: `Math` without `random`, `JSON`, `Number`,
+     `fetch`, and similar.
+
+   Rejected: client globals (`window`, `document`, `Date`, `Intl`,
+   `Math.random`, `isServer`), component props and outer parameters, and
+   anything unknown.
+3. **No invalidation.** Every reference to `X` is a read: `X()`, the lowered
+   `_$perform(X)`, or `yield* X`. Passing the accessor to `refresh`, a prop, an
+   argument, or an export rejects it. Generator computes, which are live
+   sources, and scheduling APIs (`setInterval`, `setTimeout`, `EventSource`,
+   and others) are rejected.
+4. **Immutable authority.** The adopted value is shared by reference. Every
+   read is followed through member chains, local aliases, iteration callbacks,
+   `<For>`/`<Show>` render parameters, and same-module component props. It is
+   rejected on:
+   - a mutation;
+   - a pass to an unknown function or unsummarized component;
+   - a store into an escaping position.
+
+   A fresh copy (`[...X()].sort(pure)`) may be mutated. Its elements may not.
+5. **No client-visible side effects.** No assignment outside the compute's
+   locals, and no JSX.
+
+Sealed-ness is a fixed point. A memo that reads, or flows into, a rejected
+memo is rejected too.
+
+**Rewrites.** All are identical on both generates.
+
+- **Sealed memos.** They get `$sealed: 1` in their options. A memo whose every
+  read sits inside another sealed compute gets `$sealed: 2` (compute-only).
+- **Accessor text holes.** `{X()}` as the whole child expression of an
+  intrinsic element becomes `{X}`, so the renderer receives the accessor.
+- **Row bindings.** Take a render callback whose parameter is exactly a sealed
+  memo's data: `<For each={X()}>` or keyed `<Show when={X()}>`, not merged
+  with other data and never reassigned. When it returns JSX unconditionally,
+  its intrinsic-element child and plain-attribute expressions are hoisted into
+  `const`s at the top of the callback. This applies only to expressions that
+  read that parameter and constants through pure operations.
+
+**Runtime.**
+
+- **Server.** It serializes `$sealed: 1` synchronous values. `$sealed: 2`
+  memos ship nothing, async values included.
+- **Client.** `hydratedCreateMemo` adopts a present, settled record as
+  `constantAccessor(value)`. That means no node, no compute, and no links. It
+  still consumes the memo's id slot. A missing, pending, or rejected record
+  falls back to the ordinary hydrated memo. A `$sealed: 2` memo falls back to
+  a lazy hydrated memo, which computes only if some reader falls back.
+- **Insert sink.** `insert()` inserts a `$sealed` accessor once, with no
+  effect.
+
+### Tests
+
+```sh
+cd packages/compiler && cargo test --lib server_authority          # 13 tests
+cd packages/web
+npx vitest run --config vite.config.server.mjs test/server/hydration-harness.spec.tsx
+npx vitest run --config vite.config.hydrate.mjs test/hydration/parity-harness.spec.tsx test/hydration/track-d-authority.spec.tsx
+# baseline: prefix both with SOLID_SERVER_AUTHORITY=0 (server first)
+SOLID_AUTHORITY_REPORT=1 …    # prints every decision and rejection reason
+```
+
+- **Positive fixtures.** A fetch, sort, format, and title chain; a sync frozen
+  store sorted and formatted; accessor text holes; row-binding hoists;
+  compute-only marking; summarized readonly components.
+- **Refusal fixtures.** Each of these is rejected with a specific reason:
+  - client-specific inputs (`window`, `Date`, `isServer`, `Math.random`);
+  - `"hybrid"`, `"client"`, and `transparent` sources, and the implicit
+    default;
+  - an escaped setter, and `refresh`;
+  - an unsummarized import, props, `setInterval`, a generator, and a
+    non-inline compute;
+  - mutation by `.sort()`, member assignment, an aliased assignment, a mutating
+    local component, and an update expression;
+  - dependency and flow propagation;
+  - unknown component children and props, and an escaped accessor.
+
+  Row hoisting is refused for a merged `each`, `keyed={false}`, a
+  conditional-return callback, component children, and a reassigned
+  parameter.
+- **Harness scenarios.** Parity passes with sealing on and off:
+  - `authority-catalog`: 4 rows, each with a live button, plus a live cart
+    signal;
+  - `authority-bulk`: 200 rows;
+  - `authority-sync`: a text hole and an attribute;
+  - `authority-rejected-live`: a refusal that must still update.
+- **Slice spec.** `track-d-authority.spec.tsx` asserts zero client calls of
+  the fetcher, comparator, and formatter when sealed, and nonzero in the
+  baseline. It clicks a row button to prove live descendants are retained.
+  It passes in both modes.
+
+Full suites with slice 5 applied:
+
+| Suite | Result |
+|---|---|
+| signals | 1803 passed |
+| solid | 600 passed |
+| web client | 748 passed |
+| web hydrate | 194 passed |
+| compiler Rust | 93 passed |
+| todos-blocks | 6 passed |
+
+Two failures are pre-existing and unrelated: the Node 22 abort-signal test in
+the web server suite (808 passed, 1 failed) and three host-fusion fixtures in
+the compiler fixture suite.
+
+### Measurements
+
+Raw logs are in `documentation/plans/track-d-raw/slice5-*.txt`.
+
+**Census.** Dev build, one hydration each.
+
+| Scenario | Computations | Effects | Links | Client fetch / sort / format calls |
+|---|---|---|---|---|
+| bulk, baseline | 418 | 406 | 16 | 1 / 1266 / 200 |
+| bulk, sealed | 15 | 5 | 10 | 0 / 0 / 0 |
+| catalog, baseline | 26 | 14 | 16 | 1 / 5 / 4 |
+| catalog, sealed | 15 | 5 | 10 | 0 / 0 / 0 |
+| sync, baseline | 5 | 3 | 19 | — |
+| sync, sealed | 3 | 2 | 0 | — |
+
+Owners are unchanged, 208 on the bulk page, because rows keep their owners for
+the live buttons.
+
+**Hydration time and allocation.** Production bundles in jsdom (`--expose-gc`,
+64 MB semi-space), 40 samples after 8 warmups, 3 interleaved rounds. This is
+the synchronous `hydrate()` plus `flush()` walk.
+
+| Scenario | Median ms, baseline | Median ms, sealed | Median allocated, baseline | Median allocated, sealed |
+|---|---|---|---|---|
+| bulk | 8.53 / 8.27 / 8.51 | 7.25 / 7.44 / 7.22 | 2.09 / 2.06 / 2.05 MB | 1.71 / 1.72 / 1.71 MB |
+| sync | 0.89 / 0.87 / 0.90 | 0.68 / 0.72 / 0.68 | 83.8 KB | 37.4 KB |
+| catalog | 1.20 / 1.23 / 1.27 | 1.19 / 1.23 / 1.15 | 123–125 KB | 106 KB |
+
+The catalog timing difference is within noise; its p90 reaches 1.5–1.9 ms in
+both modes. jsdom DOM claiming dominates small pages.
+
+**Bytes.**
+
+| Measure | Baseline | Sealed |
+|---|---|---|
+| Bulk data, raw | 11,226 B | 11,934 B |
+| Bulk data, gzip / brotli | 3,144 / 1,865 B | 3,144 / 2,162 B |
+| Catalog data, raw | 2,122 B | 2,049 B |
+| Sync data, raw | 0 B | 55 B |
+| Client runtime, hydrating-app entry, min / gz | 83,576 / 30,271 B | 84,003 / 30,383 B |
+| Server `solid-js` dist | 73,015 B | 73,148 B |
+
+- The bulk gzip size is equal by coincidence; brotli differs.
+- The client runtime difference is +427 B minified and +112 B gzipped.
+- HTML is unchanged in every scenario.
+
+### Limitations
+
+- **Intra-module proof.** Cross-module facts come only from the explicit
+  summary option, the contract a Track C linker would produce. Props are
+  never trusted.
+- **Only `createMemo`.** Projections and function-form stores and signals are
+  not sealed.
+- **No adoption of rendered branches.** `<Show>` and `<For>` still create
+  their memos, now with no links. Removing them needs a compiler branch
+  rewrite.
+- **Attributes.** Attributes reading a sealed accessor keep their effect,
+  with no link. Only row-parameter attributes are hoisted.
+- **Seroval de-duplication.** It is per payload. A value shared across modules
+  with a mutating consumer is outside the proof.
+- **No dev verification.** Development builds do not yet check the proof at
+  runtime, for example by freezing adopted values.
+
+### Decision
+
+**KEEP.** Measurable CPU, allocation, node, and link reductions on data-heavy
+pages. The data-byte cost is bounded by the compute-only rule. Every
+uncertain case falls back to ordinary hydration.
