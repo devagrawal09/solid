@@ -1193,7 +1193,9 @@ export function slotSignal<T>(
         // Slot backrefs: what the equals/unobserved closures used to capture.
         _host: host,
         _key: key,
-        // Store read-path caches, pre-shaped (were post-construction expandos).
+        // Store read-path caches, pre-shaped (were post-construction expandos):
+        // `px` is the child TARGET last served for this key (null when that
+        // child is served raw), `pxv` the raw it wraps.
         acc,
         px: undefined,
         pxv: undefined

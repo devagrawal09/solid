@@ -1,9 +1,10 @@
 import { template as _$template } from "@solidjs/web";
 import { insert as _$insert } from "@solidjs/web";
 var _tmpl$ = /* @__PURE__ */ _$template(`<p> <!> <!>`);
-import { $, createMemo, createSignal, readStore, perform as _$perform, readPath as _$readPath, readProp as _$readProp } from "solid-js";
-// Direct property syntax: `yield* root.a[0][k]` lowers to a path read
-// (`readPath`; `readProp` when the root is a component's props parameter).
+import { $, createMemo, createSignal, readStore, perform as _$perform, readPath1 as _$readPath1, readPath2 as _$readPath2, readPath3 as _$readPath3 } from "solid-js";
+// Direct property syntax: `yield* root.a[0][k]` lowers to one proxy-free
+// handle read (`readPath1`–`readPath4` by key count, `readPathN` beyond);
+// store and prop roots share the readers.
 export function Counter(props: {
 	count: number;
 	user: {
@@ -13,15 +14,7 @@ export function Counter(props: {
 	const [index] = createSignal(0);
 	const total = createMemo($(function() {
 		const i = _$perform(index);
-		return `${_$perform(_$readPath(store, ["user", "name"]))} ${_$perform(_$readPath(store, [
-			"items",
-			0,
-			"name"
-		]))} ${_$perform(_$readPath(store, [
-			"items",
-			i,
-			"name"
-		]))} ${_$perform(_$readPath(store, ["items", "length"]))}`;
+		return `${_$readPath2(store, "user", "name")} ${_$readPath3(store, "items", 0, "name")} ${_$readPath3(store, "items", i, "name")} ${_$readPath2(store, "items", "length")}`;
 	}));
 	return $(function() {
 		var _el$ = _tmpl$();
@@ -30,10 +23,10 @@ export function Counter(props: {
 		var _el$4 = _el$3.nextSibling;
 		var _el$5 = _el$4.nextSibling;
 		_$insert(_el$, () => {
-			return _$perform(_$readProp(props, ["count"]));
+			return _$readPath1(props, "count");
 		}, _el$2);
 		_$insert(_el$, () => {
-			return _$perform(_$readProp(props, ["user", "name"]));
+			return _$readPath2(props, "user", "name");
 		}, _el$3);
 		_$insert(_el$, () => {
 			return _$perform(total);

@@ -6,14 +6,14 @@ var _tmpl$ = [
 	"\">Count: ",
 	"</div>"
 ];
-import { $, createSignal, perform as _$perform, readPath as _$readPath, readProp as _$readProp } from "solid-js";
+import { $, createSignal, perform as _$perform, readPath1 as _$readPath1 } from "solid-js";
 export function View(props) {
 	const [count] = createSignal(1);
 	// JSX yields are compiler-only: after lowering, `{_$perform(count)}` is a
 	// fine-grained read owned by the JSX, not by the enclosing block.
 	return $(function() {
 		var _v$ = () => {
-			return _$ssrClassName(_$perform(_$readProp(props, ["theme"])));
+			return _$ssrClassName(_$readPath1(props, "theme"));
 		}, _v$2 = () => {
 			return _$escape(_$perform(count));
 		};

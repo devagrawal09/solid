@@ -41,11 +41,11 @@ describe("block lowering contract", () => {
       const { code } = transform(source, { filename: "src/view.jsx", generate });
       expect(code).not.toMatch(/yield\*/);
       expect(code).not.toContain("$(function*");
-      // `props.theme` is a path read of the component's props.
-      expect(code).toContain('_$perform(_$readProp(props, ["theme"]))');
+      // `props.theme` is a path read of the component's props: one handle read.
+      expect(code).toContain('_$readPath1(props, "theme")');
       expect(code).toContain("_$perform(count)");
       expect(code).toContain(
-        'import { $, createSignal, perform as _$perform, readPath as _$readPath, readProp as _$readProp } from "solid-js";'
+        'import { $, createSignal, perform as _$perform, readPath1 as _$readPath1 } from "solid-js";'
       );
     }
   });
@@ -170,15 +170,16 @@ describe("host fusion contract", () => {
     expect(code).not.toContain("_$perform(label)");
   });
 
-  it("erases path reads to member expressions", () => {
+  it("keeps path reads as handle reads around an erased block", () => {
     const { code } = transform(readFixture("fusion-paths"), {
       filename: "src/test.js",
       hostFusion: true
     });
-    expect(code).toContain("return store.user.name;");
-    expect(code).toContain("return props.count;");
-    expect(code).not.toContain("_$readPath(");
-    expect(code).not.toContain("_$readProp(");
+    // The reader lowers the strict guard and reads through an accessor or
+    // block at the path itself, so it is exact outside a block; a bare member
+    // chain would hand back the accessor instead of its value.
+    expect(code).toContain('return _$readPath2(store, "user", "name");');
+    expect(code).toContain('return _$readPath1(props, "count");');
     expect(code).not.toContain("_$perform(");
   });
 

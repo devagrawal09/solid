@@ -1,5 +1,6 @@
 import { STATUS_ERROR } from "./core/constants.js";
 import { unwrapStatusError } from "./core/error.js";
+import { blockGuard } from "./core/core.js";
 import {
   cleanup,
   effect,
@@ -430,6 +431,15 @@ interface TokenTarget {
 }
 /** Tokens created during the current synchronous block run (unread = error). */
 let liveTokens: TokenTarget[] | null = null;
+/**
+ * Every token proxy → its target. Answers "is this a token" without touching
+ * the value: probing a store proxy for the brand was a full `get` trap (plus
+ * a guard/untrack bracket) on every path read and `readStore` root, and a
+ * foreign proxy must never be probed at all. `tokensCreated` keeps the
+ * lookup off every read of an app whose compiled blocks never alias a path.
+ */
+const tokenTargets = new WeakMap<object, TokenTarget>();
+let tokensCreated = false;
 
 /**
  * Called by a store proxy's `get` trap while the strict guard is raised: the
@@ -443,7 +453,10 @@ export function pathToken(root: object, key: PathKey, parent: TokenTarget | null
     used: false
   };
   if (liveTokens !== null) liveTokens.push(target);
-  return new Proxy(target, tokenTraps);
+  const token = new Proxy(target, tokenTraps);
+  tokenTargets.set(token, target);
+  tokensCreated = true;
+  return token;
 }
 
 function consume(target: TokenTarget): void {
@@ -453,11 +466,8 @@ function consume(target: TokenTarget): void {
 }
 
 function tokenOf(value: unknown): TokenTarget | undefined {
-  if (value === null || (typeof value !== "object" && typeof value !== "function"))
-    return undefined;
-  // A store proxy answers an unknown symbol through its tracked path: probe
-  // untracked and with the guard lowered (never a dependency).
-  return probe(() => (value as any)[TOKEN]);
+  if (!tokensCreated || value === null || typeof value !== "object") return undefined;
+  return tokenTargets.get(value);
 }
 
 function describePath(target: TokenTarget): string {
@@ -520,9 +530,64 @@ function checkTokens(tokens: TokenTarget[]): void {
   }
 }
 
+// --- proxy-free path walks ------------------------------------------------------
+//
+// A path read walks `root[k0][k1]…` with the strict guard lowered. The store
+// module records every child target it serves and exposes the latest through
+// `storeServed`; a hop whose value is that child's proxy (a proxy has one
+// target, so the identity is exact) runs the store's `get` trap on the
+// target as a plain call (`storeGet`) instead of through the Proxy. So a
+// compiled `yield* store.a.b.c` pays one Proxy [[Get]] — the root's first
+// key — and allocates nothing.
+//
+// Anything else — the root, a props object, a raw or raw-marked object, a
+// foreign proxy (merge/omit, the SSR pending store), a primitive — takes the
+// ordinary `value[key]`, exactly the access a proxy walk makes; when that is
+// itself a store trap, the child it serves is resolved for the next hop.
+// Numeric keys are coerced as a Proxy coerces them (ToPropertyKey of a number
+// is its string); any other key type goes through the proxy. Only the readers
+// reference `hop`; a store-only app keeps just the setter below.
+
+/** Structural view of the store target a hop needs (store/next/target.ts). */
+interface ServedTarget {
+  px: any;
+}
+type StoreGet = (target: any, key: PropertyKey, receiver: any) => any;
+let storeGet: StoreGet | null = null;
+let storeServed: () => ServedTarget | null = () => null;
+
+/**
+ * @internal The store module installs its `get` trap, callable directly,
+ * and the getter of the child target it most recently served.
+ */
+export function setStoreGet(get: StoreGet, served: () => ServedTarget | null): void {
+  storeGet = get;
+  storeServed = served;
+}
+
+function hop(value: any, key: any): any {
+  const t = storeServed();
+  if (t !== null && value === t.px) {
+    if (typeof key === "string") return storeGet!(t, key, value);
+    if (typeof key === "number") return storeGet!(t, "" + key, value);
+  }
+  return value[key];
+}
+
+/** The proxy walk: what the runtime driver's path tokens and `readPath`
+ * operations perform (uncompiled blocks). Deliberately not the handle walk:
+ * tokens are reachable from every store bundle (the store trap creates
+ * them), and keeping `hop` off that path lets a store-only app drop it. */
 function walk(root: unknown, path: readonly PathKey[]): unknown {
   let value: any = root;
   for (const key of path) value = value[key];
+  return value;
+}
+
+/** The handle walk (`readPathN`). */
+function walkHandles(root: unknown, path: readonly PathKey[]): unknown {
+  let value: any = root;
+  for (let i = 0, n = path.length; i < n; i++) value = hop(value, path[i]);
   return value;
 }
 
@@ -592,6 +657,107 @@ export function readProp<R, const P extends readonly PathKey[]>(
   _witness?: unknown
 ): PropRead<R, P> {
   return pathRead(root, path, "prop", false) as PropRead<R, P>;
+}
+
+// --- lowered path readers ----------------------------------------------------------
+//
+// What the compiler emits for `yield* root.a.b` (store and prop paths alike —
+// the runtime read is the same; only the typecheck projection's phantom
+// `StoreRead` / `PropRead` differ): one call, no operation object, no path
+// array, no closure, no token probe. Each is exactly `perform(readPath(root,
+// [keys]))`: the walk runs with the strict guard lowered, reads through an
+// accessor or block found at the path (`readThrough`), and a root that is a
+// path token (`const u = store.user` inside the body) takes the operation
+// path so the token is consumed and its prefix prepended. A `read` is
+// admitted by every host, so no host check applies. Fixed arities cover the
+// common depths without an argument array; `readPathN` takes the keys as an
+// array (the compiler hoists all-literal key arrays to module constants).
+
+/** `yield* root[k0]`, lowered. */
+export function readPath1<R, const K0 extends PathKey>(root: R, k0: K0): PathResult<R, [K0]>;
+export function readPath1(root: any, k0: PathKey): any {
+  if (tokensCreated && isToken(root)) return perform(readPath(root, [k0]));
+  if (!blockGuard) return readThrough(hop(root, k0));
+  const prev = setBlockGuard(false);
+  try {
+    return readThrough(hop(root, k0));
+  } finally {
+    setBlockGuard(prev);
+  }
+}
+
+/** `yield* root[k0][k1]`, lowered. */
+export function readPath2<R, const K0 extends PathKey, const K1 extends PathKey>(
+  root: R,
+  k0: K0,
+  k1: K1
+): PathResult<R, [K0, K1]>;
+export function readPath2(root: any, k0: PathKey, k1: PathKey): any {
+  if (tokensCreated && isToken(root)) return perform(readPath(root, [k0, k1]));
+  if (!blockGuard) return readThrough(hop(hop(root, k0), k1));
+  const prev = setBlockGuard(false);
+  try {
+    return readThrough(hop(hop(root, k0), k1));
+  } finally {
+    setBlockGuard(prev);
+  }
+}
+
+/** `yield* root[k0][k1][k2]`, lowered. */
+export function readPath3<
+  R,
+  const K0 extends PathKey,
+  const K1 extends PathKey,
+  const K2 extends PathKey
+>(root: R, k0: K0, k1: K1, k2: K2): PathResult<R, [K0, K1, K2]>;
+export function readPath3(root: any, k0: PathKey, k1: PathKey, k2: PathKey): any {
+  if (tokensCreated && isToken(root)) return perform(readPath(root, [k0, k1, k2]));
+  if (!blockGuard) return readThrough(hop(hop(hop(root, k0), k1), k2));
+  const prev = setBlockGuard(false);
+  try {
+    return readThrough(hop(hop(hop(root, k0), k1), k2));
+  } finally {
+    setBlockGuard(prev);
+  }
+}
+
+/** `yield* root[k0][k1][k2][k3]`, lowered. */
+export function readPath4<
+  R,
+  const K0 extends PathKey,
+  const K1 extends PathKey,
+  const K2 extends PathKey,
+  const K3 extends PathKey
+>(root: R, k0: K0, k1: K1, k2: K2, k3: K3): PathResult<R, [K0, K1, K2, K3]>;
+export function readPath4(root: any, k0: PathKey, k1: PathKey, k2: PathKey, k3: PathKey): any {
+  if (tokensCreated && isToken(root)) return perform(readPath(root, [k0, k1, k2, k3]));
+  if (!blockGuard) return readThrough(hop(hop(hop(hop(root, k0), k1), k2), k3));
+  const prev = setBlockGuard(false);
+  try {
+    return readThrough(hop(hop(hop(hop(root, k0), k1), k2), k3));
+  } finally {
+    setBlockGuard(prev);
+  }
+}
+
+/** `yield* root[k0]…[kn]`, lowered: any depth, keys as an array (never retained). */
+export function readPathN<R, const P extends readonly PathKey[]>(
+  root: R,
+  keys: P
+): PathResult<R, P>;
+export function readPathN(root: any, keys: readonly PathKey[]): any {
+  if (tokensCreated && isToken(root)) return perform(readPath(root, keys));
+  if (!blockGuard) return readThrough(walkHandles(root, keys));
+  const prev = setBlockGuard(false);
+  try {
+    return readThrough(walkHandles(root, keys));
+  } finally {
+    setBlockGuard(prev);
+  }
+}
+
+function isToken(value: unknown): boolean {
+  return value !== null && typeof value === "object" && tokenTargets.has(value);
 }
 
 /**

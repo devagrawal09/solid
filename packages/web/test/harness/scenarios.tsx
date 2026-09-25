@@ -22,6 +22,7 @@
  * - Keep async delays short (5-15ms) — the specs own the settle waits.
  */
 import {
+  $,
   createSignal,
   createMemo,
   createProjection,
@@ -1572,7 +1573,56 @@ function PropConditionForwarded() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Strict store paths (optimization Track B, slice 2): `yield* store.a.b` in a
+// memo block lowers to a handle reader (`readPath2(store, "a", "b")`). Server
+// stores are plain objects, client stores proxies walked through handles —
+// both must render the same text, adopt the markup, and track exactly the
+// read paths after hydration. (Paths are read in memo blocks: JSX returned
+// from a `$` block has a separate, known hydration-id parity defect.)
+let setPathStore!: (fn: (s: any) => void) => void;
+function StrictStorePaths() {
+  const [store, set] = createStore({
+    user: { name: "Ada", address: { city: "London" } },
+    items: [{ name: "one" }, { name: "two" }],
+    other: 0
+  });
+  setPathStore = set;
+  const label = createMemo(
+    // @ts-ignore — authored `yield*` operands are values (checked by solid-tsc)
+    $(function* () {
+      // @ts-ignore
+      return `${yield* store.user.name} in ${yield* store.user.address.city}`;
+    })
+  );
+  const count = createMemo(
+    // @ts-ignore
+    $(function* () {
+      // @ts-ignore
+      return `${yield* store.items.length}:${yield* store.items[1].name}`;
+    })
+  );
+  return (
+    <div>
+      <span>{label()}</span>
+      <b>{count()}</b>
+    </div>
+  );
+}
+
 export const scenarios: Scenario[] = [
+  {
+    name: "strict-store-paths",
+    App: StrictStorePaths,
+    expectedText: "Ada in London2:two",
+    update: () =>
+      setPathStore(s => {
+        s.other = 1;
+        s.user.address.city = "Paris";
+      }),
+    expectedTextAfterUpdate: "Ada in Paris2:two",
+    stableSelector: "div, span, b"
+  },
   {
     name: "text-hole",
     App: TextHole,
