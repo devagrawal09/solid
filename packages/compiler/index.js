@@ -30,6 +30,17 @@ function transformAsync(code, options) {
   return Promise.resolve().then(() => transform(code, options));
 }
 
+function projectBlocksForTypecheck(code, options) {
+  if (typeof code !== "string") {
+    throw new TypeError(
+      "@solidjs/compiler projectBlocksForTypecheck() expects source code as a string"
+    );
+  }
+  const nativeOptions = validateTypecheckProjectionOptions(options);
+  const result = native.projectBlocksForTypecheck(code, nativeOptions);
+  return { code: result.code, edits: result.edits, rewrites: result.rewrites };
+}
+
 function projectTsrxForTypecheck(code, options) {
   if (typeof code !== "string") {
     throw new TypeError(
@@ -280,7 +291,8 @@ const nativeOptionKeys = new Set([
   "serverComponents",
   "builtIns",
   "renderers",
-  "generators"
+  "generators",
+  "hostFusion"
 ]);
 
 function validateOptions(code, options) {
@@ -458,6 +470,7 @@ module.exports = {
   transform,
   transformAsync,
   projectTsrxForTypecheck,
+  projectBlocksForTypecheck,
   transformDirectives,
   transformDirectivesAsync,
   transformLazy,

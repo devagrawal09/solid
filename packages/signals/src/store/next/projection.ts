@@ -26,12 +26,15 @@ import {
 } from "../../core/index.js";
 
 import { projectionWriteActive, setProjectionWriteActive } from "../../core/scheduler.js";
+import type { ReactiveHostBlock } from "../../generator.js";
 import {
   $TARGET,
   markRawIngest,
   setWriteOverride,
   STORE_VALUE,
   type NoFn,
+  type BlockStore,
+  type ProjectionBlock,
   type ProjectionOptions,
   type Store
 } from "../store.js";
@@ -209,6 +212,25 @@ function createProjectionNextInternal<T extends object = {}>(
   };
 }
 
+// Block form first: a block is callable, so it would also satisfy the
+// function form (and lose its metadata) if that were tried first. The block
+// form does not disturb plain callbacks: an ordinary function lacks the
+// block's runtime members, so it is refused before its parameters are
+// contextually typed. At runtime the two forms are one path — the block is
+// invoked as `fn(draft)` and runs under its default (reactive) host.
+export function createProjectionNext<T extends object, B extends ProjectionBlock<T>>(
+  fn: B & ProjectionBlock<T>,
+  seed: Partial<T> | Store<NoFn<T>>,
+  options?: ProjectionOptions
+): BlockStore<B, T>;
+// The function form is a reactive host too (`& ReactiveHostBlock`, as in
+// `ComputeFunction`): a block is callable, so without it a writing block
+// would slip through here after the block form refused it.
+export function createProjectionNext<T extends object = {}>(
+  fn: ((draft: T) => void | T | Promise<void | T> | AsyncIterable<void | T>) & ReactiveHostBlock,
+  seed: Partial<T> | Store<NoFn<T>>,
+  options?: ProjectionOptions
+): Refreshable<Store<T>>;
 export function createProjectionNext<T extends object = {}>(
   fn: (draft: T) => void | T | Promise<void | T> | AsyncIterable<void | T>,
   seed: Partial<T> | Store<NoFn<T>>,
@@ -220,6 +242,16 @@ export function createProjectionNext<T extends object = {}>(
 /** Derived writable store (legacy parity): a projection whose public setter
  * masks the recompute for the tick (core R31 — the manual write wins over a
  * same-flush dependency change). */
+export function createStoreDerivedNext<T extends object, B extends ProjectionBlock<T>>(
+  fn: B & ProjectionBlock<T>,
+  seed: Partial<T> | Store<NoFn<T>>,
+  options?: ProjectionOptions
+): [BlockStore<B, T>, (f: (draft: T) => T | void) => void];
+export function createStoreDerivedNext<T extends object = {}>(
+  fn: ((draft: T) => void | T | Promise<void | T> | AsyncIterable<void | T>) & ReactiveHostBlock,
+  seed: Partial<T> | Store<NoFn<T>>,
+  options?: ProjectionOptions
+): [Refreshable<Store<T>>, (f: (draft: T) => T | void) => void];
 export function createStoreDerivedNext<T extends object = {}>(
   fn: (draft: T) => void | T | Promise<void | T> | AsyncIterable<void | T>,
   seed: Partial<T> | Store<NoFn<T>>,

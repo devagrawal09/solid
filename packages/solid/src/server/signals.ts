@@ -38,6 +38,8 @@ export {
   raise,
   attempt,
   readStore,
+  readPath,
+  readProp,
   write,
   call,
   perform,
@@ -53,9 +55,13 @@ import type {
   AccessorIterable,
   AnyBlock,
   BlockAccessor,
+  BlockSignal,
+  BlockStore,
+  BlockStoreReturn,
   BlockValue,
   ReactiveHostBlock,
   ProjectionOptions,
+  ProjectionBlock,
   Refreshable,
   StoreOptions
 } from "@solidjs/signals";
@@ -77,6 +83,10 @@ export type {
   Block,
   AnyBlock,
   BlockAccessor,
+  BlockMetadata,
+  BlockSignal,
+  BlockStore,
+  BlockStoreReturn,
   ColoredAccessor,
   BlockMeta,
   BlockValue,
@@ -93,6 +103,7 @@ export type {
   FailuresOf,
   WritesOf,
   ReactiveHostBlock,
+  ProjectionBlock,
   JsxBlock,
   JsxBlockShape,
   EventBlock,
@@ -101,6 +112,11 @@ export type {
   Op,
   ReadOp,
   StoreReadOp,
+  StoreRead,
+  PropRead,
+  PathKey,
+  PathValue,
+  PathResult,
   AsyncOp,
   RaiseOp,
   AttemptOp,
@@ -764,6 +780,10 @@ function warnServerWrite(category: "signal" | "store" | "optimistic"): void {
 
 export function createSignal<T>(): Signal<T | undefined>;
 export function createSignal<T>(value: Exclude<T, Function>, options?: SignalOptions<T>): Signal<T>;
+export function createSignal<B extends AnyBlock & ReactiveHostBlock>(
+  fn: B,
+  options?: ServerSignalOptions<BlockValue<B>>
+): BlockSignal<B>;
 // Commit #0 (loadingValue) removes the uninitialized window: never undefined
 // (the server flushes the loading value even for ssrSource "client"), and
 // `prev` is always T — mirrors the client wrapper and the signals core.
@@ -1854,8 +1874,13 @@ export function createStore<T extends object = {}>(
   initialValue: NoFn<T> | Store<NoFn<T>>,
   options?: StoreOptions
 ): [get: Store<T>, set: StoreSetter<T>];
+export function createStore<T extends object, B extends ProjectionBlock<T>>(
+  fn: B & ProjectionBlock<T>,
+  seed: Partial<T> | Store<NoFn<T>>,
+  options?: ServerProjectionOptions
+): BlockStoreReturn<B, T>;
 export function createStore<T extends object = {}>(
-  fn: (draft: T) => void | T | Promise<void | T> | AsyncIterable<void | T>,
+  fn: ((draft: T) => void | T | Promise<void | T> | AsyncIterable<void | T>) & ReactiveHostBlock,
   seed: Partial<T> | Store<NoFn<T>>,
   options?: ServerProjectionOptions
 ): [get: Refreshable<Store<T>>, set: StoreSetter<T>];
@@ -1899,8 +1924,13 @@ export function createOptimisticStore<T extends object = {}>(
   initialValue: NoFn<T> | Store<NoFn<T>>,
   options?: StoreOptions
 ): [get: Store<T>, set: StoreSetter<T>];
+export function createOptimisticStore<T extends object, B extends ProjectionBlock<T>>(
+  fn: B & ProjectionBlock<T>,
+  seed: Partial<T> | Store<NoFn<T>>,
+  options?: ServerProjectionOptions
+): BlockStoreReturn<B, T>;
 export function createOptimisticStore<T extends object = {}>(
-  fn: (draft: T) => void | T | Promise<void | T> | AsyncIterable<void | T>,
+  fn: ((draft: T) => void | T | Promise<void | T> | AsyncIterable<void | T>) & ReactiveHostBlock,
   seed: Partial<T> | Store<NoFn<T>>,
   options?: ServerProjectionOptions
 ): [get: Refreshable<Store<T>>, set: StoreSetter<T>];
@@ -2040,8 +2070,13 @@ function replaceState<T extends object>(target: T, next: T): void {
   Object.assign(target, next);
 }
 
+export function createProjection<T extends object, B extends ProjectionBlock<T>>(
+  fn: B & ProjectionBlock<T>,
+  seed: Partial<T> | Store<NoFn<T>>,
+  options?: ServerProjectionOptions
+): BlockStore<B, T>;
 export function createProjection<T extends object = {}>(
-  fn: (draft: T) => void | T | Promise<void | T> | AsyncIterable<void | T>,
+  fn: ((draft: T) => void | T | Promise<void | T> | AsyncIterable<void | T>) & ReactiveHostBlock,
   seed: Partial<T> | Store<NoFn<T>>,
   options?: ServerProjectionOptions
 ): Refreshable<Store<T>>;

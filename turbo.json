@@ -95,6 +95,14 @@
     "@solidjs/compiler#test": {
       "cache": false
     },
+    "diagnostics-example#test": {
+      "dependsOn": ["solid-js#build", "@solidjs/web#build", "@solidjs/diagnostics#build"],
+      "outputs": []
+    },
+    "diagnostics-example#typecheck": {
+      "dependsOn": ["^types", "@solidjs/diagnostics#build"],
+      "outputs": []
+    },
     "test-integration#test": {
       "dependsOn": [
         "@solidjs/signals#build",
@@ -104,6 +112,14 @@
         "@solidjs/html#build",
         "@solidjs/universal#build"
       ]
+    },
+    "attribution-lab-example#test": {
+      "dependsOn": ["solid-js#build", "@solidjs/web#build", "@solidjs/diagnostics#build"],
+      "outputs": []
+    },
+    "attribution-lab-example#typecheck": {
+      "dependsOn": ["^types", "@solidjs/diagnostics#build"],
+      "outputs": []
     },
     "solid-js#test-types": {
       "outputs": [],

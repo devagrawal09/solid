@@ -1,0 +1,26 @@
+{
+  "name": "todos-blocks-example",
+  "description": "The TodoMVC example (examples/todos) rewritten with `$` typed generator blocks — yield* signal reads, direct property reads (yield* todo.title), readStore selectors, event blocks with attempt/write, and JSX blocks — compiled through the native compiler's block lowering and typechecked with solid-tsc",
+  "version": "0.0.0",
+  "private": true,
+  "author": "Ryan Carniato",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "start": "vite preview",
+    "test": "vitest run",
+    "typecheck": "node ../../packages/typecheck/bin/solid-tsc.js --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@solidjs/vite-plugin": "3.0.0-next.35",
+    "@solidjs/web": "workspace:*",
+    "@types/node": "^25.6.0",
+    "jsdom": "^25.0.1",
+    "solid-js": "workspace:*",
+    "typescript": "^6.0.2",
+    "vite": "^7.0.0",
+    "vitest": "^4.1.6"
+  }
+}

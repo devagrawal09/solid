@@ -109,6 +109,12 @@ pub struct CompileOptions {
     /// `signal()` reads before JSX lowering. Default `true`; `false` leaves
     /// them to the runtime driver. See `generators.rs` for the safe subset.
     pub generators: bool,
+    /// Experimental: when a lowered `$(fn)` block is the direct argument of a
+    /// statically known host (`createMemo`, `createEffect`, …), erase the
+    /// block wrapper and `_$perform` calls, producing output identical to
+    /// hand-written Solid accessors. Requires `generators: true`. Default
+    /// `false`.
+    pub host_fusion: bool,
 }
 
 impl Default for CompileOptions {
@@ -140,6 +146,7 @@ impl Default for CompileOptions {
             built_ins: default_built_ins(),
             renderers: Vec::new(),
             generators: true,
+            host_fusion: false,
         }
     }
 }
@@ -265,6 +272,13 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
             .map_err(CompileError::transform)?;
     }
 
+    // Experimental: fuse `$()` blocks with their statically known host
+    // (`createMemo($(fn))` → `createMemo(fn)` with direct accessor calls).
+    if options.host_fusion && options.generators {
+        crate::generators::fuse_host_blocks(&allocator, &mut program, source)
+            .map_err(CompileError::transform)?;
+    }
+
     match options.generate {
         Generate::Dom => {
             let mut transform = AstDomTransform::new(
@@ -384,7 +398,7 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
     })
 }
 
-fn parse_program<'a>(
+pub(crate) fn parse_program<'a>(
     allocator: &'a Allocator,
     source: &'a str,
     source_type: SourceType,
@@ -418,7 +432,7 @@ pub(crate) fn has_jsx_import_source(
     })
 }
 
-fn source_type_for_filename(filename: Option<&str>) -> Result<SourceType, CompileError> {
+pub(crate) fn source_type_for_filename(filename: Option<&str>) -> Result<SourceType, CompileError> {
     filename
         .map(SourceType::from_path)
         .transpose()

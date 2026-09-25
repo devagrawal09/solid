@@ -14,6 +14,7 @@
 //! revision when embedding it. The Node `transform()` interface remains the
 //! supported public contract.
 
+mod block_projection;
 mod compiler;
 #[cfg(feature = "node")]
 mod config;
@@ -34,6 +35,9 @@ mod ssr;
 mod tsrx;
 mod universal;
 
+pub use block_projection::{
+    BlockProjectionEdit, BlockTypecheckProjection, project_blocks_for_typecheck,
+};
 pub use compiler::{CompileOptions, CompileOutput, Generate, Renderer, Syntax, Wrapper, compile};
 pub use error::{CompileError, CompileErrorKind};
 #[cfg(feature = "tsrx")]

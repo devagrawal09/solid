@@ -61,6 +61,68 @@ pub(crate) fn expression_to_argument<'a>(expression: Expression<'a>) -> Argument
     }
 }
 
+pub(crate) fn argument_to_expression<'a>(argument: Argument<'a>) -> Option<Expression<'a>> {
+    match argument {
+        Argument::BooleanLiteral(value) => Some(Expression::BooleanLiteral(value)),
+        Argument::NullLiteral(value) => Some(Expression::NullLiteral(value)),
+        Argument::NumericLiteral(value) => Some(Expression::NumericLiteral(value)),
+        Argument::BigIntLiteral(value) => Some(Expression::BigIntLiteral(value)),
+        Argument::RegExpLiteral(value) => Some(Expression::RegExpLiteral(value)),
+        Argument::StringLiteral(value) => Some(Expression::StringLiteral(value)),
+        Argument::ArrayExpression(value) => Some(Expression::ArrayExpression(value)),
+        Argument::TemplateLiteral(value) => Some(Expression::TemplateLiteral(value)),
+        Argument::Identifier(value) => Some(Expression::Identifier(value)),
+        Argument::ImportMeta(value) => Some(Expression::ImportMeta(value)),
+        Argument::NewTarget(value) => Some(Expression::NewTarget(value)),
+        Argument::Super(value) => Some(Expression::Super(value)),
+        Argument::ThisExpression(value) => Some(Expression::ThisExpression(value)),
+        Argument::CallExpression(value) => Some(Expression::CallExpression(value)),
+        Argument::ChainExpression(value) => Some(Expression::ChainExpression(value)),
+        Argument::ObjectExpression(value) => Some(Expression::ObjectExpression(value)),
+        Argument::ArrowFunctionExpression(value) => Some(Expression::ArrowFunctionExpression(value)),
+        Argument::AssignmentExpression(value) => Some(Expression::AssignmentExpression(value)),
+        Argument::AwaitExpression(value) => Some(Expression::AwaitExpression(value)),
+        Argument::BinaryExpression(value) => Some(Expression::BinaryExpression(value)),
+        Argument::StaticMemberExpression(value) => Some(Expression::StaticMemberExpression(value)),
+        Argument::ComputedMemberExpression(value) => {
+            Some(Expression::ComputedMemberExpression(value))
+        }
+        Argument::PrivateFieldExpression(value) => Some(Expression::PrivateFieldExpression(value)),
+        Argument::ClassExpression(value) => Some(Expression::ClassExpression(value)),
+        Argument::FunctionExpression(value) => Some(Expression::FunctionExpression(value)),
+        Argument::ImportExpression(value) => Some(Expression::ImportExpression(value)),
+        Argument::LogicalExpression(value) => Some(Expression::LogicalExpression(value)),
+        Argument::NewExpression(value) => Some(Expression::NewExpression(value)),
+        Argument::ConditionalExpression(value) => Some(Expression::ConditionalExpression(value)),
+        Argument::PrivateInExpression(value) => Some(Expression::PrivateInExpression(value)),
+        Argument::UnaryExpression(value) => Some(Expression::UnaryExpression(value)),
+        Argument::UpdateExpression(value) => Some(Expression::UpdateExpression(value)),
+        Argument::YieldExpression(value) => Some(Expression::YieldExpression(value)),
+        Argument::ParenthesizedExpression(value) => {
+            Some(Expression::ParenthesizedExpression(value))
+        }
+        Argument::SequenceExpression(value) => Some(Expression::SequenceExpression(value)),
+        Argument::TaggedTemplateExpression(value) => {
+            Some(Expression::TaggedTemplateExpression(value))
+        }
+        Argument::JSXElement(value) => Some(Expression::JSXElement(value)),
+        Argument::JSXFragment(value) => Some(Expression::JSXFragment(value)),
+        Argument::TSAsExpression(value) => Some(Expression::TSAsExpression(value)),
+        Argument::TSSatisfiesExpression(value) => {
+            Some(Expression::TSSatisfiesExpression(value))
+        }
+        Argument::TSTypeAssertion(value) => Some(Expression::TSTypeAssertion(value)),
+        Argument::TSNonNullExpression(value) => Some(Expression::TSNonNullExpression(value)),
+        Argument::TSInstantiationExpression(value) => {
+            Some(Expression::TSInstantiationExpression(value))
+        }
+        Argument::V8IntrinsicExpression(value) => {
+            Some(Expression::V8IntrinsicExpression(value))
+        }
+        Argument::SpreadElement(_) => None,
+    }
+}
+
 pub(crate) fn import_named<'a>(
     allocator: &'a Allocator,
     module_name: &str,

@@ -2,6 +2,9 @@ export type {
   Store,
   StoreReturn,
   ProjectionStoreReturn,
+  ProjectionBlock,
+  BlockStore,
+  BlockStoreReturn,
   StoreSetter,
   StoreNode,
   StoreOptions,
@@ -14,8 +17,17 @@ export type { Merge, Omit } from "./utils.js";
 export { isWrappable, $TRACK, $PROXY, $TARGET } from "./store.js";
 export { mergeSources } from "./utils.js";
 
-import type { NoFn, ProjectionOptions, Store, StoreOptions, StoreSetter } from "./store.js";
+import type {
+  BlockStoreReturn,
+  NoFn,
+  ProjectionBlock,
+  ProjectionOptions,
+  Store,
+  StoreOptions,
+  StoreSetter
+} from "./store.js";
 import type { Refreshable } from "../core/index.js";
+import type { ReactiveHostBlock } from "../generator.js";
 import {
   createStoreNext,
   deepNext,
@@ -30,13 +42,19 @@ export { storeIsShallow, storeHasFamily, storeHasOptimisticFamily } from "./next
 export { createOptimisticStoreNext as createOptimisticStore } from "./next/optimistic.js";
 
 /** Public createStore: plain form `(initialValue, options?)` and derived writable
- * form `(fn, seed, options?)`. */
+ * form `(fn, seed, options?)` — `fn` an ordinary function or a `$` block (whose
+ * effect metadata the returned store retains; see `ProjectionBlock`). */
 export function createStore<T extends object = {}>(
   initialValue: NoFn<T> | Store<NoFn<T>>,
   options?: StoreOptions
 ): [get: Store<T>, set: StoreSetter<T>];
+export function createStore<T extends object, B extends ProjectionBlock<T>>(
+  fn: B & ProjectionBlock<T>,
+  seed: Partial<T> | Store<NoFn<T>>,
+  options?: ProjectionOptions
+): BlockStoreReturn<B, T>;
 export function createStore<T extends object = {}>(
-  fn: (draft: T) => void | T | Promise<void | T> | AsyncIterable<void | T>,
+  fn: ((draft: T) => void | T | Promise<void | T> | AsyncIterable<void | T>) & ReactiveHostBlock,
   seed: Partial<T> | Store<NoFn<T>>,
   options?: ProjectionOptions
 ): [get: Refreshable<Store<T>>, set: StoreSetter<T>];

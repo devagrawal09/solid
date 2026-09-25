@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "lib": ["ESNext", "DOM"],
+    "jsx": "preserve",
+    "jsxImportSource": "@solidjs/web",
+    "paths": {
+      "solid-js": ["../../../solid/types/index.d.ts"],
+      "@solidjs/signals": ["../../../signals/dist/types/index.d.ts"],
+      "@solidjs/web": ["../../../web/types/index.d.ts"],
+      "@solidjs/web/jsx-runtime": ["../../../web/jsx/jsx.d.ts"],
+      "@solidjs/web/jsx-dev-runtime": ["../../../web/jsx/jsx.d.ts"]
+    }
+  }
+}

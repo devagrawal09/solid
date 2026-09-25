@@ -67,6 +67,10 @@ pub struct TransformOptions {
     /// `solid-js` / `@solidjs/signals`) to plain functions with `signal()`
     /// reads. Default `true`.
     pub generators: Option<bool>,
+    /// Experimental: erase `$()` block wrappers and `perform` calls when
+    /// consumed by a statically known host (`createMemo`, `createEffect`, …).
+    /// Default `false`. Requires `generators: true`.
+    pub host_fusion: Option<bool>,
 }
 
 #[napi(object)]

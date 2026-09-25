@@ -41,9 +41,12 @@ describe("block lowering contract", () => {
       const { code } = transform(source, { filename: "src/view.jsx", generate });
       expect(code).not.toMatch(/yield\*/);
       expect(code).not.toContain("$(function*");
-      expect(code).toContain("_$perform(props.theme)");
+      // `props.theme` is a path read of the component's props.
+      expect(code).toContain('_$perform(_$readProp(props, ["theme"]))');
       expect(code).toContain("_$perform(count)");
-      expect(code).toContain('import { $, createSignal, perform as _$perform } from "solid-js";');
+      expect(code).toContain(
+        'import { $, createSignal, perform as _$perform, readPath as _$readPath, readProp as _$readProp } from "solid-js";'
+      );
     }
   });
 
@@ -145,5 +148,67 @@ const a = $(function* () {
     expect(() => transform("const a = 1;", { filename: "a.js", generatorz: false })).toThrow(
       /unknown option `generatorz`/
     );
+  });
+});
+
+describe("host fusion contract", () => {
+  const memoEffectSource = readFixture("fusion-memo-effect");
+
+  it("erases $() wrapper and perform calls when consumed by createMemo/createEffect", () => {
+    const { code } = transform(memoEffectSource, { filename: "src/test.js", hostFusion: true });
+    // $ wrapper erased: createMemo/createEffect receive plain functions
+    expect(code).toContain("createMemo(function(prev) {");
+    expect(code).toContain("createEffect(function() {");
+    expect(code).not.toMatch(/createMemo\(\$\(function/);
+    expect(code).not.toMatch(/createEffect\(\$\(function/);
+    // perform erased: direct accessor calls
+    expect(code).toContain("const c = count();");
+    expect(code).toContain("double()");
+    expect(code).toContain("label()");
+    expect(code).not.toContain("_$perform(count)");
+    expect(code).not.toContain("_$perform(double)");
+    expect(code).not.toContain("_$perform(label)");
+  });
+
+  it("erases path reads to member expressions", () => {
+    const { code } = transform(readFixture("fusion-paths"), {
+      filename: "src/test.js",
+      hostFusion: true
+    });
+    expect(code).toContain("return store.user.name;");
+    expect(code).toContain("return props.count;");
+    expect(code).not.toContain("_$readPath(");
+    expect(code).not.toContain("_$readProp(");
+    expect(code).not.toContain("_$perform(");
+  });
+
+  it("does NOT fuse standalone blocks (no known host)", () => {
+    const { code } = transform(readFixture("fusion-bail-standalone"), {
+      filename: "src/test.js",
+      hostFusion: true
+    });
+    // $ wrapper and perform must remain
+    expect(code).toContain("$(function() {");
+    expect(code).toContain("_$perform(count)");
+  });
+
+  it("is off by default even when generators are on", () => {
+    const { code } = transform(memoEffectSource, { filename: "src/test.js" });
+    // Without hostFusion, $ wrapper and perform stay
+    expect(code).toContain("$(function(prev) {");
+    expect(code).toContain("_$perform(count)");
+  });
+
+  it("produces identical output to non-fused when consumed by the same host", () => {
+    // Verify the fused createMemo output is a plain function, not a block
+    const fused = transform(memoEffectSource, { filename: "src/test.js", hostFusion: true });
+    const unfused = transform(memoEffectSource, { filename: "src/test.js", hostFusion: false });
+    // Fused output should be strictly smaller (no $(), no _$perform())
+    expect(fused.code.length).toBeLessThan(unfused.code.length);
+    // Both should still have createMemo and createEffect
+    expect(fused.code).toContain("createMemo(");
+    expect(fused.code).toContain("createEffect(");
+    expect(unfused.code).toContain("createMemo(");
+    expect(unfused.code).toContain("createEffect(");
   });
 });

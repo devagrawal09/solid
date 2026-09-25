@@ -4,7 +4,7 @@ import { readShallow as _$readShallow } from "@solidjs/web";
 import { className as _$className } from "@solidjs/web";
 import { effect as _$effect } from "@solidjs/web";
 var _tmpl$ = /* @__PURE__ */ _$template(`<div>Count: `);
-import { $, createSignal, perform as _$perform } from "solid-js";
+import { $, createSignal, perform as _$perform, readPath as _$readPath, readProp as _$readProp } from "solid-js";
 export function View(props) {
 	const [count] = createSignal(1);
 	// JSX yields are compiler-only: after lowering, `{_$perform(count)}` is a
@@ -15,7 +15,7 @@ export function View(props) {
 		_$insert(_el$, () => {
 			return _$perform(count);
 		}, null);
-		_$effect(() => _$readShallow(_$perform(props.theme)), (_v$, _$p) => {
+		_$effect(() => _$readShallow(_$perform(_$readProp(props, ["theme"]))), (_v$, _$p) => {
 			_$className(_el$, _v$, _$p);
 		});
 		return _el$;

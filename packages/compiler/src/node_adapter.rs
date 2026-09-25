@@ -23,6 +23,56 @@ pub struct ProjectTsrxForTypecheckOptions {
     pub filename: Option<String>,
 }
 
+#[napi(object)]
+#[derive(Default)]
+pub struct ProjectBlocksForTypecheckOptions {
+    pub filename: Option<String>,
+}
+
+#[napi(object)]
+pub struct BlockProjectionEditResult {
+    /// Authored offset in UTF-16 code units.
+    pub source_start: u32,
+    pub source_end: u32,
+    /// Generated offset in UTF-16 code units.
+    pub generated_start: u32,
+    pub generated_end: u32,
+}
+
+#[napi(object)]
+pub struct BlockTypecheckProjectionResult {
+    pub code: String,
+    pub edits: Vec<BlockProjectionEditResult>,
+    pub rewrites: u32,
+}
+
+/// Typecheck projection for `$` blocks' direct property syntax
+/// (`yield* store.user.name` → `yield* readPath(store, ["user","name"])`).
+#[napi]
+pub fn project_blocks_for_typecheck(
+    code: String,
+    options: Option<ProjectBlocksForTypecheckOptions>,
+) -> Result<BlockTypecheckProjectionResult> {
+    let options = options.unwrap_or_default();
+    let output =
+        crate::block_projection::project_blocks_for_typecheck(&code, options.filename.as_deref())
+            .map_err(|error| Error::from_reason(error.to_string()))?;
+    Ok(BlockTypecheckProjectionResult {
+        code: output.code,
+        edits: output
+            .edits
+            .into_iter()
+            .map(|edit| BlockProjectionEditResult {
+                source_start: edit.source_start,
+                source_end: edit.source_end,
+                generated_start: edit.generated_start,
+                generated_end: edit.generated_end,
+            })
+            .collect(),
+        rewrites: output.rewrites,
+    })
+}
+
 #[cfg(feature = "tsrx")]
 #[napi(object)]
 pub struct TsrxTypecheckEmbeddedRegion {
@@ -274,6 +324,7 @@ fn core_options(options: TransformOptions) -> Result<CompileOptions> {
             })
             .collect(),
         generators: options.generators.unwrap_or(true),
+        host_fusion: options.host_fusion.unwrap_or(false),
     })
 }
 

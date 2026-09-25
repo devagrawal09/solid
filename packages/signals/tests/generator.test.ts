@@ -68,6 +68,29 @@ async function rejected(promise: Promise<unknown>): Promise<unknown> {
 }
 
 describe("strict block scope", () => {
+  it("supports blocks in writable computed signals", () => {
+    const [count, setCount] = createSignal(1);
+    const [double, setDouble] = createRoot(() =>
+      createSignal(
+        $(function* () {
+          return (yield* count) * 2;
+        })
+      )
+    );
+
+    expect(double()).toBe(2);
+    setCount(2);
+    flush();
+    expect(double()).toBe(4);
+
+    setDouble(9);
+    flush();
+    expect(double()).toBe(9);
+    setCount(3);
+    flush();
+    expect(double()).toBe(6);
+  });
+
   it("a direct signal read inside a block fails; yield* reads succeed", () => {
     const [count] = createSignal(1);
     // TypeScript cannot see that `count()` is a reactive read (it is an

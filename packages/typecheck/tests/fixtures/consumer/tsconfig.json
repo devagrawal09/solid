@@ -1,0 +1,15 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "paths": {
+      "solid-js": ["../../../../solid/types/index.d.ts"],
+      "@solidjs/signals": ["../../../../signals/dist/types/index.d.ts"],
+      "@solidjs/web": ["../../../../web/types/index.d.ts"],
+      "@solidjs/web/jsx-runtime": ["../../../../web/jsx/jsx.d.ts"],
+      "@solidjs/web/jsx-dev-runtime": ["../../../../web/jsx/jsx.d.ts"],
+      "the-lib": ["../lib/dist/index.d.ts"]
+    }
+  },
+  "include": ["src"]
+}

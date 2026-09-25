@@ -51,10 +51,13 @@ import {
 } from "../../core/scheduler.js";
 import { beginAsyncReporterWrites, endAsyncReporterWrites } from "../../core/invariants.js";
 import { installOptimisticEngine } from "../../core/optimistic.js";
+import type { ReactiveHostBlock } from "../../generator.js";
 import {
+  type BlockStoreReturn,
   $TARGET,
   markRawIngest,
   type NoFn,
+  type ProjectionBlock,
   type ProjectionOptions,
   type Store,
   type StoreOptions,
@@ -183,8 +186,13 @@ export function createOptimisticStoreNext<T extends object = {}>(
   initialValue: NoFn<T> | Store<NoFn<T>>,
   options?: StoreOptions
 ): [get: Store<T>, set: StoreSetter<T>];
+export function createOptimisticStoreNext<T extends object, B extends ProjectionBlock<T>>(
+  fn: B & ProjectionBlock<T>,
+  seed: Partial<T> | Store<NoFn<T>>,
+  options?: ProjectionOptions
+): BlockStoreReturn<B, T>;
 export function createOptimisticStoreNext<T extends object = {}>(
-  fn: (draft: T) => void | T | Promise<void | T> | AsyncIterable<void | T>,
+  fn: ((draft: T) => void | T | Promise<void | T> | AsyncIterable<void | T>) & ReactiveHostBlock,
   seed: Partial<T> | Store<NoFn<T>>,
   options?: ProjectionOptions
 ): [get: Refreshable<Store<T>>, set: StoreSetter<T>];

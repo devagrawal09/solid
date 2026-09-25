@@ -5,11 +5,16 @@ import {
   call,
   createEffect,
   createMemo,
+  createOptimisticStore,
+  createProjection,
   createSignal,
   createStore,
   errored,
   loading,
+  perform,
   raise,
+  readPath,
+  readProp,
   readStore,
   wait,
   write,
@@ -19,11 +24,19 @@ import {
   type BlockFailures,
   type BlockInput,
   type BlockReads,
+  type BlockStore,
   type BlockTasks,
   type BlockValue,
   type BlockWrites,
   type EventBlock,
-  type JsxBlock
+  type JsxBlock,
+  type PathResult,
+  type PathValue,
+  type PropRead,
+  type Refreshable,
+  type Store,
+  type StoreRead,
+  type StoreSetter
 } from "../src/index.js";
 
 type Expect<T extends true> = T;
@@ -86,7 +99,8 @@ type _fromStore = [
   Expect<Equal<BlockTasks<typeof fromStore>, never>>,
   Expect<Equal<BlockFailures<typeof fromStore>, never>>,
   Expect<Equal<BlockWrites<typeof fromStore>, never>>,
-  // Store types carry no metadata, so derived totals stay quiet (documented).
+  // A plain store carries no metadata, so derived totals stay quiet
+  // (documented); block-derived stores do — see "Block-derived stores".
   Expect<Equal<BlockAsync<typeof fromStore>, false>>,
   Expect<Equal<BlockErrors<typeof fromStore>, never>>
 ];
@@ -113,6 +127,215 @@ createMemo(storeWriter);
 const _storeWriterJsx: JsxBlock<void> = storeWriter;
 // @ts-expect-error — the updater is typed against the store's state
 write(setStore, s => (s.nope = 1));
+
+// --- Block-derived stores: createProjection / createStore / createOptimisticStore -----
+interface Summary {
+  total: number;
+  label: string;
+}
+// Mutation form: the draft is the block's input; the shape comes from it.
+const summarize = $(function* (draft: Summary) {
+  draft.total = yield* count;
+  draft.label = yield* label;
+});
+const summary = createProjection(summarize, {});
+// Return form, parameterless: the shape comes from the value; the seed is a
+// Partial of it.
+const shaped = $(function* () {
+  return { total: yield* count, label: "n" } as Summary;
+});
+const shapedSummary = createProjection(shaped, { total: 0 });
+// Waiting and failing inside the derive.
+const remote = $(function* (draft: Summary) {
+  const user = yield* wait(fetchUser(yield* count), HttpError);
+  draft.label = user.name;
+});
+const remoteSummary = createProjection(remote, { total: 0, label: "" });
+const [derivedSummary, setDerivedSummary] = createStore(remote, {});
+const [optimisticSummary, setOptimisticSummary] = createOptimisticStore(remote, {});
+type _blockStores = [
+  Expect<Equal<typeof summary, BlockStore<typeof summarize, Summary>>>,
+  Expect<Equal<typeof shapedSummary, BlockStore<typeof shaped, Summary>>>,
+  Expect<Equal<typeof remoteSummary, BlockStore<typeof remote, Summary>>>,
+  Expect<Equal<typeof derivedSummary, BlockStore<typeof remote, Summary>>>,
+  Expect<Equal<typeof setDerivedSummary, StoreSetter<Summary>>>,
+  Expect<Equal<typeof optimisticSummary, BlockStore<typeof remote, Summary>>>,
+  Expect<Equal<typeof setOptimisticSummary, StoreSetter<Summary>>>,
+  // The store is still the plain state: properties read as usual.
+  Expect<Equal<(typeof summary)["total"], number>>
+];
+setDerivedSummary(s => {
+  s.total = 1;
+});
+// @ts-expect-error — the setter is typed against the shape
+setDerivedSummary(s => (s.nope = 1));
+// @ts-expect-error — the seed must be a Partial of the block's shape
+createProjection(summarize, { total: "1" });
+const wrongShape = $(function* (draft: Summary) {
+  return { nope: yield* count };
+});
+// @ts-expect-error — the value must be void or the shape
+createProjection(wrongShape, {});
+// Reading a block-derived store: the selector result is inferred, the store
+// root is the Read, and the projection's async status and errors are
+// inherited exactly as through `createMemo(block)`.
+const readsProjection = $(function* () {
+  const total = yield* readStore(summary, s => s.total);
+  const name = yield* readStore(remoteSummary, s => s.label);
+  return `${name}:${total}`;
+});
+type _readsProjection = [
+  Expect<Equal<BlockValue<typeof readsProjection>, string>>,
+  Expect<Equal<BlockReads<typeof readsProjection>, typeof summary | typeof remoteSummary>>,
+  Expect<Equal<BlockTasks<typeof readsProjection>, never>>,
+  Expect<Equal<BlockFailures<typeof readsProjection>, never>>,
+  Expect<Equal<BlockAsync<typeof readsProjection>, true>>,
+  Expect<Equal<BlockErrors<typeof readsProjection>, HttpError>>
+];
+const readsSync = $(function* () {
+  return yield* readStore(summary, s => s.label);
+});
+type _readsSync = [
+  Expect<Equal<BlockAsync<typeof readsSync>, false>>,
+  Expect<Equal<BlockErrors<typeof readsSync>, never>>
+];
+// Two hops: a derived store reading the async projection colors its readers.
+const [relabeled] = createStore(
+  $(function* (draft: { text: string }) {
+    draft.text = (yield* readStore(remoteSummary, s => s.label)).toUpperCase();
+  }),
+  { text: "" }
+);
+const twoHops = $(function* () {
+  return yield* readStore(relabeled, s => s.text);
+});
+type _twoHops = [
+  Expect<Equal<BlockAsync<typeof twoHops>, true>>,
+  Expect<Equal<BlockErrors<typeof twoHops>, HttpError>>
+];
+// Store hosts are reactive hosts: a block that writes is refused by all three.
+const writingDerive = $(function* (draft: Summary) {
+  yield* write(setCount, 1);
+  draft.total = 1;
+});
+// @ts-expect-error — a projection admits no Writes
+createProjection(writingDerive, {});
+// @ts-expect-error — nor a derived store
+createStore(writingDerive, {});
+// @ts-expect-error — nor a derived optimistic store
+createOptimisticStore(writingDerive, {});
+// Explicit type arguments select the function form: a block is still callable.
+const explicit = createProjection<Summary>(summarize, {});
+type _explicit = [Expect<Equal<typeof explicit, Refreshable<Store<Summary>>>>];
+// The ordinary-function and plain-value forms are unchanged.
+const plainProjection = createProjection((draft: Summary) => {
+  draft.total = 1;
+}, {});
+const inferredFromSeed = createProjection(
+  draft => {
+    draft.total = 1;
+  },
+  { total: 0 }
+);
+const [plainDerived] = createStore(async () => ({ total: 1, label: "" }), {} as Partial<Summary>);
+const [plainStore, setPlainStore] = createStore({ total: 0 });
+type _plainForms = [
+  Expect<Equal<typeof plainProjection, Refreshable<Store<Summary>>>>,
+  Expect<Equal<typeof inferredFromSeed, Refreshable<Store<{ total: number }>>>>,
+  Expect<Equal<typeof plainDerived, Refreshable<Store<Summary>>>>,
+  Expect<Equal<typeof plainStore, { total: number }>>,
+  Expect<Equal<typeof setPlainStore, StoreSetter<{ total: number }>>>
+];
+
+// --- Direct property syntax (projected form) ------------------------------------
+// `yield* store.user.name` is what authors write; `solid-tsc` projects it to
+// the `readPath` / `readProp` op below before checking, so these assertions
+// are the types the authored spelling receives.
+type _pathValue = [
+  Expect<Equal<PathValue<typeof store, readonly ["user", "name"]>, string>>,
+  Expect<Equal<PathValue<typeof store, readonly ["items", 0, "name"]>, string>>,
+  Expect<Equal<PathValue<typeof store, readonly ["items", number]>, { id: number; name: string }>>,
+  Expect<Equal<PathValue<typeof store, readonly ["items", "length"]>, number>>,
+  Expect<Equal<PathValue<typeof store, readonly ["nope"]>, unknown>>
+];
+declare const idx: number;
+const paths = $(function* () {
+  const name = yield* readPath(store, ["user", "name"]);
+  const item = yield* readPath(store, ["items", idx]);
+  const count = yield* readPath(store, ["items", "length"]);
+  return { name, item, count };
+});
+type _paths = [
+  Expect<
+    Equal<
+      BlockValue<typeof paths>,
+      { name: string; item: { id: number; name: string }; count: number }
+    >
+  >,
+  Expect<
+    Equal<
+      BlockReads<typeof paths>,
+      | StoreRead<typeof store, readonly ["user", "name"]>
+      | StoreRead<typeof store, readonly ["items", number]>
+      | StoreRead<typeof store, readonly ["items", "length"]>
+    >
+  >,
+  Expect<Equal<BlockTasks<typeof paths>, never>>,
+  Expect<Equal<BlockAsync<typeof paths>, false>>,
+  Expect<Equal<Admits<typeof paths>, true>>
+];
+declare const props: { count: number; user: { name: string } };
+const propPaths = $(function* () {
+  return `${yield* readProp(props, ["count"])}:${yield* readProp(props, ["user", "name"])}`;
+});
+type _propPaths = [
+  Expect<Equal<BlockValue<typeof propPaths>, string>>,
+  Expect<
+    Equal<
+      BlockReads<typeof propPaths>,
+      PropRead<typeof props, readonly ["count"]> | PropRead<typeof props, readonly ["user", "name"]>
+    >
+  >
+];
+// A path whose value is itself readable (an accessor, a block) reads
+// through it — `yield* props.filter` is the signal's value — and inherits
+// its coloring (`writableUser` is a colored signal: async, HttpError).
+declare const readableProps: {
+  filter: typeof count;
+  block: typeof paths;
+  colored: typeof writableUser;
+  fn: () => string;
+};
+const through = $(function* () {
+  const f = yield* readProp(readableProps, ["filter"]);
+  const b = yield* readProp(readableProps, ["block"]);
+  const fn = yield* readProp(readableProps, ["fn"]);
+  return { f, b, fn };
+});
+type _through = [
+  Expect<Equal<PathResult<typeof readableProps, readonly ["filter"]>, number>>,
+  Expect<
+    Equal<
+      BlockValue<typeof through>,
+      {
+        f: number;
+        b: { name: string; item: { id: number; name: string }; count: number };
+        fn: () => string;
+      }
+    >
+  >,
+  Expect<Equal<BlockAsync<typeof through>, false>>
+];
+const throughColored = $(function* () {
+  return yield* readProp(readableProps, ["colored"]);
+});
+type _throughColored = [
+  Expect<Equal<BlockAsync<typeof throughColored>, true>>,
+  Expect<Equal<BlockErrors<typeof throughColored>, HttpError>>
+];
+// A wrong path selects `unknown`, so it cannot pretend to be the value.
+// @ts-expect-error — `unknown` is not a string
+const _wrong: string = perform(readPath(store, ["user", "nope"]));
 
 // --- Failures: raise / attempt --------------------------------------------------
 const fallible = $(function* () {
@@ -149,6 +372,17 @@ type _profile = [
   Expect<Equal<ReturnType<typeof profile>, Promise<typeof view>>>
 ];
 
+// A path through a block-derived (colored) store colors the reader.
+const coloredStore = createStore(profile, { tag: "p", text: "" } as typeof view);
+const coloredPath = $(function* () {
+  return yield* readPath(coloredStore[0], ["text"]);
+});
+type _coloredPath = [
+  Expect<Equal<BlockValue<typeof coloredPath>, string>>,
+  Expect<Equal<BlockAsync<typeof coloredPath>, true>>,
+  Expect<Equal<BlockErrors<typeof coloredPath>, HttpError>>
+];
+
 // --- Writes -------------------------------------------------------------------------
 const writer = $(function* (event: MouseEvent) {
   const c = yield* count;
@@ -172,6 +406,20 @@ type _greeting = [
   Expect<Equal<BlockFailures<typeof greeting>, never>>,
   Expect<Equal<BlockAsync<typeof greeting>, true>>,
   Expect<Equal<BlockErrors<typeof greeting>, HttpError>>
+];
+
+// A writable memo made with createSignal retains the block metadata too.
+const [writableUser, setWritableUser] = createSignal(profile);
+setWritableUser(view);
+const writableGreeting = $(function* () {
+  return { tag: "p", text: `Hi ${(yield* writableUser).text}` } as typeof view;
+});
+type _writableGreeting = [
+  Expect<Equal<ReturnType<typeof writableUser>, typeof view>>,
+  Expect<Equal<BlockTasks<typeof writableGreeting>, never>>,
+  Expect<Equal<BlockFailures<typeof writableGreeting>, never>>,
+  Expect<Equal<BlockAsync<typeof writableGreeting>, true>>,
+  Expect<Equal<BlockErrors<typeof writableGreeting>, HttpError>>
 ];
 
 // --- Delegation accumulates the callee's categories ----------------------------------

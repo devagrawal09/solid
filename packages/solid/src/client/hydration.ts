@@ -25,6 +25,9 @@ import {
   type Accessor,
   type AnyBlock,
   type BlockAccessor,
+  type BlockSignal,
+  type BlockStore,
+  type BlockStoreReturn,
   type BlockValue,
   type ReactiveHostBlock,
   type ComputeFunction,
@@ -32,6 +35,7 @@ import {
   type NoInfer,
   type Owner,
   type ProjectionOptions,
+  type ProjectionBlock,
   type Refreshable,
   type Signal,
   type SignalOptions,
@@ -1472,6 +1476,10 @@ export const createMemo: {
 export const createSignal: {
   <T>(): Signal<T | undefined>;
   <T>(value: Exclude<T, Function>, options?: SignalOptions<T>): Signal<T>;
+  <B extends AnyBlock & ReactiveHostBlock>(
+    fn: B,
+    options?: HydrationSignalOptions<BlockValue<B>>
+  ): BlockSignal<B>;
   // Commit #0 (loadingValue): never undefined, `prev` is always T — see
   // createMemo (bare "client" is the structural form there too).
   <T>(
@@ -1612,11 +1620,18 @@ export const createOptimistic: {
  * (`"server"` | `"hybrid"` | `"client"`) for the same client-vs-server
  * tradeoffs as the other primitives. See {@link HydrationSsrFields}.
  */
-export const createProjection: <T extends object = {}>(
-  fn: (draft: T) => void | T | Promise<void | T> | AsyncIterable<void | T>,
-  seed: Partial<T> | Store<NoFn<T>>,
-  options?: HydrationProjectionOptions
-) => Refreshable<Store<T>> = ((...args: any[]) => {
+export const createProjection: {
+  <T extends object, B extends ProjectionBlock<T>>(
+    fn: B & ProjectionBlock<T>,
+    seed: Partial<T> | Store<NoFn<T>>,
+    options?: HydrationProjectionOptions
+  ): BlockStore<B, T>;
+  <T extends object = {}>(
+    fn: ((draft: T) => void | T | Promise<void | T> | AsyncIterable<void | T>) & ReactiveHostBlock,
+    seed: Partial<T> | Store<NoFn<T>>,
+    options?: HydrationProjectionOptions
+  ): Refreshable<Store<T>>;
+} = ((...args: any[]) => {
   // `hydrating` can only be true once enableHydration() installed the
   // adapter slot (see createOptimistic above for the retention story).
   return sharedConfig.hydrating
@@ -1691,8 +1706,13 @@ export const createStore: {
     initialValue: NoFn<T> | Store<NoFn<T>>,
     options?: StoreOptions
   ): [get: Store<T>, set: StoreSetter<T>];
+  <T extends object, B extends ProjectionBlock<T>>(
+    fn: B & ProjectionBlock<T>,
+    seed: Partial<T> | Store<NoFn<T>>,
+    options?: HydrationProjectionOptions
+  ): BlockStoreReturn<B, T>;
   <T extends object = {}>(
-    fn: (draft: T) => void | T | Promise<void | T> | AsyncIterable<void | T>,
+    fn: ((draft: T) => void | T | Promise<void | T> | AsyncIterable<void | T>) & ReactiveHostBlock,
     seed: Partial<T> | Store<NoFn<T>>,
     options?: HydrationProjectionOptions
   ): [get: Refreshable<Store<T>>, set: StoreSetter<T>];
@@ -1755,8 +1775,13 @@ export const createOptimisticStore: {
     initialValue: NoFn<T> | Store<NoFn<T>>,
     options?: StoreOptions
   ): [get: Store<T>, set: StoreSetter<T>];
+  <T extends object, B extends ProjectionBlock<T>>(
+    fn: B & ProjectionBlock<T>,
+    seed: Partial<T> | Store<NoFn<T>>,
+    options?: HydrationProjectionOptions
+  ): BlockStoreReturn<B, T>;
   <T extends object = {}>(
-    fn: (draft: T) => void | T | Promise<void | T> | AsyncIterable<void | T>,
+    fn: ((draft: T) => void | T | Promise<void | T> | AsyncIterable<void | T>) & ReactiveHostBlock,
     seed: Partial<T> | Store<NoFn<T>>,
     options?: HydrationProjectionOptions
   ): [get: Refreshable<Store<T>>, set: StoreSetter<T>];

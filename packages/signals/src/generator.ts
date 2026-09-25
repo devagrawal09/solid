@@ -6,6 +6,7 @@ import {
   getOwner,
   runWithOwner,
   setBlockGuard,
+  untrack,
   type Owner
 } from "./core/index.js";
 import type { SourceAccessor } from "./signals.js";
@@ -18,6 +19,8 @@ import type { SourceAccessor } from "./signals.js";
  * the *host* that consumes the block can admit or refuse each one:
  *
  *   yield* signal                 Reads      tracked read
+ *   yield* store.user.name        Reads      a store path (StoreRead<Root, ["user","name"]>)
+ *   yield* props.count            Reads      a prop path  (PropRead<Props, ["count"]>)
  *   yield* readStore(store, sel)  Reads      one selector run over a store (root recorded)
  *   yield* wait(promise, ...Errs) Tasks      async suspension (declared errs → Failures)
  *   yield* raise(error)           Failures   typed throw
@@ -64,10 +67,38 @@ import type { SourceAccessor } from "./signals.js";
  * Stores: `readStore` records the store root in Reads and infers the
  * selector's result; it does not type the path read, give store instances
  * fresh identities, or resolve shared references — the proxy does the exact
- * tracking at runtime. `Store<T>` carries no `[META]`, so async / error
- * coloring of derived or projection stores is not reflected in a block's
- * derived totals (it still surfaces at runtime as NotReadyError / the error).
+ * tracking at runtime. A plain `Store<T>` carries no `[META]`, so the async /
+ * error coloring of a store derived from an ordinary function is not
+ * reflected in a block's derived totals (it still surfaces at runtime as
+ * NotReadyError / the error). A store derived from a block —
+ * `createProjection(block, seed)`, `createStore(block, seed)`,
+ * `createOptimisticStore(block, seed)` — is a `BlockStore`: it keeps the
+ * block's metadata, so reading it accumulates the block's Reads, async
+ * status and error union exactly as reading `createMemo(block)` does.
  * Writes use `write(setStore, updater)`; store setters stay ordinary.
+ *
+ * Direct property syntax (`yield* store.user.name`, `yield* props.count`):
+ * - Runtime: inside a block body (strict guard raised) a store proxy answers a
+ *   string-keyed read with a *path token* instead of a value; further
+ *   property access extends the token's path, `yield*` performs the read by
+ *   re-walking the path through the real proxy with the guard lowered (so
+ *   the store tracks exactly the nodes touched), and any other use of a
+ *   token throws. A token that a run never consumed with `yield*` (e.g.
+ *   `if (store.flag)`) fails the run with `[UNREAD_PATH]`, so a forgotten
+ *   `yield*` is loud in both modes. Props objects are plain compiler output
+ *   (getters), not proxies: `yield* props.count` works in compiled
+ *   (lowered) code, where it becomes `perform(readProp(props, ["count"]))`
+ *   and the getter runs with the guard lowered; in uncompiled code the
+ *   getter's signal read fails loudly (`[DIRECT_READ_IN_BLOCK]`).
+ * - Types: stock TypeScript types `yield* e` from the value type of `e`, so
+ *   the source spelling is only checkable through the typecheck projection
+ *   (`@solidjs/compiler`'s `projectBlocksForTypecheck`, driven by
+ *   `solid-tsc`), which rewrites the operand to `readPath(root, [...])` /
+ *   `readProp(root, [...])` — the same ops the compiler lowers to — typed
+ *   `StoreRead<Root, Path>` / `PropRead<Root, Path>` with the selected
+ *   value inferred by `PathValue`. Roots are recorded as written: an alias
+ *   (`const u = store.user`) is its own root; no alias or shared-reference
+ *   resolution is claimed.
  */
 
 /** Runtime tag on every yieldable operation. */
@@ -110,6 +141,48 @@ export interface StoreReadOp<Store, R> {
   delegated: boolean;
   [Symbol.iterator](): Generator<StoreReadOp<Store, R>, R, any>;
 }
+export type PathKey = string | number;
+/**
+ * The value selected by walking `P` from `R` (index signatures, tuples and
+ * array elements included). A key that is not in `R` selects `unknown`; the
+ * typecheck projection additionally hands TypeScript the authored expression
+ * so a wrong key is reported as the usual TS2339 at its column.
+ */
+export type PathValue<R, P> = P extends readonly [infer K, ...infer Rest]
+  ? K extends keyof R
+    ? PathValue<R[K], Rest>
+    : R extends readonly unknown[]
+      ? K extends number
+        ? PathValue<R[K], Rest>
+        : unknown
+      : unknown
+  : R;
+/**
+ * What `yield* x.path` produces: the path's value — read through when that
+ * value is itself readable (a signal accessor or a block), exactly as
+ * `yield*` behaves on the value in an uncompiled block, so `yield*
+ * props.filter` with `filter: SourceAccessor<Filter>` is a `Filter`.
+ */
+export type PathResult<R, P> = ReadThrough<PathValue<R, P>>;
+type ReadThrough<V> = V extends AnyBlock
+  ? BlockValue<V>
+  : V extends SourceAccessor<infer T>
+    ? T
+    : V;
+interface PathRead<R, P extends readonly PathKey[], Kind extends string> {
+  readonly [OP]: "read";
+  /** The bound walk; what the driver performs (guard lowered, through the real proxy). */
+  readonly source: () => PathResult<R, P>;
+  readonly root: R;
+  readonly path: P;
+  readonly kind: Kind;
+  delegated: boolean;
+  [Symbol.iterator](): Generator<this, PathResult<R, P>, any>;
+}
+/** `yield* store.user.name` (projected: `readPath(store, ["user","name"])`). */
+export interface StoreRead<R, P extends readonly PathKey[]> extends PathRead<R, P, "store"> {}
+/** `yield* props.count` (projected: `readProp(props, ["count"])`). */
+export interface PropRead<R, P extends readonly PathKey[]> extends PathRead<R, P, "prop"> {}
 /** `yield* wait(promise)` — suspends the block (a Task). */
 export interface AsyncOp<T, E = unknown> {
   readonly [OP]: "wait";
@@ -153,6 +226,8 @@ export interface CallOp<B extends AnyBlock> {
 export type Op =
   | ReadOp<any>
   | StoreReadOp<any, any>
+  | StoreRead<any, any>
+  | PropRead<any, any>
   | AsyncOp<any, any>
   | RaiseOp<any>
   | AttemptOp<any, any>
@@ -202,10 +277,12 @@ export type BlockInput<B> = B extends Block<any, any, any, any, any, infer I> ? 
 export type BlockOps<B> =
   B extends Block<any, infer R, infer T, infer F, infer W, any> ? OpsOf<R, T, F, W> : never;
 
-/** An accessor created from a block (`createMemo(block)`) keeps its metadata. */
-export type BlockAccessor<B extends AnyBlock> = SourceAccessor<BlockValue<B>> & {
+/** Phantom metadata retained by reactive values derived from a block. */
+export type BlockMetadata<B extends AnyBlock> = {
   readonly [META]: BlockMeta<BlockReads<B>, BlockTasks<B>, BlockFailures<B>, BlockWrites<B>>;
 };
+/** An accessor created from a block (`createMemo(block)`) keeps its metadata. */
+export type BlockAccessor<B extends AnyBlock> = SourceAccessor<BlockValue<B>> & BlockMetadata<B>;
 /**
  * An accessor annotated with derived totals only — what a boundary block
  * reads, or how a prop can declare "this signal may be pending / fail with
@@ -226,9 +303,17 @@ export type ColoredAccessor<
 
 // --- derived totals ------------------------------------------------------------
 
-type MetaOf<S> = S extends { readonly [META]: infer M extends BlockMeta<any, any, any, any> }
-  ? M
-  : never;
+// A path read colors its reader through the root it walks (a `BlockStore`
+// keeps its block's metadata) and through the value it reads through (a
+// colored accessor or block held in a prop or a store field).
+type MetaOf<S> =
+  S extends StoreRead<infer R, infer P>
+    ? MetaOf<R> | MetaOf<PathValue<R, P>>
+    : S extends PropRead<infer R, infer P>
+      ? MetaOf<PathValue<R, P>>
+      : S extends { readonly [META]: infer M extends BlockMeta<any, any, any, any> }
+        ? M
+        : never;
 /** Async through reads: a source whose metadata has Tasks, or whose own reads do. */
 type MetaAsync<M> =
   M extends BlockMeta<infer R, infer T, any, any>
@@ -252,8 +337,13 @@ export type BlockErrors<B> = BlockFailures<B> | MetaErrors<MetaOf<BlockReads<B>>
 // A store read is structurally a `ReadOp` whose source is the bound
 // selector; test for it first so the Reads record the store root, not the
 // closure.
-export type ReadsOf<Y> =
-  Y extends StoreReadOp<infer S, any> ? S : Y extends ReadOp<infer S> ? S : never;
+export type ReadsOf<Y> = Y extends StoreRead<any, any> | PropRead<any, any>
+  ? Y
+  : Y extends StoreReadOp<infer S, any>
+    ? S
+    : Y extends ReadOp<infer S>
+      ? S
+      : never;
 export type TasksOf<Y> = Extract<Y, AsyncOp<any, any>>;
 export type FailuresOf<Y> =
   | (Y extends AsyncOp<any, infer E> ? E : never)
@@ -309,22 +399,199 @@ export function* accessorIterator<T>(
  * Read a store through a selector as one read operation. The selector runs
  * with direct reads permitted (the store proxy is what tracks them, at its
  * usual granularity), and its result is the value of the `yield*`. The
- * block's Reads record the store root; a pending or failed projection
- * surfaces at runtime through the read (NotReadyError / the error), but the
- * store types carry no async / error metadata, so the block's derived
- * totals do not see it (see the module notes).
+ * block's Reads record the store root. A pending or failed derive surfaces
+ * at runtime through the read (NotReadyError / the error) either way; at
+ * the type level a plain store carries no async / error metadata, so the
+ * block's derived totals stay quiet, while a store derived from a block
+ * (`createProjection(block, seed)` and the derived `createStore` /
+ * `createOptimisticStore` forms) keeps the block's metadata and colors the
+ * reader transitively (see the module notes).
  */
 export function readStore<S extends object, R>(
   store: S,
   selector: (state: S) => R
 ): StoreReadOp<S, R> {
+  // `readStore(store.user, …)` inside a block: the argument is a path token.
+  const token = tokenOf(store);
+  if (token) consume(token);
+  const source = token ? () => selector(walk(token.root, token.path) as S) : () => selector(store);
+  return { [OP]: "read", source, store, delegated: false, [Symbol.iterator]: opIterator } as any;
+}
+
+// --- direct property syntax: path reads and tokens ------------------------------
+
+/** Brand of a path token's target (read through the proxy's `get`). */
+const TOKEN: unique symbol = Symbol("path-token");
+interface TokenTarget {
+  root: object;
+  path: PathKey[];
+  parent: TokenTarget | null;
+  used: boolean;
+}
+/** Tokens created during the current synchronous block run (unread = error). */
+let liveTokens: TokenTarget[] | null = null;
+
+/**
+ * Called by a store proxy's `get` trap while the strict guard is raised: the
+ * read is deferred into a token that records the path; `yield*` performs it.
+ */
+export function pathToken(root: object, key: PathKey, parent: TokenTarget | null = null): object {
+  const target: TokenTarget = {
+    root,
+    path: parent ? [...parent.path, key] : [key],
+    parent,
+    used: false
+  };
+  if (liveTokens !== null) liveTokens.push(target);
+  return new Proxy(target, tokenTraps);
+}
+
+function consume(target: TokenTarget): void {
+  for (let node: TokenTarget | null = target; node !== null && !node.used; node = node.parent) {
+    node.used = true;
+  }
+}
+
+function tokenOf(value: unknown): TokenTarget | undefined {
+  if (value === null || (typeof value !== "object" && typeof value !== "function"))
+    return undefined;
+  // A store proxy answers an unknown symbol through its tracked path: probe
+  // untracked and with the guard lowered (never a dependency).
+  return probe(() => (value as any)[TOKEN]);
+}
+
+function describePath(target: TokenTarget): string {
+  return target.path.map(key => (typeof key === "number" ? `[${key}]` : `.${key}`)).join("");
+}
+
+function tokenMisuse(target: TokenTarget, how: string): Error {
+  return new Error(
+    `[DIRECT_READ_IN_BLOCK] \`<root>${describePath(target)}\` was used ${how} inside a \`$\` block; read it with \`yield* <root>${describePath(target)}\``
+  );
+}
+
+const tokenTraps: ProxyHandler<TokenTarget> = {
+  get(target, key) {
+    if (key === TOKEN) return target;
+    if (key === Symbol.iterator) {
+      return function* () {
+        consume(target);
+        return yield pathRead(target.root, target.path, "store", true);
+      };
+    }
+    if (typeof key === "symbol") throw tokenMisuse(target, `as a value (${String(key)})`);
+    return pathToken(target.root, key, target);
+  },
+  has(target, key) {
+    if (key === TOKEN) return true;
+    if (typeof key === "symbol") return false;
+    throw tokenMisuse(target, `with \`in\``);
+  },
+  ownKeys(target) {
+    throw tokenMisuse(target, "by enumerating its keys");
+  },
+  getOwnPropertyDescriptor(target, key) {
+    throw tokenMisuse(target, `by describing \`${String(key)}\``);
+  },
+  set(target, key) {
+    throw tokenMisuse(target, `to write \`${String(key)}\``);
+  },
+  deleteProperty(target, key) {
+    throw tokenMisuse(target, `to delete \`${String(key)}\``);
+  },
+  defineProperty(target) {
+    throw tokenMisuse(target, "to define a property");
+  },
+  getPrototypeOf(target) {
+    throw tokenMisuse(target, "as a value (prototype)");
+  }
+};
+
+/** Every token created by the run must have been read with `yield*`. */
+function checkTokens(tokens: TokenTarget[]): void {
+  // Latest first: the deepest unread path names the whole access.
+  for (let i = tokens.length - 1; i >= 0; i--) {
+    const target = tokens[i];
+    if (!target.used) {
+      throw new Error(
+        `[UNREAD_PATH] \`<root>${describePath(target)}\` was accessed inside a \`$\` block but never read with \`yield*\`; write \`yield* <root>${describePath(target)}\` (a bare access is a deferred token, not a value)`
+      );
+    }
+  }
+}
+
+function walk(root: unknown, path: readonly PathKey[]): unknown {
+  let value: any = root;
+  for (const key of path) value = value[key];
+  return value;
+}
+
+/**
+ * `yield* x.path` reads through a value that is itself readable — a signal
+ * accessor or a block — as `yield*` does on that value in an uncompiled
+ * block (`yield* props.filter` on a plain props object iterates the
+ * accessor). The lowered `readPath` / `readProp` and the store's path tokens
+ * do the same, so both modes agree. A block that waits cannot be read
+ * through in call form (`[ASYNC_BLOCK_OUTSIDE_DRIVER]`), as with `yield*
+ * block` on a lowered identifier.
+ */
+function readThrough(value: unknown): unknown {
+  return typeof value === "function" &&
+    ((value as any)[BLOCK] || Symbol.iterator in (value as object))
+    ? perform(value as SourceAccessor<unknown>)
+    : value;
+}
+
+function pathRead(root: unknown, path: readonly PathKey[], kind: string, delegated: boolean): Op {
+  const token = tokenOf(root);
+  if (token) {
+    consume(token);
+    root = token.root;
+    path = [...token.path, ...path];
+  }
+  const walked = root;
+  const full = path;
   return {
     [OP]: "read",
-    source: () => selector(store),
-    store,
-    delegated: false,
+    source: () => readThrough(walk(walked, full)),
+    root: walked,
+    path: full,
+    kind,
+    delegated,
     [Symbol.iterator]: opIterator
   } as any;
+}
+
+/**
+ * The op the compiler lowers `yield* store.a.b` to and the typecheck
+ * projection types it as: one path read of a store (or any object) —
+ * `StoreRead<Root, Path>`, performed by re-walking the real proxy. Not a
+ * use-site helper; the source spelling is the member chain.
+ *
+ * `_witness` is typecheck-only: the projection passes the authored
+ * expression itself (`readPath(store, ["user", "name"], store.user.name)`)
+ * so TypeScript reports a wrong key (TS2339) at its authored column; the
+ * compiler's lowering never passes it and the runtime ignores it.
+ */
+export function readPath<R, const P extends readonly PathKey[]>(
+  root: R,
+  path: P,
+  _witness?: unknown
+): StoreRead<R, P> {
+  return pathRead(root, path, "store", false) as StoreRead<R, P>;
+}
+
+/**
+ * The same read for a component's props (`yield* props.count`): the prop
+ * getter runs with the guard lowered, so it tracks exactly as `props.count`
+ * would in an ordinary computation — `PropRead<Props, Path>`.
+ */
+export function readProp<R, const P extends readonly PathKey[]>(
+  root: R,
+  path: P,
+  _witness?: unknown
+): PropRead<R, P> {
+  return pathRead(root, path, "prop", false) as PropRead<R, P>;
 }
 
 /**
@@ -509,11 +776,16 @@ export function $(body: (input: any) => any): AnyBlock {
     const prevHost = currentHost;
     currentHost = host;
     const prevGuard = setBlockGuard(true);
+    const prevTokens = liveTokens;
+    const tokens: TokenTarget[] = (liveTokens = []);
     try {
       const result = body(args[0]);
       if (isAsyncIterator(result)) throw asyncGeneratorError();
-      return isSyncIterator(result) ? drive(result, host) : result;
+      const value = isSyncIterator(result) ? drive(result, host) : result;
+      checkTokens(tokens);
+      return value;
     } finally {
+      liveTokens = prevTokens;
       setBlockGuard(prevGuard);
       currentHost = prevHost;
     }
@@ -548,12 +820,22 @@ export function perform<B extends AnyBlock>(target: B | CallOp<B>): BlockValue<B
 export function perform<T>(
   target: ReadOp<SourceAccessor<T>> | StoreReadOp<any, T> | AttemptOp<T, any>
 ): T;
+export function perform<R, P extends readonly PathKey[]>(
+  target: StoreRead<R, P> | PropRead<R, P>
+): PathResult<R, P>;
 export function perform<S extends AnySetter>(target: WriteOp<S>): ReturnType<S>;
 export function perform(target: RaiseOp<any> | AsyncOp<any, any>): never;
 export function perform(target: unknown): unknown {
   if (typeof target === "function") {
     if ((target as any)[BLOCK]) return delegateSync(target as AnyBlock, undefined);
     return readGuarded(target as () => unknown);
+  }
+  // A lowered bare identifier that holds a path token (`const u = store.user;
+  // yield* u`): perform the path read.
+  const token = tokenOf(target);
+  if (token) {
+    consume(token);
+    return readGuarded(() => readThrough(walk(token.root, token.path)));
   }
   if (isOp(target)) {
     checkHost(currentHost, target[OP]);
@@ -696,17 +978,22 @@ function resume<R>(
   const prevHost = currentHost;
   currentHost = state.host;
   const prevGuard = setBlockGuard(true);
+  const prevTokens = liveTokens;
+  const tokens: TokenTarget[] = (liveTokens = []);
   try {
-    return step(iterator, advance(), state);
+    const value = step(iterator, advance(), state);
+    checkTokens(tokens);
+    return value;
   } finally {
+    liveTokens = prevTokens;
     setBlockGuard(prevGuard);
     currentHost = prevHost;
   }
 }
 
-/** Perform one operation with the strict guard lowered around it. */
+/** Perform one operation with the strict guard lowered around it (every
+ * tier: the store proxy answers a raised guard with a path token). */
 function readGuarded<T>(run: () => T): T {
-  if (!__DEV__) return run();
   const prevGuard = setBlockGuard(false);
   try {
     return run();
@@ -719,22 +1006,38 @@ function isOp(value: unknown): value is Op {
   return value !== null && typeof value === "object" && OP in value;
 }
 
+// Shape probes on a block's result. A result may be a store proxy (a
+// selector that returns the store itself), whose `has`/`get` traps are
+// tracked reads: probe untracked and with the strict guard lowered, exactly
+// as the core's `handleAsync` probes a computation's result — the probe is
+// not a dependency of the block.
+function probe<T>(run: () => T): T {
+  return readGuarded(() => untrack(run));
+}
+
 function isSyncIterator(value: unknown): value is Generator<Op, unknown, any> {
   return (
     value !== null &&
     typeof value === "object" &&
-    typeof (value as Partial<Generator>).next === "function" &&
-    typeof (value as any)[Symbol.iterator] === "function" &&
-    !(Symbol.asyncIterator in (value as object))
+    probe(
+      () =>
+        typeof (value as Partial<Generator>).next === "function" &&
+        typeof (value as any)[Symbol.iterator] === "function" &&
+        !(Symbol.asyncIterator in value)
+    )
   );
 }
 
 function isAsyncIterator(value: unknown): boolean {
-  return value !== null && typeof value === "object" && Symbol.asyncIterator in value;
+  return value !== null && typeof value === "object" && probe(() => Symbol.asyncIterator in value);
 }
 
 function isThenableValue(value: unknown): boolean {
-  return value !== null && typeof value === "object" && typeof (value as any).then === "function";
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    probe(() => typeof (value as any).then === "function")
+  );
 }
 
 function asyncGeneratorError(): TypeError {

@@ -1,0 +1,31 @@
+{
+  "name": "@solidjs/typecheck",
+  "version": "0.0.0",
+  "description": "solid-tsc: TypeScript checking for `$` blocks' direct property syntax (`yield* store.user.name`) through the compiler's typecheck projection, with diagnostics mapped back to source",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "solid-tsc": "./bin/solid-tsc.js"
+  },
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@solidjs/compiler": "workspace:*",
+    "typescript": ">=5.5"
+  },
+  "devDependencies": {
+    "@solidjs/compiler": "workspace:*",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.6"
+  }
+}

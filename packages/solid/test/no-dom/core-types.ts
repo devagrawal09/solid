@@ -29,3 +29,33 @@ Show({
 
 void Primitive;
 void Parent;
+
+// Block-derived stores keep their metadata through the published declarations.
+import { $, createProjection, readStore, wait } from "solid-js";
+import type { BlockAsync, BlockErrors, BlockStore } from "solid-js";
+
+const total = createProjection(
+  $(function* (draft: { total: number }) {
+    draft.total = yield* value;
+  }),
+  {}
+);
+const remote = createProjection(
+  $(function* () {
+    return { total: yield* wait(Promise.resolve(1), RangeError) };
+  }),
+  {}
+);
+const reads = $(function* () {
+  return (yield* readStore(total, s => s.total)) + (yield* readStore(remote, s => s.total));
+});
+const asyncThroughRemote: BlockAsync<typeof reads> = true;
+const errorsThroughRemote: RangeError = null! as BlockErrors<typeof reads>;
+const typedStore: BlockStore<
+  typeof remote extends BlockStore<infer B, any> ? B : never,
+  { total: number }
+> = remote;
+
+void asyncThroughRemote;
+void errorsThroughRemote;
+void typedStore;

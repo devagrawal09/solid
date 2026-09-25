@@ -1,5 +1,108 @@
 # `$()` Typed Reactive Blocks
 
+## Exploration Status
+
+Status as of 2026-09-25: the design remains an experimental, uncommitted branch, but the end-to-end prototype now covers typed blocks, host enforcement, direct typed store/prop paths, compiler lowering, projected TypeScript checking, block-derived signals/stores, DOM event dispatch, and a converted TodoMVC example.
+
+The production proposal has two modes only:
+
+- **Compat** transforms supported blocks and retains runtime generator fallbacks and ordinary JavaScript interoperability.
+- **Strict** requires the complete application graph to use typed generator boundaries, rejects unknown or unsupported effects at build time, omits runtime fallback, and automatically selects the fastest and smallest safe runtime and application chunks for the proven capability graph.
+
+Current exploration work:
+
+- Direct path implementation is complete and verified: `yield* store.user.name`, indexed store paths, and `yield* props.count` carry root/path metadata.
+- `solid-tsc` provides pre-typecheck source projection, mapped diagnostics, and declaration emit because stock TypeScript cannot type the authored direct-path syntax by itself.
+- Runtime-size and app-code partitioning investigations are complete; their recommendations remain proposals, not implemented production optimizations.
+- The read-only strict-mode SSR/hydration investigation is complete. It found that current serialization is primarily async-result data, current hydration re-executes the full component tree, and JSX blocks currently have a hydration-id parity defect that must be fixed before strict SSR can be considered viable.
+- Required performance measurements are documented below; optimized mode is not ready to become the default until reproducible baselines exist.
+
+## Recent Changes
+
+### 2026-09-25
+
+- Added metadata-preserving block overloads for computed `createSignal`, `createStore`, `createProjection`, and `createOptimisticStore`.
+- Added direct typed property reads for stores and props with `StoreRead<Root, Path>`, `PropRead<Root, Path>`, `PathValue`, and `PathResult`.
+- Added runtime store path tokens, strict unread/direct-use diagnostics, and exact tracked re-walks through the existing store proxy.
+- Added compiler lowering for supported member paths before JSX lowering.
+- Added `@solidjs/typecheck` and its `solid-tsc` CLI for projected checking, mapped diagnostics, declaration emit, and separate consumer compilation.
+- Kept `readStore(store, selector)` for structural reads such as `map`, `filter`, and `every`.
+- Added `examples/todos-blocks`, converted applicable reactive, JSX, event, signal, store, and path reads to typed blocks.
+- Fixed result-shape probing so blocks may return store proxies without triggering strict direct-read diagnostics.
+- Replaced the earlier public `strict | warn | loose` proposal with production `compat | strict` modes; implementation switches remain experimental controls.
+- Added required measurements for untransformed runtime overhead, compiler-transform overhead, projected typechecking, optimized runtime performance, and bundle size.
+- Completed read-only studies of runtime slicing and app-dominated cold-code partitioning, including chunk clustering, prefetch policies, safety constraints, and benchmark gates.
+- Completed a strict SSR/hydration study covering wire serialization, hydration-specific JavaScript, client execution, code/data segment alignment, and resumability limits; identified JSX-block hydration-id parity as a critical blocker.
+- Selected cold event-domain extraction and resumable event blocks as the two app-bundle prototypes. Deferred JSX/feature-region splitting is not part of the proposal; existing explicit `lazy()` behavior remains available without strict-mode automation.
+
+## Detailed Prototype Inventory
+
+### Runtime And Types
+
+- `@solidjs/signals` exports `$`, typed blocks, iterable signal accessors, task/failure/write/call operations, loading/error handlers, and direct path operations.
+- Blocks carry separate `Reads`, `Tasks`, `Failures`, `Writes`, and `Input` categories, including transitive async/error metadata from readable values.
+- Reactive hosts reject writes; JSX hosts admit direct reads only; event hosts admit reads, tasks, failures, and writes.
+- `createMemo`, computed `createSignal`, effects, and block-derived stores/projections preserve block metadata.
+- DOM event blocks preserve their creation owner through forwarding and route synchronous or asynchronous failures to the captured error boundary.
+- Store writes remain explicit through `write(setStore, updater)`; setters do not become context-sensitive.
+
+### Compiler And Typechecking
+
+- The Rust compiler recognizes imported `$` blocks and lowers a conservative generator subset before JSX lowering.
+- Supported signal and path reads lower through `perform`; unsupported blocks fall back in compat mode and are intended to fail the build in strict mode.
+- Direct paths lower to `readPath(root, keys)` or `readProp(props, keys)` operations.
+- `solid-tsc` projects direct path expressions into typecheck-only operations while preserving authored diagnostic positions.
+- Emitted declarations contain ordinary public path-operation types, so downstream consumers can use stock TypeScript.
+- No language-service plugin exists yet; editors may report errors on authored direct-path syntax even when `solid-tsc` succeeds.
+- `solid-tsc --build` and watch mode are not implemented.
+
+### Examples And Verification
+
+- `examples/todos-blocks` exercises transformed blocks, JSX reads, events, stores, direct paths, structural selectors, loading, errors, and runtime fallback coverage.
+- The direct-path pass reported green signals, compiler Rust/fixture, Solid, web client, SSR, hydration, `packages/typecheck`, TodoMVC typecheck/test/build, and formatting suites.
+- Runtime/transform equivalence, host rejection, root/path inference, diagnostic remapping, declaration emit, and separate consumer compilation have focused coverage.
+
+### Strict SSR And Hydration Findings
+
+- Current SSR serializes async memo/signal results, async projections, iterable results, errors, loading/stream sentinels, and asset maps. Plain signals, synchronous memos, and plain stores are generally recreated by client execution rather than serialized as application state.
+- Current hydration re-runs the component tree, creates owners and computations, reconnects dependencies, and executes binding computations; it primarily avoids redundant DOM creation and writes.
+- Returned JSX `$` blocks currently consume hydration IDs differently on server and client. Strict mode makes these blocks pervasive, so hydration-id parity is a release blocker rather than an optional optimization issue.
+- Root/path metadata can help project async/store payloads and align cold code chunks with cold data segments, but it does not prove object identity, alias safety, serializability, or closure resumability.
+- Static components with no client-live behavior are candidates for omitted hydration code only after compiler reachability, refs/directives/context, boundary, and descendant-interactivity proofs are complete.
+- Resumable event blocks require every capture to be addressable by a stable root/path, constant, or registered action. Arbitrary closures, DOM nodes, owners, setters, and non-serializable objects remain blockers.
+- Streaming, `Loading`, `Errored`, transitions, portals, custom elements, directives, and client-only sources require explicit capability and identity handling; absence of `Writes` alone never proves hydration can be skipped.
+
+### App Bundle Prototype Priorities
+
+The two proposed app-code slicing experiments are:
+
+1. **Cold event-domain extraction.** Move an event block and its cold-only import/call graph into a clustered interaction chunk. Prefetch on route load, idle, visibility, hover, or focus so normal events remain synchronous once interaction is possible.
+2. **Resumable event blocks.** Avoid hydrating the creating component when every handler capture is addressable as a stable root/path, constant, serialized value, registered action, and boundary coordinate. Emit an event coordinate in server HTML and load the shared event chunk on demand or through prefetch. The manifest must include the nearest statically proven error-boundary coordinate so a rejected resumed handler routes directly without recreating its component owner chain.
+
+Resumability must reject arbitrary closures, mutable locals, DOM-node captures, unregistered setters, owners, and non-serializable objects. Handlers requiring immediate `preventDefault` or propagation control need a small synchronous shell or must be loaded before interaction. Direct boundary coordinates apply only to resumed event failures; ordinary reactive pending/error status must still propagate through actual dependency consumers because one source can feed multiple boundaries. Error routing, ownership, cleanup, hydration IDs, and action identity must remain equivalent to ordinary hydration.
+
+Compiler-created deferred JSX or feature regions are explicitly out of scope. Strict mode does not turn a synchronous branch into an asynchronous one. Applications may continue to opt into existing `lazy()` and `Loading` behavior directly.
+
+### Strict Multi-Module Pipeline
+
+Strict optimization includes both TypeScript and bundler/linker phases:
+
+1. **Source compiler summaries** record behavioral facts visible in implementations: block effects, captures and escapes, component prop usage, event forwarding, boundary relationships, direct paths, and unknown operations.
+2. **`solid-tsc` typed summaries** attach resolved symbol identity across imports/re-exports, instantiated generic and prop types, typed root/path metadata, and validated branded contracts for addressable captures, registered actions, serializable values, and compiled libraries. TypeScript narrows and diagnoses candidates but does not by itself prove runtime behavior.
+3. **Bundler/linker analysis** joins summaries over the complete server and client module graphs, propagates `hot | cold | shared | unknown` reachability to a fixed point, computes capability absence, clusters cold event domains, emits resumable-event and hydration manifests, and selects runtime entries. Server and client graphs are analyzed independently.
+
+Missing, incompatible, or escaped metadata becomes `unknown` and conservatively retains hot code, data, hydration, and general runtime capabilities. Published strict-compatible libraries must ship linkable summaries alongside declarations and JavaScript.
+
+### Remaining Work
+
+- Independently review the accumulated experimental diff and public API naming.
+- Implement and validate the two production modes as whole-application build contracts, including `solid-tsc` typed-summary emission and bundler/linker fixed-point analysis.
+- Add editor language-service support for projected direct-path syntax.
+- Build the required compiler/runtime/size benchmark matrix and establish acceptance thresholds.
+- Prototype and measure cold event-domain extraction and resumable event blocks; do not add compiler-created deferred feature regions.
+- Decide which runtime slicing, SSR serialization, and hydration specializations earn implementation after measurement.
+- Define compatibility and publication policy for libraries that cannot provide strict capability manifests.
+
 ## Core Goal
 
 Build `$()` into Solid as a typed effect boundary for reactive code.
@@ -7,7 +110,7 @@ Build `$()` into Solid as a typed effect boundary for reactive code.
 ```tsx
 function Component(props) {
   return $(function* () {
-    return <div>{(yield* props.user).name}</div>;
+    return <div>{yield* props.user.name}</div>;
   });
 }
 ```
@@ -72,9 +175,10 @@ JSX blocks may directly yield signal reads only:
 ```tsx
 function User(props) {
   return $(function* () {
+    const user = yield* props.user;
     return (
       <article>
-        <h1>{(yield* props.user).name}</h1>
+        <h1>{user.name}</h1>
         <span>{yield* props.status}</span>
       </article>
     );
@@ -432,38 +536,120 @@ A reactive block containing writes is not accepted by `createMemo`.
 
 An event block accepts every effect category.
 
-## Stores
+## Direct Store And Prop Paths
 
-Stores use property access rather than callable accessors. A property such as `store.user.name` evaluates to a plain value before `yield*` can observe it, so the initial integration uses one explicit read operation and the existing store proxy:
-
-```tsx
-function UserView(props) {
-  return $(function* () {
-    return <div>{yield* readStore(props.store, state => state.user.name)}</div>;
-  });
-}
-```
-
-`readStore(store, selector)`:
-
-- Is a normal read operation and is therefore valid in reactive, JSX, and event blocks.
-- Runs `selector` in the block's permitted read scope.
-- Uses the existing store proxy and per-property nodes for exact runtime tracking.
-- Infers the selector result type.
-- Records the store root in the block's `Reads` category.
-- Does not change normal store behavior outside `$`.
-
-Arrays use the same operation:
+Strict blocks support direct typed property reads without a user-facing lens, property wrapper, `readProp`, or selector helper:
 
 ```tsx
-return $(function* () {
-  return <ul>{yield* readStore(store, state => state.items.map(item => <li>{item.name}</li>))}</ul>;
-});
+const name = yield * store.user.name;
+const first = yield * store.items[0].name;
+const current = yield * store.items[index];
+const count = yield * store.items.length;
+const label = yield * props.label;
 ```
 
-The selector may perform nested, indexed, structural, or dynamic reads. The runtime proxy remains authoritative for the actual property nodes read on each execution.
+### Path Types
 
-Store writes use the existing event-only write operation and ordinary store setter:
+Each direct read records its root and path:
+
+```ts
+StoreRead<typeof store, readonly ["user", "name"]>;
+StoreRead<typeof store, readonly ["items", number]>;
+PropRead<typeof props, readonly ["label"]>;
+```
+
+`PathValue<Root, Path>` walks the path to infer the selected value. `PathResult<Root, Path>` additionally reads through a signal accessor or block stored at the selected path, matching the value behavior of `yield*`. Async and error coloring carried by that readable value propagates transitively.
+
+The static path supports property names, numeric indices, tuple positions, array `length`, index signatures, and simple dynamic identifier keys. A path is compile-time capability metadata; the actual store nodes and mounted prop instance remain runtime identities.
+
+### Store Runtime
+
+During runtime generator execution, the store proxy returns a deferred path token while strict block scope is active:
+
+```text
+store.user      -> token(root, ["user"])
+.user.name      -> token(root, ["user", "name"])
+yield*          -> StoreRead(root, path)
+driver           -> tracked walk through the real store proxy
+```
+
+The tracked re-walk uses the existing store machinery, which remains authoritative for exact property, structural, index, dynamic-key, alias, and shared-reference behavior. Outside a strict block, the same store proxy returns ordinary values.
+
+A token used as an ordinary value throws `[DIRECT_READ_IN_BLOCK]`. A token created but never yielded throws `[UNREAD_PATH]`. Aliases can extend a token:
+
+```ts
+const user = store.user;
+const name = yield * user.name;
+```
+
+Destructuring resolves ordinary values rather than retaining a path token and should not be used to express a typed path read.
+
+### Compiler Lowering
+
+The generator transform runs before JSX lowering and rewrites supported paths approximately as:
+
+```js
+_$perform(_$readPath(store, ["user", "name"]));
+_$perform(_$readPath(store, ["items", index, "name"]));
+_$perform(_$readProp(props, ["label"]));
+```
+
+Bare identifiers retain their existing signal-accessor or block-delegation meaning. Member paths read the value at the path; explicit block invocation remains `call(block, input)`.
+
+Props are ordinary compiler-emitted getter objects rather than store proxies. Direct prop paths therefore require compiler lowering; the lowered `readProp` operation invokes the real getter under permitted read scope so Solid tracks its exact underlying signals or stores.
+
+### Projected Typechecking
+
+Stock TypeScript checks the authored operand before Solid's runtime transform, so it cannot infer that a plain string or number is a path operation. The prototype adds `@solidjs/typecheck` and the `solid-tsc` CLI.
+
+For typechecking only, `projectBlocksForTypecheck` inserts an operation with the authored expression retained as a witness:
+
+```ts
+yield * __solid_readPath(store, ["items", index, "name"], store.items[index].name);
+yield * __solid_readProp(props, ["count"], props.count);
+```
+
+This provides root/path metadata and selected-value inference while mapping diagnostics back to the authored source location. Declaration emit contains ordinary public `StoreRead` and `PropRead` types, so downstream consumers can compile separately with stock TypeScript.
+
+Current tooling limitations:
+
+- Editors still diagnose authored direct paths because no language-service plugin ships yet; `solid-tsc` is the source of truth.
+- `solid-tsc --build` and watch mode are not implemented.
+- Optional chains, method calls, complex computed expressions, and paths rooted in `splitProps` or `mergeProps` results are conservatively refused by projection/lowering.
+- Unsupported forms remain errors or runtime fallbacks in compat experiments; strict production mode must reject them at build time.
+
+### Structural Store Reads
+
+Direct paths intentionally cover property paths, not arbitrary collection programs. `readStore(store, selector)` remains for structural operations:
+
+```tsx
+const names = yield * readStore(store, state => state.items.map(item => item.name));
+const visible = yield * readStore(store, state => state.items.filter(matchesFilter));
+```
+
+The selector executes once under permitted read scope, and the existing proxy records the exact runtime properties and structure it touches. Its type metadata records the store root and inferred result rather than a fabricated static path for arbitrary JavaScript.
+
+### Block-Derived Stores
+
+Function-form stores and projections accept no-write blocks and preserve their metadata:
+
+```ts
+const projected = createProjection(
+  $(function* (draft: State) {
+    draft.name = yield* sourceStore.name;
+  }),
+  seed
+);
+
+const [writable, setWritable] = createStore(block, seed);
+const [optimistic, setOptimistic] = createOptimisticStore(block, seed);
+```
+
+`BlockStore<B, T>` is an ordinary projection proxy intersected with phantom `BlockMetadata<B>`; no runtime metadata property is added. Reading it through a direct path or `readStore` carries its source block's async/error metadata transitively. Blocks containing `Writes` are rejected by these reactive hosts.
+
+### Store Writes
+
+Store writes remain explicit event operations:
 
 ```ts
 const addItem = $(function* () {
@@ -474,79 +660,6 @@ const addItem = $(function* () {
 ```
 
 Reactive and JSX hosts reject this block because its `Writes` category is non-empty. Store setters do not become context-sensitive.
-
-### Store Transform
-
-For a supported selector, transform mode lowers:
-
-```ts
-yield * readStore(store, state => state.user.name);
-```
-
-to an ordinary selector invocation or equivalent direct property access:
-
-```ts
-store.user.name;
-```
-
-Unsupported selector forms remain on the runtime path rather than being partially lowered.
-
-### Store TypeScript Limits
-
-The initial type model tracks the store root and selected value type, not the complete property path. Runtime tracking remains exact.
-
-TypeScript can represent a static path tuple such as `["users", number, "name"]`, but it cannot safely make ordinary store properties contextually yieldable only inside `$`. Permanently branding every property as yieldable would allow plain values to escape and later be incorrectly accepted by `yield*`.
-
-TypeScript also cannot automatically assign a fresh nominal identity to every `createStore()` call or prove that two paths currently reference the same raw object. Shared references, aliases, dynamic indices, and actual store-node identity remain runtime concerns.
-
-Potential later work includes compiler-emitted path metadata, a TypeScript language-service plugin, or an opt-in path view. The first version intentionally does not add lenses or context-sensitive store proxy values.
-
-### Wrapper-Free Store Alternative
-
-A future strict mode could support direct store syntax without `readStore`:
-
-```tsx
-return $(function* () {
-  return <div>{yield* store.user.name}</div>;
-});
-```
-
-While the runtime driver advances a `$` generator, it can mark the block as active. The existing store proxy can observe that state and return a deferred path reference instead of immediately returning the property value:
-
-```text
-store.user      -> path ["user"]
-.user.name      -> path ["user", "name"]
-yield*          -> StoreRead operation
-driver           -> reads the real value through the normal store proxy
-```
-
-Outside `$`, the same proxy continues returning ordinary values. Transform mode lowers the expression directly to `store.user.name`.
-
-Arrays can use the same path behavior for indices and `length`:
-
-```tsx
-yield * store.items[0].name;
-yield * store.items.length;
-yield * store.items[index];
-```
-
-For methods or iteration, the collection is yielded before normal array operations:
-
-```tsx
-(yield * store.items).map(item => <li>{item.name}</li>);
-```
-
-The path reference owns the effect iterator, so it does not replace the real array's `Symbol.iterator`. After resolution, the value is the ordinary store array proxy and normal `map`, spread, and `for...of` behavior remains available.
-
-This design has important costs:
-
-- A proxy can detect an active `$` execution but cannot know whether a property access is syntactically the operand of `yield*`.
-- Ordinary store reads inside the generator would also produce deferred references and must be diagnosed if they are not consumed.
-- TypeScript cannot contextually change a property's type only inside `$`. Recursive value-and-path intersection types allow values to escape with a yieldable type even though the escaped runtime primitive is not yieldable.
-- Native `await` cannot keep a browser-global active scope set safely; the driver must restore scope around each controlled continuation.
-- Array methods, getters, destructuring, optional chains, computed keys, and values passed through opaque functions require explicit semantics and conservative fallback.
-
-The wrapper-free form is therefore plausible as compiler-checked strict syntax, but it is not the initial runtime contract. `readStore(store, selector)` remains the small, sound implementation that works without contextual TypeScript behavior.
 
 ## Strictness And Interoperability
 
@@ -593,17 +706,42 @@ The runtime remains correct by falling back to ordinary tracking, but exhaustive
 
 ### Compiler Modes
 
+The implementation currently exposes several independent switches to explore the design space: runtime versus transformed execution, warning and guard levels, optimization flags, and individual feature experiments. These are development controls, not the proposed production API.
+
+The production proposal has only two modes:
+
 ```ts
 solid({
-  effects: "strict" | "warn" | "loose"
+  mode: "compat" | "strict"
 });
 ```
 
-`strict` rejects effects that cannot be represented precisely.
+#### Compat
 
-`warn` allows them but reports lost precision.
+Compat mode supports incremental adoption and external JavaScript:
 
-`loose` preserves ordinary JavaScript behavior and uses runtime tracking.
+- Supported `$` blocks may still be transformed for performance.
+- Generator blocks that cannot be transformed use the runtime driver and operation fallbacks.
+- Ordinary Solid accessors, callbacks, components, and untyped libraries remain valid.
+- Unknown modules and dynamic imports force conservative runtime feature inclusion.
+- Development diagnostics may report lost effect precision without making the build fail.
+
+Compat guarantees correct behavior, not complete effect knowledge or the smallest possible runtime.
+
+#### Strict
+
+Strict mode is a whole-application contract, not a per-file lint level:
+
+- Every reactive or effectful application boundary must use typed generator blocks with strict host and read/write rules.
+- All application modules, route chunks, workers, and participating libraries must be compiled in strict mode or provide a trusted strict capability manifest.
+- Unsupported generator forms, hidden effects, ordinary reactive reads inside blocks, unknown effectful callbacks, and unclassified dynamic imports are build errors.
+- Runtime generator fallback is not shipped. A block that cannot be lowered fails the build instead of deoptimizing.
+- Client and server graphs are checked and specialized independently.
+- Development builds verify compiler claims and fail loudly on metadata or capability mismatches.
+
+With the complete application graph proven strict, Solid automatically selects specialized block hosts and runtime entry points, removes unused interpreters and feature modules, and applies safe application-code splitting. Strict mode produces the fastest and smallest build available for that application's proven capabilities without requiring users to configure individual optimization flags.
+
+Libraries that cannot satisfy the strict contract require compat mode; strict mode does not silently place them behind a fallback boundary.
 
 ### Legacy Adapters
 
@@ -625,7 +763,7 @@ Unknown effects remain in the block’s type. `Errored` cannot claim that every 
 
 ## Runtime Mode
 
-Runtime mode requires no `$` transform.
+Runtime mode is an implementation path used by compat mode and by experiments; it is not a separate production mode. It requires no `$` transform.
 
 Signals implement an iterator:
 
@@ -653,7 +791,7 @@ A development guard can detect direct reads inside strict blocks. Loose blocks p
 
 ## Transform Mode
 
-Transform mode removes generator overhead while preserving behavior.
+Transform mode is an implementation path used by both production modes. It removes generator overhead while preserving behavior. Compat may fall back when lowering is unsafe; strict mode rejects the same block at build time.
 
 ```ts
 $(function* () {
@@ -707,7 +845,7 @@ Runtime and transformed behavior must be tested for equivalence.
 
 ## Optimize Mode
 
-Optimize mode may eventually use static effect and dependency information for deeper specialization.
+Optimize mode is currently an experimental switch. In the production proposal, its proven optimizations are selected automatically by strict mode rather than exposed as a third public mode. It may eventually use static effect and dependency information for deeper specialization.
 
 The central correctness distinction is:
 
@@ -721,6 +859,74 @@ Dynamic or unknown dependencies
 A dependency appearing under a branch is not necessarily active on every execution.
 
 Static metadata must not replace Solid’s dynamic tracking unless the dependency set is proven exact.
+
+## Required Performance Measurements
+
+Performance claims for `$` require three separate measurements. They must not be collapsed into one transformed-demo result.
+
+### Runtime Fallback Overhead
+
+Measure `$` with generator transformation completely disabled against equivalent idiomatic Solid code. This establishes the cost and viability of the runtime fallback rather than treating it only as a correctness path.
+
+Required cases:
+
+- Block creation and first execution.
+- Steady-state updates with one read, multiple reads, conditional reads, and nested block delegation.
+- Reactive computations, JSX blocks, and event blocks.
+- Synchronous store/prop path reads and selector-based structural store reads.
+- Allocation rate, retained memory, and owner/link counts in addition to wall time.
+- Development guards measured separately from production runtime behavior.
+- Minified and gzipped cost of retaining the generator driver and fallback operations.
+
+Each case must compare hand-written accessors, untransformed `$`, and the same workload after transformation.
+
+### Compiler Transform Overhead
+
+Measure the incremental compile-time cost of enabling the `$` transform, independent of runtime results. Extend the compiler benchmark with identical inputs compiled with and without generator/path lowering.
+
+Required workloads:
+
+- Existing many-small-file fixture corpus.
+- Existing approximately 128 KB and 1 MB single-module workloads.
+- Synthetic modules with low, representative, and dense `$` block usage.
+- Supported blocks, unsupported blocks that must bail out, JSX blocks, event blocks, and direct store/prop paths.
+- Cold process startup and warmed in-process throughput.
+- Wall time, throughput, peak memory, emitted byte count, and source-map size.
+- Pre-typecheck projection and projected TypeScript checking measured separately from runtime-code transformation.
+
+Results must report absolute time and the delta from the same compiler configuration with `$` processing disabled.
+
+### Optimized Runtime Performance
+
+Measure transformed and metadata-specialized `$` against both untransformed `$` and equivalent hand-written Solid output. The optimized path is successful only when it approaches or improves on the hand-written baseline without changing behavior.
+
+Required coverage:
+
+- Signals graph creation, one-to-one updates, fan-out, diamond propagation, and avoidable recomputation.
+- DOM mount/clear, full replacement, partial row updates, keyed reverse/shuffle, and dynamic component paths.
+- Event dispatch, forwarded/wrapped handlers, first interaction, and repeated interaction.
+- Store projection, sparse path updates, structural selectors, and keyed reconciliation.
+- Async task, loading, error, cancellation, and transition paths when their features are retained.
+- SSR rendering and hydration startup.
+- Production bundle size for read-only, event-only, synchronous-only, store-using, and full-feature applications.
+
+The comparison matrix is:
+
+| Variant         | Purpose                                                |
+| --------------- | ------------------------------------------------------ |
+| Idiomatic Solid | Hand-written performance floor                         |
+| Runtime `$`     | Cost of no transformation                              |
+| Transformed `$` | Cost after generator removal                           |
+| Optimized `$`   | Benefit of metadata specialization and feature pruning |
+
+### Measurement Discipline
+
+- Run production artifacts for runtime and size measurements.
+- Use repeated samples, medians, spread/RME, pinned Node/browser versions, machine details, and commit SHA.
+- Use the in-repo Vitest/CodSpeed suites for fast regression detection and validate retained optimizations against the relevant Tier-2 suite.
+- Run runtime/transform equivalence and correctness suites before accepting a performance result.
+- Record regressions as well as wins; an optimization is not retained solely because a synthetic `$` microbenchmark improves.
+- Do not enable optimized mode by default until all three measurement groups have reproducible baselines.
 
 ## Compiler-Emitted Metadata
 
@@ -765,6 +971,7 @@ Useful runtime optimizations include:
 
 - Skip generator and iterator probing for lowered blocks.
 - Skip generic direct-task handling when safely proven absent.
+- Erase pending and error status channels from computations proven synchronous and non-throwing; retain development assertions for violated proofs.
 - Select the correct host interpreter immediately.
 - Configure event concurrency and ownership.
 - Produce source-level diagnostics.
@@ -826,7 +1033,7 @@ Compiler identifies event blocks. Runtime supplies:
 - Ownership
 - Cancellation
 - Concurrency
-- Error routing
+- Error routing, including direct boundary coordinates for resumable handlers
 - Batched writes
 
 ## Bundle-Size Specialization
@@ -844,7 +1051,7 @@ Potential removable functionality includes:
 - Async helpers such as `isPending`, `latest`, and `resolve`
 - Async transition scheduling
 
-Per-block flags alone cannot tree-shake this code. Solid needs tree-shakeable runtime modules or build-time feature constants.
+Per-block flags alone cannot tree-shake this code. Solid needs tree-shakeable runtime modules or build-time feature constants. Within a full runtime, proven synchronous/non-throwing nodes should also use a status-free recomputation path so normal creation and updates do not pay pending/error bookkeeping costs. This does not bypass dependency propagation for nodes that can actually suspend or fail.
 
 Possible runtime modules:
 
@@ -920,7 +1127,9 @@ The larger model is similar to algebraic effects: `$` blocks declare operations,
 - TypeScript does not track thrown exceptions natively.
 - Arbitrary functions may hide reads, writes, Promises, and errors.
 - JSX may erase generic block return types.
-- Solid props and stores use property reads rather than accessor calls.
+- Direct prop/store paths require projected typechecking; editor language-service support is still missing.
+- Static root/path metadata cannot prove runtime aliases, shared-reference identity, or serializability.
+- JSX blocks currently break server/client hydration-id parity and must be fixed before strict SSR is viable.
 - Direct reads after native `await` cannot safely use global tracking.
 - Event errors occur after render and require captured boundary routing.
 - Event concurrency needs explicit defaults.
@@ -933,37 +1142,118 @@ The larger model is similar to algebraic effects: `$` blocks declare operations,
 - Runtime mode and transform mode must remain behaviorally identical.
 - Replacing actions entirely requires matching their transaction and cancellation semantics.
 
-## Current Prototype Status
+## Prototype 1: Compiler Host Fusion and Block Erasure
 
-The original `packages/solid-typed` experiment established iterable typed signals and transitive metadata. The active prototype now integrates the model into core packages.
+### Design
 
-### Implemented Runtime And Types
+When a typed `$()` block is consumed by a statically known host
+(`createMemo`, `createEffect`, `createRenderEffect`), the compiler erases the
+`$()` wrapper and replaces every `_$perform(accessor)` call with a direct
+`accessor()` invocation. Path reads (`_$readPath`, `_$readProp`) are erased to
+member expressions (e.g. `store.user.name`, `props.count`).
 
-- `@solidjs/signals` exports `$`, typed blocks, signal iterators, read/task/failure/write operations, composition helpers, and function-style loading/error handlers.
-- A block carries separate `Reads`, `Tasks`, `Failures`, `Writes`, and `Input` categories. Derived async and error totals include metadata inherited from read accessors.
-- Block delegation preserves and accumulates transitive categories.
-- `createMemo`, computed `createSignal`, and effect compute functions accept blocks but structurally reject writes.
-- JSX accepts only zero-input blocks whose direct tasks, failures, and writes are `never`. Reads remain unrestricted, including reads of async/error-colored accessors.
-- JSX insertion executes blocks through the render host and rejects disallowed operations at runtime.
-- DOM event props accept event blocks. Direct and delegated event paths dispatch them at the final DOM sink.
-- Event blocks preserve their creation owner through prop forwarding and route synchronous or asynchronous failures to the captured error boundary.
-- `write(setter, value)` supplies the typed write operation. Raw setters remain ordinary functions and are not context-sensitive.
-- Undeclared failures from arbitrary callbacks remain `unknown`; the prototype does not claim checked exceptions for unrestricted JavaScript.
+**Safety invariant:** without the `$` block wrapper the block guard is never
+raised, so `readGuarded` is a no-op and `_$perform(x)` === `x()`. Path tokens
+are never created because store proxies return normal values when no guard is
+active. The fusion pass only fires when every `_$perform` argument in the
+function body is "fully erasable" — identifiers, non-optional member
+expressions, or `_$readPath`/`_$readProp` calls with an identifier root and
+string/number/identifier literal keys. It bails when the body contains
+`readStore`, `raise`, `attempt`, `write`, `call`, or any other non-trivial
+perform argument.
 
-### Implemented Compiler Work
+The pass runs **after** the generator transform and **before** JSX lowering.
 
-- The Rust compiler recognizes imported `$` blocks and lowers a conservative generator subset before JSX lowering.
-- Supported reads and operations lower through `perform` while preserving the block brand and runtime fallback.
-- Host and syntax diagnostics cover plain yield, async generators, direct throw, invalid JSX operations, and JSX yields that cannot be lowered safely.
-- Unsupported blocks remain on the runtime generator path rather than being partially transformed.
-- Compiler fixtures cover signal reads, JSX reads, operations, aliases, shadowing, unsupported delegation, and disabled transformation.
+### Implementation
 
-### Verification
+Behind the `hostFusion: true` compiler option (default `false`). Requires
+`generators: true`.
 
-The completed host-context pass reported green focused suites across signals, Solid, web, compiler, server, and type tests. Coverage includes inline JSX reads, transitive async/error metadata, JSX host rejection, reactive write rejection, event forwarding, wrapped event composition, direct and delegated DOM dispatch, error routing, and runtime/transform equivalence.
+**Changed files:**
+- `packages/compiler/src/generators.rs` — `fuse_host_blocks()` pass (~250 lines), 6 unit tests (3 positive, 3 negative)
+- `packages/compiler/src/compiler.rs` — `host_fusion` option in `CompileOptions`, fusion pass call site
+- `packages/compiler/src/config.rs` — `host_fusion: Option<bool>` in NAPI `TransformOptions`
+- `packages/compiler/src/node_adapter.rs` — `host_fusion` plumbed in `core_options()`
+- `packages/compiler/src/shared/ast.rs` — `argument_to_expression()` helper
+- `packages/compiler/types.d.ts` — `hostFusion?: boolean` in TypeScript types
+- `packages/compiler/index.js` — `hostFusion` added to `nativeOptionKeys`
+- `packages/compiler/__tests__/generators-fixtures.test.js` — 5 fusion contract tests
+- `packages/compiler/__tests__/generators/fixtures/fusion-memo-effect/` — fusion fixture
+- `packages/compiler/__tests__/generators/fixtures/fusion-paths/` — path-read fusion fixture
+- `packages/compiler/__tests__/generators/fixtures/fusion-bail-standalone/` — negative fixture
 
-### Store Work
+### Test Results
 
-The minimal `readStore(store, selector)` integration is currently being implemented and tested. Its scope is the store model documented above: root-level type metadata, selector result inference, existing-proxy runtime tracking, event writes through `write`, and conservative transform lowering. Full static path identities, lenses, and shared-reference analysis are explicitly deferred.
+**Rust unit tests:** 72 passed, 0 failed (15 generator tests including 6 new fusion tests)
+```
+cargo +1.97.1 test -- --test-threads=1
+```
 
-The current worktree remains experimental and uncommitted. Public naming, compatibility policy, runtime-size impact, and final guarantees still require review after the store pass and independent verification.
+**JS fixture tests:** 5823 passed, 0 failed, 28 skipped (40 test files)
+```
+npx vitest run
+```
+
+**Fusion-specific contract tests (5):**
+- erases `$()` wrapper and perform calls when consumed by createMemo/createEffect
+- erases path reads to member expressions
+- does NOT fuse standalone blocks (no known host)
+- is off by default even when generators are on
+- produces strictly smaller output than non-fused for the same input
+
+### Measurements
+
+**Environment:** macOS Darwin 25.5.0, Rust 1.97.1, Node.js v24.18.0
+
+#### Emitted output size (unminified)
+
+| Fixture | Without fusion | With fusion | Savings |
+|---------|---------------|-------------|---------|
+| memo-effect (3 blocks: createMemo×2 + createEffect×1) | 742 bytes | 688 bytes | 54 bytes (7.3%) |
+| paths (2 blocks: createMemo with readPath + readProp) | 363 bytes | 298 bytes | 65 bytes (17.9%) |
+
+#### Code-body parity with handwritten Solid
+
+Function bodies are **identical** to handwritten Solid (verified line-by-line).
+The only remaining overhead is unused import specifiers (`$`, `perform as
+_$perform`, `readPath as _$readPath`, `readProp as _$readProp`) left behind
+because the fusion pass does not yet clean up the import declaration. These are
+eliminated by bundler tree-shaking/dead-code elimination.
+
+#### Runtime overhead erasure
+
+Per fused block, the following runtime operations are eliminated at compile time:
+- 1× `$(fn)` call → `fn` (no block allocation, no `createComputation` overhead in `$`)
+- N× `_$perform(accessor)` → `accessor()` (no `readGuarded` call, no guard check)
+- M× `_$readPath(root, keys)` → `root.key1.key2...` (no path-token allocation)
+- M× `_$readProp(props, keys)` → `props.key` (no prop-token allocation)
+- 0× `renderBlock`/`isBlock` check at host insertion (the value is a plain function, not a block)
+
+### Known Limitations
+
+1. **Unused import specifiers remain.** The fusion pass does not strip `$`,
+   `perform`, `readPath`, `readProp` from the import declaration when all their
+   call-site usages are erased. A follow-up could add an import-cleanup
+   sub-pass; in practice bundlers handle this.
+
+2. **JSX host fusion not attempted.** JSX children that are `$()` blocks go
+   through `renderBlock` detection at insert time. Fusing those requires
+   coordinating with the JSX transform's template-creation logic and is scoped
+   for a later prototype.
+
+3. **JSX `$` hydration-ID parity is already known broken.** This prototype does
+   not conceal or paper over that issue.
+
+### Decision
+
+**KEEP** — prototype 1 demonstrates the core value proposition:
+
+- The fused output is **identical** to handwritten Solid (ignoring import
+  specifiers that tree-shaking removes).
+- The pass is safe: it only fires when the entire block body is provably
+  erasable, and bails conservatively on any non-trivial construct.
+- The implementation is ~250 lines of Rust, gated behind an off-by-default
+  flag, with zero impact on existing behavior.
+- Output size reduction is 7–18% per fused block depending on path-read density.
+- Runtime overhead (block allocation, guard checks, path-token allocation) is
+  fully eliminated for fused blocks.

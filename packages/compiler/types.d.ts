@@ -50,6 +50,13 @@ export interface TransformOptions {
    * compile errors. Default `true`.
    */
   generators?: boolean;
+  /**
+   * Experimental: erase `$()` block wrappers and `perform` calls when
+   * consumed by a statically known host (`createMemo`, `createEffect`, …),
+   * producing output identical to hand-written Solid. Requires `generators:
+   * true`. Default `false`.
+   */
+  hostFusion?: boolean;
 }
 
 export interface RendererOption {
@@ -111,6 +118,31 @@ export interface TsrxTypecheckProjectionResult {
  * Experimental compiler-owned TSRX projection for typechecking and editor
  * tooling. This API is host-independent and does not run a runtime renderer.
  */
+/** One splice of the block typecheck projection (offsets in UTF-16 code units). */
+export interface BlockProjectionEdit {
+  sourceStart: number;
+  sourceEnd: number;
+  generatedStart: number;
+  generatedEnd: number;
+}
+export interface BlockTypecheckProjection {
+  code: string;
+  edits: BlockProjectionEdit[];
+  rewrites: number;
+}
+/**
+ * Pre-typecheck projection for `$` blocks' direct property syntax: wraps
+ * each `yield* root.a[0][k]` operand as `readPath(root, ["a", 0, k], root.a[0][k])`
+ * / `readProp(...)` (the ops the compiler lowers to, plus the authored
+ * operand as a witness so TypeScript reports wrong keys at their column) and
+ * adds their import. Every edit is an insertion, so all authored positions
+ * survive; `solid-tsc` (`@solidjs/typecheck`) drives it and maps diagnostics
+ * back with `edits`.
+ */
+export function projectBlocksForTypecheck(
+  code: string,
+  options?: { filename?: string } | null
+): BlockTypecheckProjection;
 export function projectTsrxForTypecheck(
   code: string,
   options?: ProjectTsrxForTypecheckOptions | null

@@ -1,14 +1,28 @@
 import {
+  $,
   createEffect,
   createRenderEffect,
   createMemo,
+  createOptimisticStore,
+  createProjection,
+  createStore,
   Accessor,
   SourceAccessor,
   refresh,
+  readStore,
   createSignal,
   createOptimistic,
+  wait,
+  write,
   Signal,
-  Setter
+  Setter,
+  type BlockAsync,
+  type BlockErrors,
+  type BlockStore,
+  type BlockValue,
+  type Refreshable,
+  type Store,
+  type StoreSetter
 } from "../src/index.js";
 
 class Animal {
@@ -363,3 +377,100 @@ const s6: Setter<undefined> = setNumberOrUndefined;
 const s7: Setter<string> = setUndefined;
 // @ts-expect-error can't set string to undefined
 const s8: Setter<string | undefined> = setUndefined;
+
+//////////////////////////////////////////////////////////////////////////
+// block-derived stores (client / hydration wrappers) /////////////////////
+//////////////////////////////////////////////////////////////////////////
+
+type Expect<T extends true> = T;
+type Equal<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+
+class HttpError extends Error {
+  readonly kind = "http";
+}
+declare function fetchLabel(id: number): Promise<string>;
+interface Summary {
+  total: number;
+  label: string;
+}
+const [summaryId] = createSignal(1);
+const summarize = $(function* (draft: Summary) {
+  const id = yield* summaryId;
+  draft.total = id;
+  draft.label = yield* wait(fetchLabel(id), HttpError);
+});
+const shaped = $(function* () {
+  return { total: yield* summaryId, label: "n" } as Summary;
+});
+
+const summary = createProjection(summarize, {});
+const shapedSummary = createProjection(shaped, { total: 0 }, { ssrSource: "client" });
+const [derivedSummary, setDerivedSummary] = createStore(summarize, {});
+const [optimisticSummary, setOptimisticSummary] = createOptimisticStore(summarize, {});
+type _blockStores = [
+  Expect<Equal<typeof summary, BlockStore<typeof summarize, Summary>>>,
+  Expect<Equal<typeof shapedSummary, BlockStore<typeof shaped, Summary>>>,
+  Expect<Equal<typeof derivedSummary, BlockStore<typeof summarize, Summary>>>,
+  Expect<Equal<typeof setDerivedSummary, StoreSetter<Summary>>>,
+  Expect<Equal<typeof optimisticSummary, BlockStore<typeof summarize, Summary>>>,
+  Expect<Equal<typeof setOptimisticSummary, StoreSetter<Summary>>>,
+  Expect<Equal<(typeof summary)["label"], string>>
+];
+
+// Reading a block-derived store inherits the projection's async status and
+// error union; reading a sync one does not.
+const readsSummary = $(function* () {
+  return `${yield* readStore(summary, s => s.label)}/${yield* readStore(shapedSummary, s => s.total)}`;
+});
+const readsShaped = $(function* () {
+  return yield* readStore(shapedSummary, s => s.total);
+});
+type _reads = [
+  Expect<Equal<BlockValue<typeof readsSummary>, string>>,
+  Expect<Equal<BlockAsync<typeof readsSummary>, true>>,
+  Expect<Equal<BlockErrors<typeof readsSummary>, HttpError>>,
+  Expect<Equal<BlockValue<typeof readsShaped>, number>>,
+  Expect<Equal<BlockAsync<typeof readsShaped>, false>>,
+  Expect<Equal<BlockErrors<typeof readsShaped>, never>>
+];
+
+// A block that writes is refused by every store host.
+const writingDerive = $(function* (draft: Summary) {
+  yield* write(setDerivedSummary, s => {
+    s.total = 1;
+  });
+  draft.total = 1;
+});
+// @ts-expect-error — a projection admits no Writes
+createProjection(writingDerive, {});
+// @ts-expect-error — nor a derived store
+createStore(writingDerive, {});
+// @ts-expect-error — nor a derived optimistic store
+createOptimisticStore(writingDerive, {});
+
+// The plain forms are unchanged.
+const plainProjection = createProjection(
+  (draft: Summary) => {
+    draft.total = 1;
+  },
+  {},
+  { ssrSource: "server" }
+);
+const inferredFromSeed = createProjection(
+  draft => {
+    draft.total = 1;
+  },
+  { total: 0 }
+);
+const [plainDerived] = createStore(async () => ({ total: 1, label: "" }), {} as Partial<Summary>);
+const [plainOptimistic] = createOptimisticStore<Summary>(() => ({ total: 1, label: "" }), {});
+const [plainStore, setPlainStore] = createStore({ total: 0 });
+type _plainForms = [
+  Expect<Equal<typeof plainProjection, Refreshable<Store<Summary>>>>,
+  Expect<Equal<typeof inferredFromSeed, Refreshable<Store<{ total: number }>>>>,
+  Expect<Equal<typeof plainDerived, Refreshable<Store<Summary>>>>,
+  Expect<Equal<typeof plainOptimistic, Refreshable<Store<Summary>>>>,
+  Expect<Equal<typeof plainStore, { total: number }>>,
+  Expect<Equal<typeof setPlainStore, StoreSetter<{ total: number }>>>
+];

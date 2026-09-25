@@ -2,6 +2,7 @@ import { getObserver, type Signal } from "../core/index.js";
 import { ext } from "../core/core.js";
 import type { Refreshable } from "../core/index.js";
 import { GlobalQueue } from "../core/scheduler.js";
+import type { AnyBlock, Block, BlockMetadata } from "../generator.js";
 import { $OWNER, lookupTarget as lookupNextTarget, type StoreNextFamily } from "./next/target.js";
 
 /** A reactive view of a store's value. Update it through the paired `StoreSetter`. */
@@ -27,6 +28,32 @@ export type StoreSetter<T> = (fn: (state: T) => T | void) => void;
 export type StoreReturn<T> = [get: Store<T>, set: StoreSetter<T>];
 /** Tuple returned by the derived `createStore(fn, seed, options?)` form. */
 export type ProjectionStoreReturn<T> = [get: Refreshable<Store<T>>, set: StoreSetter<T>];
+/**
+ * A projection compute expressed as a `$` block: the draft is its input (a
+ * parameterless block is fine), its value is `void` (draft mutated in place)
+ * or the store shape (a replacement, reconciled by `options.key`), and — as
+ * in every reactive host — it may read, wait and fail, but not write.
+ *
+ * Overloads take it as `fn: B & ProjectionBlock<T>` rather than
+ * `B extends ProjectionBlock<T>`: a constraint contributes nothing to
+ * inference, so `T` would come from the seed alone (`{}` for a mutation
+ * form); the intersection infers `T` from the block's input and value, the
+ * seed is then checked against `Partial<T>`, and `B` keeps the metadata.
+ */
+export type ProjectionBlock<T extends object> = Block<void | T, any, any, any, never, T>;
+/**
+ * A projected store that retains its source block's effect metadata, so a
+ * `yield* readStore(projected, selector)` in another block accumulates the
+ * projection's Reads, async status and error union (see `BlockAsync` /
+ * `BlockErrors`). The metadata is phantom: the value is the same store proxy.
+ */
+export type BlockStore<B extends AnyBlock, T extends object> = Refreshable<Store<T>> &
+  BlockMetadata<B>;
+/** Tuple returned by the derived `createStore` / `createOptimisticStore` block form. */
+export type BlockStoreReturn<B extends AnyBlock, T extends object> = [
+  get: BlockStore<B, T>,
+  set: StoreSetter<T>
+];
 /** Options shared by all store primitives. */
 export interface StoreOptions {
   /** Debug name (dev mode only) */

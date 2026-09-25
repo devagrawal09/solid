@@ -64,7 +64,8 @@ import {
   setStoreCommitHook
 } from "../../core/scheduler.js";
 import type { Signal } from "../../core/types.js";
-import { pendingCheckActive, strictRead } from "../../core/core.js";
+import { blockGuard, pendingCheckActive, strictRead } from "../../core/core.js";
+import { pathToken } from "../../generator.js";
 import {
   DEV,
   registerGraph,
@@ -1861,6 +1862,12 @@ function pullProjectionForLatest(target: StoreNextTarget): void {
 
 const traps: ProxyHandler<StoreNextTarget> = {
   get(target, key, receiver) {
+    // Inside a `$` block body (strict guard raised) a string-keyed read is
+    // deferred into a path token: `yield*` performs it through this same
+    // proxy with the guard lowered (see generator.ts, "direct property
+    // syntax"). Never taken by the driver's own reads, nor by a draft (a
+    // projection derive mutates its draft as plain data).
+    if (blockGuard && typeof key === "string" && !inDraft(target)) return pathToken(receiver, key);
     // One typeof gates every brand-symbol compare off the hot string path
     // (four symbol comparisons per property read otherwise).
     if (typeof key !== "string") {

@@ -161,6 +161,8 @@ export type Setter<in out T> = {
 
 /** A `[get, set]` pair returned from `createSignal` / `createOptimistic`. */
 export type Signal<T> = [get: SourceAccessor<T>, set: Setter<T>];
+/** A writable signal derived from a block. The getter retains the block's effect metadata. */
+export type BlockSignal<B extends AnyBlock> = [get: BlockAccessor<B>, set: Setter<BlockValue<B>>];
 
 // `ReactiveHostBlock`: a `$` block is accepted only when its Writes are
 // `never` — a reactive computation may read, wait and fail, but not write.
@@ -375,6 +377,10 @@ export type NoInfer<T extends any> = [T][T extends any ? 0 : never];
  */
 export function createSignal<T>(): Signal<T | undefined>;
 export function createSignal<T>(value: Exclude<T, Function>, options?: SignalOptions<T>): Signal<T>;
+export function createSignal<B extends AnyBlock & ReactiveHostBlock>(
+  fn: B,
+  options?: SignalOptions<BlockValue<B>> & MemoOptions<BlockValue<B>>
+): BlockSignal<B>;
 export function createSignal<T>(
   fn: ComputeFunction<T>,
   options?: SignalOptions<T> & MemoOptions<T>
