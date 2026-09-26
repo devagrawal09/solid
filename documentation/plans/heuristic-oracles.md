@@ -1,6 +1,6 @@
 # Heuristic Oracles: Price the Shortcut Before Building the Proof
 
-Status as of 2026-09-26. This is a measurement study, not a feature. Runtime arms exist only behind `__ORACLE__` and are folded out of every shipped build. The `prod`, `sync`, `observe` and `dev` outputs were verified byte-identical to the pre-change build.
+Status as of 2026-09-26 (round 2 added the same day). This is a measurement study, not a feature. Runtime arms exist only behind `__ORACLE__` and are folded out of every shipped build. The `prod`, `sync`, `observe` and `dev` outputs were verified byte-identical to the pre-change build.
 
 ## Question
 
@@ -26,6 +26,9 @@ Only a heuristic that wins on both benefit and coverage earns a compiler proof.
 | H2 | No untracked reader observes the memo mid-batch | Commit the memo directly, skipping the staging round-trip | ±2%; chain update −8% | – | Reject |
 | H3 | Every source of a node dies with it | Skip unlinking at disposal | Within noise | – | Reject |
 | H4 | A signal's setter is never used | Treat the signal as a constant | Mount −2% alone; −24% when its binding also becomes static | 1.5% of signals (2/133) | Reject: no coverage |
+| H8b | A compute owns nothing and its sources die with it | Never link it into the owner tree | Mount −5% to −8%; −18% with hydration ids; with H1, −47% | – | **Build with H1** (round 2) |
+| C2 | Fusion across a component boundary (component inlined) | H1 applied to memos passed as props | replace −19%, update −7%; select +34% when the memo reads a shared source | Most of the 35 "escaped" memos in the census escape only as props | **Build, local sources only** (round 2) |
+| L1 | Each list row renders one element | Skip flatten/normalize before the DOM reconciler | swap −15%, remove/insert −23% | – | **Build** (round 2) |
 | H6 | An element's bindings are pure reads | One effect per element | Mount −24%, but updates +6%; with H1, select +97% | Attributes already grouped by today's compiler | Already done for attributes; do not group fused selections |
 
 The whole-graph async-free runtime (Track A stage 2) is included as a reference point. In the same scenarios it measured mount −8% to −9%, updates −4% to −20% and filter/select −10% to −16%. Per-node H1 beats it on mount; the two compose.
@@ -124,6 +127,105 @@ The variants are hand edits of the real compiler's output for `scripts/heuristic
 | Dynamic DOM parts that are children (H7 upper bound) | 353 / 696 (51%); the rest are attributes, which the compiler already groups per element |
 | Dynamic parts sitting on an element with ≥ 2 parts (H6) | 271 / 696 (39%), in 120 elements |
 
+## Round 2: Owners, Component Boundaries and Lists
+
+Oracles added after the first verdicts. The keyed-selector rewrite and type-driven static props were considered and not tested. The selection pattern belongs in a projection rather than being compiled away. Static props would lean on types that a runtime value can violate, forcing a throw or a deopt.
+
+| # | Fact the compiler proves | Shortcut | Result | Verdict |
+| --- | --- | --- | --- | --- |
+| H8a | The compute creates no primitives, registers no cleanup and reads no context | Take no child id from the parent | Client-only mount +4% to +6% (the check costs more than an id that is nearly free); id-carrying trees −6% to −8% | Only as part of H8b |
+| H8b | H8a, plus every source dies with the node and there is no effect cleanup | Never link the node into its parent (no owner-tree insert, no disposal visit, no id) | Mount −5% to −8% client-only, **−18% to −19% with ids** (SSR/hydration trees); updates unchanged | **Build**, alongside H1 |
+| H1+H8b | Both | Both | rows mount −40% client-only, **−47% with ids** | The two compose |
+| C1 | A component is known, pure and called from one site | Inline it (no props object, no getter indirection) | replace −7%, other ops within noise | Enabler only |
+| C2 | C1, plus the per-row memo's only reader is now local | Fuse the memo across the former component boundary | replace −19%, create −18%, update10th −7%; **select +34%** | **Build, but not for memos over a shared source** (see below) |
+| L1 | Every row renders exactly one element | Mapped nodes go straight to the DOM reconciler (no flatten/normalize/dispatch) | swap −15%, remove/insert −23%; create, replace and updates within noise | **Build** for structural list updates |
+
+Unsafety tests for H8 are in `tests/heuristic-oracles.test.ts`:
+- a memo marked ownerless that does create children loses its hydration id scope;
+- a detached effect's compute-phase cleanup never runs;
+- a detached node reading a surviving source keeps running after disposal.
+
+**Cross-component fusion and shared sources.** Fusing `isSel = createMemo(() => selected() === row.id)` into the row's class binding removes a node per row (mount −19%). But every selection now recomputes 1,000 binding effects instead of 1,000 cheap memos plus 2 effects. An effect recompute costs more than a memo recompute, so select is +34%, reproducible across two runs. The rows suite without components measured the opposite (−22%), and the signal-level select cell is bimodal. So the select direction is not settled, but the risk is. Rule: fuse when the memo reads only row-local sources; keep the memo, or move to a projection, when it reads a source shared across many rows. That fact (where the source was created) is local to the compiler.
+
+### Round 2 data
+
+H8 instruction counts (two runs each; `*-ids` roots carry an id, as SSR and hydration trees do):
+
+##### rows (instructions per op, n = 200)
+
+| Cell | update10th | Δ | mount | Δ | select | Δ |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline@prod | 106,705 |  | 1,950,223 |  | 428,289 |  |
+| control@oracle | 105,629 | −1.0% | 1,992,806 | +2.2% | 430,917 | +0.6% |
+| H1-fuse@oracle | 101,972 | −4.4% | 1,207,416 | −38.1% | 429,749 | +0.3% |
+| H8a-ownerless@oracle | 101,180 | −5.2% | 2,061,711 | +5.7% | 430,303 | +0.5% |
+| H8b-detached@oracle | 101,299 | −5.1% | 1,798,511 | −7.8% | 430,329 | +0.5% |
+| H1+H8b@oracle | 102,130 | −4.3% | 1,171,535 | −39.9% | 429,443 | +0.3% |
+
+Run-to-run spread: update10th max 0.4%, mount max 0.1%, select max 0.0%.
+
+##### chain (instructions per op, n = 200)
+
+| Cell | mount | Δ | update | Δ |
+| --- | ---: | ---: | ---: | ---: |
+| baseline@prod | 1,878,319 |  | 1,752,779 |  |
+| control@oracle | 1,902,576 | +1.3% | 1,763,665 | +0.6% |
+| H1-fuse@oracle | 1,313,278 | −30.1% | 1,219,166 | −30.4% |
+| H8a-ownerless@oracle | 1,954,925 | +4.1% | 1,755,252 | +0.1% |
+| H8b-detached@oracle | 1,793,041 | −4.5% | 1,755,273 | +0.1% |
+
+Run-to-run spread: mount max 0.1%, update max 0.0%.
+
+##### todos (instructions per op, n = 200)
+
+| Cell | mount | Δ | toggle | Δ | filter | Δ |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline@prod | 2,729,133 |  | 106,956 |  | 1,020,856 |  |
+| control@oracle | 2,716,658 | −0.5% | 106,975 | +0.0% (noise) | 1,025,149 | +0.4% |
+| H1-fuse@oracle | 2,306,156 | −15.5% | 107,057 | +0.1% | 631,819 | −38.1% |
+| H8a-ownerless@oracle | 2,844,536 | +4.2% | 107,028 | +0.1% | 1,021,875 | +0.1% |
+| H8b-detached@oracle | 2,506,302 | −8.2% | 106,999 | +0.0% | 1,021,839 | +0.1% |
+
+Run-to-run spread: mount max 0.0%, toggle max 0.0%, filter max 0.2%.
+
+##### rows-ids (instructions per op, n = 200)
+
+| Cell | update10th | Δ | mount | Δ | select | Δ |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline@prod | 99,085 |  | 2,206,538 |  | 428,307 |  |
+| control@oracle | 98,890 | −0.2% (noise) | 2,291,170 | +3.8% | 430,938 | +0.6% |
+| H1-fuse@oracle | 102,915 | +3.9% | 1,401,242 | −36.5% | 329,410 | −23.1% |
+| H8a-ownerless@oracle | 101,444 | +2.4% | 2,064,331 | −6.4% | 430,245 | +0.5% |
+| H8b-detached@oracle | 101,329 | +2.3% | 1,801,070 | −18.4% | 430,270 | +0.5% |
+| H1+H8b@oracle | 102,204 | +3.1% | 1,171,918 | −46.9% | 429,512 | +0.3% |
+
+Run-to-run spread: update10th max 0.6%, mount max 0.0%, select max 0.1%.
+
+##### todos-ids (instructions per op, n = 200)
+
+| Cell | toggle | Δ | mount | Δ | filter | Δ |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline@prod | 106,994 |  | 3,123,869 |  | 1,020,896 |  |
+| control@oracle | 106,950 | −0.0% (noise) | 3,146,559 | +0.7% | 1,025,173 | +0.4% |
+| H1-fuse@oracle | 107,037 | +0.0% (noise) | 2,563,700 | −17.9% | 636,539 | −37.6% |
+| H8a-ownerless@oracle | 107,019 | +0.0% (noise) | 2,884,121 | −7.7% | 1,021,913 | +0.1% |
+| H8b-detached@oracle | 106,976 | −0.0% (noise) | 2,543,359 | −18.6% | 1,021,809 | +0.1% |
+
+Run-to-run spread: toggle max 0.1%, mount max 0.0%, filter max 0.0%.
+
+##### <For> + Row component in Chromium 141.0.7390.37 (µs per op, n = 1000, mean of two runs × median of 5 pages)
+
+| Variant | create | Δ | replace | Δ | update10th | Δ | select | Δ | swap | Δ | removeAdd | Δ |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline | 5220.8 |  | 5787.5 |  | 76.9 |  | 148.5 |  | 105.1 |  | 118.6 |  |
+| C1-inline | 4672.5 | −11% (noise) | 5358.3 | −7% (noise) | 76.2 | −1% (noise) | 156.3 | +5% (noise) | 107.3 | +2% (noise) | 112.8 | −5% (noise) |
+| C2-fuse | 4294.6 | −18% (noise) | 4675.0 | −19% | 71.5 | −7% | 199.6 | +34% | 105.3 | +0% (noise) | 112.6 | −5% (noise) |
+| L1-nodes | 5216.7 | −0% (noise) | 5660.0 | −2% (noise) | 75.5 | −2% (noise) | 146.6 | −1% (noise) | 89.6 | −15% | 91.5 | −23% |
+| C2+L1 | 4120.8 | −21% (noise) | 4673.3 | −19% (noise) | 70.1 | −9% (noise) | 197.9 | +33% | 90.1 | −14% | 84.8 | −28% |
+| control | 5929.2 | +14% (noise) | 5995.0 | +4% (noise) | 78.2 | +2% (noise) | 151.3 | +2% (noise) | 102.8 | −2% (noise) | 118.1 | −0% (noise) |
+
+`create` has a wide spread in both runs (±31% baseline); read `replace` for the create-path effect.
+
 ## What Each Heuristic Needs From the Compiler
 
 - **H1 memo fusion** needs the local reader graph of a `const m = createMemo(...)`:
@@ -158,6 +260,11 @@ node scripts/heuristics/icount.mjs --scenarios rows,chain \
   --cells baseline@prod,H5-statusFree@prod,H5-syncOnly@prod --out documentation/plans/heuristic-oracles/icount-h5.json
 # DOM: needs `rollup -c` in packages/solid and the @solidjs/web build
 node scripts/heuristics/dom/bench.mjs --n 1000 --reps 5
+node scripts/heuristics/icount.mjs --scenarios rows,chain,todos,rows-ids,todos-ids \
+  --cells baseline@prod,H1-fuse@oracle,H8a-ownerless@oracle,H8b-detached@oracle,H1+H8b@oracle,control@oracle \
+  --out documentation/plans/heuristic-oracles/icount-h8.json          # and -repeat
+node scripts/heuristics/dom/bench.mjs --suite list --n 1000 --reps 5 \
+  --out documentation/plans/heuristic-oracles/dom-list-1.json          # and -2
 node scripts/heuristics/census.mjs <dir>... --out census.json
 node scripts/heuristics/report.mjs
 cd packages/signals && npx vitest run tests/heuristic-oracles.test.ts

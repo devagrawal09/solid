@@ -19,7 +19,8 @@ const load = f => (existsSync(join(DATA, f)) ? JSON.parse(readFileSync(join(DATA
 
 for (const [firstFile, secondFile, title] of [
   ["icount.json", "icount-repeat.json", "oracles"],
-  ["icount-h5.json", "icount-h5-repeat.json", "Track A options, re-measured"]
+  ["icount-h5.json", "icount-h5-repeat.json", "Track A options, re-measured"],
+  ["icount-h8.json", "icount-h8-repeat.json", "H8 ownerless / detached"]
 ]) {
   const a = load(firstFile);
   const b = load(secondFile);
@@ -76,6 +77,35 @@ if (dom) {
       const band = (c.spread + base.spread) / 2;
       const delta = v === "baseline" ? "" : `${d >= 0 ? "+" : "−"}${Math.abs(d * 100).toFixed(0)}%${Math.abs(d) <= band ? " (noise)" : ""}`;
       return `${c.usPerOp.toFixed(1)} | ${delta}`;
+    });
+    console.log(`| ${v} | ${row.join(" | ")} |`);
+  }
+}
+
+// List + cross-component suite: two independent bench runs, averaged; the
+// spread column is the larger of the two runs' within-run spreads plus the
+// run-to-run difference.
+const l1 = load("dom-list-1.json");
+const l2 = load("dom-list-2.json");
+if (l1 && l2) {
+  console.log(`\n#### <For> + Row component in Chromium ${l1.chromium} (µs per op, n = ${l1.n}, mean of two runs × median of ${l1.reps} pages)\n`);
+  const ops = [...new Set(l1.results.map(r => r.op))];
+  const variants = [...new Set(l1.results.map(r => r.variant))];
+  const cell = (v, o) => {
+    const a = l1.results.find(r => r.variant === v && r.op === o);
+    const b = l2.results.find(r => r.variant === v && r.op === o);
+    const mean = (a.usPerOp + b.usPerOp) / 2;
+    return { mean, band: Math.abs(a.usPerOp - b.usPerOp) / mean + Math.max(a.spread, b.spread) / 2 };
+  };
+  console.log(`| Variant | ${ops.map(o => `${o} | Δ`).join(" | ")} |`);
+  console.log(`| --- | ${ops.map(() => "---: | ---:").join(" | ")} |`);
+  for (const v of variants) {
+    const row = ops.map(o => {
+      const c = cell(v, o);
+      const base = cell("baseline", o);
+      const d = (c.mean - base.mean) / base.mean;
+      const delta = v === "baseline" ? "" : `${d >= 0 ? "+" : "−"}${Math.abs(d * 100).toFixed(0)}%${Math.abs(d) <= Math.max(c.band, base.band) ? " (noise)" : ""}`;
+      return `${c.mean.toFixed(1)} | ${delta}`;
     });
     console.log(`| ${v} | ${row.join(" | ")} |`);
   }

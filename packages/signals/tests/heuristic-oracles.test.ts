@@ -220,7 +220,7 @@ describe("H8 ownerless / detached: memos and effects that own nothing", () => {
       );
       return { childId, error };
     };
-    expect(run(false).childId).toBe("r0");
+    expect(run(false).childId).toBe("r00"); // first child of the memo "r0"
     // The node took no id, so nothing under it can be keyed for hydration.
     expect(run(true).childId).toBeUndefined();
     expect(run(true).error).toBeInstanceOf(Error);

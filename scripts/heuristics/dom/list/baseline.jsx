@@ -22,7 +22,8 @@ export function make(n, tbody) {
   const [rows, setRows] = createSignal([]);
   const [selected, setSelected] = createSignal(-1);
   let dispose,
-    sel = 0;
+    sel = 0,
+    round = 0;
   return {
     mount() {
       dispose = render(
@@ -61,7 +62,10 @@ export function make(n, tbody) {
       },
       update10th() {
         const r = rows();
-        for (let i = 0; i < r.length; i += 10) r[i].setLabel(r[i].label() + " !");
+        // A fresh bounded label per round (appending would grow without
+        // bound, and variants run different iteration counts).
+        round++;
+        for (let i = 0; i < r.length; i += 10) r[i].setLabel("row " + r[i].id + " !" + round);
         flush();
       },
       select() {

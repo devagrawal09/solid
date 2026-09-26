@@ -26,6 +26,7 @@ Current exploration work:
 
 - Priced compiler-licensed runtime shortcuts before building their proofs; see [heuristic-oracles.md](./heuristic-oracles.md). Each shortcut is assumed per node behind `__ORACLE__` (folded out of shipped builds), gated for equivalence, shown unsafe on ordinary code, measured, and counted in real code.
 - Build first: single-reader memo fusion (mount −17% to −39%, 29% of memos) and typed text bindings through `solid-tsc` types (DOM text update −28%). Reject direct memo commit, local disposal and constant signals.
+- Round 2: detached owner-free nodes (−18% mount with hydration ids, −47% combined with memo fusion), memo fusion across component boundaries (replace −19%, restricted to memos over row-local sources since shared-source fusion made select +34%), and single-element list rows (swap −15%, remove/insert −23%) all earn compiler proofs.
 - Track A's `statusFree` path measures **faster** (−6% to −22%) with steady-state warmups; the stage-1 "slower" verdict came from warmups short enough to include JIT compilation. Its blocker is proof coverage, not the runtime path.
 
 ### 2026-09-25 (strict-solid-tsx)
