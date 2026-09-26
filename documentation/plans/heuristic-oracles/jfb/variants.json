@@ -1,0 +1,76 @@
+{
+  "repoCommit": "5e4eedcee78a6d333bf07bd52f809af20a1fd34e",
+  "runtimes": {
+    "signals-prod": "6e4608b7d2118587",
+    "solid.js": "4809cd3ee18ebed6",
+    "web.js": "8b46e01cf5e4a401",
+    "signals-r0": "6fa5a986e78e61fd",
+    "signals-r16": "d0a9329bb47685c3",
+    "web-r0.js": "01b9d23b3ad75e33"
+  },
+  "variants": {
+    "baseline": {
+      "dir": "solid-next",
+      "bytes": 74592,
+      "sha256": "7cd2de8f0f74352b",
+      "signals": "signals-prod/index.js",
+      "web": "web.js"
+    },
+    "H7": {
+      "dir": "solid-next-h7",
+      "bytes": 73286,
+      "sha256": "8ddcb3a32852824c",
+      "signals": "signals-prod/index.js",
+      "web": "web.js"
+    },
+    "L1": {
+      "dir": "solid-next-l1",
+      "bytes": 75737,
+      "sha256": "b53ef87cfbd5340e",
+      "signals": "signals-prod/index.js",
+      "web": "web.js"
+    },
+    "H7+L1": {
+      "dir": "solid-next-h7l1",
+      "bytes": 74431,
+      "sha256": "dc512a7a37353571",
+      "signals": "signals-prod/index.js",
+      "web": "web.js"
+    },
+    "child": {
+      "dir": "solid-next-child",
+      "bytes": 74533,
+      "sha256": "468708a90171c721",
+      "signals": "signals-prod/index.js",
+      "web": "web.js"
+    },
+    "child-H7": {
+      "dir": "solid-next-child-h7",
+      "bytes": 73274,
+      "sha256": "ca0ae44c993c0f6c",
+      "signals": "signals-prod/index.js",
+      "web": "web.js"
+    },
+    "rspec-r0": {
+      "dir": "solid-next-rspec-r0",
+      "bytes": 74592,
+      "sha256": "7cd2de8f0f74352b",
+      "signals": "signals-r0/index.js",
+      "web": "web-r0.js"
+    },
+    "rspec-r1b": {
+      "dir": "solid-next-rspec-r1b",
+      "bytes": 74909,
+      "sha256": "51601489311d12a2",
+      "signals": "signals-r16/index.js",
+      "web": "web-r0.js"
+    },
+    "broken": {
+      "dir": "solid-next-broken",
+      "bytes": 73279,
+      "sha256": "9c2bb185dc04dfac",
+      "signals": "signals-prod/index.js",
+      "web": "web.js"
+    }
+  }
+}

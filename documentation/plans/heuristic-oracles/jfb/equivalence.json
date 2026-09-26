@@ -1,0 +1,99 @@
+{
+  "url": "http://localhost:8080",
+  "chromium": "141.0.7390.37",
+  "steps": [
+    "01 run",
+    "03 update",
+    "03 update again",
+    "04 select row 2",
+    "04 select row 5",
+    "04 re-select row 5",
+    "05 swap",
+    "04 select swapped row 999",
+    "05 swap back",
+    "06 remove row 4",
+    "06 remove row 1",
+    "06 remove last row",
+    "08 append 1k",
+    "03 update 2k",
+    "05 swap 2k",
+    "04 select row 1500",
+    "09 clear",
+    "05 swap on empty",
+    "03 update on empty",
+    "02 run",
+    "02 replace",
+    "04 select row 10",
+    "02 replace with selection",
+    "07 create 10k",
+    "03 update 10k",
+    "04 select row 10000",
+    "09 clear 10k",
+    "01 run after clear"
+  ],
+  "variants": {
+    "baseline": {
+      "dir": "solid-next",
+      "ok": true,
+      "firstMismatch": null,
+      "pageErrors": [],
+      "bytesCompared": 12422717
+    },
+    "H7": {
+      "dir": "solid-next-h7",
+      "ok": true,
+      "firstMismatch": null,
+      "pageErrors": [],
+      "bytesCompared": 12422717
+    },
+    "L1": {
+      "dir": "solid-next-l1",
+      "ok": true,
+      "firstMismatch": null,
+      "pageErrors": [],
+      "bytesCompared": 12422717
+    },
+    "H7+L1": {
+      "dir": "solid-next-h7l1",
+      "ok": true,
+      "firstMismatch": null,
+      "pageErrors": [],
+      "bytesCompared": 12422717
+    },
+    "child": {
+      "dir": "solid-next-child",
+      "ok": true,
+      "firstMismatch": null,
+      "pageErrors": [],
+      "bytesCompared": 12422717
+    },
+    "child-H7": {
+      "dir": "solid-next-child-h7",
+      "ok": true,
+      "firstMismatch": null,
+      "pageErrors": [],
+      "bytesCompared": 12422717
+    },
+    "rspec-r0": {
+      "dir": "solid-next-rspec-r0",
+      "ok": true,
+      "firstMismatch": null,
+      "pageErrors": [],
+      "bytesCompared": 12422717
+    },
+    "rspec-r1b": {
+      "dir": "solid-next-rspec-r1b",
+      "ok": true,
+      "firstMismatch": null,
+      "pageErrors": [],
+      "bytesCompared": 12422717
+    },
+    "broken": {
+      "dir": "solid-next-broken",
+      "ok": false,
+      "firstMismatch": "01 run",
+      "pageErrors": [],
+      "bytesCompared": 11928209
+    }
+  }
+}
