@@ -1,0 +1,870 @@
+{
+  "n": 50,
+  "rounds": 7,
+  "report": [
+    {
+      "scenario": "sel",
+      "cell": "memo@prod",
+      "runtime": "prod",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 0,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 1,
+        "brokenDiverges": null
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "sel",
+      "cell": "memo+SF@prod",
+      "runtime": "prod",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 0,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 3,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 1,
+        "brokenDiverges": null
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "sel",
+      "cell": "memo+SFmemo@prod",
+      "runtime": "prod",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 0,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 1,
+        "brokenDiverges": null
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "sel",
+      "cell": "memo(control)@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 0,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 1,
+        "brokenDiverges": null
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "sel",
+      "cell": "memo+stack@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 0,
+        "detached": 2,
+        "ownerlessOnly": 1,
+        "statusFree": 3,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 1,
+        "brokenDiverges": null
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "sel",
+      "cell": "fused@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 1,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 0,
+        "brokenDiverges": true
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "sel",
+      "cell": "fused+stack@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 1,
+        "detached": 1,
+        "ownerlessOnly": 1,
+        "statusFree": 2,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 0,
+        "brokenDiverges": true
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "sel",
+      "cell": "memo+stack2@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 0,
+        "detached": 2,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 1,
+        "brokenDiverges": null
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "sel",
+      "cell": "fused+stack2@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 1,
+        "detached": 1,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 0,
+        "brokenDiverges": true
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "sel",
+      "cell": "proj+stack2@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 0,
+        "detached": 1,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 1,
+        "rootId": 0,
+        "memos": 0,
+        "brokenDiverges": null
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "sel",
+      "cell": "proj@prod",
+      "runtime": "prod",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 0,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 1,
+        "rootId": 0,
+        "memos": 0,
+        "brokenDiverges": null
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "sel",
+      "cell": "proj+SF@prod",
+      "runtime": "prod",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 0,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 2,
+        "projection": 1,
+        "rootId": 0,
+        "memos": 0,
+        "brokenDiverges": null
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "sel",
+      "cell": "proj(control)@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 0,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 1,
+        "rootId": 0,
+        "memos": 0,
+        "brokenDiverges": null
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "sel",
+      "cell": "proj+stack@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 0,
+        "detached": 1,
+        "ownerlessOnly": 1,
+        "statusFree": 2,
+        "projection": 1,
+        "rootId": 0,
+        "memos": 0,
+        "brokenDiverges": null
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "rows",
+      "cell": "a@prod",
+      "runtime": "prod",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 0,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 1,
+        "brokenDiverges": null
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "rows",
+      "cell": "a@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 0,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 1,
+        "brokenDiverges": null
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "rows",
+      "cell": "b@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 0,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 1,
+        "brokenDiverges": null
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "rows",
+      "cell": "c@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 1,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 0,
+        "brokenDiverges": true
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "rows",
+      "cell": "b+H8b@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 0,
+        "detached": 2,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 1,
+        "brokenDiverges": null
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "rows",
+      "cell": "a-ids@prod",
+      "runtime": "prod",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 0,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 1,
+        "memos": 1,
+        "brokenDiverges": null
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "rows",
+      "cell": "b-ids@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 0,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 1,
+        "memos": 1,
+        "brokenDiverges": null
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "rows",
+      "cell": "b+H8b-ids@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 0,
+        "detached": 2,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 1,
+        "memos": 1,
+        "brokenDiverges": null
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "chain",
+      "cell": "a@prod",
+      "runtime": "prod",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 0,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 2,
+        "brokenDiverges": null
+      },
+      "steps": 8
+    },
+    {
+      "scenario": "chain",
+      "cell": "a@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 0,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 2,
+        "brokenDiverges": null
+      },
+      "steps": 8
+    },
+    {
+      "scenario": "chain",
+      "cell": "b@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 1,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 1,
+        "brokenDiverges": false
+      },
+      "steps": 8
+    },
+    {
+      "scenario": "chain",
+      "cell": "c@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 1,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 0,
+        "brokenDiverges": false
+      },
+      "steps": 8
+    },
+    {
+      "scenario": "chain",
+      "cell": "b+H8b@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 1,
+        "detached": 1,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 1,
+        "brokenDiverges": false
+      },
+      "steps": 8
+    },
+    {
+      "scenario": "chain",
+      "cell": "a-ids@prod",
+      "runtime": "prod",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 0,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 1,
+        "memos": 2,
+        "brokenDiverges": null
+      },
+      "steps": 8
+    },
+    {
+      "scenario": "chain",
+      "cell": "b-ids@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 1,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 1,
+        "memos": 1,
+        "brokenDiverges": false
+      },
+      "steps": 8
+    },
+    {
+      "scenario": "chain",
+      "cell": "b+H8b-ids@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 1,
+        "detached": 1,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 1,
+        "memos": 1,
+        "brokenDiverges": false
+      },
+      "steps": 8
+    },
+    {
+      "scenario": "todos",
+      "cell": "a@prod",
+      "runtime": "prod",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 0,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 2,
+        "brokenDiverges": null
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "todos",
+      "cell": "a@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 0,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 2,
+        "brokenDiverges": null
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "todos",
+      "cell": "b@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 1,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 1,
+        "brokenDiverges": false
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "todos",
+      "cell": "c@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 2,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 0,
+        "brokenDiverges": true
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "todos",
+      "cell": "b+H8b@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 1,
+        "detached": 4,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 1,
+        "brokenDiverges": false
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "todos",
+      "cell": "a-ids@prod",
+      "runtime": "prod",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 0,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 1,
+        "memos": 2,
+        "brokenDiverges": null
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "todos",
+      "cell": "b-ids@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 1,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 1,
+        "memos": 1,
+        "brokenDiverges": false
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "todos",
+      "cell": "b+H8b-ids@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 1,
+        "detached": 4,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 1,
+        "memos": 1,
+        "brokenDiverges": false
+      },
+      "steps": 15
+    },
+    {
+      "scenario": "dash",
+      "cell": "a@prod",
+      "runtime": "prod",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 0,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 8,
+        "brokenDiverges": null
+      },
+      "steps": 36
+    },
+    {
+      "scenario": "dash",
+      "cell": "a@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 0,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 8,
+        "brokenDiverges": null
+      },
+      "steps": 36
+    },
+    {
+      "scenario": "dash",
+      "cell": "b@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 4,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 4,
+        "brokenDiverges": false
+      },
+      "steps": 36
+    },
+    {
+      "scenario": "dash",
+      "cell": "c@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 5,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 3,
+        "brokenDiverges": false
+      },
+      "steps": 36
+    },
+    {
+      "scenario": "dash",
+      "cell": "b+H8b@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 4,
+        "detached": 9,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 4,
+        "brokenDiverges": false
+      },
+      "steps": 36
+    },
+    {
+      "scenario": "dash",
+      "cell": "a-ids@prod",
+      "runtime": "prod",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 0,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 1,
+        "memos": 8,
+        "brokenDiverges": null
+      },
+      "steps": 36
+    },
+    {
+      "scenario": "dash",
+      "cell": "b-ids@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 4,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 1,
+        "memos": 4,
+        "brokenDiverges": false
+      },
+      "steps": 36
+    },
+    {
+      "scenario": "dash",
+      "cell": "b+H8b-ids@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 4,
+        "detached": 9,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 1,
+        "memos": 4,
+        "brokenDiverges": false
+      },
+      "steps": 36
+    },
+    {
+      "scenario": "dash",
+      "cell": "b[widget-only]@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 3,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 5,
+        "brokenDiverges": false
+      },
+      "steps": 36
+    },
+    {
+      "scenario": "dash",
+      "cell": "b[total-only]@oracle",
+      "runtime": "oracle",
+      "ok": true,
+      "missing": [],
+      "markers": {
+        "fusedEffects": 1,
+        "detached": 0,
+        "ownerlessOnly": 0,
+        "statusFree": 0,
+        "projection": 0,
+        "rootId": 0,
+        "memos": 7,
+        "brokenDiverges": false
+      },
+      "steps": 36
+    }
+  ]
+}

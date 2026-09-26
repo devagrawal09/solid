@@ -1,0 +1,30 @@
+{
+  "n": 200,
+  "ops": 40,
+  "warmup": {
+    "mount": 300,
+    "update": 2000
+  },
+  "node": "v22.22.2",
+  "date": "2026-09-26T13:01:48.155Z",
+  "results": [
+    {
+      "scenario": "sel",
+      "cell": "memo+SFmemo@prod",
+      "op": "update10th",
+      "irPerOp": 91070
+    },
+    {
+      "scenario": "sel",
+      "cell": "memo+SFmemo@prod",
+      "op": "mount",
+      "irPerOp": 1827939
+    },
+    {
+      "scenario": "sel",
+      "cell": "memo+SFmemo@prod",
+      "op": "select",
+      "irPerOp": 338038
+    }
+  ]
+}

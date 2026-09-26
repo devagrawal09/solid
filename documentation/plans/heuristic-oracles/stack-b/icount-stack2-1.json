@@ -1,0 +1,66 @@
+{
+  "n": 200,
+  "ops": 40,
+  "warmup": {
+    "mount": 300,
+    "update": 2000
+  },
+  "node": "v22.22.2",
+  "date": "2026-09-26T13:50:34.678Z",
+  "results": [
+    {
+      "scenario": "sel",
+      "cell": "memo+stack2@oracle",
+      "op": "update10th",
+      "irPerOp": 89798
+    },
+    {
+      "scenario": "sel",
+      "cell": "memo+stack2@oracle",
+      "op": "mount",
+      "irPerOp": 1603645
+    },
+    {
+      "scenario": "sel",
+      "cell": "memo+stack2@oracle",
+      "op": "select",
+      "irPerOp": 334712
+    },
+    {
+      "scenario": "sel",
+      "cell": "fused+stack2@oracle",
+      "op": "mount",
+      "irPerOp": 1145025
+    },
+    {
+      "scenario": "sel",
+      "cell": "fused+stack2@oracle",
+      "op": "update10th",
+      "irPerOp": 104008
+    },
+    {
+      "scenario": "sel",
+      "cell": "fused+stack2@oracle",
+      "op": "select",
+      "irPerOp": 329363
+    },
+    {
+      "scenario": "sel",
+      "cell": "proj+stack2@oracle",
+      "op": "update10th",
+      "irPerOp": 98759
+    },
+    {
+      "scenario": "sel",
+      "cell": "proj+stack2@oracle",
+      "op": "mount",
+      "irPerOp": 2181337
+    },
+    {
+      "scenario": "sel",
+      "cell": "proj+stack2@oracle",
+      "op": "select",
+      "irPerOp": 62929
+    }
+  ]
+}

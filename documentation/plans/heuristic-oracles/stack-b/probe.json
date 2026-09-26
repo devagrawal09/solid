@@ -1,0 +1,20 @@
+{
+  "prod": {
+    "detached": false,
+    "ownerless": false,
+    "fused": false,
+    "childIds": [
+      "p0",
+      "p1"
+    ]
+  },
+  "oracle": {
+    "detached": true,
+    "ownerless": true,
+    "fused": true,
+    "childIds": [
+      "p0",
+      "p0"
+    ]
+  }
+}

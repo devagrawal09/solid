@@ -1,0 +1,24 @@
+{
+  "n": 200,
+  "ops": 40,
+  "warmup": {
+    "mount": 300,
+    "update": 2000
+  },
+  "node": "v22.22.2",
+  "date": "2026-09-26T13:23:45.850Z",
+  "results": [
+    {
+      "scenario": "dash",
+      "cell": "b+H8b@oracle",
+      "op": "rename",
+      "irPerOp": 2448
+    },
+    {
+      "scenario": "dash",
+      "cell": "a@prod",
+      "op": "rename",
+      "irPerOp": 2316
+    }
+  ]
+}

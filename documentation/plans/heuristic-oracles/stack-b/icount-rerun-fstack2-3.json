@@ -1,0 +1,18 @@
+{
+  "n": 200,
+  "ops": 40,
+  "warmup": {
+    "mount": 300,
+    "update": 2000
+  },
+  "node": "v22.22.2",
+  "date": "2026-09-26T14:03:17.789Z",
+  "results": [
+    {
+      "scenario": "sel",
+      "cell": "fused+stack2@oracle",
+      "op": "update10th",
+      "irPerOp": 103824
+    }
+  ]
+}

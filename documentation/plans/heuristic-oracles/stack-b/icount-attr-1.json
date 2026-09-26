@@ -1,0 +1,84 @@
+{
+  "n": 200,
+  "ops": 40,
+  "warmup": {
+    "mount": 300,
+    "update": 2000
+  },
+  "node": "v22.22.2",
+  "date": "2026-09-26T13:12:31.371Z",
+  "results": [
+    {
+      "scenario": "dash",
+      "cell": "b[widget-only]@oracle",
+      "op": "tick",
+      "irPerOp": 700919
+    },
+    {
+      "scenario": "dash",
+      "cell": "b[widget-only]@oracle",
+      "op": "mount",
+      "irPerOp": 6419397
+    },
+    {
+      "scenario": "dash",
+      "cell": "b[widget-only]@oracle",
+      "op": "threshold",
+      "irPerOp": 503766
+    },
+    {
+      "scenario": "dash",
+      "cell": "b[widget-only]@oracle",
+      "op": "unit",
+      "irPerOp": 1379784
+    },
+    {
+      "scenario": "dash",
+      "cell": "b[widget-only]@oracle",
+      "op": "range",
+      "irPerOp": 3834456
+    },
+    {
+      "scenario": "dash",
+      "cell": "b[widget-only]@oracle",
+      "op": "rename",
+      "irPerOp": 2443
+    },
+    {
+      "scenario": "dash",
+      "cell": "b[total-only]@oracle",
+      "op": "tick",
+      "irPerOp": 1675822
+    },
+    {
+      "scenario": "dash",
+      "cell": "b[total-only]@oracle",
+      "op": "mount",
+      "irPerOp": 8309984
+    },
+    {
+      "scenario": "dash",
+      "cell": "b[total-only]@oracle",
+      "op": "threshold",
+      "irPerOp": 494638
+    },
+    {
+      "scenario": "dash",
+      "cell": "b[total-only]@oracle",
+      "op": "unit",
+      "irPerOp": 1378455
+    },
+    {
+      "scenario": "dash",
+      "cell": "b[total-only]@oracle",
+      "op": "range",
+      "irPerOp": 3554511
+    },
+    {
+      "scenario": "dash",
+      "cell": "b[total-only]@oracle",
+      "op": "rename",
+      "irPerOp": 2344
+    }
+  ]
+}

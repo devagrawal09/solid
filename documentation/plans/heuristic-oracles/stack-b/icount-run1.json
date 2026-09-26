@@ -1,0 +1,864 @@
+{
+  "n": 200,
+  "ops": 40,
+  "warmup": {
+    "mount": 300,
+    "update": 2000
+  },
+  "node": "v22.22.2",
+  "date": "2026-09-26T11:46:17.376Z",
+  "results": [
+    {
+      "scenario": "sel",
+      "cell": "memo@prod",
+      "op": "update10th",
+      "irPerOp": 99830
+    },
+    {
+      "scenario": "sel",
+      "cell": "memo@prod",
+      "op": "mount",
+      "irPerOp": 1950241
+    },
+    {
+      "scenario": "sel",
+      "cell": "memo@prod",
+      "op": "select",
+      "irPerOp": 428469
+    },
+    {
+      "scenario": "sel",
+      "cell": "memo+SF@prod",
+      "op": "mount",
+      "irPerOp": 2330473
+    },
+    {
+      "scenario": "sel",
+      "cell": "memo+SF@prod",
+      "op": "update10th",
+      "irPerOp": 99710
+    },
+    {
+      "scenario": "sel",
+      "cell": "memo+SF@prod",
+      "op": "select",
+      "irPerOp": 410478
+    },
+    {
+      "scenario": "sel",
+      "cell": "memo(control)@oracle",
+      "op": "mount",
+      "irPerOp": 1992813
+    },
+    {
+      "scenario": "sel",
+      "cell": "memo(control)@oracle",
+      "op": "update10th",
+      "irPerOp": 99243
+    },
+    {
+      "scenario": "sel",
+      "cell": "memo(control)@oracle",
+      "op": "select",
+      "irPerOp": 430968
+    },
+    {
+      "scenario": "sel",
+      "cell": "memo+stack@oracle",
+      "op": "mount",
+      "irPerOp": 2162111
+    },
+    {
+      "scenario": "sel",
+      "cell": "memo+stack@oracle",
+      "op": "update10th",
+      "irPerOp": 99753
+    },
+    {
+      "scenario": "sel",
+      "cell": "memo+stack@oracle",
+      "op": "select",
+      "irPerOp": 410572
+    },
+    {
+      "scenario": "sel",
+      "cell": "fused@oracle",
+      "op": "mount",
+      "irPerOp": 1206961
+    },
+    {
+      "scenario": "sel",
+      "cell": "fused@oracle",
+      "op": "update10th",
+      "irPerOp": 103294
+    },
+    {
+      "scenario": "sel",
+      "cell": "fused@oracle",
+      "op": "select",
+      "irPerOp": 329418
+    },
+    {
+      "scenario": "sel",
+      "cell": "fused+stack@oracle",
+      "op": "mount",
+      "irPerOp": 1392089
+    },
+    {
+      "scenario": "sel",
+      "cell": "fused+stack@oracle",
+      "op": "update10th",
+      "irPerOp": 93300
+    },
+    {
+      "scenario": "sel",
+      "cell": "fused+stack@oracle",
+      "op": "select",
+      "irPerOp": 330174
+    },
+    {
+      "scenario": "sel",
+      "cell": "proj@prod",
+      "op": "mount",
+      "irPerOp": 2342817
+    },
+    {
+      "scenario": "sel",
+      "cell": "proj@prod",
+      "op": "update10th",
+      "irPerOp": 104310
+    },
+    {
+      "scenario": "sel",
+      "cell": "proj@prod",
+      "op": "select",
+      "irPerOp": 63134
+    },
+    {
+      "scenario": "sel",
+      "cell": "proj+SF@prod",
+      "op": "mount",
+      "irPerOp": 2525032
+    },
+    {
+      "scenario": "sel",
+      "cell": "proj+SF@prod",
+      "op": "update10th",
+      "irPerOp": 94369
+    },
+    {
+      "scenario": "sel",
+      "cell": "proj+SF@prod",
+      "op": "select",
+      "irPerOp": 68728
+    },
+    {
+      "scenario": "sel",
+      "cell": "proj(control)@oracle",
+      "op": "mount",
+      "irPerOp": 2336895
+    },
+    {
+      "scenario": "sel",
+      "cell": "proj(control)@oracle",
+      "op": "update10th",
+      "irPerOp": 103835
+    },
+    {
+      "scenario": "sel",
+      "cell": "proj(control)@oracle",
+      "op": "select",
+      "irPerOp": 62925
+    },
+    {
+      "scenario": "sel",
+      "cell": "proj+stack@oracle",
+      "op": "mount",
+      "irPerOp": 2403889
+    },
+    {
+      "scenario": "sel",
+      "cell": "proj+stack@oracle",
+      "op": "update10th",
+      "irPerOp": 94379
+    },
+    {
+      "scenario": "sel",
+      "cell": "proj+stack@oracle",
+      "op": "select",
+      "irPerOp": 69831
+    },
+    {
+      "scenario": "rows",
+      "cell": "a@prod",
+      "op": "mount",
+      "irPerOp": 1950248
+    },
+    {
+      "scenario": "rows",
+      "cell": "a@prod",
+      "op": "update10th",
+      "irPerOp": 99835
+    },
+    {
+      "scenario": "rows",
+      "cell": "a@prod",
+      "op": "select",
+      "irPerOp": 428493
+    },
+    {
+      "scenario": "rows",
+      "cell": "a@oracle",
+      "op": "mount",
+      "irPerOp": 1992772
+    },
+    {
+      "scenario": "rows",
+      "cell": "a@oracle",
+      "op": "update10th",
+      "irPerOp": 99062
+    },
+    {
+      "scenario": "rows",
+      "cell": "a@oracle",
+      "op": "select",
+      "irPerOp": 430921
+    },
+    {
+      "scenario": "rows",
+      "cell": "b@oracle",
+      "op": "mount",
+      "irPerOp": 1992806
+    },
+    {
+      "scenario": "rows",
+      "cell": "b@oracle",
+      "op": "update10th",
+      "irPerOp": 99068
+    },
+    {
+      "scenario": "rows",
+      "cell": "b@oracle",
+      "op": "select",
+      "irPerOp": 430922
+    },
+    {
+      "scenario": "rows",
+      "cell": "c@oracle",
+      "op": "mount",
+      "irPerOp": 1206959
+    },
+    {
+      "scenario": "rows",
+      "cell": "c@oracle",
+      "op": "update10th",
+      "irPerOp": 103350
+    },
+    {
+      "scenario": "rows",
+      "cell": "c@oracle",
+      "op": "select",
+      "irPerOp": 329402
+    },
+    {
+      "scenario": "rows",
+      "cell": "b+H8b@oracle",
+      "op": "mount",
+      "irPerOp": 1731519
+    },
+    {
+      "scenario": "rows",
+      "cell": "b+H8b@oracle",
+      "op": "update10th",
+      "irPerOp": 97809
+    },
+    {
+      "scenario": "rows",
+      "cell": "b+H8b@oracle",
+      "op": "select",
+      "irPerOp": 426213
+    },
+    {
+      "scenario": "rows",
+      "cell": "a-ids@prod",
+      "op": "mount",
+      "irPerOp": 2206544
+    },
+    {
+      "scenario": "rows",
+      "cell": "a-ids@prod",
+      "op": "update10th",
+      "irPerOp": 96712
+    },
+    {
+      "scenario": "rows",
+      "cell": "a-ids@prod",
+      "op": "select",
+      "irPerOp": 428292
+    },
+    {
+      "scenario": "rows",
+      "cell": "b-ids@oracle",
+      "op": "mount",
+      "irPerOp": 2291125
+    },
+    {
+      "scenario": "rows",
+      "cell": "b-ids@oracle",
+      "op": "update10th",
+      "irPerOp": 96729
+    },
+    {
+      "scenario": "rows",
+      "cell": "b-ids@oracle",
+      "op": "select",
+      "irPerOp": 430926
+    },
+    {
+      "scenario": "rows",
+      "cell": "b+H8b-ids@oracle",
+      "op": "mount",
+      "irPerOp": 1858179
+    },
+    {
+      "scenario": "rows",
+      "cell": "b+H8b-ids@oracle",
+      "op": "update10th",
+      "irPerOp": 97788
+    },
+    {
+      "scenario": "rows",
+      "cell": "b+H8b-ids@oracle",
+      "op": "select",
+      "irPerOp": 427302
+    },
+    {
+      "scenario": "chain",
+      "cell": "a@prod",
+      "op": "mount",
+      "irPerOp": 1854071
+    },
+    {
+      "scenario": "chain",
+      "cell": "a@oracle",
+      "op": "mount",
+      "irPerOp": 1877819
+    },
+    {
+      "scenario": "chain",
+      "cell": "a@prod",
+      "op": "update",
+      "irPerOp": 1752692
+    },
+    {
+      "scenario": "chain",
+      "cell": "b@oracle",
+      "op": "mount",
+      "irPerOp": 1313703
+    },
+    {
+      "scenario": "chain",
+      "cell": "a@oracle",
+      "op": "update",
+      "irPerOp": 1763939
+    },
+    {
+      "scenario": "chain",
+      "cell": "c@oracle",
+      "op": "mount",
+      "irPerOp": 546981
+    },
+    {
+      "scenario": "chain",
+      "cell": "b@oracle",
+      "op": "update",
+      "irPerOp": 1217647
+    },
+    {
+      "scenario": "chain",
+      "cell": "c@oracle",
+      "op": "update",
+      "irPerOp": 770343
+    },
+    {
+      "scenario": "chain",
+      "cell": "b+H8b@oracle",
+      "op": "mount",
+      "irPerOp": 1172087
+    },
+    {
+      "scenario": "chain",
+      "cell": "a-ids@prod",
+      "op": "mount",
+      "irPerOp": 2193284
+    },
+    {
+      "scenario": "chain",
+      "cell": "b+H8b@oracle",
+      "op": "update",
+      "irPerOp": 1217645
+    },
+    {
+      "scenario": "chain",
+      "cell": "b-ids@oracle",
+      "op": "mount",
+      "irPerOp": 1493551
+    },
+    {
+      "scenario": "chain",
+      "cell": "a-ids@prod",
+      "op": "update",
+      "irPerOp": 1751793
+    },
+    {
+      "scenario": "chain",
+      "cell": "b-ids@oracle",
+      "op": "update",
+      "irPerOp": 1217547
+    },
+    {
+      "scenario": "chain",
+      "cell": "b+H8b-ids@oracle",
+      "op": "mount",
+      "irPerOp": 1274131
+    },
+    {
+      "scenario": "todos",
+      "cell": "a@prod",
+      "op": "mount",
+      "irPerOp": 2729094
+    },
+    {
+      "scenario": "chain",
+      "cell": "b+H8b-ids@oracle",
+      "op": "update",
+      "irPerOp": 1217503
+    },
+    {
+      "scenario": "todos",
+      "cell": "a@prod",
+      "op": "toggle",
+      "irPerOp": 106989
+    },
+    {
+      "scenario": "todos",
+      "cell": "a@oracle",
+      "op": "mount",
+      "irPerOp": 2716668
+    },
+    {
+      "scenario": "todos",
+      "cell": "a@prod",
+      "op": "filter",
+      "irPerOp": 1020910
+    },
+    {
+      "scenario": "todos",
+      "cell": "a@oracle",
+      "op": "toggle",
+      "irPerOp": 107019
+    },
+    {
+      "scenario": "todos",
+      "cell": "b@oracle",
+      "op": "mount",
+      "irPerOp": 2769928
+    },
+    {
+      "scenario": "todos",
+      "cell": "a@oracle",
+      "op": "filter",
+      "irPerOp": 1025239
+    },
+    {
+      "scenario": "todos",
+      "cell": "b@oracle",
+      "op": "toggle",
+      "irPerOp": 103325
+    },
+    {
+      "scenario": "todos",
+      "cell": "b@oracle",
+      "op": "filter",
+      "irPerOp": 1031515
+    },
+    {
+      "scenario": "todos",
+      "cell": "c@oracle",
+      "op": "mount",
+      "irPerOp": 1919391
+    },
+    {
+      "scenario": "todos",
+      "cell": "c@oracle",
+      "op": "toggle",
+      "irPerOp": 90928
+    },
+    {
+      "scenario": "todos",
+      "cell": "c@oracle",
+      "op": "filter",
+      "irPerOp": 513972
+    },
+    {
+      "scenario": "todos",
+      "cell": "b+H8b@oracle",
+      "op": "toggle",
+      "irPerOp": 103245
+    },
+    {
+      "scenario": "todos",
+      "cell": "b+H8b@oracle",
+      "op": "mount",
+      "irPerOp": 2514091
+    },
+    {
+      "scenario": "todos",
+      "cell": "a-ids@prod",
+      "op": "mount",
+      "irPerOp": 3123819
+    },
+    {
+      "scenario": "todos",
+      "cell": "b+H8b@oracle",
+      "op": "filter",
+      "irPerOp": 1031266
+    },
+    {
+      "scenario": "todos",
+      "cell": "a-ids@prod",
+      "op": "toggle",
+      "irPerOp": 106960
+    },
+    {
+      "scenario": "todos",
+      "cell": "b-ids@oracle",
+      "op": "mount",
+      "irPerOp": 3105924
+    },
+    {
+      "scenario": "todos",
+      "cell": "a-ids@prod",
+      "op": "filter",
+      "irPerOp": 1020820
+    },
+    {
+      "scenario": "todos",
+      "cell": "b-ids@oracle",
+      "op": "toggle",
+      "irPerOp": 103271
+    },
+    {
+      "scenario": "todos",
+      "cell": "b-ids@oracle",
+      "op": "filter",
+      "irPerOp": 1031252
+    },
+    {
+      "scenario": "todos",
+      "cell": "b+H8b-ids@oracle",
+      "op": "mount",
+      "irPerOp": 2566812
+    },
+    {
+      "scenario": "todos",
+      "cell": "b+H8b-ids@oracle",
+      "op": "toggle",
+      "irPerOp": 103143
+    },
+    {
+      "scenario": "todos",
+      "cell": "b+H8b-ids@oracle",
+      "op": "filter",
+      "irPerOp": 1031338
+    },
+    {
+      "scenario": "dash",
+      "cell": "a@prod",
+      "op": "mount",
+      "irPerOp": 8165920
+    },
+    {
+      "scenario": "dash",
+      "cell": "a@prod",
+      "op": "tick",
+      "irPerOp": 1666689
+    },
+    {
+      "scenario": "dash",
+      "cell": "a@prod",
+      "op": "threshold",
+      "irPerOp": 478360
+    },
+    {
+      "scenario": "dash",
+      "cell": "a@prod",
+      "op": "unit",
+      "irPerOp": 1351442
+    },
+    {
+      "scenario": "dash",
+      "cell": "a@prod",
+      "op": "range",
+      "irPerOp": 3807047
+    },
+    {
+      "scenario": "dash",
+      "cell": "a@prod",
+      "op": "rename",
+      "irPerOp": 2337
+    },
+    {
+      "scenario": "dash",
+      "cell": "a@oracle",
+      "op": "tick",
+      "irPerOp": 1668458
+    },
+    {
+      "scenario": "dash",
+      "cell": "a@oracle",
+      "op": "mount",
+      "irPerOp": 8263899
+    },
+    {
+      "scenario": "dash",
+      "cell": "a@oracle",
+      "op": "threshold",
+      "irPerOp": 480517
+    },
+    {
+      "scenario": "dash",
+      "cell": "a@oracle",
+      "op": "unit",
+      "irPerOp": 1356715
+    },
+    {
+      "scenario": "dash",
+      "cell": "a@oracle",
+      "op": "range",
+      "irPerOp": 3817986
+    },
+    {
+      "scenario": "dash",
+      "cell": "a@oracle",
+      "op": "rename",
+      "irPerOp": 2311
+    },
+    {
+      "scenario": "dash",
+      "cell": "b@oracle",
+      "op": "tick",
+      "irPerOp": 701617
+    },
+    {
+      "scenario": "dash",
+      "cell": "b@oracle",
+      "op": "mount",
+      "irPerOp": 6415740
+    },
+    {
+      "scenario": "dash",
+      "cell": "b@oracle",
+      "op": "threshold",
+      "irPerOp": 503697
+    },
+    {
+      "scenario": "dash",
+      "cell": "b@oracle",
+      "op": "unit",
+      "irPerOp": 1378652
+    },
+    {
+      "scenario": "dash",
+      "cell": "b@oracle",
+      "op": "range",
+      "irPerOp": 3542207
+    },
+    {
+      "scenario": "dash",
+      "cell": "b@oracle",
+      "op": "rename",
+      "irPerOp": 2439
+    },
+    {
+      "scenario": "dash",
+      "cell": "c@oracle",
+      "op": "tick",
+      "irPerOp": 665538
+    },
+    {
+      "scenario": "dash",
+      "cell": "c@oracle",
+      "op": "mount",
+      "irPerOp": 5834179
+    },
+    {
+      "scenario": "dash",
+      "cell": "c@oracle",
+      "op": "threshold",
+      "irPerOp": 503691
+    },
+    {
+      "scenario": "dash",
+      "cell": "c@oracle",
+      "op": "unit",
+      "irPerOp": 740693
+    },
+    {
+      "scenario": "dash",
+      "cell": "c@oracle",
+      "op": "rename",
+      "irPerOp": 2419
+    },
+    {
+      "scenario": "dash",
+      "cell": "c@oracle",
+      "op": "range",
+      "irPerOp": 2975272
+    },
+    {
+      "scenario": "dash",
+      "cell": "b+H8b@oracle",
+      "op": "tick",
+      "irPerOp": 695751
+    },
+    {
+      "scenario": "dash",
+      "cell": "b+H8b@oracle",
+      "op": "mount",
+      "irPerOp": 5803393
+    },
+    {
+      "scenario": "dash",
+      "cell": "b+H8b@oracle",
+      "op": "threshold",
+      "irPerOp": 499844
+    },
+    {
+      "scenario": "dash",
+      "cell": "b+H8b@oracle",
+      "op": "unit",
+      "irPerOp": 1363503
+    },
+    {
+      "scenario": "dash",
+      "cell": "b+H8b@oracle",
+      "op": "range",
+      "irPerOp": 3517545
+    },
+    {
+      "scenario": "dash",
+      "cell": "b+H8b@oracle",
+      "op": "rename",
+      "irPerOp": 2426
+    },
+    {
+      "scenario": "dash",
+      "cell": "a-ids@prod",
+      "op": "tick",
+      "irPerOp": 1667027
+    },
+    {
+      "scenario": "dash",
+      "cell": "a-ids@prod",
+      "op": "mount",
+      "irPerOp": 9252133
+    },
+    {
+      "scenario": "dash",
+      "cell": "a-ids@prod",
+      "op": "threshold",
+      "irPerOp": 478521
+    },
+    {
+      "scenario": "dash",
+      "cell": "a-ids@prod",
+      "op": "unit",
+      "irPerOp": 1351197
+    },
+    {
+      "scenario": "dash",
+      "cell": "a-ids@prod",
+      "op": "range",
+      "irPerOp": 3807698
+    },
+    {
+      "scenario": "dash",
+      "cell": "a-ids@prod",
+      "op": "rename",
+      "irPerOp": 2322
+    },
+    {
+      "scenario": "dash",
+      "cell": "b-ids@oracle",
+      "op": "tick",
+      "irPerOp": 701512
+    },
+    {
+      "scenario": "dash",
+      "cell": "b-ids@oracle",
+      "op": "mount",
+      "irPerOp": 7066938
+    },
+    {
+      "scenario": "dash",
+      "cell": "b-ids@oracle",
+      "op": "threshold",
+      "irPerOp": 503731
+    },
+    {
+      "scenario": "dash",
+      "cell": "b-ids@oracle",
+      "op": "unit",
+      "irPerOp": 1377201
+    },
+    {
+      "scenario": "dash",
+      "cell": "b-ids@oracle",
+      "op": "rename",
+      "irPerOp": 2434
+    },
+    {
+      "scenario": "dash",
+      "cell": "b-ids@oracle",
+      "op": "range",
+      "irPerOp": 3555247
+    },
+    {
+      "scenario": "dash",
+      "cell": "b+H8b-ids@oracle",
+      "op": "tick",
+      "irPerOp": 695631
+    },
+    {
+      "scenario": "dash",
+      "cell": "b+H8b-ids@oracle",
+      "op": "mount",
+      "irPerOp": 6368723
+    },
+    {
+      "scenario": "dash",
+      "cell": "b+H8b-ids@oracle",
+      "op": "threshold",
+      "irPerOp": 499825
+    },
+    {
+      "scenario": "dash",
+      "cell": "b+H8b-ids@oracle",
+      "op": "unit",
+      "irPerOp": 1363607
+    },
+    {
+      "scenario": "dash",
+      "cell": "b+H8b-ids@oracle",
+      "op": "range",
+      "irPerOp": 3517316
+    },
+    {
+      "scenario": "dash",
+      "cell": "b+H8b-ids@oracle",
+      "op": "rename",
+      "irPerOp": 2436
+    }
+  ]
+}
