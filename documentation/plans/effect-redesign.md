@@ -1,4 +1,4 @@
-# One-Function Effects and Tracked Writes in the Generator Frontend
+# One-Function Effects in the Generator Frontend
 
 Status: design note, 2026-09-26. Nothing here is implemented. Authored examples use the generator frontend `$(function* () {})`.
 
@@ -10,7 +10,7 @@ Solid 2 split effects into `createEffect(compute, effect)` because dependencies 
 - a transition may run the compute speculatively, possibly more than once, while the side effect waits for the commit;
 - pending retries re-run the compute.
 
-If the compiler can see every reactive read and write in an effect, can authors go back to one function? And can writes return, both in effects and in reactive scopes? (Answers: yes, compiled into the split form; yes, in the effect half; no, in reactive scopes, where the diagnostic suggests a derivation instead.)
+If the compiler can see every reactive read and write in an effect, can authors go back to one function? And can writes return, both in effects and in reactive scopes? (Answers: yes, compiled into the split form; no writes in effects or reactive scopes, where the diagnostic suggests a derivation; writes belong to event hosts and actions.)
 
 ## 1. One-function effects, compiled into the split form
 
@@ -41,20 +41,11 @@ createEffect(
 
 Conditional reads stay conditional in the compute half, so runtime tracking remains authoritative. The semantics are those of the hand-written split.
 
-### Read-after-write
+### No writes in effects (decided)
 
-Writes are typed operations (`yield* write(setter, value)`), so they land in the effect half. That is 2.0's effect-phase rule: the phase never observes its own unsettled writes. A read placed after a write was hoisted into the compute half and sees the pre-write value. The block's `Writes` metadata names the setter, so the compiler can diagnose this case:
+Effect blocks reject the `Writes` category, as reactive hosts already do: `yield* write(...)` inside a `createEffect` block is a compile error. Writes belong to event hosts and actions. Derived state is authored as a derivation (section 3).
 
-```ts
-createEffect(
-  $(function* () {
-    yield* write(setA, 1);
-    log(yield* b); // diagnostic: b derives from a; this read sees the pre-write value
-  })
-);
-```
-
-Today, reactive hosts reject blocks with a non-empty `Writes` category. The redesign needs an effect host type that admits `Writes` and requires every write to slice into the effect half.
+This is stricter than 2.0 today, where the effect phase may write. It removes the class of effects that exist only to copy one signal into another, and with it any need for a read-after-write rule: an effect never observes its own writes because it has none. An effect's side effects are non-reactive (DOM, logging, third-party APIs, subscriptions).
 
 ## 2. Barrier reads
 
@@ -64,7 +55,7 @@ A read, or the branch around it, that depends on the effect's own side effect ca
 createEffect(
   $(function* () {
     el.textContent = yield* label;
-    if (el.scrollHeight > el.clientHeight) yield* write(setTruncated, yield* fullText);
+    if (el.scrollHeight > el.clientHeight) el.title = yield* fullText;
   })
 );
 ```
@@ -79,7 +70,7 @@ createEffect(
   () => [label(), speculative(fullText)],
   ([t, ft]) => {
     el.textContent = t;
-    if (el.scrollHeight > el.clientHeight) setTruncated(ft.use());
+    if (el.scrollHeight > el.clientHeight) el.title = ft.use();
   }
 );
 ```
@@ -99,9 +90,9 @@ createEffect(
 2. **Tracked tail.** Slice up to the barrier and run the rest with dynamic tracking inside the effect phase. It needs a new runtime construct, cannot suspend a pending tail read, and a tail dependency change re-runs the whole effect. Superseded by prefetch.
 3. **No fallback.** Reject in strict mode with a quick fix that splits the block into an effect plus `onSettled`. Barrier effects are often two effects in disguise: write the DOM, then react to the layout. This remains the answer for the two rejected cases above.
 
-## 3. Writes in reactive scopes: not lowered (decided)
+## 3. Writes in effects and reactive scopes: not lowered (decided)
 
-Writes stay illegal in reactive scopes. Computes are re-executable (transition forks, retries, mid-pass invalidation), and knowing statically which signal is written does not make a write idempotent.
+Writes stay illegal in reactive scopes and, per section 1, in effects. Computes are re-executable (transition forks, retries, mid-pass invalidation), and knowing statically which signal is written does not make a write idempotent.
 
 Automatically lowering such writes into derivations was considered and rejected: derivations are better authored directly. Lowering would have to define semantics that 2.0 never had, and it breaks in several ways:
 
@@ -131,7 +122,7 @@ Suggested replacements:
 - a reset with other writers: `createSignal($(function* () { ... }))`;
 - partial store writes: a `createProjection` block.
 
-Cycles in the `Reads`/`Writes` graph are reported with their path. Writes in the effect half of a one-function effect (section 1) remain allowed.
+Cycles in the `Reads`/`Writes` graph are reported with their path. A write that is really a response to user input belongs in an event block or action.
 
 ## Work plan
 
