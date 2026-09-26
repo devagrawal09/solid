@@ -1,0 +1,1066 @@
+{
+  "suite": "rows",
+  "n": 1000,
+  "reps": 5,
+  "chromium": "141.0.7390.37",
+  "date": "2026-09-26T11:19:22.689Z",
+  "verification": {
+    "baseline": {
+      "runtime": "prod",
+      "flags": {},
+      "bundleBytes": 61607,
+      "checks": [
+        {
+          "check": "- _t$.data = v",
+          "ok": true
+        },
+        {
+          "check": "+ _$insert(_el$3, label)",
+          "ok": true
+        },
+        {
+          "check": "+ _$readShallow(",
+          "ok": true
+        },
+        {
+          "check": "- __statusFree);",
+          "ok": true
+        },
+        {
+          "check": "- oracle: 201326592",
+          "ok": true
+        },
+        {
+          "check": "detached sites == 0",
+          "ok": true,
+          "got": 0
+        },
+        {
+          "check": "bundle lacks oracle arms",
+          "ok": true
+        },
+        {
+          "check": "bundle is not async-free",
+          "ok": true
+        }
+      ]
+    },
+    "control": {
+      "runtime": "oracle",
+      "flags": {},
+      "bundleBytes": 61839,
+      "checks": [
+        {
+          "check": "- _t$.data = v",
+          "ok": true
+        },
+        {
+          "check": "+ _$insert(_el$3, label)",
+          "ok": true
+        },
+        {
+          "check": "+ _$readShallow(",
+          "ok": true
+        },
+        {
+          "check": "- __statusFree);",
+          "ok": true
+        },
+        {
+          "check": "- oracle: 201326592",
+          "ok": true
+        },
+        {
+          "check": "detached sites == 0",
+          "ok": true,
+          "got": 0
+        },
+        {
+          "check": "bundle has oracle arms",
+          "ok": true
+        },
+        {
+          "check": "bundle is not async-free",
+          "ok": true
+        }
+      ]
+    },
+    "baseline@sync": {
+      "runtime": "sync",
+      "flags": {},
+      "bundleBytes": 53276,
+      "checks": [
+        {
+          "check": "- _t$.data = v",
+          "ok": true
+        },
+        {
+          "check": "+ _$insert(_el$3, label)",
+          "ok": true
+        },
+        {
+          "check": "+ _$readShallow(",
+          "ok": true
+        },
+        {
+          "check": "- __statusFree);",
+          "ok": true
+        },
+        {
+          "check": "- oracle: 201326592",
+          "ok": true
+        },
+        {
+          "check": "detached sites == 0",
+          "ok": true,
+          "got": 0
+        },
+        {
+          "check": "bundle lacks oracle arms",
+          "ok": true
+        },
+        {
+          "check": "bundle is async-free",
+          "ok": true
+        }
+      ]
+    },
+    "STACK": {
+      "runtime": "oracle",
+      "flags": {
+        "h7": true,
+        "h8b": true,
+        "sf": true
+      },
+      "bundleBytes": 55066,
+      "checks": [
+        {
+          "check": "+ _t$.data = v",
+          "ok": true
+        },
+        {
+          "check": "- _$insert(_el$3, label)",
+          "ok": true
+        },
+        {
+          "check": "- _$readShallow(",
+          "ok": true
+        },
+        {
+          "check": "+ __statusFree);",
+          "ok": true
+        },
+        {
+          "check": "+ oracle: 201326592",
+          "ok": true
+        },
+        {
+          "check": "detached sites == 1",
+          "ok": true,
+          "got": 1
+        },
+        {
+          "check": "bundle has oracle arms",
+          "ok": true
+        },
+        {
+          "check": "bundle is not async-free",
+          "ok": true
+        }
+      ]
+    },
+    "STACK-H7": {
+      "runtime": "oracle",
+      "flags": {
+        "h7": false,
+        "h8b": true,
+        "sf": true
+      },
+      "bundleBytes": 61842,
+      "checks": [
+        {
+          "check": "- _t$.data = v",
+          "ok": true
+        },
+        {
+          "check": "+ _$insert(_el$3, label)",
+          "ok": true
+        },
+        {
+          "check": "+ _$readShallow(",
+          "ok": true
+        },
+        {
+          "check": "+ __statusFree);",
+          "ok": true
+        },
+        {
+          "check": "- oracle: 201326592",
+          "ok": true
+        },
+        {
+          "check": "detached sites == 0",
+          "ok": true,
+          "got": 0
+        },
+        {
+          "check": "bundle has oracle arms",
+          "ok": true
+        },
+        {
+          "check": "bundle is not async-free",
+          "ok": true
+        }
+      ]
+    },
+    "STACK-H8b": {
+      "runtime": "oracle",
+      "flags": {
+        "h7": true,
+        "h8b": false,
+        "sf": true
+      },
+      "bundleBytes": 55047,
+      "checks": [
+        {
+          "check": "+ _t$.data = v",
+          "ok": true
+        },
+        {
+          "check": "- _$insert(_el$3, label)",
+          "ok": true
+        },
+        {
+          "check": "- _$readShallow(",
+          "ok": true
+        },
+        {
+          "check": "+ __statusFree);",
+          "ok": true
+        },
+        {
+          "check": "- oracle: 201326592",
+          "ok": true
+        },
+        {
+          "check": "detached sites == 0",
+          "ok": true,
+          "got": 0
+        },
+        {
+          "check": "bundle has oracle arms",
+          "ok": true
+        },
+        {
+          "check": "bundle is not async-free",
+          "ok": true
+        }
+      ]
+    },
+    "STACK-SF": {
+      "runtime": "oracle",
+      "flags": {
+        "h7": true,
+        "h8b": true,
+        "sf": false
+      },
+      "bundleBytes": 55063,
+      "checks": [
+        {
+          "check": "+ _t$.data = v",
+          "ok": true
+        },
+        {
+          "check": "- _$insert(_el$3, label)",
+          "ok": true
+        },
+        {
+          "check": "- _$readShallow(",
+          "ok": true
+        },
+        {
+          "check": "- __statusFree);",
+          "ok": true
+        },
+        {
+          "check": "+ oracle: 201326592",
+          "ok": true
+        },
+        {
+          "check": "detached sites == 1",
+          "ok": true,
+          "got": 1
+        },
+        {
+          "check": "bundle has oracle arms",
+          "ok": true
+        },
+        {
+          "check": "bundle is not async-free",
+          "ok": true
+        }
+      ]
+    },
+    "STACK+H8b-class": {
+      "runtime": "oracle",
+      "flags": {
+        "h7": true,
+        "h8b": true,
+        "sf": true,
+        "h8bClass": true
+      },
+      "bundleBytes": 55085,
+      "checks": [
+        {
+          "check": "+ _t$.data = v",
+          "ok": true
+        },
+        {
+          "check": "- _$insert(_el$3, label)",
+          "ok": true
+        },
+        {
+          "check": "- _$readShallow(",
+          "ok": true
+        },
+        {
+          "check": "+ __statusFree);",
+          "ok": true
+        },
+        {
+          "check": "+ oracle: 201326592",
+          "ok": true
+        },
+        {
+          "check": "detached sites == 2",
+          "ok": true,
+          "got": 2
+        },
+        {
+          "check": "bundle has oracle arms",
+          "ok": true
+        },
+        {
+          "check": "bundle is not async-free",
+          "ok": true
+        }
+      ]
+    },
+    "STACK@oracle-sync": {
+      "runtime": "oracle-sync",
+      "flags": {
+        "h7": true,
+        "h8b": true,
+        "sf": true
+      },
+      "bundleBytes": 46741,
+      "checks": [
+        {
+          "check": "+ _t$.data = v",
+          "ok": true
+        },
+        {
+          "check": "- _$insert(_el$3, label)",
+          "ok": true
+        },
+        {
+          "check": "- _$readShallow(",
+          "ok": true
+        },
+        {
+          "check": "+ __statusFree);",
+          "ok": true
+        },
+        {
+          "check": "+ oracle: 201326592",
+          "ok": true
+        },
+        {
+          "check": "detached sites == 1",
+          "ok": true,
+          "got": 1
+        },
+        {
+          "check": "bundle has oracle arms",
+          "ok": true
+        },
+        {
+          "check": "bundle is async-free",
+          "ok": true
+        }
+      ]
+    }
+  },
+  "gate": {
+    "baseline": {
+      "ok": true,
+      "steps": 7,
+      "firstDiff": null
+    },
+    "control": {
+      "ok": true,
+      "steps": 7,
+      "firstDiff": null
+    },
+    "baseline@sync": {
+      "ok": true,
+      "steps": 7,
+      "firstDiff": null
+    },
+    "STACK": {
+      "ok": true,
+      "steps": 7,
+      "firstDiff": null
+    },
+    "STACK-H7": {
+      "ok": true,
+      "steps": 7,
+      "firstDiff": null
+    },
+    "STACK-H8b": {
+      "ok": true,
+      "steps": 7,
+      "firstDiff": null
+    },
+    "STACK-SF": {
+      "ok": true,
+      "steps": 7,
+      "firstDiff": null
+    },
+    "STACK+H8b-class": {
+      "ok": true,
+      "steps": 7,
+      "firstDiff": null
+    },
+    "STACK@oracle-sync": {
+      "ok": true,
+      "steps": 7,
+      "firstDiff": null
+    }
+  },
+  "probe": {
+    "baseline": {
+      "oldLabel": "row 0"
+    },
+    "control": {
+      "oldLabel": "row 0"
+    },
+    "baseline@sync": {
+      "oldLabel": "row 0"
+    },
+    "STACK": {
+      "oldLabel": "row 0 !1"
+    },
+    "STACK-H7": {
+      "oldLabel": "row 0"
+    },
+    "STACK-H8b": {
+      "oldLabel": "row 0"
+    },
+    "STACK-SF": {
+      "oldLabel": "row 0 !1"
+    },
+    "STACK+H8b-class": {
+      "oldLabel": "row 0 !1"
+    },
+    "STACK@oracle-sync": {
+      "oldLabel": "row 0 !1"
+    }
+  },
+  "results": [
+    {
+      "variant": "baseline",
+      "runtime": "prod",
+      "op": "mount",
+      "usPerOp": 4914.285714338933,
+      "reps": [
+        4516.6666666045785,
+        4550.000000046566,
+        5116.666666697711,
+        5283.333333364378,
+        4914.285714338933
+      ],
+      "spread": 0.15600775195524644,
+      "batches": [
+        6,
+        6,
+        6,
+        6,
+        7
+      ],
+      "minBatchMs": 27.09999999962747
+    },
+    {
+      "variant": "control",
+      "runtime": "oracle",
+      "op": "mount",
+      "usPerOp": 5000,
+      "reps": [
+        4649.999999984478,
+        5360.000000055879,
+        4783.333333364378,
+        5000,
+        5149.999999984478
+      ],
+      "spread": 0.14200000001428034,
+      "batches": [
+        6,
+        5,
+        6,
+        5,
+        6
+      ],
+      "minBatchMs": 25
+    },
+    {
+      "variant": "baseline@sync",
+      "runtime": "sync",
+      "op": "mount",
+      "usPerOp": 4833.333333333333,
+      "reps": [
+        4516.666666682188,
+        4399.999999984478,
+        4833.333333333333,
+        5016.666666682188,
+        5033.333333286767
+      ],
+      "spread": 0.13103448275219778,
+      "batches": [
+        6,
+        6,
+        6,
+        6,
+        6
+      ],
+      "minBatchMs": 26.399999999906868
+    },
+    {
+      "variant": "STACK",
+      "runtime": "oracle",
+      "op": "mount",
+      "usPerOp": 4316.6666667287545,
+      "reps": [
+        4449.999999953434,
+        4216.666666635622,
+        4166.666666666667,
+        4316.6666667287545,
+        4414.28571427241
+      ],
+      "spread": 0.06563706562533397,
+      "batches": [
+        6,
+        6,
+        6,
+        6,
+        7
+      ],
+      "minBatchMs": 25
+    },
+    {
+      "variant": "STACK-H7",
+      "runtime": "oracle",
+      "op": "mount",
+      "usPerOp": 4766.666666682188,
+      "reps": [
+        5440.000000037253,
+        5116.666666620101,
+        4516.6666666045785,
+        4685.714285754199,
+        4766.666666682188
+      ],
+      "spread": 0.19370629372650372,
+      "batches": [
+        5,
+        6,
+        6,
+        7,
+        6
+      ],
+      "minBatchMs": 27.09999999962747
+    },
+    {
+      "variant": "STACK-H8b",
+      "runtime": "oracle",
+      "op": "mount",
+      "usPerOp": 4666.666666666667,
+      "reps": [
+        4666.666666666667,
+        5680.000000074506,
+        4566.666666651145,
+        4750,
+        4416.666666666667
+      ],
+      "spread": 0.27071428573025114,
+      "batches": [
+        6,
+        5,
+        6,
+        6,
+        6
+      ],
+      "minBatchMs": 26.5
+    },
+    {
+      "variant": "STACK-SF",
+      "runtime": "oracle",
+      "op": "mount",
+      "usPerOp": 4371.428571441876,
+      "reps": [
+        4566.666666651145,
+        4257.142857182771,
+        4371.428571441876,
+        4314.285714312324,
+        4600.000000015522
+      ],
+      "spread": 0.07843137254320115,
+      "batches": [
+        6,
+        7,
+        7,
+        7,
+        6
+      ],
+      "minBatchMs": 27.399999999906868
+    },
+    {
+      "variant": "STACK+H8b-class",
+      "runtime": "oracle",
+      "op": "mount",
+      "usPerOp": 4242.857142883752,
+      "reps": [
+        4014.2857142990188,
+        3899.999999973391,
+        4316.666666651145,
+        4242.857142883752,
+        4257.142857116248
+      ],
+      "spread": 0.09820426487292876,
+      "batches": [
+        7,
+        7,
+        6,
+        7,
+        7
+      ],
+      "minBatchMs": 25.899999999906868
+    },
+    {
+      "variant": "STACK@oracle-sync",
+      "runtime": "oracle-sync",
+      "op": "mount",
+      "usPerOp": 4385.714285740895,
+      "reps": [
+        4071.4285714285716,
+        4414.28571427241,
+        4250,
+        4385.714285740895,
+        4571.428571428572
+      ],
+      "spread": 0.11400651465728874,
+      "batches": [
+        7,
+        7,
+        6,
+        7,
+        7
+      ],
+      "minBatchMs": 25.5
+    },
+    {
+      "variant": "baseline",
+      "runtime": "prod",
+      "op": "update10th",
+      "usPerOp": 71.22507122507122,
+      "reps": [
+        72.25433526011561,
+        73.17784256586918,
+        71.22507122507122,
+        70.4225352112676,
+        68.87052341597796
+      ],
+      "spread": 0.06047476086447285,
+      "batches": [
+        346,
+        343,
+        351,
+        355,
+        363
+      ],
+      "minBatchMs": 24.999999999999996
+    },
+    {
+      "variant": "control",
+      "runtime": "oracle",
+      "op": "update10th",
+      "usPerOp": 76.68711656441718,
+      "reps": [
+        81.22977346157758,
+        76.68711656441718,
+        76.21951219512195,
+        76.21951219512195,
+        78.43750000029104
+      ],
+      "spread": 0.0653338069145814,
+      "batches": [
+        309,
+        326,
+        328,
+        328,
+        320
+      ],
+      "minBatchMs": 25
+    },
+    {
+      "variant": "baseline@sync",
+      "runtime": "sync",
+      "op": "update10th",
+      "usPerOp": 67.65498652316208,
+      "reps": [
+        65.61679790026247,
+        67.65498652316208,
+        74.4047619047619,
+        66.3129973474801,
+        69.3370165748429
+      ],
+      "spread": 0.12989381058395183,
+      "batches": [
+        381,
+        371,
+        336,
+        377,
+        362
+      ],
+      "minBatchMs": 24.999999999999996
+    },
+    {
+      "variant": "STACK",
+      "runtime": "oracle",
+      "op": "update10th",
+      "usPerOp": 61.12469437652812,
+      "reps": [
+        64.1025641025641,
+        61.27450980392157,
+        61.12469437652812,
+        56.433408577878104,
+        55.80357142857143
+      ],
+      "spread": 0.1357715201465201,
+      "batches": [
+        390,
+        408,
+        409,
+        443,
+        448
+      ],
+      "minBatchMs": 25
+    },
+    {
+      "variant": "STACK-H7",
+      "runtime": "oracle",
+      "op": "update10th",
+      "usPerOp": 70.8215297450425,
+      "reps": [
+        70.8215297450425,
+        67.47311827982024,
+        80.12820512820512,
+        86.77966101568634,
+        67.20430107526882
+      ],
+      "spread": 0.27640408235869546,
+      "batches": [
+        353,
+        372,
+        312,
+        295,
+        372
+      ],
+      "minBatchMs": 25
+    },
+    {
+      "variant": "STACK-H8b",
+      "runtime": "oracle",
+      "op": "update10th",
+      "usPerOp": 59.85748218460951,
+      "reps": [
+        56.68934240362812,
+        59.85748218460951,
+        61.881188118811885,
+        61.881188118811885,
+        57.736720554272516
+      ],
+      "spread": 0.08673678754430952,
+      "batches": [
+        441,
+        421,
+        404,
+        404,
+        433
+      ],
+      "minBatchMs": 25
+    },
+    {
+      "variant": "STACK-SF",
+      "runtime": "oracle",
+      "op": "update10th",
+      "usPerOp": 61.42506142506142,
+      "reps": [
+        62.814070351758794,
+        61.42506142506142,
+        60.82725060827251,
+        66.13756613756614,
+        61.27450980392157
+      ],
+      "spread": 0.08645193681690033,
+      "batches": [
+        398,
+        407,
+        411,
+        378,
+        408
+      ],
+      "minBatchMs": 25
+    },
+    {
+      "variant": "STACK+H8b-class",
+      "runtime": "oracle",
+      "op": "update10th",
+      "usPerOp": 57.870370370370374,
+      "reps": [
+        59.95203836930455,
+        56.56108597285068,
+        57.736720554272516,
+        65.10416666666667,
+        57.870370370370374
+      ],
+      "spread": 0.14762443438914039,
+      "batches": [
+        417,
+        442,
+        433,
+        384,
+        432
+      ],
+      "minBatchMs": 25
+    },
+    {
+      "variant": "STACK@oracle-sync",
+      "runtime": "oracle-sync",
+      "op": "update10th",
+      "usPerOp": 58.10185185206743,
+      "reps": [
+        52.742616033755276,
+        53.191489361702125,
+        60.97560975609756,
+        58.10185185206743,
+        58.41121495327103
+      ],
+      "spread": 0.1416993341848076,
+      "batches": [
+        474,
+        470,
+        410,
+        432,
+        428
+      ],
+      "minBatchMs": 25
+    },
+    {
+      "variant": "baseline",
+      "runtime": "prod",
+      "op": "select",
+      "usPerOp": 149.11242603660511,
+      "reps": [
+        149.11242603660511,
+        142.85714285714286,
+        139.66480446927375,
+        149.7005988023952,
+        150.6024096385542
+      ],
+      "spread": 0.07335139974582282,
+      "batches": [
+        169,
+        175,
+        179,
+        167,
+        166
+      ],
+      "minBatchMs": 25
+    },
+    {
+      "variant": "control",
+      "runtime": "oracle",
+      "op": "select",
+      "usPerOp": 141.80790960504595,
+      "reps": [
+        141.80790960504595,
+        141.80790960504595,
+        142.04545454545453,
+        141.8079096024151,
+        146.51162790805967
+      ],
+      "spread": 0.03316964701577689,
+      "batches": [
+        177,
+        177,
+        176,
+        177,
+        172
+      ],
+      "minBatchMs": 24.999999999999996
+    },
+    {
+      "variant": "baseline@sync",
+      "runtime": "sync",
+      "op": "select",
+      "usPerOp": 136.6120218579235,
+      "reps": [
+        143.4285714291036,
+        146.7836257315388,
+        136.6120218579235,
+        135.67567567617908,
+        134.94623655964048
+      ],
+      "spread": 0.08664968873829561,
+      "batches": [
+        175,
+        171,
+        183,
+        185,
+        186
+      ],
+      "minBatchMs": 25.000000000000004
+    },
+    {
+      "variant": "STACK",
+      "runtime": "oracle",
+      "op": "select",
+      "usPerOp": 102.04081632653062,
+      "reps": [
+        102.45901639344262,
+        102.04081632653062,
+        95.43726235776856,
+        110.08771929661171,
+        95.78544061302682
+      ],
+      "spread": 0.14357447800066286,
+      "batches": [
+        244,
+        245,
+        263,
+        228,
+        261
+      ],
+      "minBatchMs": 25
+    },
+    {
+      "variant": "STACK-H7",
+      "runtime": "oracle",
+      "op": "select",
+      "usPerOp": 105.9322033898305,
+      "reps": [
+        109.17030567685589,
+        99.60159362549801,
+        112.10762331838565,
+        104.58333333372138,
+        105.9322033898305
+      ],
+      "spread": 0.11805692030085929,
+      "batches": [
+        229,
+        251,
+        223,
+        240,
+        236
+      ],
+      "minBatchMs": 25
+    },
+    {
+      "variant": "STACK-H8b",
+      "runtime": "oracle",
+      "op": "select",
+      "usPerOp": 105.9322033898305,
+      "reps": [
+        110.57268722507987,
+        96.89922480620154,
+        105.9322033898305,
+        103.21285140450041,
+        110.61946902654867
+      ],
+      "spread": 0.1295191054400769,
+      "batches": [
+        227,
+        258,
+        236,
+        249,
+        226
+      ],
+      "minBatchMs": 25
+    },
+    {
+      "variant": "STACK-SF",
+      "runtime": "oracle",
+      "op": "select",
+      "usPerOp": 147.92899408284023,
+      "reps": [
+        154.93827160551317,
+        153.37423312883436,
+        145.930232558681,
+        145.34883720930233,
+        147.92899408284023
+      ],
+      "spread": 0.06482457651838523,
+      "batches": [
+        162,
+        163,
+        172,
+        172,
+        169
+      ],
+      "minBatchMs": 25
+    },
+    {
+      "variant": "STACK+H8b-class",
+      "runtime": "oracle",
+      "op": "select",
+      "usPerOp": 102.45901639344262,
+      "reps": [
+        105.88235294000253,
+        119.61722488038278,
+        97.28682170398244,
+        102.04081632653062,
+        102.45901639344262
+      ],
+      "spread": 0.2179447350016673,
+      "batches": [
+        238,
+        209,
+        258,
+        245,
+        244
+      ],
+      "minBatchMs": 25
+    },
+    {
+      "variant": "STACK@oracle-sync",
+      "runtime": "oracle-sync",
+      "op": "select",
+      "usPerOp": 105.9322033898305,
+      "reps": [
+        117.37089201877934,
+        105.9322033898305,
+        113.12217194570135,
+        102.88065843621399,
+        102.88065843621399
+      ],
+      "spread": 0.13678780501941692,
+      "batches": [
+        213,
+        236,
+        221,
+        243,
+        243
+      ],
+      "minBatchMs": 25
+    }
+  ]
+}
