@@ -8,7 +8,7 @@
 // Before timing, every variant must produce the same tbody HTML as the
 // baseline after mount and after each op (the equivalence gate).
 //
-//   node scripts/heuristics/dom/bench.mjs [--n 1000] [--reps 5]
+//   node scripts/heuristics/dom/bench.mjs [--suite rows|list] [--n 1000] [--reps 5]
 //        [--out documentation/plans/heuristic-oracles/dom-bench.json]
 //   node scripts/heuristics/dom/bench.mjs --check            (equivalence gate only)
 //   node scripts/heuristics/dom/bench.mjs --print-baseline
@@ -18,7 +18,6 @@ import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs, ROOT, RUNTIMES, snapshotRuntimes } from "../common.mjs";
-import { DOM_VARIANTS } from "./variants.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const args = parseArgs(process.argv.slice(2));
@@ -31,9 +30,15 @@ if (args["print-baseline"]) {
 }
 
 snapshotRuntimes();
+// --suite rows (variants.mjs) | list (list/variants.mjs: <For> + components)
+const SUITE = args.suite ?? "rows";
+const DOM_VARIANTS =
+  SUITE === "list"
+    ? (await import("./list/variants.mjs")).LIST_VARIANTS
+    : (await import("./variants.mjs")).DOM_VARIANTS;
 const N = Number(args.n ?? 1000);
 const REPS = Number(args.reps ?? 5);
-const dir = join(ROOT, "node_modules/.cache/heuristics/dom");
+const dir = join(ROOT, "node_modules/.cache/heuristics/dom", SUITE);
 mkdirSync(dir, { recursive: true });
 
 // Global Playwright (the environment's pre-installed browser); a project-local
@@ -77,6 +82,7 @@ function pageTrace(n) {
   const app = window.__make(n, tbody);
   const out = [];
   app.mount();
+  app.prepare?.();
   out.push(tbody.innerHTML);
   for (let r = 0; r < 3; r++)
     for (const k of Object.keys(app.ops)) {
@@ -102,11 +108,28 @@ function pageTime([n, op]) {
   } else {
     const app = window.__make(n, tbody);
     app.mount();
+    app.prepare?.();
     run = app.ops[op];
-    batch = 1000;
     warmup = 1000;
+    batch = 0; // sized below
   }
-  for (let i = 0; i < warmup; i++) run();
+  // Warm up for `warmup` runs or ~1.5 s, whichever comes first, then size
+  // batches to ~25 ms so the coarsened timer is far below one sample.
+  const w0 = performance.now();
+  let done = 0;
+  while (done < warmup && performance.now() - w0 < 1500) {
+    run();
+    done++;
+  }
+  if (batch === 0) {
+    const t0 = performance.now();
+    let k = 0;
+    while (performance.now() - t0 < 25) {
+      run();
+      k++;
+    }
+    batch = Math.max(1, k);
+  }
   const samples = [];
   for (let s = 0; s < 20; s++) {
     const t = performance.now();
@@ -146,7 +169,8 @@ if (failed || args.check) {
 
 const median = xs => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
 const results = [];
-for (const op of ["mount", "update10th", "select"])
+const OPS = SUITE === "list" ? ["create", "replace", "update10th", "select", "swap", "removeAdd"] : ["mount", "update10th", "select"];
+for (const op of OPS)
   for (const name of Object.keys(pages)) {
     const reps = [];
     for (let r = 0; r < REPS; r++) {
@@ -162,7 +186,8 @@ for (const op of ["mount", "update10th", "select"])
   }
 const version = browser.version();
 await browser.close();
-const out = args.out ?? "documentation/plans/heuristic-oracles/dom-bench.json";
+const out =
+  args.out ?? `documentation/plans/heuristic-oracles/dom-${SUITE === "rows" ? "bench" : SUITE}.json`;
 writeFileSync(
   resolve(ROOT, out),
   JSON.stringify({ n: N, reps: REPS, chromium: version, date: new Date().toISOString(), results }, null, 2) + "\n"
