@@ -54,7 +54,7 @@ For each heuristic: what the compiler's fact buys, the best **runtime-only** alt
 | H10 cold-scope hydration: bindings over signals no client write reaches are not created | DOM hydration **−27%** (labels), −44% (all but selection), **−57%** with H4 | Defer bindings until first write (moves the work to the first click); defer until idle (no total saving) | all of the total-work saving | Learns a binding's sources only by running it once, which is exactly the work skipped. Unsafe on an unseen write (test in `hydrate/bench.mjs --check`) |
 | S1 handle reads, H2, H3, H4, H6 (updates) | ≈0 or negative | – | – | Not worth a proof |
 
-Summary:
+Summary (see "Validation on the Repo's Benchmark Tiers" for what held on Tier 1 and Tier 2):
 - **Where the compiler is irreplaceable:** fusion (H1, C2), typed DOM writes (H7, L1), ownership (H8b), status pass-through (H9), store scalar replacement (S2, S4), sync actions (A1).
 - **Where the runtime closes the gap:** status-free recompute on hot updates (R1b) and shared selections (projections).
 - **Largest per-site gains:** fusion and store scalar replacement. **Largest coverage:** H1 (29% of memos) and H7 (up to 51% of dynamic parts).
@@ -422,6 +422,22 @@ R1b is the only speculation that earns its place. It closes the round-1 **select
 | L1-nodes | 5880.0 | −7% (noise) | 6150.0 | −1% (noise) | 78.6 | +0% (noise) | 151.1 | −1% (noise) | 94.7 | −12% | 97.5 | −25% |
 
 `web-r0` is the web bundle rebuilt from the worktree with every bit off, the control for R2/R3/R-all. The shipped baseline is the main checkout's build. Their gap (−10% to +16%, all flagged noise) is the DOM harness's noise floor on this machine.
+
+## Validation on the Repo's Benchmark Tiers
+
+The results above come from this study's own harness: cachegrind instruction counts plus Chromium page timings. They were then re-checked on the tiers in `documentation/benchmarking-strategy.md`.
+
+| Tier | What ran | What held | What did not |
+| --- | --- | --- | --- |
+| **Tier 1**: `vitest bench` (`packages/signals/tests/heuristic-oracles.bench.ts`, quiet machine, prod tier ×2 plus dev tier; equivalence gate on values and effect runs, self-tested) | The oracle programs, 1,000 rows | H1 mount −31%, chain update −70%; S2 mount −72%, update −60%; S4 mount −32%; H9+H1 refetch −49%; A1 −22% (prod tier); projection select −98% | H9 alone −8% (noise); H1 on a shared-source selection +2% (noise); A1 ≈0 in the dev tier. Details in `heuristic-oracles/tier1/` |
+| **Tier 2, Node**: js-reactivity-benchmark, 3 interleaved rounds, one process per build | prod, prod + `statusFree` (H5), rspec r0, R1b | H5: 7 of 20 tests faster (−16% to −29%), none slower. R1b: 6 faster (−12% to −25%). r0 = prod on all 20 | R1b: one test slower (`25-1000x5` +10%). jsrb's pull-count assertions fail identically for every build. Details in `heuristic-oracles/jsrb/` |
+| **Tier 2, DOM**: js-framework-benchmark (JFB's own runner, Playwright, Chromium 141, 15 iterations, 2 runs in reversed order) | A `keyed/solid-next` port of JFB's Solid 1 entry, built with the repo compiler; H7, L1, H7+L1, a JSX-child-text variant with and without H7, rspec r0/R1b | H7 on JSX-child text: create1k-after1k −22%/−20% (Mann-Whitney p < 0.01, both runs); update10th −17%/−21% (inside the band). Generic child `insert` costs +18% on create10k versus `textContent=` | Everything else is inside the A/A noise floor: byte-identical bundles differ by up to 15% per cell on this shared VM. **H1 and R1b are not applicable**: idiomatic Solid 2 JFB uses a projection for selection and has no per-row memo. L1 swap −9% is inside the band. Details in `heuristic-oracles/jfb/` |
+
+What this changes:
+- **Instruction-count and Tier-1 wins are real per site**, and they reproduce across harnesses and in wall time.
+- **Their application-level size depends on how the app is written.** Written idiomatically, the JFB app and TodoMVC (stack B) contain few of the patterns H1 and R1b remove. Fusion pays where authors write derived memos: stack B's dashboard, local chains, the census's 29% of memos. It does not pay in list benchmarks already hand-optimized with projections.
+- **H7 is the one DOM heuristic confirmed on Tier 2**, and only where text reaches the DOM through generic JSX child inserts.
+- **JFB on this 4-core shared VM resolves about ±15% per cell.** Smaller effects need JFB on dedicated hardware with more iterations; the repo's Tier-2 practice is 10+ repetition medians on the same machine. Until then, treat the DOM-lane deltas of 15% or less in rounds 1–3 as unconfirmed on Tier 2.
 
 ## What Each Heuristic Needs From the Compiler
 
