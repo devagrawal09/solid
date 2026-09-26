@@ -18,7 +18,7 @@ if (!WT) throw new Error("--worktree <path> required");
 const OUT = join(ROOT, "node_modules/.cache/heuristics/rspec");
 mkdirSync(OUT, { recursive: true });
 
-const SIGNALS_BITS = [0, 1, 2, 3];
+const SIGNALS_BITS = [0, 1, 2, 3, 16];
 const WEB_BITS = [0, 2, 4, 6];
 
 // Signals: rspecTree(dir, bits) from the worktree's rollup config.

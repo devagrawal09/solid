@@ -80,7 +80,7 @@ async function bundle(name, { source, runtime, signals, web }) {
   return html;
 }
 
-// In-page: equivalence trace, then timings (median of 20 batches after warmup).
+// In-page: equivalence trace, then timings (median of 20 adaptive >= 25 ms samples after warmup).
 function pageTrace(n) {
   const tbody = document.getElementById("tbody");
   const app = window.__make(n, tbody);
@@ -98,16 +98,13 @@ function pageTrace(n) {
 }
 function pageTime([n, op]) {
   const tbody = document.getElementById("tbody");
-  let run, batch, warmup;
+  let run, warmup;
   if (op === "mount") {
     run = () => {
       const app = window.__make(n, tbody);
       app.mount();
       app.unmount();
     };
-    // Batches sized so each sample spans many ms: file:// pages are not
-    // cross-origin isolated, so performance.now() is coarsened.
-    batch = 20;
     warmup = 40;
   } else {
     const app = window.__make(n, tbody);
@@ -115,30 +112,28 @@ function pageTime([n, op]) {
     app.prepare?.();
     run = app.ops[op];
     warmup = 1000;
-    batch = 0; // sized below
   }
-  // Warm up for `warmup` runs or ~1.5 s, whichever comes first, then size
-  // batches to ~25 ms so the coarsened timer is far below one sample.
   const w0 = performance.now();
   let done = 0;
   while (done < warmup && performance.now() - w0 < 1500) {
     run();
     done++;
   }
-  if (batch === 0) {
-    const t0 = performance.now();
-    let k = 0;
-    while (performance.now() - t0 < 25) {
-      run();
-      k++;
-    }
-    batch = Math.max(1, k);
-  }
+  // Adaptive batches (ported from stack-a/bench.mjs): every sample runs until
+  // >= 25 ms have elapsed — file:// pages are not cross-origin isolated, so
+  // performance.now() is coarsened, and a fixed mount batch of 20 could fall
+  // below that on fast variants.
   const samples = [];
   for (let s = 0; s < 20; s++) {
     const t = performance.now();
-    for (let i = 0; i < batch; i++) run();
-    samples.push(((performance.now() - t) * 1000) / batch);
+    let k = 0,
+      el = 0;
+    do {
+      run();
+      k++;
+      el = performance.now() - t;
+    } while (el < 25);
+    samples.push((el * 1000) / k);
   }
   samples.sort((a, b) => a - b);
   return samples[10];

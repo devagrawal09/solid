@@ -41,10 +41,10 @@ index 35a8bd13..0d907bad 100644
    test: {
      environment: "jsdom",
 diff --git a/packages/signals/rollup.config.js b/packages/signals/rollup.config.js
-index dac9e8d7..0dbf1cd3 100644
+index dac9e8d7..be269d60 100644
 --- a/packages/signals/rollup.config.js
 +++ b/packages/signals/rollup.config.js
-@@ -36,8 +36,16 @@ import prettier from "rollup-plugin-prettier";
+@@ -36,8 +36,17 @@ import prettier from "rollup-plugin-prettier";
  // `attribution.prod.ts`, an inert twin with the same surface — a prod build
  // has no hook sites to feed one.
  
@@ -58,11 +58,12 @@ index dac9e8d7..0dbf1cd3 100644
 +    "__RSPEC__ & 2": String(Boolean(rspec & 2)),
 +    "__RSPEC__ & 4": String(Boolean(rspec & 4)),
 +    "__RSPEC__ & 8": String(Boolean(rspec & 8)),
++    "__RSPEC__ & 16": String(Boolean(rspec & 16)),
 +    __RSPEC__: String(rspec),
      __DEV__: String(dev),
      __OBSERVE__: String(observe),
      __TEST__: "false",
-@@ -121,3 +129,10 @@ export default [
+@@ -121,3 +130,10 @@ export default [
  // (`rollup -c rollup.oracle.config.js`, driven by scripts/heuristics/build.mjs),
  // so it is never part of a published build.
  export const oracleBuild = [tree("dist/oracle", false, false, true)];
@@ -153,11 +154,92 @@ index b4395865..786d65f8 100644
          // Thenable assimilation can itself throw synchronously (a `then`
          // getter, or a `then()` method that throws — #2918). Match `await`
          // semantics: the failure is thrown back into the generator at the
+diff --git a/packages/signals/src/core/async.ts b/packages/signals/src/core/async.ts
+index ec5a9412..3b067059 100644
+--- a/packages/signals/src/core/async.ts
++++ b/packages/signals/src/core/async.ts
+@@ -3,6 +3,9 @@ import {
+   CONFIG_CHILD_COMPANIONS,
+   CONFIG_AUTO_DISPOSE,
+   CONFIG_INPUTS_PUBLISHED,
++  CONFIG_SPECULATED,
++  CONFIG_SPEC_DEOPT,
++  CONFIG_NOTHROW,
+   CONFIG_SYNC,
+   EFFECT_TRACKED,
+   EFFECT_USER,
+@@ -342,6 +345,11 @@ export function handleAsync<T>(
+   // / AsyncIterable comes through. The fast-path semantics in production would
+   // silently store the unawaited value, which is what the user opted out of by
+   // passing `sync: true`; the diagnostic surfaces that mistake immediately.
++  // R1b: a runtime-promoted memo went async on the full path: deopt for good.
++  if (__RSPEC__ & 16) {
++    if ((thenable || iterator) && el._config & CONFIG_SPECULATED)
++      el._config = (el._config & ~(CONFIG_SYNC | CONFIG_NOTHROW | CONFIG_SPECULATED)) | CONFIG_SPEC_DEOPT;
++  }
+   if (__DEV__ && el._config & CONFIG_SYNC) {
+     const message =
+       `[SYNC_NODE_RECEIVED_ASYNC] A computed/effect created with \`sync: true\` returned ` +
+diff --git a/packages/signals/src/core/constants.ts b/packages/signals/src/core/constants.ts
+index 3b8d86ab..c5c4a677 100644
+--- a/packages/signals/src/core/constants.ts
++++ b/packages/signals/src/core/constants.ts
+@@ -189,6 +189,11 @@ export const CONFIG_ORACLE_OWNERLESS = 1 << 26;
+  * cleanup. Nothing on disposal needs to reach it, so it is never linked into
+  * its parent's child list. */
+ export const CONFIG_ORACLE_DETACHED = 1 << 27;
++/** R1b (runtime speculation experiment): the node was promoted to the
++ * status-free path by the runtime after a clean full-path run. */
++export const CONFIG_SPECULATED = 1 << 29;
++/** R1b: the node threw or went async after promotion; never promote again. */
++export const CONFIG_SPEC_DEOPT = 1 << 30;
+ 
+ export const STATUS_NONE = 0;
+ export const STATUS_PENDING = 1 << 0;
 diff --git a/packages/signals/src/core/core.ts b/packages/signals/src/core/core.ts
-index 753c0164..be3ee089 100644
+index 753c0164..95eee6d2 100644
 --- a/packages/signals/src/core/core.ts
 +++ b/packages/signals/src/core/core.ts
-@@ -916,6 +916,8 @@ export function computed<T>(
+@@ -28,6 +28,8 @@ import {
+   CONFIG_OWNED_WRITE,
+   CONFIG_SLOT_NODE,
+   CONFIG_NOTHROW,
++  CONFIG_SPECULATED,
++  CONFIG_SPEC_DEOPT,
+   CONFIG_ORACLE_DIRECT,
+   CONFIG_ORACLE_DETACHED,
+   CONFIG_ORACLE_FUSED,
+@@ -386,7 +388,7 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
+       value = el._fn(value);
+       if (__DEV__) verifyAsyncFree!(el, value);
+       el._loading = false;
+-    } else if (!__DEV__ && el._config & CONFIG_SYNC) {
++    } else if (!__DEV__ && el._config & CONFIG_SYNC && !(__RSPEC__ & 16 && el._config & CONFIG_SPECULATED)) {
+       value = el._fn(value);
+       if (el._x !== null) el._x._inFlight = null;
+       el._loading = false;
+@@ -415,6 +417,20 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
+     // extension — no extension, no status to clear. (_x from an unrelated
+     // installer just makes clearStatus a cheap re-verified no-op.)
+     if (el._statusFlags !== 0 || el._x !== null) clearStatus(el, create);
++    // R1b: a memo whose full-path run was clean is promoted to the
++    // status-free path for its next runs (deopted for good on a throw or an
++    // async-shaped result there).
++    if (__RSPEC__ & 16) {
++      if (
++        !isEffect &&
++        !(el._config & (CONFIG_SPEC_DEOPT | CONFIG_SPECULATED | CONFIG_SYNC)) &&
++        el._statusFlags === 0 &&
++        !el._loading &&
++        (el._x === null || !el._x._inFlight) &&
++        !(typeof value === "object" && value !== null)
++      )
++        el._config |= CONFIG_SYNC | CONFIG_NOTHROW | CONFIG_SPECULATED;
++    }
+     // _optimisticLane is only ever assigned by engine paths (CONFIG_HAS_LANE
+     // is their sticky presence mark).
+     if (__ASYNC__ && el._config & CONFIG_HAS_LANE && el._x?._optimisticLane)
+@@ -916,6 +932,8 @@ export function computed<T>(
    // Oracle bits (CONFIG_ORACLE_*): assumed facts, measurement builds only.
    // The option is unprefixed so prod property mangling leaves it readable.
    if (__ORACLE__ && (options as any)?.oracle) self._config |= (options as any).oracle;
@@ -166,7 +248,7 @@ index 753c0164..be3ee089 100644
    setupComputedNode(self, options);
    return self;
  }
-@@ -1073,6 +1075,7 @@ export function createEffectNode<T>(
+@@ -1073,6 +1091,7 @@ export function createEffectNode<T>(
      self._config |= CONFIG_ORACLE_FUSED;
    }
    if (__ORACLE__ && (options as any)?.oracle) self._config |= (options as any).oracle;
@@ -175,10 +257,10 @@ index 753c0164..be3ee089 100644
    return self;
  }
 diff --git a/packages/signals/src/core/status-free.ts b/packages/signals/src/core/status-free.ts
-index ce886e05..14a6d798 100644
+index ce886e05..3e1c60d2 100644
 --- a/packages/signals/src/core/status-free.ts
 +++ b/packages/signals/src/core/status-free.ts
-@@ -37,10 +37,11 @@
+@@ -37,10 +37,13 @@
   *   behavior (except that a wrong *sync* proof stores a Promise as a value,
   *   which is the documented contract of `sync: true` and is loud in dev).
   */
@@ -187,23 +269,45 @@ index ce886e05..14a6d798 100644
  import { attrHooks } from "./attribution-hooks.js";
  import {
    CONFIG_NOTHROW,
++  CONFIG_SPECULATED,
++  CONFIG_SPEC_DEOPT,
 +  CONFIG_SYNC,
    EFFECT_TRACKED,
    EFFECT_USER,
    NOT_PENDING,
-@@ -149,6 +150,8 @@ function devVerifySync(el: Computed<any>, result: unknown): void {
+@@ -149,7 +152,15 @@ function devVerifySync(el: Computed<any>, result: unknown): void {
   * the full path's catch does in the plain world, and deoptimize. */
  function threw(el: Computed<any>, e: unknown): void {
    el._config &= ~CONFIG_NOTHROW;
+-  if (__DEV__) {
++  let speculated = false;
++  if (__RSPEC__ & 16) {
++    speculated = (el._config & CONFIG_SPECULATED) !== 0;
++    if (speculated)
++      el._config = (el._config & ~(CONFIG_SYNC | CONFIG_SPECULATED)) | CONFIG_SPEC_DEOPT;
++  }
 +  // R1: a speculated node falls back to the fully general path for good.
 +  if (__RSPEC__ & 1) el._config &= ~CONFIG_SYNC;
-   if (__DEV__) {
++  if (__DEV__ && !speculated) {
      reportDiagnostic(
        emitDiagnostic(
-@@ -213,6 +216,19 @@ export function recomputeStatusFree(el: Computed<any>, create: boolean): boolean
+         {
+@@ -213,6 +224,31 @@ export function recomputeStatusFree(el: Computed<any>, create: boolean): boolean
    let failed = false;
    try {
      value = el._fn(value);
++    if (__RSPEC__ & 16) {
++      if (
++        el._config & CONFIG_SPECULATED &&
++        typeof value === "object" &&
++        value !== null &&
++        (typeof (value as any).then === "function" ||
++          (value as any)[Symbol.asyncIterator] !== undefined)
++      ) {
++        el._config = (el._config & ~(CONFIG_SYNC | CONFIG_NOTHROW | CONFIG_SPECULATED)) | CONFIG_SPEC_DEOPT;
++        value = handleAsync(el, value);
++      }
++    }
 +    if (__RSPEC__ & 1) {
 +      if (
 +        typeof value === "object" &&
@@ -239,10 +343,20 @@ index 968c4265..25929e14 100644
  
  export {};
 diff --git a/packages/signals/src/map.ts b/packages/signals/src/map.ts
-index 8b02db44..5bbba133 100644
+index 8b02db44..17ce87b0 100644
 --- a/packages/signals/src/map.ts
 +++ b/packages/signals/src/map.ts
-@@ -553,9 +553,23 @@ function updateKeyedMap<Item, MappedItem>(this: MapData<Item, MappedItem>): any[
+@@ -7,7 +7,8 @@ import {
+   setSignal,
+   signal,
+   type Root,
+-  type Signal
++  type Signal,
++  untrack
+ } from "./core/index.js";
+ import { accessor, type Accessor } from "./signals.js";
+ import { $TRACK } from "./store/index.js";
+@@ -553,9 +554,30 @@ function updateKeyedMap<Item, MappedItem>(this: MapData<Item, MappedItem>): any[
      }
    });
  
@@ -251,11 +365,18 @@ index 8b02db44..5bbba133 100644
 +    // array to the DOM reconciler directly (no flatten / normalize).
 +    const m = this._mappings as any;
 +    let all = m.length > 0;
-+    for (let k = 0; all && k < m.length; k++) {
-+      const t = m[k] !== null && typeof m[k] === "object" ? m[k].nodeType : 0;
-+      if (t !== 1 && t !== 3) all = false;
-+    }
-+    m[ALL_NODES] = all;
++    // Untracked: a mapped value may be a store row, whose tracked read would
++    // create a `nodeType` node per row.
++    untrack(() => {
++      for (let k = 0; all && k < m.length; k++) {
++        const t = m[k] !== null && typeof m[k] === "object" ? m[k].nodeType : 0;
++        if (t !== 1 && t !== 3) all = false;
++      }
++    });
++    // Non-enumerable: the mapped array is user-visible (deep equality,
++    // Object.assign) and must not grow an own enumerable key.
++    if (ALL_NODES in m) m[ALL_NODES] = all;
++    else Object.defineProperty(m, ALL_NODES, { value: all, writable: true });
 +  }
    return this._mappings;
  }
@@ -294,6 +415,19 @@ index 29b56b63..a59b06cb 100644
    },
    test: {
      globals: true,
+diff --git a/packages/web/rollup.config.js b/packages/web/rollup.config.js
+index 6272725c..0081eb34 100644
+--- a/packages/web/rollup.config.js
++++ b/packages/web/rollup.config.js
+@@ -58,6 +58,8 @@ const replaceFlags = (isDev, isObserve) =>
+   replace({
+     '"_SOLID_DEV_"': isDev,
+     '"_SOLID_OBSERVE_"': isObserve,
++    // Runtime speculation experiments (WEB_RSPEC=<bits>, worktree only).
++    __RSPEC__: process.env.WEB_RSPEC ?? "0",
+     preventAssignment: true,
+     delimiters: ["", ""]
+   });
 diff --git a/packages/web/src/client.ts b/packages/web/src/client.ts
 index 79073b4d..df3b0d78 100644
 --- a/packages/web/src/client.ts

@@ -1,0 +1,137 @@
+{
+  "n": 200,
+  "ops": 40,
+  "warmup": {
+    "mount": 300,
+    "update": 2000
+  },
+  "node": "v22.22.2",
+  "results": [
+    {
+      "scenario": "rows",
+      "cell": "baseline@prod",
+      "op": "update10th",
+      "irPerOp": 102024
+    },
+    {
+      "scenario": "rows",
+      "cell": "baseline@prod",
+      "op": "mount",
+      "irPerOp": 1950250
+    },
+    {
+      "scenario": "rows",
+      "cell": "baseline@prod",
+      "op": "select",
+      "irPerOp": 428318
+    },
+    {
+      "scenario": "rows",
+      "cell": "R1@r1",
+      "op": "mount",
+      "irPerOp": 1931925
+    },
+    {
+      "scenario": "rows",
+      "cell": "R1@r1",
+      "op": "update10th",
+      "irPerOp": 100174
+    },
+    {
+      "scenario": "rows",
+      "cell": "R1@r1",
+      "op": "select",
+      "irPerOp": 411169
+    },
+    {
+      "scenario": "rows",
+      "cell": "H5-statusFree@prod",
+      "op": "mount",
+      "irPerOp": 1827939
+    },
+    {
+      "scenario": "rows",
+      "cell": "H5-statusFree@prod",
+      "op": "update10th",
+      "irPerOp": 93461
+    },
+    {
+      "scenario": "rows",
+      "cell": "H5-statusFree@prod",
+      "op": "select",
+      "irPerOp": 337194
+    },
+    {
+      "scenario": "chain",
+      "cell": "baseline@prod",
+      "op": "mount",
+      "irPerOp": 1853958
+    },
+    {
+      "scenario": "chain",
+      "cell": "R1@r1",
+      "op": "mount",
+      "irPerOp": 1882938
+    },
+    {
+      "scenario": "chain",
+      "cell": "baseline@prod",
+      "op": "update",
+      "irPerOp": 1751042
+    },
+    {
+      "scenario": "chain",
+      "cell": "H5-statusFree@prod",
+      "op": "mount",
+      "irPerOp": 1756651
+    },
+    {
+      "scenario": "chain",
+      "cell": "R1@r1",
+      "op": "update",
+      "irPerOp": 1608431
+    },
+    {
+      "scenario": "todos",
+      "cell": "baseline@prod",
+      "op": "mount",
+      "irPerOp": 2729058
+    },
+    {
+      "scenario": "chain",
+      "cell": "H5-statusFree@prod",
+      "op": "update",
+      "irPerOp": 1426186
+    },
+    {
+      "scenario": "todos",
+      "cell": "baseline@prod",
+      "op": "toggle",
+      "irPerOp": 106905
+    },
+    {
+      "scenario": "todos",
+      "cell": "R1@r1",
+      "op": "mount",
+      "irPerOp": 2884062
+    },
+    {
+      "scenario": "todos",
+      "cell": "baseline@prod",
+      "op": "filter",
+      "irPerOp": 1020718
+    },
+    {
+      "scenario": "todos",
+      "cell": "R1@r1",
+      "op": "toggle",
+      "irPerOp": 107365
+    },
+    {
+      "scenario": "todos",
+      "cell": "R1@r1",
+      "op": "filter",
+      "irPerOp": 938732
+    }
+  ]
+}

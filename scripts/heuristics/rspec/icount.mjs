@@ -4,7 +4,7 @@
 // A's compiler-emitted `statusFree` option (H5-statusFree@prod). Same method as
 // ../icount.mjs (cachegrind, (ops, 2·ops) differencing, steady-state warmups).
 //
-//   node scripts/heuristics/rspec/icount.mjs [--jobs 4] --out <file>
+//   node scripts/heuristics/rspec/icount.mjs [--jobs 4] [--variants r1,r16] --out <file>
 import { spawn } from "node:child_process";
 import { cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -24,8 +24,14 @@ const dir = join(ROOT, "node_modules/.cache/heuristics/rspec/icount");
 const snap = join(ROOT, "node_modules/.cache/heuristics/rspec/snap", String(process.pid));
 rmSync(snap, { recursive: true, force: true });
 cpSync(join(ROOT, "packages/signals/dist/prod"), join(snap, "prod"), { recursive: true });
-cpSync(join(ROOT, "node_modules/.cache/heuristics/rspec/signals-r1"), join(snap, "r1"), { recursive: true });
-const RUNTIME = { prod: join(snap, "prod/index.js"), r1: join(snap, "r1/index.js") };
+// --variants r1,r16: the speculation trees to measure next to prod.
+const VARIANTS = (args.variants ?? "r1").split(",");
+const RUNTIME = { prod: join(snap, "prod/index.js") };
+for (const v of VARIANTS) {
+  cpSync(join(ROOT, `node_modules/.cache/heuristics/rspec/signals-${v}`), join(snap, v), { recursive: true });
+  RUNTIME[v] = join(snap, `${v}/index.js`);
+}
+const LABEL = { r1: "R1", r16: "R1b" };
 
 function write(name, source, runtime) {
   mkdirSync(dir, { recursive: true });
@@ -63,7 +69,7 @@ const tasks = [];
 for (const s of SCENARIOS.filter(s => ["rows", "chain", "todos"].includes(s.name))) {
   const cells = [
     ["baseline@prod", s.variants.baseline, "prod"],
-    ["R1@r1", s.variants.baseline, "r1"]
+    ...VARIANTS.map(v => [`${LABEL[v] ?? v}@${v}`, s.variants.baseline, v])
   ];
   if (s.variants["H5-statusFree"]) cells.push(["H5-statusFree@prod", s.variants["H5-statusFree"], "prod"]);
   const probe = await import(pathToFileURL(write(`${s.name}.probe`, s.variants.baseline, "prod")).href);
