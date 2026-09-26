@@ -197,7 +197,7 @@ index 3b8d86ab..c5c4a677 100644
  export const STATUS_NONE = 0;
  export const STATUS_PENDING = 1 << 0;
 diff --git a/packages/signals/src/core/core.ts b/packages/signals/src/core/core.ts
-index 753c0164..95eee6d2 100644
+index 753c0164..669665ce 100644
 --- a/packages/signals/src/core/core.ts
 +++ b/packages/signals/src/core/core.ts
 @@ -28,6 +28,8 @@ import {
@@ -209,7 +209,27 @@ index 753c0164..95eee6d2 100644
    CONFIG_ORACLE_DIRECT,
    CONFIG_ORACLE_DETACHED,
    CONFIG_ORACLE_FUSED,
-@@ -386,7 +388,7 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
+@@ -236,6 +238,19 @@ export function clearSnapshots(): void {
+ }
+ 
+ export function recompute(el: Computed<any>, create: boolean = false): void {
++  // R1b: a memo re-running with no extension and no status has only ever
++  // run clean (an async flight or a throw leaves `_x`): promote it to the
++  // status-free path. The creation run pays nothing.
++  if (__RSPEC__ & 16) {
++    if (
++      !create &&
++      el._x === null &&
++      el._statusFlags === 0 &&
++      !(el._config & (CONFIG_SYNC | CONFIG_SPEC_DEOPT)) &&
++      !(el as any)._type
++    )
++      el._config |= CONFIG_SYNC | CONFIG_NOTHROW | CONFIG_SPECULATED;
++  }
+   // Status-free path (Track A stage 1): both proofs present and the path is
+   // installed (status-free.ts, pulled in by compiled `$` output). The hook
+   // declines outside the plain world; then the full path below runs.
+@@ -386,7 +401,7 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
        value = el._fn(value);
        if (__DEV__) verifyAsyncFree!(el, value);
        el._loading = false;
@@ -218,28 +238,7 @@ index 753c0164..95eee6d2 100644
        value = el._fn(value);
        if (el._x !== null) el._x._inFlight = null;
        el._loading = false;
-@@ -415,6 +417,20 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
-     // extension — no extension, no status to clear. (_x from an unrelated
-     // installer just makes clearStatus a cheap re-verified no-op.)
-     if (el._statusFlags !== 0 || el._x !== null) clearStatus(el, create);
-+    // R1b: a memo whose full-path run was clean is promoted to the
-+    // status-free path for its next runs (deopted for good on a throw or an
-+    // async-shaped result there).
-+    if (__RSPEC__ & 16) {
-+      if (
-+        !isEffect &&
-+        !(el._config & (CONFIG_SPEC_DEOPT | CONFIG_SPECULATED | CONFIG_SYNC)) &&
-+        el._statusFlags === 0 &&
-+        !el._loading &&
-+        (el._x === null || !el._x._inFlight) &&
-+        !(typeof value === "object" && value !== null)
-+      )
-+        el._config |= CONFIG_SYNC | CONFIG_NOTHROW | CONFIG_SPECULATED;
-+    }
-     // _optimisticLane is only ever assigned by engine paths (CONFIG_HAS_LANE
-     // is their sticky presence mark).
-     if (__ASYNC__ && el._config & CONFIG_HAS_LANE && el._x?._optimisticLane)
-@@ -916,6 +932,8 @@ export function computed<T>(
+@@ -916,6 +931,8 @@ export function computed<T>(
    // Oracle bits (CONFIG_ORACLE_*): assumed facts, measurement builds only.
    // The option is unprefixed so prod property mangling leaves it readable.
    if (__ORACLE__ && (options as any)?.oracle) self._config |= (options as any).oracle;
@@ -248,7 +247,7 @@ index 753c0164..95eee6d2 100644
    setupComputedNode(self, options);
    return self;
  }
-@@ -1073,6 +1091,7 @@ export function createEffectNode<T>(
+@@ -1073,6 +1090,7 @@ export function createEffectNode<T>(
      self._config |= CONFIG_ORACLE_FUSED;
    }
    if (__ORACLE__ && (options as any)?.oracle) self._config |= (options as any).oracle;

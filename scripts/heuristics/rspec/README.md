@@ -10,7 +10,7 @@ imports) in the r0 control.
 | Bit | Name | What the runtime does | Compiler oracle it replaces |
 | --- | --- | --- | --- |
 | 1 | R1 | every computation starts on the status-free path; a throw or an async-shaped result deopts it for good (async result handed to `handleAsync`) | H5 `statusFree` |
-| 16 | R1b | a **memo** is promoted to the status-free path after a clean full-path run (no throw, no async result, no status, not loading), never at creation; a throw or async result there deopts it for good, without the NOTHROW diagnostic | H5 `statusFree` |
+| 16 | R1b | a **memo** is promoted to the status-free path at the entry of its second run when it has no extension (`_x`) and no status: it never went async or threw. Never at creation. A throw or async result there deopts it for good, without the NOTHROW diagnostic. (The first cut promoted at the end of the first run and cost +1–2% at mount; `icount-r1b-*.json` vs `icount-r1b-entry-*.json`.) | H5 `statusFree` |
 | 2 | R2 | `mapArray` tags results whose rows are all element/text nodes (probe untracked; tag non-enumerable); `insert` skips flatten/normalize and reconciles directly | L1 single-element rows |
 | 4 | R3 | `insert` writes text-to-text updates as one `.data` store, skipping normalize/insertExpression | H7 typed text |
 | 8 | R5 | `action` runs its first slice in the ambient batch and creates the transaction only when the body yields | A1 sync action → batch |
@@ -22,7 +22,7 @@ R4 (lazy id formatting) was not built: the owner `id` field is read by hydration
 | Variant | `@solidjs/signals` (1,878 tests) | `@solidjs/web`, all five configs |
 | --- | --- | --- |
 | R1 | **528 extra failures** (async semantics: waterfalls, shared pending, `isPending`; the status-free catch emulates only the plain world, and dev reports every speculated throw as a broken proof) | – |
-| R1b | 0 behavioural; 3 artifacts: core floor 23,019 B over a 23,000 B budget (`treeshake`), the H2 oracle arm bypassed on promoted memos, a status-free test counting fast runs globally (a boundary's memo was promoted; the node under test was not) | – |
+| R1b | 0 behavioural. Artifacts: core floor 23,019 B over a 23,000 B budget (`treeshake`), the H2 oracle arm bypassed on promoted memos, and tests that count fast-path runs (`status-free`, `track-a-equivalence`: their trace assertions pass, their "no fast runs" counts do not) | – |
 | R2 (first cut) | 4: the tag was an enumerable own symbol (deep equality saw it) and the `nodeType` probe created a tracked store node per store row | – |
 | R2 (fixed) | 0 (the core-floor budget as R1b) | 0 (818 client, 204 hydration, 827 server, store handles) |
 | R3 | – | 0 |
