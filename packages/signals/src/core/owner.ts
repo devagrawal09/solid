@@ -1,6 +1,7 @@
 import {
   CONFIG_AUTO_DISPOSE,
   CONFIG_ORACLE_LOCAL,
+  CONFIG_ORACLE_OWNERLESS,
   CONFIG_CHILDREN_FORBIDDEN,
   CONFIG_TRANSPARENT,
   defaultContext,
@@ -182,6 +183,8 @@ export function inheritId(
   transparent: boolean,
   parent: Owner | null | undefined
 ): string | undefined {
+  // Oracle H8: an ownerless node takes no slot in its parent's id counter.
+  if (__ORACLE__ && (options as any)?.oracle & CONFIG_ORACLE_OWNERLESS) return undefined;
   return (
     options?.id ??
     (transparent ? parent?.id : parent?.id != null ? getNextChildId(parent) : undefined)

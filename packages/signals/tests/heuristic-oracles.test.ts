@@ -15,14 +15,22 @@
  * and the write-up must be revisited.
  */
 import { describe, expect, it } from "vitest";
-import { CONFIG_ORACLE_DIRECT, CONFIG_ORACLE_LOCAL } from "../src/core/constants.js";
+import {
+  CONFIG_ORACLE_DETACHED,
+  CONFIG_ORACLE_DIRECT,
+  CONFIG_ORACLE_LOCAL,
+  CONFIG_ORACLE_OWNERLESS
+} from "../src/core/constants.js";
 import {
   createMemo,
   createRenderEffect,
   createRoot,
   createSignal,
   flush,
-  latest
+  getNextChildId,
+  getOwner,
+  latest,
+  onCleanup
 } from "../src/index.js";
 
 const same = (a: unknown, b: unknown) => a === b;
@@ -182,5 +190,81 @@ describe("H3 local: skip unlinking at disposal", () => {
     // The surviving source still holds the disposed node: it is retained
     // (a leak) and its compute re-runs on the next write.
     expect(after(true)).toBeGreaterThan(0);
+  });
+});
+
+describe("H8 ownerless / detached: memos and effects that own nothing", () => {
+  const OWNERLESS = CONFIG_ORACLE_OWNERLESS;
+  const DETACHED = CONFIG_ORACLE_OWNERLESS | CONFIG_ORACLE_DETACHED;
+
+  it("ownerless: a compute that does create primitives loses its id scope (hydration keys)", () => {
+    const run = (ownerless: boolean) => {
+      let childId: string | undefined;
+      let error: unknown;
+      createRoot(
+        () => {
+          createMemo(
+            () => {
+              // A compute that renders (or calls createUniqueId) mints ids
+              // from its own node.
+              try {
+                childId = getNextChildId(getOwner()!);
+              } catch (e) {
+                error = e;
+              }
+            },
+            (ownerless ? { oracle: OWNERLESS } : {}) as any
+          );
+        },
+        { id: "r" }
+      );
+      return { childId, error };
+    };
+    expect(run(false).childId).toBe("r0");
+    // The node took no id, so nothing under it can be keyed for hydration.
+    expect(run(true).childId).toBeUndefined();
+    expect(run(true).error).toBeInstanceOf(Error);
+  });
+
+  it("detached: an effect cleanup registered in the compute never runs at disposal", () => {
+    const run = (detached: boolean) => {
+      let cleaned = 0;
+      const dispose = createRoot(d => {
+        createRenderEffect(
+          () => void onCleanup(() => void cleaned++),
+          () => {},
+          (detached ? { oracle: DETACHED } : {}) as any
+        );
+        return d;
+      });
+      flush();
+      dispose();
+      return cleaned;
+    };
+    expect(run(false)).toBe(1);
+    expect(run(true)).toBe(0);
+  });
+
+  it("detached: a node reading a surviving source keeps running after its owner is disposed", () => {
+    const run = (detached: boolean) => {
+      const [shared, setShared] = createSignal(0);
+      let computes = 0;
+      const dispose = createRoot(d => {
+        createRenderEffect(
+          () => (computes++, shared()),
+          () => {},
+          (detached ? { oracle: DETACHED } : {}) as any
+        );
+        return d;
+      });
+      flush();
+      dispose();
+      const before = computes;
+      setShared(1);
+      flush();
+      return computes - before;
+    };
+    expect(run(false)).toBe(0);
+    expect(run(true)).toBeGreaterThan(0);
   });
 });

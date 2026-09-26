@@ -14,9 +14,11 @@
 // Oracle bit values mirror packages/signals/src/core/constants.ts.
 export const ORACLE_DIRECT = 1 << 23;
 export const ORACLE_LOCAL = 1 << 24;
+export const ORACLE_OWNERLESS = 1 << 26;
+export const ORACLE_DETACHED = 1 << 27;
 
 const HEADER = `import { createMemo, createRenderEffect, createRoot, createSignal, flush } from "@solidjs/signals";
-const DIRECT = ${ORACLE_DIRECT}, LOCAL = ${ORACLE_LOCAL};
+const DIRECT = ${ORACLE_DIRECT}, LOCAL = ${ORACLE_LOCAL}, OWNERLESS = ${ORACLE_OWNERLESS}, DETACHED = ${ORACLE_DETACHED};
 const same = (a, b) => a === b;`;
 
 /** Track A variants import the shipped host options; importing `statusFree`
@@ -194,12 +196,31 @@ export function make(n) {
  *   H4 const  — a signal whose setter is never used is a plain value.
  *   H5 static — a binding left with no reactive read runs once, no effect node.
  *   H6 group  — one element's bindings share one effect with per-part checks.
+ *   H8a ownerless — a compute that creates nothing, registers no cleanup and
+ *               reads no context takes no child id (CONFIG_ORACLE_OWNERLESS).
+ *   H8b detached  — ownerless + local sources + no effect cleanup: never
+ *               linked into the parent (CONFIG_ORACLE_DETACHED).
+ * `*-ids` scenarios run the same programs under a root with an id, as SSR and
+ * hydration trees do, so every node formats a child id.
  *   H5 status-free / sync-only — Track A stage 1's shipped host options
  *               (`statusFree`, `syncOnly`) on the memos they would be proven
  *               for, re-measured with steady-state warmups (prod runtime).
  * Each scenario lists which variants apply; `control` runs the baseline source
  * on the oracle runtime to price the oracle arms themselves.
  */
+const OWN = "oracle: OWNERLESS";
+const DET = "oracle: OWNERLESS | DETACHED";
+const H8_ROWS = {
+  "H8a-ownerless": rows({ memo: OWN, labelFx: OWN, selFx: `, ${OWN}` }),
+  "H8b-detached": rows({ memo: OWN, labelFx: DET, selFx: `, ${DET}` }),
+  // The fused selection effect reads the shared signal: ownerless, not detached.
+  "H1+H8b": rows({ fused: true, labelFx: DET, selFx: `, ${OWN}` })
+};
+const H8_TODOS = {
+  "H8a-ownerless": todos({ memo: OWN, fx: OWN }),
+  "H8b-detached": todos({ memo: OWN, fx: DET })
+};
+
 export const SCENARIOS = [
   {
     name: "rows",
@@ -212,7 +233,8 @@ export const SCENARIOS = [
       "H6-group": rows({ grouped: true }),
       "H5-statusFree": withTrackA(rows({ memo: "...statusFree" })),
       "H5-syncOnly": withTrackA(rows({ memo: "...syncOnly" })),
-      "H1+H6": rows({ fused: true, grouped: true })
+      "H1+H6": rows({ fused: true, grouped: true }),
+      ...H8_ROWS
     }
   },
   {
@@ -223,7 +245,9 @@ export const SCENARIOS = [
       "H1-fuse-all": chain({ fusedAll: true }),
       "H2-direct": chain({ memo: "oracle: DIRECT" }),
       "H5-statusFree": withTrackA(chain({ memo: "...statusFree" })),
-      "H5-syncOnly": withTrackA(chain({ memo: "...syncOnly" }))
+      "H5-syncOnly": withTrackA(chain({ memo: "...syncOnly" })),
+      "H8a-ownerless": chain({ memo: "oracle: OWNERLESS", fx: ", oracle: OWNERLESS" }),
+      "H8b-detached": chain({ memo: "oracle: OWNERLESS", fx: ", oracle: OWNERLESS | DETACHED" })
     }
   },
   {
@@ -235,7 +259,25 @@ export const SCENARIOS = [
       "H3-local": todos({ fx: "oracle: LOCAL" }),
       "H4-const": todos({ title: "const" }),
       "H4+H5-static": todos({ title: "static" }),
-      "H1+H4+H5": todos({ fusedVisible: true, title: "static" })
+      "H1+H4+H5": todos({ fusedVisible: true, title: "static" }),
+      ...H8_TODOS
     }
   }
 ];
+
+// The id-carrying twins: same programs, root created with an id.
+const withIds = source => {
+  const out = source.replace("return d;\n      });", 'return d;\n      }, { id: "r" });');
+  if (out === source) throw new Error("withIds: root pattern not found");
+  return out;
+};
+for (const name of ["rows", "todos"]) {
+  const base = SCENARIOS.find(s => s.name === name);
+  const pick = ["baseline", "H1-fuse", "H8a-ownerless", "H8b-detached", "H1+H8b"];
+  SCENARIOS.push({
+    name: `${name}-ids`,
+    variants: Object.fromEntries(
+      pick.filter(v => base.variants[v]).map(v => [v, withIds(base.variants[v])])
+    )
+  });
+}

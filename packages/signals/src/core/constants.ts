@@ -180,6 +180,15 @@ export const CONFIG_ORACLE_LOCAL = 1 << 24;
  * by `createEffectNode` when an `equals` option is passed; nothing else is
  * allowed to rely on an effect's `_equals`. */
 export const CONFIG_ORACLE_FUSED = 1 << 25;
+/** OWNERLESS: the compute creates no primitives, registers no cleanup and
+ * reads no context — it never acts as an owner. It then consumes no child id
+ * from its parent (the compiler would emit the same on server and client, so
+ * hydration ids stay in parity). */
+export const CONFIG_ORACLE_OWNERLESS = 1 << 26;
+/** DETACHED: OWNERLESS and LOCAL (every source dies with it) and no effect
+ * cleanup. Nothing on disposal needs to reach it, so it is never linked into
+ * its parent's child list. */
+export const CONFIG_ORACLE_DETACHED = 1 << 27;
 
 export const STATUS_NONE = 0;
 export const STATUS_PENDING = 1 << 0;

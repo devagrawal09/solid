@@ -29,6 +29,7 @@ import {
   CONFIG_SLOT_NODE,
   CONFIG_NOTHROW,
   CONFIG_ORACLE_DIRECT,
+  CONFIG_ORACLE_DETACHED,
   CONFIG_ORACLE_FUSED,
   CONFIG_STATUS_FREE,
   CONFIG_SYNC,
@@ -1118,7 +1119,9 @@ function setupComputedNode<T>(self: Computed<T>, options: NodeOptions<T> | undef
     });
     throw new Error(PRIMITIVE_IN_FORBIDDEN_SCOPE_MESSAGE);
   }
-  if (context) {
+  if (__ORACLE__ && self._config & CONFIG_ORACLE_DETACHED) {
+    // Oracle H8: nothing on disposal needs to reach a detached node.
+  } else if (context) {
     const lastChild = context._firstChild;
     if (lastChild === null) {
       context._firstChild = self;
