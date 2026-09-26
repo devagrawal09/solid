@@ -10,7 +10,7 @@ Solid 2 split effects into `createEffect(compute, effect)` because dependencies 
 - a transition may run the compute speculatively, possibly more than once, while the side effect waits for the commit;
 - pending retries re-run the compute.
 
-If the compiler can see every reactive read and write in an effect, can authors go back to one function? And can writes return, both in effects and in reactive scopes?
+If the compiler can see every reactive read and write in an effect, can authors go back to one function? And can writes return, both in effects and in reactive scopes? (Answers: yes, compiled into the split form; yes, in the effect half; no, in reactive scopes, where the diagnostic suggests a derivation instead.)
 
 ## 1. One-function effects, compiled into the split form
 
@@ -99,46 +99,45 @@ createEffect(
 2. **Tracked tail.** Slice up to the barrier and run the rest with dynamic tracking inside the effect phase. It needs a new runtime construct, cannot suspend a pending tail read, and a tail dependency change re-runs the whole effect. Superseded by prefetch.
 3. **No fallback.** Reject in strict mode with a quick fix that splits the block into an effect plus `onSettled`. Barrier effects are often two effects in disguise: write the DOM, then react to the layout. This remains the answer for the two rejected cases above.
 
-## 3. Writes in reactive scopes, lowered into derivations
+## 3. Writes in reactive scopes: not lowered (decided)
 
-Writes stay illegal as side effects in reactive scopes, because computes are re-executable (transition forks, retries, mid-pass invalidation). Knowing statically which signal is written does not make a write idempotent. What it does allow is **lowering the write into a derivation**, which the runtime then owns per world.
+Writes stay illegal in reactive scopes. Computes are re-executable (transition forks, retries, mid-pass invalidation), and knowing statically which signal is written does not make a write idempotent.
+
+Automatically lowering such writes into derivations was considered and rejected: derivations are better authored directly. Lowering would have to define semantics that 2.0 never had, and it breaks in several ways:
+
+- the writer and the target have different owners and lifetimes;
+- conditional writes need an exact seed, and updater-form writes are reducers, not derivations;
+- a meaningful initial value disappears;
+- after a task `yield*`, the target becomes an async memo that suspends its readers;
+- errors move from the writer's boundary to the readers';
+- the one-flush lag disappears;
+- exported targets turn "single writer" into a whole-program claim.
+
+Instead, the compiler's diagnostic proposes the derivation as a **quick fix**, applied only when the author accepts it:
 
 ```ts
-// single writer: setB is written nowhere else
 createEffect($(function* () {
-  yield* write(setB, (yield* a) * 2);
+  yield* write(setB, (yield* a) * 2);   // STRICT_WRITE_IN_REACTIVE_HOST
 }));
-// lowered
+// quick fix: make b a derivation
 const b = createMemo($(function* () {
   return (yield* a) * 2;
 }));
-
-// reset with other writers: an event also calls setB
-createEffect($(function* () {
-  yield* a;
-  yield* write(setB, init);
-}));
-// lowered
-const [b, setB] = createSignal($(function* () {
-  yield* a;
-  return init;
-}));
 ```
 
-- **Partial store writes** lower to a `createProjection` block.
-- **Cycles:** a scope that writes a signal it transitively reads is rejected, with the cycle path taken from the `Reads`/`Writes` graph.
-- **Still rejected:**
-  - several writers with different write shapes;
-  - a setter passed to unknown code;
-  - a write after a `yield*` of a task.
-- In an app the linker has proven async-free, there are no transitions or retries, so the re-execution objection mostly disappears. That is a possible later relaxation, not a starting point.
+Suggested replacements:
+
+- a single writer: a memo;
+- a reset with other writers: `createSignal($(function* () { ... }))`;
+- partial store writes: a `createProjection` block.
+
+Cycles in the `Reads`/`Writes` graph are reported with their path. Writes in the effect half of a one-function effect (section 1) remain allowed.
 
 ## Work plan
 
 1. **Census.** Over the corpus in `scripts/heuristics/census.mjs` (mostly 1.x-era code), count:
    - effects whose reads slice cleanly;
-   - barrier effects, split into prefetchable and rejected;
-   - single-writer "effect writes a signal" patterns that lower to memos or writable derived signals.
+   - barrier effects, split into prefetchable and rejected.
 2. **Slicing prototype** for generator effect blocks. It must pass an equivalence gate against hand-written split effects, plus refusal fixtures and conformance traces with transitions and async sources.
 3. **Prefetch runtime prototype:** the speculative link label, `use()`, mute after the effect phase, and lazy error capture. Semantics tests against `createTrackedEffect` traces: runs only while the branch is taken; pending and errored sources that are not consumed.
-4. **Performance:** effect-writes-signal (two flushes) against the lowered memo (one flush), and the cost of speculative reads, on the heuristic-oracles harness.
+4. **Performance:** the cost of speculative reads on the heuristic-oracles harness.
