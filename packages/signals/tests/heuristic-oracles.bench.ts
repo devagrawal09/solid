@@ -58,11 +58,23 @@ describe(`async rows ${N}: refetch`, () => {
 // ---------------------------------------------------------------------------
 // S2 store scalar replacement, S4 static store field.
 describe(`store rows ${N}: mount + dispose`, () => {
-  for (const k of ["store", "S4-static-id", "S2-scalar"] as const)
+  for (const k of [
+    "store",
+    "S1-handle-child",
+    "S1-handle-root",
+    "S4-static-id",
+    "S2-scalar"
+  ] as const)
     bench(k, () => storeRows(k).dispose(), OPTS);
 });
 describe(`store rows ${N}: update10th`, () => {
-  for (const k of ["store", "S4-static-id", "S2-scalar"] as const) {
+  for (const k of [
+    "store",
+    "S1-handle-child",
+    "S1-handle-root",
+    "S4-static-id",
+    "S2-scalar"
+  ] as const) {
     const app = storeRows(k);
     bench(k, () => app.update10th(), OPTS);
   }

@@ -12,7 +12,11 @@ import {
   createRoot,
   createSignal,
   createStore,
+  createStoreHandle,
   flush,
+  readHandle1,
+  readHandle3,
+  readHandleChild,
   untrack
 } from "../src/index.js";
 
@@ -147,7 +151,13 @@ export function asyncRows(kind: "baseline" | "H9-statusless" | "H9-direct") {
   };
 }
 
-export function storeRows(kind: "store" | "S2-scalar" | "S4-static-id") {
+export type StoreKind =
+  | "store"
+  | "S1-handle-child"
+  | "S1-handle-root"
+  | "S4-static-id"
+  | "S2-scalar";
+export function storeRows(kind: StoreKind) {
   if (kind === "S2-scalar") {
     const setters: ((v: string) => void)[] = [];
     const dispose = createRoot(d => {
@@ -170,22 +180,30 @@ export function storeRows(kind: "store" | "S2-scalar" | "S4-static-id") {
       }
     };
   }
-  const [state, setState] = createStore({
-    rows: Array.from({ length: N }, (_, i) => ({ id: i, label: "row " + i }))
-  });
+  // S1: the store proven non-escaping is a handle (Track B `storeHandles`
+  // output): reads walk it with readHandleK, no Proxy is ever created by a
+  // read — through a per-row child handle, or a 3-key path from the root.
+  const init = { rows: Array.from({ length: N }, (_, i) => ({ id: i, label: "row " + i })) };
+  const handle = kind.startsWith("S1") ? createStoreHandle(init) : null;
+  const [state, setState] = handle ?? createStore(init);
   const dispose = createRoot(d => {
     for (let i = 0; i < N; i++) {
-      const row = untrack(() => state.rows[i]);
-      if (kind === "S4-static-id") out.sink += untrack(() => row.id);
-      else
-        createRenderEffect(
-          () => row.id,
-          v => void (out.sink += v)
-        ); // static text: not counted as a run
-      createRenderEffect(
-        () => row.label,
-        v => void (out.runs++, (out.sink += v.length))
-      );
+      let id: () => number, label: () => string;
+      if (kind === "S1-handle-child") {
+        const row = readHandleChild(handle![0], ["rows", i]);
+        id = () => readHandle1(row, "id") as number;
+        label = () => readHandle1(row, "label") as string;
+      } else if (kind === "S1-handle-root") {
+        id = () => readHandle3(handle![0], "rows", i, "id") as number;
+        label = () => readHandle3(handle![0], "rows", i, "label") as string;
+      } else {
+        const row = untrack(() => (state as any).rows[i]);
+        id = () => row.id;
+        label = () => row.label;
+      }
+      if (kind === "S4-static-id") out.sink += untrack(id);
+      else createRenderEffect(id, v => void (out.sink += v)); // static text: not counted as a run
+      createRenderEffect(label, v => void (out.runs++, (out.sink += v.length)));
     }
     return d;
   });
@@ -195,7 +213,7 @@ export function storeRows(kind: "store" | "S2-scalar" | "S4-static-id") {
     dispose,
     update10th() {
       const r = ++round;
-      setState(s => {
+      (setState as any)((s: any) => {
         for (let i = 0; i < N; i += 10) s.rows[i].label = "row " + i + " #" + r;
       });
       flush();
