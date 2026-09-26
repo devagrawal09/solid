@@ -32,10 +32,13 @@ if (args["print-baseline"]) {
 snapshotRuntimes();
 // --suite rows (variants.mjs) | list (list/variants.mjs: <For> + components)
 const SUITE = args.suite ?? "rows";
+// rspec-rows / rspec-list: the runtime-speculation variants (../rspec/variants.mjs).
 const DOM_VARIANTS =
   SUITE === "list"
     ? (await import("./list/variants.mjs")).LIST_VARIANTS
-    : (await import("./variants.mjs")).DOM_VARIANTS;
+    : SUITE.startsWith("rspec-")
+      ? (await import("../rspec/variants.mjs")).rspecVariants(SUITE.slice(6))
+      : (await import("./variants.mjs")).DOM_VARIANTS;
 const N = Number(args.n ?? 1000);
 const REPS = Number(args.reps ?? 5);
 const dir = join(ROOT, "node_modules/.cache/heuristics/dom", SUITE);
@@ -51,7 +54,8 @@ try {
   ({ chromium } = require("/opt/node22/lib/node_modules/playwright"));
 }
 
-async function bundle(name, { source, runtime }) {
+// A variant may pin its own runtime bundles (`signals` / `web` paths).
+async function bundle(name, { source, runtime, signals, web }) {
   const entry = join(dir, `${name}.mjs`);
   writeFileSync(entry, `${source}\nwindow.__make = make;\n`);
   const out = join(dir, `${name}.bundle.js`);
@@ -64,8 +68,8 @@ async function bundle(name, { source, runtime }) {
     logLevel: "error",
     alias: {
       "solid-js": join(ROOT, "packages/solid/dist/solid.js"),
-      "@solidjs/web": join(ROOT, "packages/web/dist/web.js"),
-      "@solidjs/signals": RUNTIMES[runtime]
+      "@solidjs/web": web ?? join(ROOT, "packages/web/dist/web.js"),
+      "@solidjs/signals": signals ?? RUNTIMES[runtime]
     }
   });
   const html = join(dir, `${name}.html`);
@@ -169,7 +173,7 @@ if (failed || args.check) {
 
 const median = xs => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
 const results = [];
-const OPS = SUITE === "list" ? ["create", "replace", "update10th", "select", "swap", "removeAdd"] : ["mount", "update10th", "select"];
+const OPS = SUITE.endsWith("list") ? ["create", "replace", "update10th", "select", "swap", "removeAdd"] : ["mount", "update10th", "select"];
 for (const op of OPS)
   for (const name of Object.keys(pages)) {
     const reps = [];

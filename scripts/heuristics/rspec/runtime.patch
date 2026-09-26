@@ -1,0 +1,326 @@
+diff --git a/packages/compiler/__tests__/tsrx-runtime.test.js b/packages/compiler/__tests__/tsrx-runtime.test.js
+index ded4ccd..ca8522a 100644
+--- a/packages/compiler/__tests__/tsrx-runtime.test.js
++++ b/packages/compiler/__tests__/tsrx-runtime.test.js
+@@ -83,7 +83,8 @@ async function loadRuntimeModule(code, generate) {
+       __OBSERVE__: "false",
+       __TEST__: "false",
+       __ASYNC__: "true",
+-      __ORACLE__: "false"
++      __ORACLE__: "false",
++      __RSPEC__: "0"
+     },
+     plugins: [
+       {
+diff --git a/packages/diagnostics/vite.config.ts b/packages/diagnostics/vite.config.ts
+index 5c87652..1e96c25 100644
+--- a/packages/diagnostics/vite.config.ts
++++ b/packages/diagnostics/vite.config.ts
+@@ -9,7 +9,8 @@ export default defineConfig({
+     __OBSERVE__: "true",
+     __TEST__: "true",
+     __ASYNC__: "true",
+-    __ORACLE__: "false"
++    __ORACLE__: "false",
++    __RSPEC__: "0"
+   },
+   resolve: {
+     // Array form: entries match in order, and the bare package alias would
+diff --git a/packages/element/vite.config.mjs b/packages/element/vite.config.mjs
+index 35a8bd1..0d907ba 100644
+--- a/packages/element/vite.config.mjs
++++ b/packages/element/vite.config.mjs
+@@ -17,7 +17,8 @@ export default defineConfig({
+     __OBSERVE__: "true",
+     __TEST__: "true",
+     __ASYNC__: "true",
+-    __ORACLE__: "false"
++    __ORACLE__: "false",
++    __RSPEC__: "0"
+   },
+   test: {
+     environment: "jsdom",
+diff --git a/packages/signals/rollup.config.js b/packages/signals/rollup.config.js
+index dac9e8d..6917d87 100644
+--- a/packages/signals/rollup.config.js
++++ b/packages/signals/rollup.config.js
+@@ -36,8 +36,11 @@ import prettier from "rollup-plugin-prettier";
+ // `attribution.prod.ts`, an inert twin with the same surface — a prod build
+ // has no hook sites to feed one.
+ 
+-const flags = (dev, observe, asyncCapability = true, oracle = false) =>
++// SIGNALS_RSPEC=<bits> builds every tree with the runtime speculations on
++// (worktree test runs only; shipped builds leave it unset).
++const flags = (dev, observe, asyncCapability = true, oracle = false, rspec = Number(process.env.SIGNALS_RSPEC || 0)) =>
+   replace({
++    __RSPEC__: String(rspec),
+     __DEV__: String(dev),
+     __OBSERVE__: String(observe),
+     __TEST__: "false",
+@@ -121,3 +124,10 @@ export default [
+ // (`rollup -c rollup.oracle.config.js`, driven by scripts/heuristics/build.mjs),
+ // so it is never part of a published build.
+ export const oracleBuild = [tree("dist/oracle", false, false, true)];
++
++// Runtime-speculation trees (__RSPEC__ bitmask), measurement only.
++export const rspecTree = (dir, rspec) => ({
++  input: { index: "src/index.ts", attribution: engine(false) },
++  output: { dir, format: "esm", preserveModules: true, preserveModulesRoot: "src" },
++  plugins: [flags(false, false, true, false, rspec), ts(dir)]
++});
+diff --git a/packages/signals/scripts/size-attr.mjs b/packages/signals/scripts/size-attr.mjs
+index faf092e..68357cb 100644
+--- a/packages/signals/scripts/size-attr.mjs
++++ b/packages/signals/scripts/size-attr.mjs
+@@ -8,7 +8,7 @@ const res = await build({
+   minify: true,
+   write: false,
+   metafile: true,
+-  define: { __DEV__: "false", __OBSERVE__: "false", __TEST__: "false", __ASYNC__: "true", __ORACLE__: "false" },
++  define: { __DEV__: "false", __OBSERVE__: "false", __TEST__: "false", __ASYNC__: "true", __ORACLE__: "false", __RSPEC__: "0" },
+   treeShaking: true,
+   logLevel: "silent"
+ });
+diff --git a/packages/signals/scripts/store-size.mjs b/packages/signals/scripts/store-size.mjs
+index 083295b..e4e9f8c 100644
+--- a/packages/signals/scripts/store-size.mjs
++++ b/packages/signals/scripts/store-size.mjs
+@@ -17,6 +17,7 @@ const DEFINE = {
+   __TEST__: "false",
+   __ASYNC__: "true",
+   __ORACLE__: "false",
++  __RSPEC__: "0",
+   "globalThis.__DEV__": "false"
+ };
+ 
+diff --git a/packages/signals/src/core/core.ts b/packages/signals/src/core/core.ts
+index 753c016..be3ee08 100644
+--- a/packages/signals/src/core/core.ts
++++ b/packages/signals/src/core/core.ts
+@@ -916,6 +916,8 @@ export function computed<T>(
+   // Oracle bits (CONFIG_ORACLE_*): assumed facts, measurement builds only.
+   // The option is unprefixed so prod property mangling leaves it readable.
+   if (__ORACLE__ && (options as any)?.oracle) self._config |= (options as any).oracle;
++  // R1: speculate status-free; the path deopts on a throw or async result.
++  if (__RSPEC__ & 1) self._config |= CONFIG_SYNC | CONFIG_NOTHROW;
+   setupComputedNode(self, options);
+   return self;
+ }
+@@ -1073,6 +1075,7 @@ export function createEffectNode<T>(
+     self._config |= CONFIG_ORACLE_FUSED;
+   }
+   if (__ORACLE__ && (options as any)?.oracle) self._config |= (options as any).oracle;
++  if (__RSPEC__ & 1) self._config |= CONFIG_SYNC | CONFIG_NOTHROW;
+   setupComputedNode(self, lazyOptions);
+   return self;
+ }
+diff --git a/packages/signals/src/core/status-free.ts b/packages/signals/src/core/status-free.ts
+index ce886e0..0043e3d 100644
+--- a/packages/signals/src/core/status-free.ts
++++ b/packages/signals/src/core/status-free.ts
+@@ -37,10 +37,11 @@
+  *   behavior (except that a wrong *sync* proof stores a Promise as a value,
+  *   which is the documented contract of `sync: true` and is loud in dev).
+  */
+-import { clearStatus, notifyStatus } from "./async.js";
++import { clearStatus, handleAsync, notifyStatus } from "./async.js";
+ import { attrHooks } from "./attribution-hooks.js";
+ import {
+   CONFIG_NOTHROW,
++  CONFIG_SYNC,
+   EFFECT_TRACKED,
+   EFFECT_USER,
+   NOT_PENDING,
+@@ -149,6 +150,8 @@ function devVerifySync(el: Computed<any>, result: unknown): void {
+  * the full path's catch does in the plain world, and deoptimize. */
+ function threw(el: Computed<any>, e: unknown): void {
+   el._config &= ~CONFIG_NOTHROW;
++  // R1: a speculated node falls back to the fully general path for good.
++  if (__RSPEC__ & 1) el._config &= ~CONFIG_SYNC;
+   if (__DEV__) {
+     reportDiagnostic(
+       emitDiagnostic(
+@@ -213,6 +216,18 @@ export function recomputeStatusFree(el: Computed<any>, create: boolean): boolean
+   let failed = false;
+   try {
+     value = el._fn(value);
++    if (
++      __RSPEC__ & 1 &&
++      typeof value === "object" &&
++      value !== null &&
++      (typeof (value as any).then === "function" ||
++        (value as any)[Symbol.asyncIterator] !== undefined)
++    ) {
++      // R1: the speculation was wrong. Deopt for good and hand the result to
++      // the async machinery exactly as the full path would.
++      el._config &= ~(CONFIG_SYNC | CONFIG_NOTHROW);
++      value = handleAsync(el, value);
++    }
+     if (__DEV__) devVerifySync(el, value);
+     // First run: UNINITIALIZED → committed, plus the effect notifier's
+     // settled call. On an extension-less node that is all clearStatus does.
+diff --git a/packages/signals/src/globals.d.ts b/packages/signals/src/globals.d.ts
+index 968c426..25929e1 100644
+--- a/packages/signals/src/globals.d.ts
++++ b/packages/signals/src/globals.d.ts
+@@ -33,6 +33,13 @@ declare global {
+    * built only for oracles whose measured benefit earns it.
+    */
+   const __ORACLE__: boolean;
++  /**
++   * Runtime speculation experiments (documentation/plans/heuristic-oracles.md,
++   * "runtime-only"): a bitmask, 0 in every shipped build. 1 = every computation
++   * starts on the status-free path and deopts on a throw or an async-shaped
++   * result; 2 = mapArray tags all-node results for insert's direct path.
++   */
++  const __RSPEC__: number;
+ }
+ 
+ export {};
+diff --git a/packages/signals/src/map.ts b/packages/signals/src/map.ts
+index 8b02db4..5bbba13 100644
+--- a/packages/signals/src/map.ts
++++ b/packages/signals/src/map.ts
+@@ -553,9 +553,23 @@ function updateKeyedMap<Item, MappedItem>(this: MapData<Item, MappedItem>): any[
+     }
+   });
+ 
++  if (__RSPEC__ & 2) {
++    // R2: every row rendered one element or text node → insert can hand the
++    // array to the DOM reconciler directly (no flatten / normalize).
++    const m = this._mappings as any;
++    let all = m.length > 0;
++    for (let k = 0; all && k < m.length; k++) {
++      const t = m[k] !== null && typeof m[k] === "object" ? m[k].nodeType : 0;
++      if (t !== 1 && t !== 3) all = false;
++    }
++    m[ALL_NODES] = all;
++  }
+   return this._mappings;
+ }
+ 
++/** R2 tag (Symbol.for, so @solidjs/web reads the same key without an import). */
++const ALL_NODES = Symbol.for("solid.allNodes");
++
+ /**
+  * Reactively renders a callback `count` times, reusing previously-rendered
+  * entries when only the count changes. Underlying helper for `<Repeat>`.
+diff --git a/packages/signals/tests/treeshake.test.ts b/packages/signals/tests/treeshake.test.ts
+index 232e896..972d776 100644
+--- a/packages/signals/tests/treeshake.test.ts
++++ b/packages/signals/tests/treeshake.test.ts
+@@ -43,7 +43,8 @@ async function bundleFixture(
+       __OBSERVE__: "false",
+       __TEST__: "false",
+       __ASYNC__: String(asyncCapability),
+-      __ORACLE__: "false"
++      __ORACLE__: "false",
++      __RSPEC__: "0"
+     },
+     resolve: {
+       alias: {
+diff --git a/packages/signals/vite.config.ts b/packages/signals/vite.config.ts
+index 29b56b6..a59b06c 100644
+--- a/packages/signals/vite.config.ts
++++ b/packages/signals/vite.config.ts
+@@ -27,7 +27,8 @@ export default defineConfig(({ mode }) => ({
+     __ASYNC__: String(asyncCapability),
+     // Oracle arms only fire for nodes that opt in with CONFIG_ORACLE_* bits;
+     // tests/heuristic-oracles.test.ts exercises (and breaks) them.
+-    __ORACLE__: "true"
++    __ORACLE__: "true",
++    __RSPEC__: process.env.SIGNALS_RSPEC ?? "0"
+   },
+   test: {
+     globals: true,
+diff --git a/packages/web/src/client.ts b/packages/web/src/client.ts
+index 79073b4..df3b0d7 100644
+--- a/packages/web/src/client.ts
++++ b/packages/web/src/client.ts
+@@ -156,6 +156,11 @@ export {
+   DelegatedEvents
+ } from "./constants.js";
+ 
++/** Runtime-speculation bitmask (measurement builds; 0 when unreplaced). */
++declare const __RSPEC__: number;
++const RSPEC: number = typeof __RSPEC__ === "number" ? __RSPEC__ : 0;
++/** R2: mapArray's tag for an array whose rows are all element/text nodes. */
++const ALL_NODES = Symbol.for("solid.allNodes");
+ const $$EVENT_OWNER = "_$SOLID_EVENT_OWNER";
+ const $$EVENT_TUPLE = Symbol();
+ const hasOwn = Object.prototype.hasOwnProperty;
+@@ -1066,7 +1071,16 @@ export function insert(parent, accessor, marker, initial, options) {
+   effect(
+     prev => {
+       if (hydrationRt !== null) current = hydrationRt.reclaimRegion(current, parent, marker);
+-      const value = normalize(read(), current, multi, true);
++      const raw = read();
++      // R2/R3: shapes the value itself proves (all-node list, plain text)
++      // skip flatten/normalize outside hydration.
++      if (
++        hydrationRt === null &&
++        ((RSPEC & 2 && Array.isArray(raw) && (raw as any)[ALL_NODES] === true) ||
++          (RSPEC & 4 && !multi && (typeof raw === "string" || typeof raw === "number")))
++      )
++        return raw;
++      const value = normalize(raw, current, multi, true);
+       if (typeof value !== "function") return value;
+       effect(
+         () => (
+@@ -1085,6 +1099,16 @@ export function insert(parent, accessor, marker, initial, options) {
+     },
+     value => {
+       if (value === INNER_OWNED) return;
++      if (RSPEC & 4 && hydrationRt === null) {
++        // R3: text → text is one .data write (insertExpression's own branch).
++        const t = typeof value,
++          tc = typeof current;
++        if ((t === "string" || t === "number") && (tc === "string" || tc === "number")) {
++          if (value !== current) parent.firstChild.data = value;
++          current = value;
++          return;
++        }
++      }
+       current = insertExpression(parent, value, current, marker);
+       host && tagHost(current, host);
+     },
+@@ -2410,6 +2434,13 @@ function insertExpression(parent, value, current, marker) {
+     if (marker) value[$$SLOT] = marker;
+   } else if (Array.isArray(value)) {
+     const currentArray = current && Array.isArray(current);
++    if (RSPEC & 2 && (value as any)[ALL_NODES] === true && currentArray && current.length > 0) {
++      // R2: rows are proven nodes — straight to the reconciler, on a copy
++      // (mapArray owns the array it returned).
++      const next = value.slice();
++      reconcileArrays(parent, current, next, marker);
++      return next;
++    }
+     // Commit-time text materialization (normalize left primitives raw): a
+     // primitive slot adopts the positional text node with a `.data` write
+     // when one is there, and allocates only otherwise. The adopted node's
+diff --git a/packages/web/vite.config.hydrate.mjs b/packages/web/vite.config.hydrate.mjs
+index 1380efc..5ce10b4 100644
+--- a/packages/web/vite.config.hydrate.mjs
++++ b/packages/web/vite.config.hydrate.mjs
+@@ -11,6 +11,8 @@ import { resolve } from "path";
+ const rootDir = resolve(__dirname);
+ 
+ export default defineConfig({
++  // Runtime speculation experiments (WEB_RSPEC=<bits>).
++  define: { __RSPEC__: process.env.WEB_RSPEC ?? "0" },
+   // hot: false — solid-refresh wraps top-level components (e.g. the shared
+   // parity-harness scenarios) in HMR wrappers that add owners and break
+   // hydration id parity.
+diff --git a/packages/web/vite.config.mjs b/packages/web/vite.config.mjs
+index f2ec34d..2e3329a 100644
+--- a/packages/web/vite.config.mjs
++++ b/packages/web/vite.config.mjs
+@@ -12,6 +12,8 @@ import { resolve } from "path";
+ const rootDir = resolve(__dirname);
+ 
+ export default defineConfig({
++  // Runtime speculation experiments (WEB_RSPEC=<bits>).
++  define: { __RSPEC__: process.env.WEB_RSPEC ?? "0" },
+   plugins: [solidPlugin({ compiler }), codspeedPlugin()],
+   server: {
+     port: 3000
