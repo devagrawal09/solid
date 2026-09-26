@@ -1,5 +1,5 @@
 {
-  "repoCommit": "397ca07ceaf828e8d528aec3fc297a46a0e5fd94",
+  "repoCommit": "3d536fcba0af4e4f8644281ab21f369f42f7bda9",
   "runtimes": {
     "signals-prod": "6e4608b7d2118587",
     "solid.js": "4809cd3ee18ebed6",
@@ -25,29 +25,29 @@
     },
     "store-strict": {
       "dir": "solid-next-store-strict",
-      "bytes": 79071,
-      "sha256": "b8df8ee7995f533e",
+      "bytes": 79073,
+      "sha256": "1e710da679016bde",
       "signals": "signals-prod/index.js",
       "web": "web.js"
     },
     "store-handles": {
       "dir": "solid-next-store-handles",
-      "bytes": 79223,
-      "sha256": "3685c7827acdf1f7",
+      "bytes": 79225,
+      "sha256": "30f7e4692ea12228",
       "signals": "signals-prod/index.js",
       "web": "web.js"
     },
     "store-handles-for": {
       "dir": "solid-next-store-handles-for",
-      "bytes": 79847,
-      "sha256": "d29cd47029918345",
+      "bytes": 79849,
+      "sha256": "cee61692ee4132a1",
       "signals": "signals-prod/index.js",
       "web": "web.js"
     },
     "store-broken": {
       "dir": "solid-next-store-broken",
-      "bytes": 79855,
-      "sha256": "79fd12914b88b484",
+      "bytes": 79857,
+      "sha256": "b124deccce0e88d3",
       "signals": "signals-prod/index.js",
       "web": "web.js"
     }

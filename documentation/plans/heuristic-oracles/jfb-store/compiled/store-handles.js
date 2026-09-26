@@ -178,6 +178,11 @@ render(() => {
         return rows();
       },
       children: row => {
+        // The row block is run once, here, and its <tr> handed to <For>.
+        // Returning the block itself makes <For>'s result an array of
+        // functions, which insert re-runs on every list change: every row
+        // is re-created on swap/remove/append (README, "Strict-mode
+        // findings" 2).
         return $(function () {
           const rowId = _$readPath1(row, "id");
           var _el$17 = _tmpl$3();
@@ -211,7 +216,7 @@ render(() => {
             }
           );
           return _el$17;
-        });
+        })();
       }
     })
   );

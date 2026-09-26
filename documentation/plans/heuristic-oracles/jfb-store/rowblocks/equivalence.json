@@ -50,27 +50,27 @@
     },
     "store-strict": {
       "dir": "solid-next-store-strict",
-      "ok": true,
-      "firstMismatch": null,
-      "keptMismatch": null,
+      "ok": false,
+      "firstMismatch": "05 swap",
+      "keptMismatch": "kept=0 vs baseline kept=1000",
       "pageErrors": [],
-      "bytesCompared": 12391409
+      "bytesCompared": 12391392
     },
     "store-handles": {
       "dir": "solid-next-store-handles",
-      "ok": true,
-      "firstMismatch": null,
-      "keptMismatch": null,
+      "ok": false,
+      "firstMismatch": "05 swap",
+      "keptMismatch": "kept=0 vs baseline kept=1000",
       "pageErrors": [],
-      "bytesCompared": 12391409
+      "bytesCompared": 12391392
     },
     "store-handles-for": {
       "dir": "solid-next-store-handles-for",
-      "ok": true,
-      "firstMismatch": null,
-      "keptMismatch": null,
+      "ok": false,
+      "firstMismatch": "05 swap",
+      "keptMismatch": "kept=0 vs baseline kept=1000",
       "pageErrors": [],
-      "bytesCompared": 12391409
+      "bytesCompared": 12391392
     },
     "S2-rows (signals solid-next)": {
       "dir": "solid-next",
@@ -86,7 +86,7 @@
       "firstMismatch": "03 update",
       "keptMismatch": "kept=1000 vs baseline kept=1000",
       "pageErrors": [],
-      "bytesCompared": 12369461
+      "bytesCompared": 12378992
     }
   }
 }

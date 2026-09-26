@@ -87,6 +87,11 @@ render(() => {
         <tbody>
           <For each={rows()}>
             {row => {
+              // The row block is run once, here, and its <tr> handed to <For>.
+              // Returning the block itself makes <For>'s result an array of
+              // functions, which insert re-runs on every list change: every row
+              // is re-created on swap/remove/append (README, "Strict-mode
+              // findings" 2).
               return $(function* () {
                 const rowId = yield* row.id;
                 return (
@@ -103,7 +108,7 @@ render(() => {
                   <td class="col-md-6" />
                 </tr>
               ); //prettier-ignore
-              });
+              })();
             }}
           </For>
         </tbody>

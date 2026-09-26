@@ -94,9 +94,21 @@ async function trace(dir) {
   await page.waitForSelector("#run");
   const out = [];
   for (const [, sel] of STEPS) {
+    // Keyed identity: mark every row node before the step, count the marked
+    // rows after it. A keyed list keeps the nodes of surviving rows (swap and
+    // remove keep 998-1000, append keeps all old rows); the count is part of
+    // the trace, so a variant that re-creates rows fails the gate.
+    await page.evaluate(() => document.querySelectorAll("tbody>tr").forEach(t => (t.__kept = 1)));
     await page.click(sel);
     await page.evaluate(() => new Promise(r => setTimeout(r, 0)));
-    out.push(await page.evaluate(sel => document.querySelector(sel).innerHTML, SNAPSHOT));
+    out.push(
+      await page.evaluate(
+        sel =>
+          `kept=${[...document.querySelectorAll("tbody>tr")].filter(t => t.__kept).length}|` +
+          document.querySelector(sel).innerHTML,
+        SNAPSHOT
+      )
+    );
   }
   await page.close();
   return { out, errors };
@@ -122,13 +134,14 @@ for (const [name, dir] of Object.entries(VARIANTS)) {
     dir,
     ok,
     firstMismatch: at === -1 ? null : STEPS[at][0],
+    keptMismatch: at === -1 ? null : `${t.out[at].split("|", 1)[0]} vs baseline ${ref.out[at].split("|", 1)[0]}`,
     pageErrors: t.errors,
     bytesCompared: t.out.reduce((a, s) => a + s.length, 0)
   };
   const expected = name === "broken" ? !ok : ok;
   if (!expected) bad = true;
   console.log(
-    `${(ok ? "ok  " : "FAIL").padEnd(5)} ${name.padEnd(10)} ${at === -1 ? "" : `first mismatch at "${STEPS[at][0]}"`} ${t.errors.join("; ")}${name === "broken" ? (ok ? "  <- negative control did NOT fail" : "  (negative control, expected)") : ""}`
+    `${(ok ? "ok  " : "FAIL").padEnd(5)} ${name.padEnd(10)} ${at === -1 ? "" : `first mismatch at "${STEPS[at][0]}" (${t.out[at].split("|", 1)[0]} vs baseline ${ref.out[at].split("|", 1)[0]})`} ${t.errors.join("; ")}${name === "broken" ? (ok ? "  <- negative control did NOT fail" : "  (negative control, expected)") : ""}`
   );
 }
 await browser.close();

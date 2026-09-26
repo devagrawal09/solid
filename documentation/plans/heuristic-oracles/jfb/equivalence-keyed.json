@@ -33,60 +33,76 @@
   ],
   "variants": {
     "baseline": {
-      "dir": "solid-next-store",
-      "ok": true,
-      "firstMismatch": null,
-      "keptMismatch": null,
-      "pageErrors": [],
-      "bytesCompared": 12391409
-    },
-    "store-proxy-aa": {
-      "dir": "solid-next-store-aa",
-      "ok": true,
-      "firstMismatch": null,
-      "keptMismatch": null,
-      "pageErrors": [],
-      "bytesCompared": 12391409
-    },
-    "store-strict": {
-      "dir": "solid-next-store-strict",
-      "ok": true,
-      "firstMismatch": null,
-      "keptMismatch": null,
-      "pageErrors": [],
-      "bytesCompared": 12391409
-    },
-    "store-handles": {
-      "dir": "solid-next-store-handles",
-      "ok": true,
-      "firstMismatch": null,
-      "keptMismatch": null,
-      "pageErrors": [],
-      "bytesCompared": 12391409
-    },
-    "store-handles-for": {
-      "dir": "solid-next-store-handles-for",
-      "ok": true,
-      "firstMismatch": null,
-      "keptMismatch": null,
-      "pageErrors": [],
-      "bytesCompared": 12391409
-    },
-    "S2-rows (signals solid-next)": {
       "dir": "solid-next",
       "ok": true,
       "firstMismatch": null,
       "keptMismatch": null,
       "pageErrors": [],
-      "bytesCompared": 12391409
+      "bytesCompared": 12422965
+    },
+    "H7": {
+      "dir": "solid-next-h7",
+      "ok": true,
+      "firstMismatch": null,
+      "keptMismatch": null,
+      "pageErrors": [],
+      "bytesCompared": 12422965
+    },
+    "L1": {
+      "dir": "solid-next-l1",
+      "ok": true,
+      "firstMismatch": null,
+      "keptMismatch": null,
+      "pageErrors": [],
+      "bytesCompared": 12422965
+    },
+    "H7+L1": {
+      "dir": "solid-next-h7l1",
+      "ok": true,
+      "firstMismatch": null,
+      "keptMismatch": null,
+      "pageErrors": [],
+      "bytesCompared": 12422965
+    },
+    "child": {
+      "dir": "solid-next-child",
+      "ok": true,
+      "firstMismatch": null,
+      "keptMismatch": null,
+      "pageErrors": [],
+      "bytesCompared": 12422965
+    },
+    "child-H7": {
+      "dir": "solid-next-child-h7",
+      "ok": true,
+      "firstMismatch": null,
+      "keptMismatch": null,
+      "pageErrors": [],
+      "bytesCompared": 12422965
+    },
+    "rspec-r0": {
+      "dir": "solid-next-rspec-r0",
+      "ok": true,
+      "firstMismatch": null,
+      "keptMismatch": null,
+      "pageErrors": [],
+      "bytesCompared": 12422965
+    },
+    "rspec-r1b": {
+      "dir": "solid-next-rspec-r1b",
+      "ok": true,
+      "firstMismatch": null,
+      "keptMismatch": null,
+      "pageErrors": [],
+      "bytesCompared": 12422965
     },
     "broken": {
-      "dir": "solid-next-store-broken",
+      "dir": "solid-next-broken",
       "ok": false,
-      "firstMismatch": "03 update",
-      "keptMismatch": "kept=1000 vs baseline kept=1000",
+      "firstMismatch": "01 run",
+      "keptMismatch": "kept=0 vs baseline kept=0",
       "pageErrors": [],
-      "bytesCompared": 12369461
+      "bytesCompared": 11928457
     }
   }
 }
