@@ -24,7 +24,10 @@ export default defineConfig(({ mode }) => ({
     __DEV__: String(tier === "dev"),
     __OBSERVE__: String(tier !== "prod"),
     __TEST__: mode === "benchmark" || tier !== "dev" ? "false" : "true",
-    __ASYNC__: String(asyncCapability)
+    __ASYNC__: String(asyncCapability),
+    // Oracle arms only fire for nodes that opt in with CONFIG_ORACLE_* bits;
+    // tests/heuristic-oracles.test.ts exercises (and breaks) them.
+    __ORACLE__: "true"
   },
   test: {
     globals: true,

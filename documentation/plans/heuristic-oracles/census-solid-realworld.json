@@ -1,0 +1,98 @@
+{
+  "roots": [
+    "solid-realworld"
+  ],
+  "totals": {
+    "files": 17,
+    "memos": 1,
+    "memo": {
+      "single": 0,
+      "shared": 0,
+      "escaped": 1,
+      "untrackedOnly": 0,
+      "unknown": 0,
+      "unused": 0
+    },
+    "signals": 6,
+    "signal": {
+      "constant": 0,
+      "written": 6
+    },
+    "jsx": {
+      "elements": 69,
+      "dynamicParts": 29,
+      "multiElements": 10,
+      "partsInMulti": 20,
+      "attrParts": 27,
+      "childParts": 2
+    }
+  },
+  "perFile": [
+    {
+      "file": "solid-realworld/src/App.js",
+      "memos": {},
+      "signals": {
+        "written": 1
+      },
+      "multi": 0
+    },
+    {
+      "file": "solid-realworld/src/pages/Article/Comments.js",
+      "memos": {},
+      "signals": {},
+      "multi": 1
+    },
+    {
+      "file": "solid-realworld/src/pages/Editor/Editor.js",
+      "memos": {},
+      "signals": {},
+      "multi": 4
+    },
+    {
+      "file": "solid-realworld/src/pages/Home/index.js",
+      "memos": {
+        "escaped": 1
+      },
+      "signals": {},
+      "multi": 0
+    },
+    {
+      "file": "solid-realworld/src/pages/Settings.js",
+      "memos": {},
+      "signals": {},
+      "multi": 5
+    },
+    {
+      "file": "solid-realworld/src/store/createArticles.js",
+      "memos": {},
+      "signals": {
+        "written": 1
+      },
+      "multi": 0
+    },
+    {
+      "file": "solid-realworld/src/store/createAuth.js",
+      "memos": {},
+      "signals": {
+        "written": 1
+      },
+      "multi": 0
+    },
+    {
+      "file": "solid-realworld/src/store/createProfile.js",
+      "memos": {},
+      "signals": {
+        "written": 1
+      },
+      "multi": 0
+    },
+    {
+      "file": "solid-realworld/src/store/createRouteHandler.js",
+      "memos": {},
+      "signals": {
+        "written": 2
+      },
+      "multi": 0
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 import {
   CONFIG_AUTO_DISPOSE,
+  CONFIG_ORACLE_LOCAL,
   CONFIG_CHILDREN_FORBIDDEN,
   CONFIG_TRANSPARENT,
   defaultContext,
@@ -95,7 +96,10 @@ export function disposeChildren(node: Owner, self: boolean = false, zombie?: boo
     // deleteFromHeap self-guards on the in-heap flags (and tolerates plain
     // Owners, whose _flags is undefined), so no gate here.
     deleteFromHeap(n, queueFor(n));
-    clearDeps(n);
+    if (__ORACLE__ && n._config & CONFIG_ORACLE_LOCAL) {
+      // Oracle H3: a node whose sources all die with it leaves its links for
+      // the garbage collector (see CONFIG_ORACLE_LOCAL).
+    } else clearDeps(n);
     disposeChildren(child, true);
     child = nextChild;
   }

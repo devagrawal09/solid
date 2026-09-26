@@ -16,7 +16,8 @@ export default defineConfig({
     __DEV__: "true",
     __OBSERVE__: "true",
     __TEST__: "true",
-    __ASYNC__: "true"
+    __ASYNC__: "true",
+    __ORACLE__: "false"
   },
   test: {
     environment: "jsdom",

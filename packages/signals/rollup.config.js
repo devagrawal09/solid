@@ -36,12 +36,13 @@ import prettier from "rollup-plugin-prettier";
 // `attribution.prod.ts`, an inert twin with the same surface — a prod build
 // has no hook sites to feed one.
 
-const flags = (dev, observe, asyncCapability = true) =>
+const flags = (dev, observe, asyncCapability = true, oracle = false) =>
   replace({
     __DEV__: String(dev),
     __OBSERVE__: String(observe),
     __TEST__: "false",
     __ASYNC__: String(asyncCapability),
+    __ORACLE__: String(oracle),
     preventAssignment: true
   });
 
@@ -63,10 +64,10 @@ const pretty = prettier({ parser: "typescript" });
 // anyway (and must run terser with preserve_annotations).
 const engine = observe => (observe ? "src/attribution.ts" : "src/attribution.prod.ts");
 
-const tree = (dir, dev, observe) => ({
+const tree = (dir, dev, observe, oracle = false) => ({
   input: { index: "src/index.ts", attribution: engine(observe) },
   output: { dir, format: "esm", preserveModules: true, preserveModulesRoot: "src" },
-  plugins: [flags(dev, observe), ts(dir)]
+  plugins: [flags(dev, observe, true, oracle), ts(dir)]
 });
 
 // `name` is the stem: dist/<name>.js (core), dist/<name>.attribution.js
@@ -114,3 +115,9 @@ export default [
   syncTree("dist/sync"),
   syncDev
 ];
+
+// Heuristic-oracle measurement build (documentation/plans/heuristic-oracles.md):
+// the prod tree with the `__ORACLE__` arms compiled in. Opt-in only
+// (`rollup -c rollup.oracle.config.js`, driven by scripts/heuristics/build.mjs),
+// so it is never part of a published build.
+export const oracleBuild = [tree("dist/oracle", false, false, true)];

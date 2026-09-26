@@ -1,0 +1,46 @@
+{
+  "roots": [
+    "solid-hackernews"
+  ],
+  "totals": {
+    "files": 10,
+    "memos": 0,
+    "memo": {
+      "single": 0,
+      "shared": 0,
+      "escaped": 0,
+      "untrackedOnly": 0,
+      "unknown": 0,
+      "unused": 0
+    },
+    "signals": 1,
+    "signal": {
+      "constant": 0,
+      "written": 1
+    },
+    "jsx": {
+      "elements": 38,
+      "dynamicParts": 23,
+      "multiElements": 3,
+      "partsInMulti": 6,
+      "attrParts": 10,
+      "childParts": 13
+    }
+  },
+  "perFile": [
+    {
+      "file": "solid-hackernews/src/components/comment.jsx",
+      "memos": {},
+      "signals": {
+        "written": 1
+      },
+      "multi": 1
+    },
+    {
+      "file": "solid-hackernews/src/pages/stories/[id].jsx",
+      "memos": {},
+      "signals": {},
+      "multi": 2
+    }
+  ]
+}

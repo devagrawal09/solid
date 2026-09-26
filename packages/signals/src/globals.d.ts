@@ -23,6 +23,16 @@ declare global {
    * `[ASYNC_CAPABILITY_EXCLUDED]`.
    */
   const __ASYNC__: boolean;
+  /**
+   * Heuristic oracles (documentation/plans/heuristic-oracles.md). False in
+   * every shipped build, so each oracle arm folds out. True only in the
+   * measurement build (`dist/oracle`) and the test suite: there a node opts
+   * into an assumed-true fact through the `oracle` option (CONFIG_ORACLE_* bits)
+   * or an effect `equals`, and the runtime takes the shortcut that fact
+   * would license. Nothing proves the fact — that is the compiler's job,
+   * built only for oracles whose measured benefit earns it.
+   */
+  const __ORACLE__: boolean;
 }
 
 export {};

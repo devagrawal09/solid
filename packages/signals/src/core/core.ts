@@ -28,6 +28,8 @@ import {
   CONFIG_OWNED_WRITE,
   CONFIG_SLOT_NODE,
   CONFIG_NOTHROW,
+  CONFIG_ORACLE_DIRECT,
+  CONFIG_ORACLE_FUSED,
   CONFIG_STATUS_FREE,
   CONFIG_SYNC,
   CONFIG_TRANSPARENT,
@@ -504,6 +506,8 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
       // flush, bypassing every boundary and wedging the queue (#2837).
       notifyStatus(el, STATUS_ERROR, e);
     }
+    // Oracle H1: a fused effect's equality gate must not swallow its first run.
+    if (__ORACLE__ && wasUninitialized && el._config & CONFIG_ORACLE_FUSED) valueChanged = true;
 
     // A committed derived change becomes a cause for this node's subscribers,
     // chaining their attribution through this node to the root write.
@@ -594,6 +598,17 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
         }
       } else {
         el._pendingValue = value;
+        if (
+          __ORACLE__ &&
+          el._config & CONFIG_ORACLE_DIRECT &&
+          activeTransition === null &&
+          el._transition === null
+        ) {
+          // Oracle H2: a memo no untracked reader can observe mid-batch skips
+          // the staging round-trip in the plain world (CONFIG_ORACLE_DIRECT).
+          el._value = value;
+          el._pendingValue = NOT_PENDING;
+        }
         if (__DEV__) devTrackHeldPending(el);
         // A window landing that gets held re-opens the window until the hold
         // commits — the verdict's held-value branch is window-gated (#2990).
@@ -897,6 +912,9 @@ export function computed<T>(
         _x: null
       } as Computed<T>);
   if (options?.unobserved) (ext(self) as NodeExtension)._unobserved = options.unobserved;
+  // Oracle bits (CONFIG_ORACLE_*): assumed facts, measurement builds only.
+  // The option is unprefixed so prod property mangling leaves it readable.
+  if (__ORACLE__ && (options as any)?.oracle) self._config |= (options as any).oracle;
   setupComputedNode(self, options);
   return self;
 }
@@ -1047,6 +1065,13 @@ export function createEffectNode<T>(
   // +23% effect creation, caught by the creation benches). Only genuinely
   // per-node channels (boundaries) live on _x.
   if (options?.unobserved) ext(self)._unobserved = options.unobserved;
+  // Oracle H1 (a memo fused into its only reader): the effect keeps the
+  // memo's equality cut-off, so its effect phase runs only on a change.
+  if (__ORACLE__ && options?.equals) {
+    self._equals = options.equals;
+    self._config |= CONFIG_ORACLE_FUSED;
+  }
+  if (__ORACLE__ && (options as any)?.oracle) self._config |= (options as any).oracle;
   setupComputedNode(self, lazyOptions);
   return self;
 }

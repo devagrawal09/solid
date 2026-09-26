@@ -1,0 +1,475 @@
+{
+  "roots": [
+    "examples"
+  ],
+  "totals": {
+    "files": 106,
+    "memos": 45,
+    "memo": {
+      "single": 17,
+      "shared": 5,
+      "escaped": 18,
+      "untrackedOnly": 0,
+      "unknown": 5,
+      "unused": 0
+    },
+    "signals": 65,
+    "signal": {
+      "constant": 0,
+      "written": 65
+    },
+    "jsx": {
+      "elements": 766,
+      "dynamicParts": 325,
+      "multiElements": 46,
+      "partsInMulti": 99,
+      "attrParts": 126,
+      "childParts": 199
+    }
+  },
+  "perFile": [
+    {
+      "file": "examples/attribution-lab/src/app.tsx",
+      "memos": {},
+      "signals": {
+        "written": 3
+      },
+      "multi": 2
+    },
+    {
+      "file": "examples/attribution-lab/src/lab/report.tsx",
+      "memos": {},
+      "signals": {},
+      "multi": 1
+    },
+    {
+      "file": "examples/attribution-lab/src/scenarios/clamp/Pager.tsx",
+      "memos": {
+        "single": 1
+      },
+      "signals": {
+        "written": 2
+      },
+      "multi": 0
+    },
+    {
+      "file": "examples/attribution-lab/src/scenarios/clamp/pagination.ts",
+      "memos": {
+        "escaped": 2
+      },
+      "signals": {
+        "written": 3
+      },
+      "multi": 0
+    },
+    {
+      "file": "examples/attribution-lab/src/scenarios/publish/Publisher.tsx",
+      "memos": {},
+      "signals": {
+        "written": 4
+      },
+      "multi": 0
+    },
+    {
+      "file": "examples/attribution-lab/src/scenarios/publish/drafts.ts",
+      "memos": {},
+      "signals": {
+        "written": 4
+      },
+      "multi": 0
+    },
+    {
+      "file": "examples/attribution-lab/src/scenarios/relay/Results.tsx",
+      "memos": {
+        "single": 1
+      },
+      "signals": {
+        "written": 2
+      },
+      "multi": 1
+    },
+    {
+      "file": "examples/attribution-lab/src/scenarios/relay/catalog.ts",
+      "memos": {
+        "escaped": 1
+      },
+      "signals": {
+        "written": 1
+      },
+      "multi": 0
+    },
+    {
+      "file": "examples/attribution-lab/src/scenarios/relay/selection.ts",
+      "memos": {
+        "escaped": 1
+      },
+      "signals": {
+        "written": 2
+      },
+      "multi": 0
+    },
+    {
+      "file": "examples/attribution-lab/src/scenarios/waterfall/OrgPage.tsx",
+      "memos": {
+        "escaped": 4
+      },
+      "signals": {
+        "written": 3
+      },
+      "multi": 0
+    },
+    {
+      "file": "examples/chat/src/app.tsx",
+      "memos": {},
+      "signals": {
+        "written": 2
+      },
+      "multi": 0
+    },
+    {
+      "file": "examples/chat/src/components/status.tsx",
+      "memos": {},
+      "signals": {},
+      "multi": 1
+    },
+    {
+      "file": "examples/chat/src/lib/ai.tsx",
+      "memos": {
+        "single": 4,
+        "escaped": 1
+      },
+      "signals": {},
+      "multi": 2
+    },
+    {
+      "file": "examples/diagnostics/src/app.tsx",
+      "memos": {},
+      "signals": {
+        "written": 2
+      },
+      "multi": 1
+    },
+    {
+      "file": "examples/diagnostics/src/diagnostics/Evidence.tsx",
+      "memos": {},
+      "signals": {},
+      "multi": 1
+    },
+    {
+      "file": "examples/diagnostics/src/diagnostics/channel.ts",
+      "memos": {},
+      "signals": {
+        "written": 1
+      },
+      "multi": 0
+    },
+    {
+      "file": "examples/diagnostics/src/diagnostics/paint-log.ts",
+      "memos": {},
+      "signals": {
+        "written": 1
+      },
+      "multi": 0
+    },
+    {
+      "file": "examples/diagnostics/src/scenarios/action/QuantityStepper.tsx",
+      "memos": {},
+      "signals": {
+        "written": 2
+      },
+      "multi": 1
+    },
+    {
+      "file": "examples/diagnostics/src/scenarios/overrun/CheckoutSummary.tsx",
+      "memos": {},
+      "signals": {},
+      "multi": 1
+    },
+    {
+      "file": "examples/diagnostics/src/scenarios/overrun/cart.ts",
+      "memos": {
+        "escaped": 3
+      },
+      "signals": {},
+      "multi": 0
+    },
+    {
+      "file": "examples/diagnostics/src/scenarios/tear/inventory.ts",
+      "memos": {
+        "escaped": 1
+      },
+      "signals": {
+        "written": 3
+      },
+      "multi": 0
+    },
+    {
+      "file": "examples/diagnostics/src/scenarios/waterfall/StoryCard.tsx",
+      "memos": {},
+      "signals": {
+        "written": 1
+      },
+      "multi": 1
+    },
+    {
+      "file": "examples/diagnostics/src/scenarios/waterfall/story-chain.ts",
+      "memos": {
+        "escaped": 3
+      },
+      "signals": {},
+      "multi": 0
+    },
+    {
+      "file": "examples/diagnostics/src/scenarios/waterfall/story-page.ts",
+      "memos": {
+        "unknown": 1
+      },
+      "signals": {},
+      "multi": 0
+    },
+    {
+      "file": "examples/effect/src/app.tsx",
+      "memos": {},
+      "signals": {
+        "written": 1
+      },
+      "multi": 0
+    },
+    {
+      "file": "examples/effect/src/checkout.tsx",
+      "memos": {},
+      "signals": {
+        "written": 2
+      },
+      "multi": 3
+    },
+    {
+      "file": "examples/effect/src/typeahead.tsx",
+      "memos": {
+        "escaped": 1
+      },
+      "signals": {
+        "written": 1
+      },
+      "multi": 0
+    },
+    {
+      "file": "examples/hackernews/src/components/toggle.tsx",
+      "memos": {},
+      "signals": {
+        "written": 1
+      },
+      "multi": 1
+    },
+    {
+      "file": "examples/hackernews/src/lib/views.tsx",
+      "memos": {},
+      "signals": {},
+      "multi": 8
+    },
+    {
+      "file": "examples/hackernews-spa/src/components/comment.tsx",
+      "memos": {},
+      "signals": {},
+      "multi": 1
+    },
+    {
+      "file": "examples/hackernews-spa/src/components/story.tsx",
+      "memos": {},
+      "signals": {},
+      "multi": 5
+    },
+    {
+      "file": "examples/hackernews-spa/src/components/toggle.tsx",
+      "memos": {},
+      "signals": {
+        "written": 1
+      },
+      "multi": 1
+    },
+    {
+      "file": "examples/hackernews-spa/src/routes/stories.tsx",
+      "memos": {
+        "shared": 1
+      },
+      "signals": {},
+      "multi": 0
+    },
+    {
+      "file": "examples/hackernews-spa/src/routes/story.tsx",
+      "memos": {
+        "shared": 1
+      },
+      "signals": {},
+      "multi": 2
+    },
+    {
+      "file": "examples/hackernews-spa/src/routes/user.tsx",
+      "memos": {
+        "shared": 1
+      },
+      "signals": {},
+      "multi": 0
+    },
+    {
+      "file": "examples/migrating-element/src/main.tsx",
+      "memos": {},
+      "signals": {
+        "written": 1
+      },
+      "multi": 1
+    },
+    {
+      "file": "examples/notes/src/components/EditButton.tsx",
+      "memos": {},
+      "signals": {},
+      "multi": 1
+    },
+    {
+      "file": "examples/notes/src/components/NoteEditor.tsx",
+      "memos": {},
+      "signals": {
+        "written": 2
+      },
+      "multi": 0
+    },
+    {
+      "file": "examples/notes/src/components/SidebarNoteContent.tsx",
+      "memos": {},
+      "signals": {
+        "written": 1
+      },
+      "multi": 3
+    },
+    {
+      "file": "examples/notes/src/server/Note.tsx",
+      "memos": {},
+      "signals": {},
+      "multi": 1
+    },
+    {
+      "file": "examples/notes/src/server/NoteList.tsx",
+      "memos": {},
+      "signals": {},
+      "multi": 1
+    },
+    {
+      "file": "examples/rendering/shared/src/components/ErrorStream.tsx",
+      "memos": {
+        "single": 2
+      },
+      "signals": {
+        "written": 2
+      },
+      "multi": 0
+    },
+    {
+      "file": "examples/rendering/shared/src/components/Home.tsx",
+      "memos": {},
+      "signals": {
+        "written": 1
+      },
+      "multi": 0
+    },
+    {
+      "file": "examples/rendering/shared/src/components/Profile/index.tsx",
+      "memos": {
+        "shared": 1,
+        "single": 1
+      },
+      "signals": {},
+      "multi": 0
+    },
+    {
+      "file": "examples/rendering/shared/src/components/Reveal.tsx",
+      "memos": {
+        "single": 1
+      },
+      "signals": {
+        "written": 3
+      },
+      "multi": 1
+    },
+    {
+      "file": "examples/rendering/shared/src/components/Settings.tsx",
+      "memos": {},
+      "signals": {
+        "written": 3
+      },
+      "multi": 0
+    },
+    {
+      "file": "examples/rendering/shared/src/components/Skeleton.tsx",
+      "memos": {
+        "escaped": 1
+      },
+      "signals": {
+        "written": 1
+      },
+      "multi": 1
+    },
+    {
+      "file": "examples/rendering/shared/src/components/Stream.tsx",
+      "memos": {
+        "single": 1
+      },
+      "signals": {},
+      "multi": 2
+    },
+    {
+      "file": "examples/rendering/shared/src/router.tsx",
+      "memos": {},
+      "signals": {
+        "written": 1
+      },
+      "multi": 1
+    },
+    {
+      "file": "examples/sierpinski/src/main.tsx",
+      "memos": {
+        "single": 1,
+        "shared": 1
+      },
+      "signals": {
+        "written": 3
+      },
+      "multi": 1
+    },
+    {
+      "file": "examples/sync-blocks/src/app.tsx",
+      "memos": {
+        "unknown": 2,
+        "single": 3
+      },
+      "signals": {
+        "written": 3
+      },
+      "multi": 0
+    },
+    {
+      "file": "examples/todos/src/filter.ts",
+      "memos": {},
+      "signals": {
+        "written": 1
+      },
+      "multi": 0
+    },
+    {
+      "file": "examples/todos-blocks/src/app.tsx",
+      "memos": {
+        "single": 2,
+        "unknown": 2
+      },
+      "signals": {},
+      "multi": 0
+    },
+    {
+      "file": "examples/todos-blocks/src/filter.ts",
+      "memos": {},
+      "signals": {
+        "written": 1
+      },
+      "multi": 0
+    }
+  ]
+}

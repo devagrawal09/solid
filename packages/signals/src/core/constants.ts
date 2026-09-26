@@ -160,6 +160,27 @@ export const CONFIG_NOTHROW = 1 << 22;
 /** Both proofs: the status-free fast path is eligible. */
 export const CONFIG_STATUS_FREE = CONFIG_SYNC | CONFIG_NOTHROW;
 
+/** Heuristic oracles (`__ORACLE__` builds only; see globals.d.ts and
+ * documentation/plans/heuristic-oracles.md). Each bit ASSUMES a fact about
+ * the node that nothing verifies; set through the `oracle` node option.
+ *
+ * DIRECT: no untracked reader (event handler, `untrack`, effect phase,
+ * top-level read) ever reads this memo between a write and the flush that
+ * recomputes it, and no transition or lane touches it. A re-run then commits
+ * `_value` directly instead of staging `_pendingValue` for the pending-node
+ * commit at the end of the flush. */
+export const CONFIG_ORACLE_DIRECT = 1 << 23;
+/** LOCAL: every source this node reads dies with it (created under the same
+ * disposed subtree, no setter escapes it). Disposal then need not unlink the
+ * node from its sources' subscriber lists: the whole cluster becomes garbage
+ * together. */
+export const CONFIG_ORACLE_LOCAL = 1 << 24;
+/** FUSED: an effect node that absorbed a memo (its only reader) and carries
+ * the memo's `equals`, so its effect phase runs only on a changed value. Set
+ * by `createEffectNode` when an `equals` option is passed; nothing else is
+ * allowed to rely on an effect's `_equals`. */
+export const CONFIG_ORACLE_FUSED = 1 << 25;
+
 export const STATUS_NONE = 0;
 export const STATUS_PENDING = 1 << 0;
 export const STATUS_ERROR = 1 << 1;

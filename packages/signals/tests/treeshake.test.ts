@@ -42,7 +42,8 @@ async function bundleFixture(
       __DEV__: "false",
       __OBSERVE__: "false",
       __TEST__: "false",
-      __ASYNC__: String(asyncCapability)
+      __ASYNC__: String(asyncCapability),
+      __ORACLE__: "false"
     },
     resolve: {
       alias: {

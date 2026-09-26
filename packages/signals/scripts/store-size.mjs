@@ -16,6 +16,7 @@ const DEFINE = {
   __OBSERVE__: "false",
   __TEST__: "false",
   __ASYNC__: "true",
+  __ORACLE__: "false",
   "globalThis.__DEV__": "false"
 };
 
