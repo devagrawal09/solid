@@ -33,6 +33,31 @@ Only a heuristic that wins on both benefit and coverage earns a compiler proof.
 
 The whole-graph async-free runtime (Track A stage 2) is included as a reference point. In the same scenarios it measured mount −8% to −9%, updates −4% to −20% and filter/select −10% to −16%. Per-node H1 beats it on mount; the two compose.
 
+### Compiler vs runtime ledger (all rounds)
+
+For each heuristic: what the compiler's fact buys, the best **runtime-only** alternative tried, and why the runtime cannot take the rest. Instruction counts unless marked DOM. Details are in rounds 1–3 and "Runtime-Only Speculation".
+
+| Heuristic | Compiler gain | Best runtime-only alternative | Gap left to the compiler | Why the runtime cannot close it (evidence) |
+| --- | --- | --- | --- | --- |
+| H1 memo fusion | mount −38%, chain update −30% (all memos: −71%/−56%), todos filter −38% | none; R1b does not touch mount | **all of it** | Needs "no other reader, ever"; a second reader doubles the compute (test) |
+| H1 on a shared-source selection | select −23% to −25% | **projection (shipped API): select −85%** (DOM −91%), mount +20% to +28% | **none: the runtime wins** | – |
+| H5 status-free | select −21%, chain update −19%, mount −6% | **R1b: select −22%, chain update −12%**, mount +1–2% | mount (7–8 points), a third of chain update | Must run once to learn the node is clean; guessing at creation (R1) breaks 528 tests |
+| H7 typed text | DOM update −13% to −28% | R3 text fast path: 0 | **all** | The runtime still dispatches on the value's type per write |
+| L1 single-element rows | DOM swap −12%, remove/insert −25% | R2 all-node tag: **+17% / +19%** | **all** | The probe per update costs more than the flatten it skips |
+| H8b detached nodes | mount −5% to −8%, −18% with ids | lazy ids (R4): not buildable without an API change | all | Owner linking must assume a future disposal needs the node |
+| C2 cross-component fusion | DOM replace −19% | – | all | As H1, across a component boundary |
+| H9 status pass-through | refetch −13%; with H1, mount −43% and refetch −44% | all memos transparent: **44 tests fail**; single-slot pending source reverted upstream (#2893) | **all** (short of a pull-based status redesign) | Intermediate status is observable (`isPending`, untracked reads) |
+| H13 exception-free suspension | bound ≤ 8% of async mount (≈1.3k instructions per throw) | – | all | A plain function compute can only be unwound by throwing |
+| **S2 store scalar replacement** | **mount −76%, update −67%, select −29%** | cheaper target registration: ≈6% of store mount | ≈70 points | Cannot prove the store never escapes; coverage 2 of 15 stores |
+| S4 static store field | mount −20%, update −7% | – | all | Any setter anywhere can write the path later (test) |
+| A1 sync action as batch | −15% per call | R5 lazy transaction: **9 tests fail** | all | Learns the body was synchronous only after running it |
+| S1 handle reads, H2, H3, H4, H6 (updates) | ≈0 or negative | – | – | Not worth a proof |
+
+Summary:
+- **Where the compiler is irreplaceable:** fusion (H1, C2), typed DOM writes (H7, L1), ownership (H8b), status pass-through (H9), store scalar replacement (S2, S4), sync actions (A1).
+- **Where the runtime closes the gap:** status-free recompute on hot updates (R1b) and shared selections (projections).
+- **Largest per-site gains:** fusion and store scalar replacement. **Largest coverage:** H1 (29% of memos) and H7 (up to 51% of dynamic parts).
+
 ## How Each Shortcut Breaks Ordinary Code
 
 `packages/signals/tests/heuristic-oracles.test.ts` pins these. Each test runs one program with and without the oracle, and asserts the documented divergence.
@@ -324,6 +349,45 @@ Store census (`scripts/heuristics/r3/store-census.mjs`, same 206-file corpus, `r
 
 The corpus is small and mostly 1.x-era, so these coverage numbers are weak.
 
+## Runtime-Only Speculation for Rounds 1–2 (R1–R5)
+
+Can the runtime guess a fact, take the shortcut, and deoptimize when the guess is wrong, with no compiler? Each speculation below targets one compiler oracle. It was built in a worktree behind an `__RSPEC__` bit (`scripts/heuristics/rspec/`), run through the full `@solidjs/signals` suite (1,878 tests) and all five `@solidjs/web` configs against a control, and then measured.
+
+| Speculation | Targets | Safety (extra failures vs control) | Instructions (two runs, spread < 0.5%) | Chromium | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| R1: every node starts status-free, deopt on throw or async | H5 | **528 signals tests** (async waterfalls, shared pending, `isPending`; the status-free catch emulates only the plain world) | rows select −4% (H5 −21%), mount +1% to +6% | – | Reject |
+| **R1b**: a memo is promoted to status-free after a clean full-path run; deopt for good on throw or async | H5 | **0 behavioural**; core floor 23,019 B vs a 23,000 B budget | **rows select −22.3% (H5 −21.3%)**, chain update −11.9% (H5 −18.5%), todos filter −12.9%; **mount +1.0% to +2.3%** (H5 −5% to −6%), todos toggle +2.2% | **select −32% to −33%**; everything else within noise | **Closes the select gap** and most update gaps; mount stays the compiler's. Not a strict improvement yet (the +1–2% mount), so not PR-ready |
+| R2: `mapArray` tags all-node results; `insert` skips flatten | L1 | First cut: 4 (the tag leaked into deep equality; the `nodeType` probe created store nodes). Fixed: 0 | – | swap +17%, removeAdd +19% (L1: −12%, −25%) | **Reject**: the per-update probe costs more than the flatten it skips. Only the compiler knows rows are single elements for free |
+| R3: text-to-text `insert` writes `.data` directly | H7 | 0 | – | update10th +2% (noise), where H7-text is −13% | **Reject**: the runtime still dispatches on the value's type per write; H7's win is not dispatching at all |
+| R5: an action's first slice runs in the ambient batch; the transaction is created at the first yield | A1 | **9 signals tests** (first-slice `reconcile`, optimistic and `until()` state not adopted) | – | – | Reject; A1 stays a compiler fact |
+
+R1b is the only speculation that earns its place. It closes the round-1 **select** gap without a compiler, in instructions and in Chromium, with no behaviour change. Its cost is mount: a node must run once on the full path before promotion, which is exactly where H5's proof is worth −5% to −6%, and the promotion check adds 1–2%. Stack B's finding explains why R1 lost: `statusFree` on render effects costs about 950 instructions per effect at mount and cancels the memo win. R1b speculates on memos only.
+
+#### rows in Chromium 141.0.7390.37 (µs per op, n = 1000, mean of two runs × median of 5 pages)
+
+| Variant | mount | Δ | update10th | Δ | select | Δ |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline | 4991.7 |  | 72.6 |  | 151.4 |  |
+| web-r0 | 4576.2 | −8% (noise) | 73.4 | +1% (noise) | 148.6 | −2% (noise) |
+| R1b | 4875.0 | −2% (noise) | 73.2 | +1% (noise) | 101.6 | −33% |
+| R3 | 4657.1 | −7% (noise) | 74.0 | +2% (noise) | 148.4 | −2% (noise) |
+| R-all | 4897.6 | −2% (noise) | 75.3 | +4% (noise) | 102.5 | −32% |
+| H7-text | 4525.0 | −9% (noise) | 63.1 | −13% (noise) | 146.8 | −3% (noise) |
+
+#### <For> + Row component in Chromium 141.0.7390.37 (µs per op, n = 1000, mean of two runs × median of 5 pages)
+
+| Variant | create | Δ | replace | Δ | update10th | Δ | select | Δ | swap | Δ | removeAdd | Δ |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline | 6310.0 |  | 6242.5 |  | 78.4 |  | 153.4 |  | 107.3 |  | 130.7 |  |
+| web-r0 | 5710.0 | −10% (noise) | 7225.0 | +16% (noise) | 79.5 | +1% (noise) | 156.9 | +2% (noise) | 113.4 | +6% (noise) | 127.1 | −3% (noise) |
+| R1b | 7337.5 | +16% (noise) | 6375.0 | +2% (noise) | 80.4 | +3% (noise) | 104.9 | −32% | 108.7 | +1% (noise) | 131.3 | +0% (noise) |
+| R2 | 5977.5 | −5% (noise) | 6637.5 | +6% (noise) | 82.3 | +5% (noise) | 158.9 | +4% (noise) | 125.6 | +17% (noise) | 155.8 | +19% (noise) |
+| R3 | 5680.0 | −10% (noise) | 6762.5 | +8% (noise) | 77.1 | −2% (noise) | 154.4 | +1% (noise) | 119.9 | +12% | 134.4 | +3% (noise) |
+| R-all | 6135.0 | −3% (noise) | 6775.0 | +9% (noise) | 76.5 | −2% (noise) | 102.9 | −33% | 134.3 | +25% | 175.4 | +34% |
+| L1-nodes | 5880.0 | −7% (noise) | 6150.0 | −1% (noise) | 78.6 | +0% (noise) | 151.1 | −1% (noise) | 94.7 | −12% | 97.5 | −25% |
+
+`web-r0` is the web bundle rebuilt from the worktree with every bit off, the control for R2/R3/R-all. The shipped baseline is the main checkout's build. Their gap (−10% to +16%, all flagged noise) is the DOM harness's noise floor on this machine.
+
 ## What Each Heuristic Needs From the Compiler
 
 - **H1 memo fusion** needs the local reader graph of a `const m = createMemo(...)`:
@@ -372,6 +436,8 @@ node scripts/heuristics/r3/icount.mjs --scenarios async-rows --out documentation
 node scripts/heuristics/r3/icount.mjs --scenarios store-static,select --out documentation/plans/heuristic-oracles/r3/icount-3.json
 node scripts/heuristics/r3/report.mjs
 node scripts/heuristics/r3/store-census.mjs examples <corpus>... --out documentation/plans/heuristic-oracles/r3/store-census.json
+# Runtime-only speculation (R1–R5): worktree setup, builds, suites and benches
+#   see scripts/heuristics/rspec/README.md
 cd packages/signals && npx vitest run tests/heuristic-oracles.test.ts
 ```
 

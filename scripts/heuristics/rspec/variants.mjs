@@ -3,10 +3,11 @@
 // compiler oracle each speculation tries to replace runs beside it.
 //
 //   baseline  prod signals + shipped web
-//   R1        every computation speculatively status-free (signals bit 1)
+//   R1b       memos promoted to status-free after a clean run (signals bit 16;
+//             R1, bit 1, fails the signals suite and is not measured here)
 //   R3        insert text fast path (web bit 4)            rows: vs H7-text
 //   R2        all-node list results skip flatten (bits 2)  list: vs L1-nodes
-//   R-all     every speculation (signals 3, web 6)
+//   R-all     R1b + R2 + R3 (signals 18, web 6)
 import { join } from "node:path";
 import { ROOT } from "../common.mjs";
 
@@ -21,9 +22,9 @@ export async function rspecVariants(suite) {
     return {
       baseline: v.baseline,
       "web-r0": { source: base, signals: sig(0), web: web(0) }, // rebuilt-from-worktree control
-      R1: { source: base, signals: sig(1), web: web(0) },
+      R1b: { source: base, signals: sig(16), web: web(0) },
       R3: { source: base, signals: sig(0), web: web(4) },
-      "R-all": { source: base, signals: sig(3), web: web(6) },
+      "R-all": { source: base, signals: sig(18), web: web(6) },
       "H7-text": v["H7-text"]
     };
   }
@@ -33,10 +34,10 @@ export async function rspecVariants(suite) {
     return {
       baseline: v.baseline,
       "web-r0": { source: base, signals: sig(0), web: web(0) },
-      R1: { source: base, signals: sig(1), web: web(0) },
+      R1b: { source: base, signals: sig(16), web: web(0) },
       R2: { source: base, signals: sig(2), web: web(2) },
       R3: { source: base, signals: sig(0), web: web(4) },
-      "R-all": { source: base, signals: sig(3), web: web(6) },
+      "R-all": { source: base, signals: sig(18), web: web(6) },
       "L1-nodes": v["L1-nodes"]
     };
   }

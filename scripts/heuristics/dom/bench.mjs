@@ -37,7 +37,7 @@ const DOM_VARIANTS =
   SUITE === "list"
     ? (await import("./list/variants.mjs")).LIST_VARIANTS
     : SUITE.startsWith("rspec-")
-      ? (await import("../rspec/variants.mjs")).rspecVariants(SUITE.slice(6))
+      ? await (await import("../rspec/variants.mjs")).rspecVariants(SUITE.slice(6))
       : (await import("./variants.mjs")).DOM_VARIANTS;
 const N = Number(args.n ?? 1000);
 const REPS = Number(args.reps ?? 5);
