@@ -15,7 +15,7 @@
 import { build } from "esbuild";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs, ROOT, RUNTIMES, snapshotRuntimes } from "../common.mjs";
 import { DOM_VARIANTS } from "./variants.mjs";
@@ -164,7 +164,7 @@ const version = browser.version();
 await browser.close();
 const out = args.out ?? "documentation/plans/heuristic-oracles/dom-bench.json";
 writeFileSync(
-  join(ROOT, out),
+  resolve(ROOT, out),
   JSON.stringify({ n: N, reps: REPS, chromium: version, date: new Date().toISOString(), results }, null, 2) + "\n"
 );
 console.log(`wrote ${out}`);

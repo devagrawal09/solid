@@ -9,7 +9,7 @@
 //        [--scenarios rows,chain] [--cells H1-fuse@oracle,...] [--out documentation/plans/heuristic-oracles/icount.json]
 import { spawn } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { cells, parseArgs, ROOT, snapshotRuntimes, writeModule } from "./common.mjs";
 import { SCENARIOS } from "./scenarios.mjs";
@@ -87,9 +87,9 @@ async function worker() {
 await Promise.all(Array.from({ length: JOBS }, worker));
 
 const out = args.out ?? "documentation/plans/heuristic-oracles/icount.json";
-mkdirSync(dirname(join(ROOT, out)), { recursive: true });
+mkdirSync(dirname(resolve(ROOT, out)), { recursive: true });
 writeFileSync(
-  join(ROOT, out),
+  resolve(ROOT, out),
   JSON.stringify(
     { n: N, ops: OPS, warmup: WARMUP, node: process.version, date: new Date().toISOString(), results },
     null,

@@ -9,7 +9,7 @@
 //        [--out documentation/plans/heuristic-oracles/bench.json]
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { cells, parseArgs, ROOT, snapshotRuntimes, writeModule } from "./common.mjs";
 import { SCENARIOS } from "./scenarios.mjs";
@@ -59,9 +59,9 @@ for (const scenario of SCENARIOS) {
   }
 }
 const out = args.out ?? "documentation/plans/heuristic-oracles/bench.json";
-mkdirSync(dirname(join(ROOT, out)), { recursive: true });
+mkdirSync(dirname(resolve(ROOT, out)), { recursive: true });
 writeFileSync(
-  join(ROOT, out),
+  resolve(ROOT, out),
   JSON.stringify({ n: N, reps: REPS, node: process.version, date: new Date().toISOString(), results }, null, 2) + "\n"
 );
 console.log(`wrote ${out}`);
