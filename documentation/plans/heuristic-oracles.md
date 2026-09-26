@@ -51,6 +51,7 @@ For each heuristic: what the compiler's fact buys, the best **runtime-only** alt
 | **S2 store scalar replacement** | **mount −76%, update −67%, select −29%** | cheaper target registration: ≈6% of store mount | ≈70 points | Cannot prove the store never escapes; coverage 2 of 15 stores |
 | S4 static store field | mount −20%, update −7% | – | all | Any setter anywhere can write the path later (test) |
 | A1 sync action as batch | −15% per call | R5 lazy transaction: **9 tests fail** | all | Learns the body was synchronous only after running it |
+| H10 cold-scope hydration: bindings over signals no client write reaches are not created | DOM hydration **−27%** (labels), −44% (all but selection), **−57%** with H4 | Defer bindings until first write (moves the work to the first click); defer until idle (no total saving) | all of the total-work saving | Learns a binding's sources only by running it once, which is exactly the work skipped. Unsafe on an unseen write (test in `hydrate/bench.mjs --check`) |
 | S1 handle reads, H2, H3, H4, H6 (updates) | ≈0 or negative | – | – | Not worth a proof |
 
 Summary:
@@ -267,6 +268,20 @@ Method as before: hand-written oracle variants (`scripts/heuristics/r3/scenarios
 | A1 | An action body has no `yield` and no `await` | Run it as a plain batch that returns a settled promise | **−15% per call** (two writes, 400 readers) | R5: run the first slice in the ambient batch and create the transaction only at the first yield | **9 tests fail**: first-slice store, optimistic and `until()` state is not adopted by the late transaction | **Build**: the proof is syntactic and cheap |
 | Sel | (H1 on a per-row selection memo) | Fuse `selected() === id` into the row effect | mount −56%, select −25% | A selection projection (shipped API) | **select −85%**, mount +28% | **Runtime wins on select**; the compiler wins on mount. Use both: fuse row-local memos, project shared selections |
 
+### Channel inventory: which per-node state is maintained eagerly
+
+Every node carries several channels besides its value. The compiler helps only where the runtime maintains a channel **eagerly** in case someone observes it later. The inventory below comes from code reading plus this study's measurements:
+
+| Channel | Maintained | Who observes it | Cost when unobserved | Compiler fact that elides it | Measured |
+| --- | --- | --- | --- | --- | --- |
+| Staged vs committed value | Eagerly, every recompute (`_pendingValue`, commit at flush end) | Untracked mid-batch reads, `latest`, transitions | Small | No mid-batch untracked reader (H2) | ±2%: not worth it |
+| Pending status and pending sources | Eagerly, on every async flight: pushed to every dependent (`notifyStatus`), retired by the settle walk | Throwing reads, `isPending`, boundaries, transitions (via effects) | **About 38% of async refetch self time** | Status is inspected only through readers (H9) | Refetch −13% to −15%; −44% with fusion |
+| Error status | Only when something throws | Reads, error boundaries | None without errors | – | – |
+| Status-free eligibility (sync, no throw) | Checked every recompute on the general path | – | General-path overhead | Sync and non-throwing (H5), or learned after a clean run (R1b) | Select −21% / −22% |
+| Optimistic lanes | Lazily, via the sticky `CONFIG_HAS_LANE` mark | Optimistic readers | None | – | – |
+| `isPending`/`latest` companions, snapshots | Lazily, on first use | Their callers | None | – | – |
+| Owner link and hydration id | Eagerly, per computation | Disposal, `createUniqueId`, hydration | Mount −5% to −8%; −18% with ids | Owns nothing, sources die with it (H8b) | See round 2 |
+
 ### What the runtime already does lazily
 
 The compiler adds nothing where the runtime already maintains a channel on demand. Code reading confirmed these:
@@ -348,6 +363,26 @@ Store census (`scripts/heuristics/r3/store-census.mjs`, same 206-file corpus, `r
 - S2 qualifies for 1 store in full, 2 at row level.
 
 The corpus is small and mostly 1.x-era, so these coverage numbers are weak.
+
+## Hydration: Cold-Scope Bindings (H10)
+
+If writes happen only in events and actions, the compiler knows which signals no client write can reach. Their bindings need not be created at hydration: the server HTML already shows the value. Priced on 1,000 server-rendered rows (real compiler SSR and hydratable output, `renderToString`, Chromium). Details and raw data are in `heuristic-oracles/hydrate/README.md`.
+
+| Variant | Hydration µs (two runs) | Δ |
+| --- | ---: | ---: |
+| baseline | 14,017 | |
+| inert labels | 10,222 | −27% |
+| inert everything but the selection | 7,818 | −44% |
+| + H4 (the dead label signal dropped) | 6,002 | −57% |
+| floor (claim nodes only) | 2,037 | −85% |
+| client render from scratch (CSR) | 5,206 | −63% |
+
+- **Equivalence gate.** Hydrated DOM equals the baseline and the server HTML, and the selection ops match. A variant that drops a binding without consuming its hydration id is rejected: effects bind to cloned copies while the page looks right.
+- **Unsafety.** A late write from outside the compiler's view (devtools, or an unseen handler) updates the baseline but not the inert variants.
+- **The larger finding is a runtime one.** Hydration costs 2.7× a client render in time and retained heap. About 37% of `hydrate()` profiles as GC; `claimInitial` copies the child list on every insert (about 16%); constant inserts cost 17% of this page even though they create no effect. That overhead needs no proof and should be fixed before H10 is re-priced.
+- **Coverage.** Probably low where the proof is sound: never-written plain signals were 1.5% of the census, and server data additionally needs a "no `refresh()` or revalidation reaches it" proof.
+
+Verdict: **not yet**. The compiler-only saving is real, but the runtime's hydration overhead is the bigger and cheaper target.
 
 ## Runtime-Only Speculation for Rounds 1–2 (R1–R5)
 
@@ -447,5 +482,5 @@ Environment: Node v22.22.2, Valgrind 3.22 (`cachegrind --cache-sim=no`), Chromiu
 
 - Three signal-level scenarios and one DOM scenario are chosen to exercise each fact where it holds. They show what a heuristic is worth *per site*. Application-level wins scale with coverage, which is why the census exists.
 - The signal-level scenarios exclude DOM cost. The DOM bench excludes layout and paint, and covers one list shape.
-- Hydration and SSR are not exercised. H7 during hydration needs the claim path, which the oracle variants skip. Stores, async and actions are covered at signal level only (round 3).
+- Hydration is covered by one Chromium page (`hydrate/`, 1,000 SSR rows); H7 during hydration is not. Stores, async and actions are covered at signal level only (round 3).
 - The census is syntactic, file-local and small (206 files).

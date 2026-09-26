@@ -1,0 +1,335 @@
+{
+  "n": 1000,
+  "reps": 5,
+  "chromium": "141.0.7390.37",
+  "date": "2026-09-26T14:58:43.248Z",
+  "ssrBytes": 89360,
+  "gate": {
+    "baseline": {
+      "hydratedEqualsBaseline": true,
+      "hydratedEqualsSSR": true,
+      "opsEqualBaseline": true,
+      "firstMismatch": null,
+      "clonesDuringHydrate": 0,
+      "serverNodesKept": true,
+      "unsafe": {
+        "before": "row 5",
+        "after": "written after hydration",
+        "setterExists": true
+      },
+      "afterUnsafeSelect": "danger",
+      "unsafeError": null,
+      "claimOk": true,
+      "pass": true
+    },
+    "inert-labels": {
+      "hydratedEqualsBaseline": true,
+      "hydratedEqualsSSR": true,
+      "opsEqualBaseline": true,
+      "firstMismatch": null,
+      "clonesDuringHydrate": 0,
+      "serverNodesKept": true,
+      "unsafe": {
+        "before": "row 5",
+        "after": "row 5",
+        "setterExists": true
+      },
+      "afterUnsafeSelect": "danger",
+      "unsafeError": null,
+      "claimOk": true,
+      "pass": true
+    },
+    "inert-all": {
+      "hydratedEqualsBaseline": true,
+      "hydratedEqualsSSR": true,
+      "opsEqualBaseline": true,
+      "firstMismatch": null,
+      "clonesDuringHydrate": 0,
+      "serverNodesKept": true,
+      "unsafe": {
+        "before": "row 5",
+        "after": "row 5",
+        "setterExists": true
+      },
+      "afterUnsafeSelect": "danger",
+      "unsafeError": null,
+      "claimOk": true,
+      "pass": true
+    },
+    "inert-all+H4": {
+      "hydratedEqualsBaseline": true,
+      "hydratedEqualsSSR": true,
+      "opsEqualBaseline": true,
+      "firstMismatch": null,
+      "clonesDuringHydrate": 0,
+      "serverNodesKept": true,
+      "unsafe": {
+        "before": "row 5",
+        "after": "row 5",
+        "setterExists": false
+      },
+      "afterUnsafeSelect": "danger",
+      "unsafeError": null,
+      "claimOk": true,
+      "pass": true
+    },
+    "floor": {
+      "hydratedEqualsBaseline": true,
+      "hydratedEqualsSSR": true,
+      "opsEqualBaseline": false,
+      "firstMismatch": "select(3)",
+      "clonesDuringHydrate": 0,
+      "serverNodesKept": true,
+      "unsafe": {
+        "before": "row 5",
+        "after": "row 5",
+        "setterExists": false
+      },
+      "afterUnsafeSelect": "",
+      "unsafeError": null,
+      "claimOk": true,
+      "pass": true
+    },
+    "gather-only": {
+      "hydratedEqualsBaseline": true,
+      "hydratedEqualsSSR": true,
+      "opsEqualBaseline": false,
+      "firstMismatch": "select(3)",
+      "clonesDuringHydrate": 0,
+      "serverNodesKept": true,
+      "unsafe": {
+        "before": "row 5",
+        "after": "row 5",
+        "setterExists": false
+      },
+      "afterUnsafeSelect": "",
+      "unsafeError": null,
+      "claimOk": true,
+      "pass": true
+    },
+    "broken-noid": {
+      "hydratedEqualsBaseline": true,
+      "hydratedEqualsSSR": true,
+      "opsEqualBaseline": false,
+      "firstMismatch": "select(3)",
+      "clonesDuringHydrate": 33,
+      "serverNodesKept": true,
+      "unsafe": {
+        "before": "row 5",
+        "after": "row 5",
+        "setterExists": true
+      },
+      "afterUnsafeSelect": "",
+      "unsafeError": null,
+      "claimOk": false,
+      "pass": true
+    },
+    "csr": {
+      "reference": true,
+      "domEqualsBaselineModuloHk": true,
+      "unsafe": {
+        "before": "row 5",
+        "after": "written after hydration",
+        "setterExists": true
+      }
+    }
+  },
+  "results": [
+    {
+      "variant": "baseline",
+      "usPerHydrate": 14033.333333209157,
+      "spread": 0.15083135391172595,
+      "reps": [
+        15266.66666691502,
+        14399.999999751648,
+        13150.000000372529,
+        13966.666666790843,
+        14033.333333209157
+      ],
+      "usPerDispose": 2099.999999627471,
+      "disposeReps": [
+        2166.6666666666665,
+        2133.3333334575095,
+        2000,
+        2099.999999627471,
+        2066.6666670391955
+      ],
+      "heapBytes": 2983520,
+      "batchK": [
+        3,
+        3,
+        4,
+        3,
+        3
+      ]
+    },
+    {
+      "variant": "inert-labels",
+      "usPerHydrate": 10625,
+      "spread": 0.11529411761199727,
+      "reps": [
+        10625,
+        10750,
+        10280.000000074506,
+        10150.000000372529,
+        11375
+      ],
+      "usPerDispose": 1725.0000000931323,
+      "disposeReps": [
+        1725.0000000931323,
+        1700.0000001862645,
+        1739.9999998509884,
+        1700.0000001862645,
+        1824.9999997206032
+      ],
+      "heapBytes": 2459356,
+      "batchK": [
+        4,
+        4,
+        5,
+        4,
+        4
+      ]
+    },
+    {
+      "variant": "inert-all",
+      "usPerHydrate": 7516.666666915019,
+      "spread": 0.16851441242780382,
+      "reps": [
+        7900.0000000620885,
+        8300,
+        7033.333333209157,
+        7219.999999925494,
+        7516.666666915019
+      ],
+      "usPerDispose": 1260.0000001490116,
+      "disposeReps": [
+        1516.6666666045785,
+        1560.0000001490116,
+        1233.3333333954215,
+        1260.0000001490116,
+        1250
+      ],
+      "heapBytes": 2412220,
+      "batchK": [
+        6,
+        5,
+        6,
+        5,
+        6
+      ]
+    },
+    {
+      "variant": "inert-all+H4",
+      "usPerHydrate": 5783.333333209157,
+      "spread": 0.10677233422055395,
+      "reps": [
+        5783.333333209157,
+        5462.500000139698,
+        5750,
+        6071.428571428572,
+        6079.999999701977
+      ],
+      "usPerDispose": 1057.1428571960755,
+      "disposeReps": [
+        1016.6666666045785,
+        1049.9999998137355,
+        1087.5000001396984,
+        1057.1428571960755,
+        1060.0000001490116
+      ],
+      "heapBytes": 1474396,
+      "batchK": [
+        6,
+        8,
+        8,
+        7,
+        5
+      ]
+    },
+    {
+      "variant": "floor",
+      "usPerHydrate": 2012.4999999534339,
+      "spread": 0.05603864733606481,
+      "reps": [
+        2012.4999999534339,
+        1922.2222222015262,
+        2034.999999962747,
+        2026.3157894736842,
+        2000
+      ],
+      "usPerDispose": 150,
+      "disposeReps": [
+        149.99999990686774,
+        144.44444452722868,
+        150,
+        152.6315789669752,
+        152.6315789669752
+      ],
+      "heapBytes": 89376,
+      "batchK": [
+        16,
+        18,
+        20,
+        19,
+        19
+      ]
+    },
+    {
+      "variant": "gather-only",
+      "usPerHydrate": 885.3658536767088,
+      "spread": 0.05377640037646822,
+      "reps": [
+        864.5833333333334,
+        912.1951219603056,
+        868.7500000232831,
+        885.3658536767088,
+        892.6829268201823
+      ],
+      "usPerDispose": 147.91666665890565,
+      "disposeReps": [
+        147.91666665890565,
+        148.78048779579197,
+        147.91666665890565,
+        146.34146341463415,
+        146.34146341463415
+      ],
+      "heapBytes": 22636,
+      "batchK": [
+        48,
+        41,
+        48,
+        41,
+        41
+      ]
+    },
+    {
+      "variant": "csr",
+      "usPerHydrate": 5349.9999999379115,
+      "spread": 0.11363299214119428,
+      "reps": [
+        5485.714285767504,
+        5162.499999860302,
+        5349.9999999379115,
+        5485.714285501412,
+        4877.77777781917
+      ],
+      "usPerDispose": 974.9999998603016,
+      "disposeReps": [
+        900.0000001064369,
+        974.9999998603016,
+        1000,
+        1014.285714498588,
+        911.1111112352875
+      ],
+      "heapBytes": 1099232,
+      "batchK": [
+        7,
+        8,
+        6,
+        7,
+        9
+      ]
+    }
+  ]
+}
