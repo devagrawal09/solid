@@ -22,6 +22,12 @@ Current exploration work:
 
 ## Recent Changes
 
+### 2026-09-26 (heuristic oracles)
+
+- Priced compiler-licensed runtime shortcuts before building their proofs; see [heuristic-oracles.md](./heuristic-oracles.md). Each shortcut is assumed per node behind `__ORACLE__` (folded out of shipped builds), gated for equivalence, shown unsafe on ordinary code, measured, and counted in real code.
+- Build first: single-reader memo fusion (mount −17% to −39%, 29% of memos) and typed text bindings through `solid-tsc` types (DOM text update −28%). Reject direct memo commit, local disposal and constant signals.
+- Track A's `statusFree` path measures **faster** (−6% to −22%) with steady-state warmups; the stage-1 "slower" verdict came from warmups short enough to include JIT compilation. Its blocker is proof coverage, not the runtime path.
+
 ### 2026-09-25 (strict-solid-tsx)
 
 - Added the first generator-free strict slice: `$(fn)` with an ordinary callback is a compilation marker that is analyzed for its statically known host (`createMemo`, `createSignal(fn)`, `createEffect` / `createRenderEffect` compute, DOM `on*` attributes) and erased, with a sidecar graph summary and `[STRICT_…]` diagnostics. See [strict-solid-tsx.md](./strict-solid-tsx.md). Generator blocks are unchanged.

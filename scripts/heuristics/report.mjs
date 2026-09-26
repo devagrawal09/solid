@@ -2,7 +2,8 @@
 // Markdown tables for documentation/plans/heuristic-oracles.md from the raw
 // data in documentation/plans/heuristic-oracles/:
 //
-//   icount.json + icount-repeat.json  instructions/op, two independent runs.
+//   icount.json + icount-repeat.json  instructions/op, two independent runs
+//   (icount-h5*.json: Track A's shipped options, same method).
 //     Each cell reports the mean; the noise column is the run-to-run spread
 //     |a − b| / mean, and a delta is only called out when it exceeds the
 //     combined spread of the two cells compared.
@@ -16,9 +17,14 @@ import { ROOT } from "./common.mjs";
 const DATA = join(ROOT, "documentation/plans/heuristic-oracles");
 const load = f => (existsSync(join(DATA, f)) ? JSON.parse(readFileSync(join(DATA, f), "utf8")) : null);
 
-const a = load("icount.json");
-const b = load("icount-repeat.json");
-if (a) {
+for (const [firstFile, secondFile, title] of [
+  ["icount.json", "icount-repeat.json", "oracles"],
+  ["icount-h5.json", "icount-h5-repeat.json", "Track A options, re-measured"]
+]) {
+  const a = load(firstFile);
+  const b = load(secondFile);
+  if (!a) continue;
+  console.log(`\n### ${title}`);
   const key = r => `${r.scenario}|${r.cell}|${r.op}`;
   const second = new Map((b?.results ?? []).map(r => [key(r), r.irPerOp]));
   const cells = new Map();
@@ -48,8 +54,8 @@ if (a) {
       console.log(`| ${l} | ${row.join(" | ")} |`);
     }
     const noisy = ops.map(o => {
-      const ns = labels.map(l => cells.get(`${s}|${l}|${o}`)?.noise).filter(x => !Number.isNaN(x));
-      return `${o} max ${(Math.max(...ns) * 100).toFixed(1)}%`;
+      const ns = labels.map(l => cells.get(`${s}|${l}|${o}`)?.noise).filter(x => x !== undefined && !Number.isNaN(x));
+      return ns.length ? `${o} max ${(Math.max(...ns) * 100).toFixed(1)}%` : `${o} single run`;
     });
     console.log(`\nRun-to-run spread: ${noisy.join(", ")}.`);
   }

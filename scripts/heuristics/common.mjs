@@ -39,8 +39,12 @@ export function cells(scenario) {
     { label: "control@oracle", variant: "baseline", runtime: "oracle" },
     { label: "baseline@sync", variant: "baseline", runtime: "sync" }
   ];
-  for (const v of Object.keys(scenario.variants))
-    if (v !== "baseline") out.push({ label: `${v}@oracle`, variant: v, runtime: "oracle" });
+  for (const v of Object.keys(scenario.variants)) {
+    if (v === "baseline") continue;
+    // H5 re-measures options the prod runtime already ships.
+    const runtime = v.startsWith("H5") ? "prod" : "oracle";
+    out.push({ label: `${v}@${runtime}`, variant: v, runtime });
+  }
   return out;
 }
 

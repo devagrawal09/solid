@@ -95,14 +95,16 @@ function pageTime([n, op]) {
       app.mount();
       app.unmount();
     };
-    batch = 3;
-    warmup = 30;
+    // Batches sized so each sample spans many ms: file:// pages are not
+    // cross-origin isolated, so performance.now() is coarsened.
+    batch = 20;
+    warmup = 40;
   } else {
     const app = window.__make(n, tbody);
     app.mount();
     run = app.ops[op];
-    batch = 20;
-    warmup = 500;
+    batch = 1000;
+    warmup = 1000;
   }
   for (let i = 0; i < warmup; i++) run();
   const samples = [];
