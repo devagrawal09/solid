@@ -200,6 +200,78 @@ const VARIANTS = {
   }
 };
 
+// --- --suite store: proxy-free store variants (jfb-store/README.md) ----------
+//   store-proxy        store-main.jsx (Solid 2 port of keyed/solid-store), plain JSX.
+//   store-proxy-aa     byte-identical copy of store-proxy (A/A noise floor).
+//   store-strict       store-strict-main.jsx (generator style), stage-1 path readers.
+//   store-handles      store-strict-main.jsx compiled with storeHandles: true.
+//   store-handles-for  store-handles, list made handle-aware by hand: the rows
+//                      array is read through the handle (structural $TRACK +
+//                      one child handle per row) and each row reads its fields
+//                      with readHandle1 (no proxy trap per row read).
+//   store-broken       store-handles-for with the label read dropped from the
+//                      effect's tracking (untracked): updates stop rendering.
+//                      Negative control, never timed.
+const compileWith = (src, extra) =>
+  transform(src, { filename: "main.jsx", generate: "dom", omitNestedClosingTags: true, ...extra });
+function handlesFor(code) {
+  code = edit(
+    code,
+    `const rows = createMemo($(function() {
+		return _$readHandle1(state, "data");
+	}));`,
+    `const rows = createMemo($(function() {
+		return __handleRows(state);
+	}));`,
+    "handles-for each"
+  );
+  code = edit(code, `const rowId = _$readPath1(row, "id");`, `const rowId = _$readHandle1(row, "id");`, "handles-for id");
+  code = edit(code, 't: _$readPath1(row, "label")', 't: _$readHandle1(row, "label")', "handles-for label");
+  // Helper: the same tracking mapArray does on a store array (the `data` key,
+  // then the array's structural $TRACK), but the rows come back as child
+  // handles (store targets), never proxies.
+  return edit(
+    code,
+    "render(() => {",
+    `function __handleRows(h) {
+  const d = _$readHandleChild(h, ["data"]);
+  _$storeProxy(d)[__TRACK];
+  return __untrack(() => {
+    const n = _$readHandle1(d, "length");
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) out[i] = _$readHandleChild(d, [i]);
+    return out;
+  });
+}
+import { $TRACK as __TRACK, untrack as __untrack, readHandleChild as _$readHandleChild } from "solid-js";
+render(() => {`,
+    "handles-for helper"
+  );
+}
+if (args.suite === "store") {
+  const storeSrc = readFileSync(join(here, "store-main.jsx"), "utf8");
+  const strictSrc = readFileSync(join(here, "store-strict-main.jsx"), "utf8");
+  const proxyCode = compile(storeSrc);
+  const strictCode = compileWith(strictSrc, {}).code;
+  const handles = compileWith(strictSrc, { storeHandles: true });
+  const hfor = handlesFor(handles.code);
+  for (const k of Object.keys(VARIANTS)) delete VARIANTS[k];
+  Object.assign(VARIANTS, {
+    "store-proxy": { dir: "solid-next-store", src: storeSrc, code: proxyCode, ...prodRt },
+    "store-proxy-aa": { dir: "solid-next-store-aa", src: storeSrc, code: proxyCode, ...prodRt },
+    "store-strict": { dir: "solid-next-store-strict", src: strictSrc, code: strictCode, ...prodRt },
+    "store-handles": { dir: "solid-next-store-handles", src: strictSrc, code: handles.code, ...prodRt },
+    "store-handles-for": { dir: "solid-next-store-handles-for", src: strictSrc, code: hfor, ...prodRt },
+    "store-broken": {
+      dir: "solid-next-store-broken",
+      src: strictSrc,
+      code: edit(hfor, 't: _$readHandle1(row, "label")', 't: __untrack(() => _$readHandle1(row, "label"))', "broken"),
+      ...prodRt
+    }
+  });
+  writeFileSync(join(JFB, "solid-store-summary.json"), JSON.stringify(handles.storeSummary, null, 2) + "\n");
+}
+
 const only = args.only ? new Set(args.only.split(",")) : null;
 const manifest = {
   repoCommit: null,
@@ -253,7 +325,7 @@ for (const [name, v] of Object.entries(VARIANTS)) {
           language: "JavaScript",
           repoURL: "https://github.com/solidjs/solid"
         },
-        scripts: { "build-prod": `node ${join(here, "build.mjs")} --jfb ${JFB} --only ${name}` }
+        scripts: { "build-prod": `node ${join(here, "build.mjs")} --jfb ${JFB}${args.suite ? ` --suite ${args.suite}` : ""} --only ${name}` }
       },
       null,
       2
@@ -310,4 +382,4 @@ for (const [name, v] of Object.entries(VARIANTS)) {
   };
   console.log(`${name.padEnd(10)} ${v.dir.padEnd(22)} ${String(min.code.length).padStart(6)} B  ${sha}`);
 }
-writeFileSync(join(JFB, "solid-variants.json"), JSON.stringify(manifest, null, 2) + "\n");
+writeFileSync(join(JFB, args.suite === "store" ? "solid-store-variants.json" : "solid-variants.json"), JSON.stringify(manifest, null, 2) + "\n");

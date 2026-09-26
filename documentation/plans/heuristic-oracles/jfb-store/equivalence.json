@@ -1,0 +1,85 @@
+{
+  "url": "http://localhost:8080",
+  "chromium": "141.0.7390.37",
+  "steps": [
+    "01 run",
+    "03 update",
+    "03 update again",
+    "04 select row 2",
+    "04 select row 5",
+    "04 re-select row 5",
+    "05 swap",
+    "04 select swapped row 999",
+    "05 swap back",
+    "06 remove row 4",
+    "06 remove row 1",
+    "06 remove last row",
+    "08 append 1k",
+    "03 update 2k",
+    "05 swap 2k",
+    "04 select row 1500",
+    "09 clear",
+    "05 swap on empty",
+    "03 update on empty",
+    "02 run",
+    "02 replace",
+    "04 select row 10",
+    "02 replace with selection",
+    "07 create 10k",
+    "03 update 10k",
+    "04 select row 10000",
+    "09 clear 10k",
+    "01 run after clear"
+  ],
+  "variants": {
+    "baseline": {
+      "dir": "solid-next-store",
+      "ok": true,
+      "firstMismatch": null,
+      "pageErrors": [],
+      "bytesCompared": 12391161
+    },
+    "store-proxy-aa": {
+      "dir": "solid-next-store-aa",
+      "ok": true,
+      "firstMismatch": null,
+      "pageErrors": [],
+      "bytesCompared": 12391161
+    },
+    "store-strict": {
+      "dir": "solid-next-store-strict",
+      "ok": true,
+      "firstMismatch": null,
+      "pageErrors": [],
+      "bytesCompared": 12391161
+    },
+    "store-handles": {
+      "dir": "solid-next-store-handles",
+      "ok": true,
+      "firstMismatch": null,
+      "pageErrors": [],
+      "bytesCompared": 12391161
+    },
+    "store-handles-for": {
+      "dir": "solid-next-store-handles-for",
+      "ok": true,
+      "firstMismatch": null,
+      "pageErrors": [],
+      "bytesCompared": 12391161
+    },
+    "S2-rows (signals solid-next)": {
+      "dir": "solid-next",
+      "ok": true,
+      "firstMismatch": null,
+      "pageErrors": [],
+      "bytesCompared": 12391161
+    },
+    "broken": {
+      "dir": "solid-next-store-broken",
+      "ok": false,
+      "firstMismatch": "03 update",
+      "pageErrors": [],
+      "bytesCompared": 12378761
+    }
+  }
+}

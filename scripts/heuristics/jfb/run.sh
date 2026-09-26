@@ -5,7 +5,7 @@
 # variants are interleaved per benchmark. Pass "reverse" to flip the framework
 # order (run 2) so a slow drift cannot favour one variant.
 #
-#   JFB=<checkout> scripts/heuristics/jfb/run.sh <out-dir> [reverse]
+#   JFB=<checkout> [FW_LIST="solid-next-store ..."] [COUNT=40] scripts/heuristics/jfb/run.sh <out-dir> [reverse]
 #
 # Runner: JFB's playwright runner (JFB's default is puppeteer; with puppeteer
 # 25.3 + this Chromium 141 most traces also captured the warmup clicks and JFB
@@ -17,7 +17,13 @@ OUT=$(realpath -m "$1")
 ORDER=${2:-forward}
 : "${JFB:?set JFB to the js-framework-benchmark checkout}"
 CHROME=${CHROME:-/opt/pw-browsers/chromium-1194/chrome-linux/chrome}
-FW=(solid-next solid-next-h7 solid-next-l1 solid-next-h7l1 solid-next-child solid-next-child-h7 solid-next-rspec-r0 solid-next-rspec-r1b)
+if [ -n "${FW_LIST:-}" ]; then
+  read -r -a FW <<<"$FW_LIST"
+else
+  FW=(solid-next solid-next-h7 solid-next-l1 solid-next-h7l1 solid-next-child solid-next-child-h7 solid-next-rspec-r0 solid-next-rspec-r1b)
+fi
+COUNT_ARGS=()
+[ -n "${COUNT:-}" ] && COUNT_ARGS=(--count "$COUNT")
 if [ "$ORDER" = reverse ]; then
   for ((i = ${#FW[@]} - 1; i >= 0; i--)); do R+=("${FW[i]}"); done
   FW=("${R[@]}")
@@ -30,7 +36,7 @@ rm -rf results
 date -u +%FT%TZ >"$OUT/started"
 LANG=en_US.UTF-8 ${PIN:-} node dist/benchmarkRunner.js --headless --runner playwright \
   --chromeBinary "$CHROME" \
-  --framework "${ARGS[@]}" \
+  --framework "${ARGS[@]}" "${COUNT_ARGS[@]}" \
   --benchmark 01_run1k 02_replace1k 03_update10th1k_x16 04_select1k 05_swap1k 06_remove-one-1k 07_create10k 08_create1k-after1k_x2 09_clear1k_x8 \
   >"$OUT/runner.log" 2>&1 || true
 # JFB drops a whole (framework, benchmark) pair when one trace fails its
@@ -45,7 +51,7 @@ for attempt in 1 2 3; do
       missing=1
       echo "attempt $attempt: $f $b" >>"$OUT/retries.log"
       LANG=en_US.UTF-8 ${PIN:-} node dist/benchmarkRunner.js --headless --runner playwright \
-        --chromeBinary "$CHROME" --framework "keyed/$f" --benchmark "$b" >>"$OUT/runner-retry.log" 2>&1 || true
+        --chromeBinary "$CHROME" --framework "keyed/$f" "${COUNT_ARGS[@]}" --benchmark "$b" >>"$OUT/runner-retry.log" 2>&1 || true
     done
   done
   [ $missing = 0 ] && break

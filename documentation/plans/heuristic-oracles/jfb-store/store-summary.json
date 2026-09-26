@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "module": "main.jsx",
+  "stores": [
+    {
+      "binding": "state",
+      "loc": "42:10",
+      "handle": true,
+      "refused": null,
+      "reads": 1,
+      "setter": true,
+      "proxyFree": false,
+      "handoffs": [],
+      "escapes": [
+        {
+          "kind": "member",
+          "loc": "51:16",
+          "detail": ""
+        }
+      ]
+    }
+  ],
+  "components": [],
+  "requires": []
+}

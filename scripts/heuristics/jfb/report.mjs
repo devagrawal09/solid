@@ -41,6 +41,29 @@ const PAIRS = [
   ["rspec-r1b", "rspec-r0"],
   ["rspec-r1b", "baseline"]
 ];
+// --suite store (jfb-store/README.md): the proxy-free store variants.
+if (args.suite === "store") {
+  for (const k of Object.keys(NAMES)) delete NAMES[k];
+  Object.assign(NAMES, {
+    "solid-next-store": "store-proxy",
+    "solid-next-store-aa": "store-proxy-aa",
+    "solid-next-store-strict": "store-strict",
+    "solid-next-store-handles": "store-handles",
+    "solid-next-store-handles-for": "store-handles-for",
+    "solid-next": "S2-rows"
+  });
+  PAIRS.length = 0;
+  PAIRS.push(
+    ["store-proxy-aa", "store-proxy"], // A/A: byte-identical bundle
+    ["store-strict", "store-proxy"],
+    ["store-handles", "store-proxy"],
+    ["store-handles-for", "store-proxy"],
+    ["S2-rows", "store-proxy"],
+    ["store-handles", "store-strict"],
+    ["store-handles-for", "store-handles"],
+    ["S2-rows", "store-handles-for"]
+  );
+}
 
 const median = xs => {
   const s = [...xs].sort((a, b) => a - b);

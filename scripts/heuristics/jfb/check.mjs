@@ -19,7 +19,22 @@ try {
   ({ chromium } = require("/opt/node22/lib/node_modules/playwright"));
 }
 
-const VARIANTS = {
+// --suite store: the proxy-free store variants (build.mjs --suite store) plus
+// the signals entry (S2). The signals entry's <h1> reads "Solid" instead of
+// "Solid Store", so this suite compares the <table> (every row) only.
+const STORE = args.suite === "store";
+const SNAPSHOT = STORE ? "table.test-data" : "#main";
+const VARIANTS = STORE
+  ? {
+      baseline: "solid-next-store",
+      "store-proxy-aa": "solid-next-store-aa",
+      "store-strict": "solid-next-store-strict",
+      "store-handles": "solid-next-store-handles",
+      "store-handles-for": "solid-next-store-handles-for",
+      "S2-rows (signals solid-next)": "solid-next",
+      broken: "solid-next-store-broken"
+    }
+  : {
   baseline: "solid-next",
   H7: "solid-next-h7",
   L1: "solid-next-l1",
@@ -81,7 +96,7 @@ async function trace(dir) {
   for (const [, sel] of STEPS) {
     await page.click(sel);
     await page.evaluate(() => new Promise(r => setTimeout(r, 0)));
-    out.push(await page.evaluate(() => document.getElementById("main").innerHTML));
+    out.push(await page.evaluate(sel => document.querySelector(sel).innerHTML, SNAPSHOT));
   }
   await page.close();
   return { out, errors };
