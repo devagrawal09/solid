@@ -1,6 +1,6 @@
 # Heuristic Oracles: Price the Shortcut Before Building the Proof
 
-Status as of 2026-09-26 (round 2 added the same day). This is a measurement study, not a feature. Runtime arms exist only behind `__ORACLE__` and are folded out of every shipped build. The `prod`, `sync`, `observe` and `dev` outputs were verified byte-identical to the pre-change build.
+Status as of 2026-09-26 (rounds 2 and 3 added the same day). This is a measurement study, not a feature. Runtime arms exist only behind `__ORACLE__` and are folded out of every shipped build. The `prod`, `sync`, `observe` and `dev` outputs were verified byte-identical to the pre-change build.
 
 ## Question
 
@@ -226,6 +226,104 @@ Run-to-run spread: toggle max 0.1%, mount max 0.0%, filter max 0.0%.
 
 `create` has a wide spread in both runs (±31% baseline); read `replace` for the create-path effect.
 
+## Round 3: Async Status, Stores, Actions and the Runtime's Answer
+
+Rounds 1–2 priced heuristics on the memo/effect graph and the DOM. Round 3 covers the rest of the stack: the async status channel, stores and actions. It adds one column the earlier rounds lacked. For every heuristic the **runtime-only alternative** was tried as well, to check the claim that a compiler is needed. Where the runtime can close the gap, that is recorded as the answer.
+
+Method as before: hand-written oracle variants (`scripts/heuristics/r3/scenarios.mjs`), an equivalence gate (`r3/check.mjs`), instruction counts (`r3/icount.mjs`, two runs), and unsafety tests in `tests/heuristic-oracles.test.ts`. Runtime-only alternatives are either shipped API (a projection, the path helpers) or runtime patches judged by the full `@solidjs/signals` suite.
+
+| # | Fact the compiler proves | Shortcut | Compiler result | Runtime-only alternative | Runtime result | Verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| H9 | Nobody inspects a memo's pending status (no untracked or event read, no `isPending`/`latest`); only its readers' status reaches a boundary | Pass pending notifications through the memo without marking it | Refetch −13% to −15%; mount unchanged. With H1 (the memo fused away): **mount −43%, refetch −44%** | (a) Make every memo transparent. (b) A single-slot pending source instead of a `Set` | (a) **44 of 1,885 tests fail** (optimistic, `isPending`, equality, `on`, reveal order, transitions). (b) Tried upstream and reverted over a stranded-pending bug (#2893). A pull-based status redesign would be needed; not prototyped | **Build with H1**; alone it is modest |
+| H13 | Every read site in a block is a `yield*` | Suspend by returning a sentinel instead of throwing `NotReadyError` | Bound: a throw costs about 1,300 instructions more than a sentinel return (micro-benchmark), about 8% of async mount here | None. A plain function compute can only be unwound by throwing | – | Low priority; priced, not built |
+| S1 | A store never escapes compiled reads; paths are exact | Handle reads (`readHandle*`, no proxy) | mount +6%, update10th −2%, select −10% | Path helpers on proxies (`readPath1`) | ±4% | **Reject as measured**: the proxy is not where store mount goes |
+| S2 | A store has a literal shape, never escapes, is never reconciled, has no dynamic keys, and its setter is local | Scalar replacement: one signal per field | **mount −76%, update10th −67%, select −29%** | Cut store constant factors: `createTarget`'s WeakMap registration costs about 5,000 instructions per object (about 12% of store mount); a non-enumerable stamp costs about 2,400 | About 6% of store mount recoverable; the rest is structural (target, proxy and node per field) | **Build**, but coverage is 2 of 15 stores (13%) in the corpus |
+| S4 | No writer (path setter, draft assignment, reconcile, replacement) reaches a store path | Read the field once, untracked; static output | mount −20%, update10th −7% | None. A setter anywhere can write the path later | – | Per-site win; coverage 0 of 33 keys file-local (the target, `row.id` in list rows, crosses component boundaries) |
+| A1 | An action body has no `yield` and no `await` | Run it as a plain batch that returns a settled promise | **−15% per call** (two writes, 400 readers) | R5: run the first slice in the ambient batch and create the transaction only at the first yield | **9 tests fail**: first-slice store, optimistic and `until()` state is not adopted by the late transaction | **Build**: the proof is syntactic and cheap |
+| Sel | (H1 on a per-row selection memo) | Fuse `selected() === id` into the row effect | mount −56%, select −25% | A selection projection (shipped API) | **select −85%**, mount +28% | **Runtime wins on select**; the compiler wins on mount. Use both: fuse row-local memos, project shared selections |
+
+### What the runtime already does lazily
+
+The compiler adds nothing where the runtime already maintains a channel on demand. Code reading confirmed these:
+
+- optimistic lanes, via the sticky `CONFIG_HAS_LANE` mark;
+- the cold extension `_x`, which holds error, pending sources and snapshots;
+- `isPending`/`latest` companions and snapshots, allocated on first use;
+- context lookup, an O(1) inherited object;
+- in-order dependency reuse in `link`, O(1) per read, so a "static deps" heuristic has little left to take;
+- `NotReadyError` stack capture, already disabled in prod.
+
+On the DOM side, today's compiler already splits static style keys and groups attribute bindings into one effect (checked by compiling a probe component). The eagerly maintained channel with real cost is **status propagation**: settling, `notifyStatus`, and adding and removing pending sources account for about 38% of refetch self time in a CPU profile.
+
+### Unsafety and equivalence tests (round 3)
+
+- **H9.** Equivalent when only the boundary and effects observe status, including a refetch that lands on an equal value. `isPending(row)` mid-flight reads `true` in ordinary Solid and `false` under the oracle.
+- **A1.** Equivalent with an optimistic write in the body, and when the body writes a node an in-flight async action holds (both entangle the same way). The runtime cannot choose this form, because it learns the body was synchronous only after running it. R5 shows that adopting the first slice afterwards is not equivalent.
+- **S4.** Equivalent when nothing writes the field; one write anywhere makes the static read stale.
+- **S2** needs no test: an escaping store (spread, `JSON.stringify`, passing it to a helper, `reconcile`) observes the object graph that scalar replacement removes.
+
+### Round 3 data
+
+Two runs per cell. async-rows pairs runs 2 and 3, because the H9 oracle gained its settle-walk pass-through after run 1 (run 1 measured refetch −23% without it, which is the incomplete oracle). `sync-source` is not an equivalent program. It is the floor, the same update with no async machinery. It shows that async status costs 2.3× (refetch) to 3.6× (mount) a sync update of the same graph.
+
+##### async-rows (instructions per op, n = 200)
+
+| Cell | mount | Δ | refetch | Δ |
+| --- | ---: | ---: | ---: | ---: |
+| baseline@prod | 6,241,026 |  | 3,208,167 |  |
+| control@oracle | 6,281,720 | +0.7% | 3,274,134 | +2.1% |
+| sync-source@prod | 1,736,144 | −72.2% | 1,365,044 | −57.5% |
+| H9-statusless@oracle | 6,224,340 | −0.3% | 2,788,862 | −13.1% |
+| H9-direct@prod | 3,552,823 | −43.1% | 1,804,369 | −43.8% |
+
+Run-to-run spread: max 0.02%.
+
+##### store-rows (instructions per op, n = 200)
+
+| Cell | mount | Δ | update10th | Δ | select | Δ |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline@prod | 8,331,738 |  | 315,219 |  | 604,942 |  |
+| R-path@prod | 8,299,382 | −0.4% | 316,481 | +0.4% | 628,648 | +3.9% |
+| S1-handle@prod | 8,815,425 | +5.8% | 310,162 | −1.6% | 547,198 | −9.5% |
+| S2-scalar@prod | 2,022,909 | −75.7% | 104,239 | −66.9% | 429,398 | −29.0% |
+
+Run-to-run spread: max 0.45%.
+
+##### store-static (instructions per op, n = 200)
+
+| Cell | mount | Δ | update10th | Δ |
+| --- | ---: | ---: | ---: | ---: |
+| baseline@prod | 7,280,134 |  | 304,983 |  |
+| S4-static@prod | 5,807,206 | −20.2% | 285,020 | −6.5% |
+
+Run-to-run spread: max 0.06%.
+
+##### select (instructions per op, n = 200)
+
+| Cell | mount | Δ | select | Δ |
+| --- | ---: | ---: | ---: | ---: |
+| baseline@prod | 1,233,521 |  | 429,345 |  |
+| H1-fuse@oracle | 546,245 | −55.7% | 320,759 | −25.3% |
+| R-projection@prod | 1,578,289 | +27.9% | 64,140 | −85.1% |
+
+Run-to-run spread: max 0.06%.
+
+##### action (instructions per op, n = 200)
+
+| Cell | write | Δ |
+| --- | ---: | ---: |
+| baseline@prod | 923,539 |  |
+| A1-batch@prod | 786,679 | −14.8% |
+
+Run-to-run spread: max 0.02%.
+
+Store census (`scripts/heuristics/r3/store-census.mjs`, same 206-file corpus, `r3/store-census.json`):
+- 15 stores; 12 with a literal initializer; none with dynamic keys or `reconcile`.
+- 12 escape. The escapes are function arguments (helpers, API calls with keys missing from the initializer) and props, and inlining the child component (C2) recovers none of them.
+- S2 qualifies for 1 store in full, 2 at row level.
+
+The corpus is small and mostly 1.x-era, so these coverage numbers are weak.
+
 ## What Each Heuristic Needs From the Compiler
 
 - **H1 memo fusion** needs the local reader graph of a `const m = createMemo(...)`:
@@ -267,6 +365,13 @@ node scripts/heuristics/dom/bench.mjs --suite list --n 1000 --reps 5 \
   --out documentation/plans/heuristic-oracles/dom-list-1.json          # and -2
 node scripts/heuristics/census.mjs <dir>... --out census.json
 node scripts/heuristics/report.mjs
+# Round 3 (async status, stores, actions)
+node scripts/heuristics/r3/check.mjs
+node scripts/heuristics/r3/icount.mjs --out documentation/plans/heuristic-oracles/r3/icount-1.json   # and -2
+node scripts/heuristics/r3/icount.mjs --scenarios async-rows --out documentation/plans/heuristic-oracles/r3/icount-async-3.json
+node scripts/heuristics/r3/icount.mjs --scenarios store-static,select --out documentation/plans/heuristic-oracles/r3/icount-3.json
+node scripts/heuristics/r3/report.mjs
+node scripts/heuristics/r3/store-census.mjs examples <corpus>... --out documentation/plans/heuristic-oracles/r3/store-census.json
 cd packages/signals && npx vitest run tests/heuristic-oracles.test.ts
 ```
 
@@ -276,5 +381,5 @@ Environment: Node v22.22.2, Valgrind 3.22 (`cachegrind --cache-sim=no`), Chromiu
 
 - Three signal-level scenarios and one DOM scenario are chosen to exercise each fact where it holds. They show what a heuristic is worth *per site*. Application-level wins scale with coverage, which is why the census exists.
 - The signal-level scenarios exclude DOM cost. The DOM bench excludes layout and paint, and covers one list shape.
-- Hydration, SSR, stores and async are not exercised. H7 during hydration needs the claim path, which the oracle variants skip.
+- Hydration and SSR are not exercised. H7 during hydration needs the claim path, which the oracle variants skip. Stores, async and actions are covered at signal level only (round 3).
 - The census is syntactic, file-local and small (206 files).

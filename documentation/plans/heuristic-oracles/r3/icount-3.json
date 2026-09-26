@@ -1,0 +1,71 @@
+{
+  "n": 200,
+  "ops": 40,
+  "warmup": {
+    "mount": 300,
+    "update": 2000
+  },
+  "node": "v22.22.2",
+  "results": [
+    {
+      "scenario": "store-static",
+      "cell": "baseline@prod",
+      "op": "update10th",
+      "irPerOp": 304899
+    },
+    {
+      "scenario": "store-static",
+      "cell": "baseline@prod",
+      "op": "mount",
+      "irPerOp": 7280300
+    },
+    {
+      "scenario": "store-static",
+      "cell": "S4-static@prod",
+      "op": "mount",
+      "irPerOp": 5807164
+    },
+    {
+      "scenario": "store-static",
+      "cell": "S4-static@prod",
+      "op": "update10th",
+      "irPerOp": 285065
+    },
+    {
+      "scenario": "select",
+      "cell": "baseline@prod",
+      "op": "mount",
+      "irPerOp": 1233501
+    },
+    {
+      "scenario": "select",
+      "cell": "baseline@prod",
+      "op": "select",
+      "irPerOp": 429353
+    },
+    {
+      "scenario": "select",
+      "cell": "H1-fuse@oracle",
+      "op": "mount",
+      "irPerOp": 546259
+    },
+    {
+      "scenario": "select",
+      "cell": "H1-fuse@oracle",
+      "op": "select",
+      "irPerOp": 320756
+    },
+    {
+      "scenario": "select",
+      "cell": "R-projection@prod",
+      "op": "mount",
+      "irPerOp": 1578261
+    },
+    {
+      "scenario": "select",
+      "cell": "R-projection@prod",
+      "op": "select",
+      "irPerOp": 64160
+    }
+  ]
+}

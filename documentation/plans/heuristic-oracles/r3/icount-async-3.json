@@ -1,0 +1,71 @@
+{
+  "n": 200,
+  "ops": 40,
+  "warmup": {
+    "mount": 300,
+    "update": 2000
+  },
+  "node": "v22.22.2",
+  "results": [
+    {
+      "scenario": "async-rows",
+      "cell": "baseline@prod",
+      "op": "mount",
+      "irPerOp": 6241098
+    },
+    {
+      "scenario": "async-rows",
+      "cell": "control@oracle",
+      "op": "mount",
+      "irPerOp": 6282206
+    },
+    {
+      "scenario": "async-rows",
+      "cell": "baseline@prod",
+      "op": "refetch",
+      "irPerOp": 3208071
+    },
+    {
+      "scenario": "async-rows",
+      "cell": "sync-source@prod",
+      "op": "mount",
+      "irPerOp": 1736126
+    },
+    {
+      "scenario": "async-rows",
+      "cell": "sync-source@prod",
+      "op": "refetch",
+      "irPerOp": 1365048
+    },
+    {
+      "scenario": "async-rows",
+      "cell": "control@oracle",
+      "op": "refetch",
+      "irPerOp": 3274276
+    },
+    {
+      "scenario": "async-rows",
+      "cell": "H9-statusless@oracle",
+      "op": "mount",
+      "irPerOp": 6224312
+    },
+    {
+      "scenario": "async-rows",
+      "cell": "H9-direct@prod",
+      "op": "mount",
+      "irPerOp": 3552823
+    },
+    {
+      "scenario": "async-rows",
+      "cell": "H9-statusless@oracle",
+      "op": "refetch",
+      "irPerOp": 2788696
+    },
+    {
+      "scenario": "async-rows",
+      "cell": "H9-direct@prod",
+      "op": "refetch",
+      "irPerOp": 1804358
+    }
+  ]
+}
