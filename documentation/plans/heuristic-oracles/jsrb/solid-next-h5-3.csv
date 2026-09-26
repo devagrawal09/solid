@@ -1,0 +1,23 @@
+framework                        , test                                                         , time    
+solid-next-h5                    , createSignals                                                , 60.14   
+solid-next-h5                    , createComputations                                           , 564.76  
+solid-next-h5                    , updateSignals                                                , 3091.38 
+solid-next-h5                    , avoidablePropagation                                         , 652.01  
+solid-next-h5                    , broadPropagation                                             , 835.23  
+solid-next-h5                    , deepPropagation                                              , 285.59  
+solid-next-h5                    , diamond                                                      , 667.56  
+solid-next-h5                    , mux                                                          , 307.31  
+solid-next-h5                    , repeatedObservers                                            , 113.97  
+solid-next-h5                    , triangle                                                     , 210.57  
+solid-next-h5                    , unstable                                                     , 180.38  
+solid-next-h5                    , molBench                                                     , 53.46   
+solid-next-h5                    , cellx1000                                                    , 51.95   
+solid-next-h5                    , cellx2500                                                    , 154.30  
+solid-next-h5                    , 2-10x5 - lazy80%                                             , 3214.83 
+Assertion failed: count solid-next-h5 undefined result:8400000 expected:3480000
+solid-next-h5                    , 6-10x10 - dyn25% - lazy80%                                   , 873.97  
+Assertion failed: count solid-next-h5 undefined result:1290000 expected:1155000
+solid-next-h5                    , 4-1000x12 - dyn5%                                            , 1965.97 
+solid-next-h5                    , 25-1000x5                                                    , 2317.66 
+solid-next-h5                    , 3-5x500                                                      , 623.19  
+solid-next-h5                    , 6-100x15 - dyn50%                                            , 869.96  

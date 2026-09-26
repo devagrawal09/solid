@@ -1,0 +1,23 @@
+framework                        , test                                                         , time    
+solid-next-r0                    , createSignals                                                , 63.93   
+solid-next-r0                    , createComputations                                           , 643.24  
+solid-next-r0                    , updateSignals                                                , 3195.59 
+solid-next-r0                    , avoidablePropagation                                         , 724.94  
+solid-next-r0                    , broadPropagation                                             , 1110.76 
+solid-next-r0                    , deepPropagation                                              , 408.98  
+solid-next-r0                    , diamond                                                      , 830.94  
+solid-next-r0                    , mux                                                          , 378.90  
+solid-next-r0                    , repeatedObservers                                            , 120.76  
+solid-next-r0                    , triangle                                                     , 274.75  
+solid-next-r0                    , unstable                                                     , 194.20  
+solid-next-r0                    , molBench                                                     , 53.62   
+solid-next-r0                    , cellx1000                                                    , 54.35   
+solid-next-r0                    , cellx2500                                                    , 230.39  
+solid-next-r0                    , 2-10x5 - lazy80%                                             , 3989.31 
+Assertion failed: count solid-next-r0 undefined result:8400000 expected:3480000
+solid-next-r0                    , 6-10x10 - dyn25% - lazy80%                                   , 1064.31 
+Assertion failed: count solid-next-r0 undefined result:1290000 expected:1155000
+solid-next-r0                    , 4-1000x12 - dyn5%                                            , 1915.62 
+solid-next-r0                    , 25-1000x5                                                    , 2213.82 
+solid-next-r0                    , 3-5x500                                                      , 760.92  
+solid-next-r0                    , 6-100x15 - dyn50%                                            , 1024.67 
