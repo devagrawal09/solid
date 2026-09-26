@@ -3,6 +3,7 @@ import {
   CONFIG_CHILD_COMPANIONS,
   CONFIG_AUTO_DISPOSE,
   CONFIG_INPUTS_PUBLISHED,
+  CONFIG_ORACLE_STATUSLESS,
   CONFIG_SYNC,
   EFFECT_TRACKED,
   EFFECT_USER,
@@ -249,6 +250,13 @@ export function settlePendingSource(el: Computed<any>, source: Computed<any> = e
   const updateCompanions = GlobalQueue._updatePendingSignal;
   const settle = (node: Computed<any>) => {
     if (visited.has(node)) return;
+    // Oracle STATUSLESS (H9): the transparent node never took the source;
+    // retire it from the node's readers.
+    if (__ORACLE__ && node._config & CONFIG_ORACLE_STATUSLESS) {
+      visited.add(node);
+      forEachDependent(node, settle);
+      return;
+    }
     // A conditional dropped this source, but another dependency can still
     // carry it. Only retire pending state inherited through the recovered
     // branch. Deliberately NOT marked visited on this early return: the
@@ -933,6 +941,15 @@ export function notifyStatus(
   forEachDependent(el, (sub, link) => {
     sub._time = clock;
     if (
+      __ORACLE__ &&
+      sub._config & CONFIG_ORACLE_STATUSLESS &&
+      pendingSource &&
+      !downstreamBlockStatus
+    ) {
+      oraclePassThrough(sub, status, error, pendingSource, downstreamLane);
+      return;
+    }
+    if (
       (__ASYNC__ &&
         status === STATUS_PENDING &&
         pendingSource &&
@@ -957,5 +974,25 @@ export function notifyStatus(
       if (!downstreamBlockStatus && !sub._transition) queuePendingNode(sub);
       notifyStatus(sub, status, error, downstreamBlockStatus, downstreamLane);
     }
+  });
+}
+
+/** Oracle STATUSLESS (heuristic-oracles.md, H9): a pending notification
+ * passes through a status-transparent node to its readers without marking
+ * it — the readers are notified as if they read the source directly. */
+function oraclePassThrough(
+  node: Computed<any>,
+  status: number,
+  error: any,
+  pendingSource: any,
+  lane: OptimisticLane | undefined
+): void {
+  forEachDependent(node, sub => {
+    sub._time = clock;
+    if (sub._config & CONFIG_ORACLE_STATUSLESS)
+      return oraclePassThrough(sub, status, error, pendingSource, lane);
+    if (sub._x?._pendingSources?.has(pendingSource)) return;
+    if (!sub._transition) queuePendingNode(sub);
+    notifyStatus(sub, status, error, false, lane);
   });
 }

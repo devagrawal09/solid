@@ -1,5 +1,5 @@
 diff --git a/packages/compiler/__tests__/tsrx-runtime.test.js b/packages/compiler/__tests__/tsrx-runtime.test.js
-index ded4ccd..ca8522a 100644
+index ded4ccd8..ca8522a5 100644
 --- a/packages/compiler/__tests__/tsrx-runtime.test.js
 +++ b/packages/compiler/__tests__/tsrx-runtime.test.js
 @@ -83,7 +83,8 @@ async function loadRuntimeModule(code, generate) {
@@ -13,7 +13,7 @@ index ded4ccd..ca8522a 100644
      plugins: [
        {
 diff --git a/packages/diagnostics/vite.config.ts b/packages/diagnostics/vite.config.ts
-index 5c87652..1e96c25 100644
+index 5c87652a..1e96c25a 100644
 --- a/packages/diagnostics/vite.config.ts
 +++ b/packages/diagnostics/vite.config.ts
 @@ -9,7 +9,8 @@ export default defineConfig({
@@ -27,7 +27,7 @@ index 5c87652..1e96c25 100644
    resolve: {
      // Array form: entries match in order, and the bare package alias would
 diff --git a/packages/element/vite.config.mjs b/packages/element/vite.config.mjs
-index 35a8bd1..0d907ba 100644
+index 35a8bd13..0d907bad 100644
 --- a/packages/element/vite.config.mjs
 +++ b/packages/element/vite.config.mjs
 @@ -17,7 +17,8 @@ export default defineConfig({
@@ -41,10 +41,10 @@ index 35a8bd1..0d907ba 100644
    test: {
      environment: "jsdom",
 diff --git a/packages/signals/rollup.config.js b/packages/signals/rollup.config.js
-index dac9e8d..6917d87 100644
+index dac9e8d7..0dbf1cd3 100644
 --- a/packages/signals/rollup.config.js
 +++ b/packages/signals/rollup.config.js
-@@ -36,8 +36,11 @@ import prettier from "rollup-plugin-prettier";
+@@ -36,8 +36,16 @@ import prettier from "rollup-plugin-prettier";
  // `attribution.prod.ts`, an inert twin with the same surface — a prod build
  // has no hook sites to feed one.
  
@@ -53,11 +53,16 @@ index dac9e8d..6917d87 100644
 +// (worktree test runs only; shipped builds leave it unset).
 +const flags = (dev, observe, asyncCapability = true, oracle = false, rspec = Number(process.env.SIGNALS_RSPEC || 0)) =>
    replace({
++    // Per-bit tokens first (rollup does not fold `0 & 1`), then the mask.
++    "__RSPEC__ & 1": String(Boolean(rspec & 1)),
++    "__RSPEC__ & 2": String(Boolean(rspec & 2)),
++    "__RSPEC__ & 4": String(Boolean(rspec & 4)),
++    "__RSPEC__ & 8": String(Boolean(rspec & 8)),
 +    __RSPEC__: String(rspec),
      __DEV__: String(dev),
      __OBSERVE__: String(observe),
      __TEST__: "false",
-@@ -121,3 +124,10 @@ export default [
+@@ -121,3 +129,10 @@ export default [
  // (`rollup -c rollup.oracle.config.js`, driven by scripts/heuristics/build.mjs),
  // so it is never part of a published build.
  export const oracleBuild = [tree("dist/oracle", false, false, true)];
@@ -69,7 +74,7 @@ index dac9e8d..6917d87 100644
 +  plugins: [flags(false, false, true, false, rspec), ts(dir)]
 +});
 diff --git a/packages/signals/scripts/size-attr.mjs b/packages/signals/scripts/size-attr.mjs
-index faf092e..68357cb 100644
+index faf092e3..68357cb0 100644
 --- a/packages/signals/scripts/size-attr.mjs
 +++ b/packages/signals/scripts/size-attr.mjs
 @@ -8,7 +8,7 @@ const res = await build({
@@ -82,7 +87,7 @@ index faf092e..68357cb 100644
    logLevel: "silent"
  });
 diff --git a/packages/signals/scripts/store-size.mjs b/packages/signals/scripts/store-size.mjs
-index 083295b..e4e9f8c 100644
+index 083295b9..e4e9f8c3 100644
 --- a/packages/signals/scripts/store-size.mjs
 +++ b/packages/signals/scripts/store-size.mjs
 @@ -17,6 +17,7 @@ const DEFINE = {
@@ -93,8 +98,63 @@ index 083295b..e4e9f8c 100644
    "globalThis.__DEV__": "false"
  };
  
+diff --git a/packages/signals/src/core/action.ts b/packages/signals/src/core/action.ts
+index b4395865..786d65f8 100644
+--- a/packages/signals/src/core/action.ts
++++ b/packages/signals/src/core/action.ts
+@@ -136,11 +136,27 @@ export function action<Args extends any[], Y, R>(
+       // The first slice's window runs to the scheduled flush, which clears
+       // the provenance with the window — no restore here.
+       setOrigin(seq);
+-      globalQueue.initTransition();
+-      let ctx = activeTransition!;
+-      ctx._actions.push(it);
++      // R5 (lazy promotion): the first slice runs in the ambient batch; the
++      // transaction is created only when the body yields (initTransition
++      // adopts the batch's staged writes). A body that completes in its first
++      // slice never opens one.
++      let ctx: Transition = null!;
++      const promote = () => {
++        if (ctx !== null) return;
++        globalQueue.initTransition();
++        ctx = activeTransition!;
++        ctx._actions.push(it);
++      };
++      if (!(__RSPEC__ & 8)) promote();
+ 
+       const done = (v?: R, e?: any, failed = false) => {
++        if (__RSPEC__ & 8) {
++          if (ctx === null) {
++            schedule();
++            failed ? reject(e) : resolve(v!);
++            return;
++          }
++        }
+         ctx = currentTransition(ctx);
+         const i = ctx._actions.indexOf(it);
+         if (i >= 0) ctx._actions.splice(i, 1);
+@@ -176,12 +192,18 @@ export function action<Args extends any[], Y, R>(
+         // A rejected iterator result (async generators) means the error already
+         // escaped the generator body — it is completed, and throwing back in
+         // would just reject again forever. Settle instead.
+-        if (isThenable(r)) return void r.then(run, e => done(undefined, e, true));
++        if (isThenable(r)) {
++          // An async generator's body continues after this call: it belongs
++          // to the transaction.
++          if (__RSPEC__ & 8) promote();
++          return void r.then(run, e => done(undefined, e, true));
++        }
+         run(r);
+       };
+ 
+       const run = (r: IteratorResult<Y, R>) => {
+         if (r.done) return done(r.value);
++        if (__RSPEC__ & 8) promote();
+         // Thenable assimilation can itself throw synchronously (a `then`
+         // getter, or a `then()` method that throws — #2918). Match `await`
+         // semantics: the failure is thrown back into the generator at the
 diff --git a/packages/signals/src/core/core.ts b/packages/signals/src/core/core.ts
-index 753c016..be3ee08 100644
+index 753c0164..be3ee089 100644
 --- a/packages/signals/src/core/core.ts
 +++ b/packages/signals/src/core/core.ts
 @@ -916,6 +916,8 @@ export function computed<T>(
@@ -115,7 +175,7 @@ index 753c016..be3ee08 100644
    return self;
  }
 diff --git a/packages/signals/src/core/status-free.ts b/packages/signals/src/core/status-free.ts
-index ce886e0..0043e3d 100644
+index ce886e05..14a6d798 100644
 --- a/packages/signals/src/core/status-free.ts
 +++ b/packages/signals/src/core/status-free.ts
 @@ -37,10 +37,11 @@
@@ -140,27 +200,28 @@ index ce886e0..0043e3d 100644
    if (__DEV__) {
      reportDiagnostic(
        emitDiagnostic(
-@@ -213,6 +216,18 @@ export function recomputeStatusFree(el: Computed<any>, create: boolean): boolean
+@@ -213,6 +216,19 @@ export function recomputeStatusFree(el: Computed<any>, create: boolean): boolean
    let failed = false;
    try {
      value = el._fn(value);
-+    if (
-+      __RSPEC__ & 1 &&
-+      typeof value === "object" &&
-+      value !== null &&
-+      (typeof (value as any).then === "function" ||
-+        (value as any)[Symbol.asyncIterator] !== undefined)
-+    ) {
-+      // R1: the speculation was wrong. Deopt for good and hand the result to
-+      // the async machinery exactly as the full path would.
-+      el._config &= ~(CONFIG_SYNC | CONFIG_NOTHROW);
-+      value = handleAsync(el, value);
++    if (__RSPEC__ & 1) {
++      if (
++        typeof value === "object" &&
++        value !== null &&
++        (typeof (value as any).then === "function" ||
++          (value as any)[Symbol.asyncIterator] !== undefined)
++      ) {
++        // R1: the speculation was wrong. Deopt for good and hand the result
++        // to the async machinery exactly as the full path would.
++        el._config &= ~(CONFIG_SYNC | CONFIG_NOTHROW);
++        value = handleAsync(el, value);
++      }
 +    }
      if (__DEV__) devVerifySync(el, value);
      // First run: UNINITIALIZED → committed, plus the effect notifier's
      // settled call. On an extension-less node that is all clearStatus does.
 diff --git a/packages/signals/src/globals.d.ts b/packages/signals/src/globals.d.ts
-index 968c426..25929e1 100644
+index 968c4265..25929e14 100644
 --- a/packages/signals/src/globals.d.ts
 +++ b/packages/signals/src/globals.d.ts
 @@ -33,6 +33,13 @@ declare global {
@@ -178,7 +239,7 @@ index 968c426..25929e1 100644
  
  export {};
 diff --git a/packages/signals/src/map.ts b/packages/signals/src/map.ts
-index 8b02db4..5bbba13 100644
+index 8b02db44..5bbba133 100644
 --- a/packages/signals/src/map.ts
 +++ b/packages/signals/src/map.ts
 @@ -553,9 +553,23 @@ function updateKeyedMap<Item, MappedItem>(this: MapData<Item, MappedItem>): any[
@@ -206,7 +267,7 @@ index 8b02db4..5bbba13 100644
   * Reactively renders a callback `count` times, reusing previously-rendered
   * entries when only the count changes. Underlying helper for `<Repeat>`.
 diff --git a/packages/signals/tests/treeshake.test.ts b/packages/signals/tests/treeshake.test.ts
-index 232e896..972d776 100644
+index 232e896f..972d7766 100644
 --- a/packages/signals/tests/treeshake.test.ts
 +++ b/packages/signals/tests/treeshake.test.ts
 @@ -43,7 +43,8 @@ async function bundleFixture(
@@ -220,7 +281,7 @@ index 232e896..972d776 100644
      resolve: {
        alias: {
 diff --git a/packages/signals/vite.config.ts b/packages/signals/vite.config.ts
-index 29b56b6..a59b06c 100644
+index 29b56b63..a59b06cb 100644
 --- a/packages/signals/vite.config.ts
 +++ b/packages/signals/vite.config.ts
 @@ -27,7 +27,8 @@ export default defineConfig(({ mode }) => ({
@@ -234,7 +295,7 @@ index 29b56b6..a59b06c 100644
    test: {
      globals: true,
 diff --git a/packages/web/src/client.ts b/packages/web/src/client.ts
-index 79073b4..df3b0d7 100644
+index 79073b4d..df3b0d78 100644
 --- a/packages/web/src/client.ts
 +++ b/packages/web/src/client.ts
 @@ -156,6 +156,11 @@ export {
@@ -299,7 +360,7 @@ index 79073b4..df3b0d7 100644
      // primitive slot adopts the positional text node with a `.data` write
      // when one is there, and allocates only otherwise. The adopted node's
 diff --git a/packages/web/vite.config.hydrate.mjs b/packages/web/vite.config.hydrate.mjs
-index 1380efc..5ce10b4 100644
+index 1380efc5..5ce10b42 100644
 --- a/packages/web/vite.config.hydrate.mjs
 +++ b/packages/web/vite.config.hydrate.mjs
 @@ -11,6 +11,8 @@ import { resolve } from "path";
@@ -312,7 +373,7 @@ index 1380efc..5ce10b4 100644
    // parity-harness scenarios) in HMR wrappers that add owners and break
    // hydration id parity.
 diff --git a/packages/web/vite.config.mjs b/packages/web/vite.config.mjs
-index f2ec34d..2e3329a 100644
+index f2ec34da..2e3329a3 100644
 --- a/packages/web/vite.config.mjs
 +++ b/packages/web/vite.config.mjs
 @@ -12,6 +12,8 @@ import { resolve } from "path";

@@ -5,7 +5,7 @@
 //   signals-r<bits>/   @solidjs/signals prod tree, property-mangled like dist/prod
 //   web-r<bits>.js     @solidjs/web client prod bundle
 //
-//   node scripts/heuristics/rspec/build.mjs --worktree <path>
+//   node scripts/heuristics/rspec/build.mjs --worktree <path> [--web-only]
 import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -23,26 +23,32 @@ const WEB_BITS = [0, 2, 4, 6];
 
 // Signals: rspecTree(dir, bits) from the worktree's rollup config.
 const signalsDir = join(WT, "packages/signals");
-const cfg = join(signalsDir, "rollup.rspec.config.mjs");
-const { writeFileSync } = await import("node:fs");
-writeFileSync(
-  cfg,
-  `import { rspecTree } from "./rollup.config.js";\nexport default [${SIGNALS_BITS.map(
-    b => `rspecTree(${JSON.stringify(join(OUT, `signals-r${b}`))}, ${b})`
-  ).join(", ")}];\n`
-);
-execFileSync("npx", ["rollup", "-c", cfg], { cwd: signalsDir, stdio: "inherit" });
-for (const b of SIGNALS_BITS)
-  execFileSync("node", ["./scripts/mangle-props.mjs", join(OUT, `signals-r${b}`)], {
-    cwd: signalsDir,
-    stdio: "inherit"
-  });
+if (!args["web-only"]) {
+  const cfg = join(signalsDir, "rollup.rspec.config.mjs");
+  const { writeFileSync } = await import("node:fs");
+  writeFileSync(
+    cfg,
+    `import { rspecTree } from "./rollup.config.js";\nexport default [${SIGNALS_BITS.map(
+      b => `rspecTree(${JSON.stringify(join(OUT, `signals-r${b}`))}, ${b})`
+    ).join(", ")}];\n`
+  );
+  execFileSync("npx", ["rollup", "-c", cfg], { cwd: signalsDir, stdio: "inherit" });
+  for (const b of SIGNALS_BITS)
+    execFileSync("node", ["./scripts/mangle-props.mjs", join(OUT, `signals-r${b}`)], {
+      cwd: signalsDir,
+      stdio: "inherit"
+    });
+}
 
 // Web: the dist/web.js entry of the worktree's config, with __RSPEC__ replaced.
 const webDir = join(WT, "packages/web");
-const { rollup } = await import(pathToFileURL(join(webDir, "node_modules/rollup/dist/es/rollup.js")).href);
-const replace = (await import(pathToFileURL(join(webDir, "node_modules/@rollup/plugin-replace/dist/es/index.js")).href))
-  .default;
+// pnpm hoists the build tools to the workspace root.
+const { rollup } = await import(
+  pathToFileURL(join(WT, "node_modules/rollup/dist/es/rollup.js")).href
+);
+const replace = (
+  await import(pathToFileURL(join(WT, "node_modules/@rollup/plugin-replace/dist/es/index.js")).href)
+).default;
 const webConfigs = (await import(pathToFileURL(join(webDir, "rollup.config.js")).href)).default;
 const webEntry = webConfigs.find(c => c.output?.file === "dist/web.js");
 if (!webEntry) throw new Error("web rollup entry dist/web.js not found");

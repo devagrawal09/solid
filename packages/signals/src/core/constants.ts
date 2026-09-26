@@ -189,6 +189,11 @@ export const CONFIG_ORACLE_OWNERLESS = 1 << 26;
  * cleanup. Nothing on disposal needs to reach it, so it is never linked into
  * its parent's child list. */
 export const CONFIG_ORACLE_DETACHED = 1 << 27;
+/** STATUSLESS: nothing observes this node's pending status (no untracked or
+ * event read, no `isPending`/`latest`, no transition inspecting its pending
+ * sources) — only its readers' status reaches a boundary. A pending
+ * notification then passes through it to its readers without marking it. */
+export const CONFIG_ORACLE_STATUSLESS = 1 << 28;
 
 export const STATUS_NONE = 0;
 export const STATUS_PENDING = 1 << 0;

@@ -1,0 +1,366 @@
+{
+  "roots": [
+    "examples",
+    "/tmp/claude-0/-home-user-solid/a0006ce6-3b9c-5c6f-97ac-4edcac833d11/scratchpad/corpus/solid-devtools",
+    "/tmp/claude-0/-home-user-solid/a0006ce6-3b9c-5c6f-97ac-4edcac833d11/scratchpad/corpus/solid-docs",
+    "/tmp/claude-0/-home-user-solid/a0006ce6-3b9c-5c6f-97ac-4edcac833d11/scratchpad/corpus/solid-hackernews",
+    "/tmp/claude-0/-home-user-solid/a0006ce6-3b9c-5c6f-97ac-4edcac833d11/scratchpad/corpus/solid-realworld"
+  ],
+  "summary": {
+    "stores": 15,
+    "literalInit": 12,
+    "dynamicKey": 0,
+    "escaping": 12,
+    "listOnly": 2,
+    "setterEscapes": 4,
+    "reconcile": 0,
+    "s2full": 1,
+    "s2row": 2,
+    "s2rowWithInlining": 2,
+    "s4": {
+      "readKeys": 33,
+      "neverWritten": 0
+    }
+  },
+  "stores": [
+    {
+      "file": "examples/diagnostics/src/scenarios/overrun/cart.ts",
+      "store": "cart",
+      "kind": "createStore",
+      "literalInit": true,
+      "reads": 8,
+      "dynamicKey": false,
+      "escapes": 1,
+      "propEscapes": 0,
+      "listEscapes": 0,
+      "setterEscapes": false,
+      "reconcile": false,
+      "readKeys": [
+        "lines",
+        "note"
+      ],
+      "writtenKeys": [
+        "note",
+        "lines"
+      ],
+      "staticKeys": [],
+      "s2full": false,
+      "s2row": false
+    },
+    {
+      "file": "examples/effect/src/checkout.tsx",
+      "store": "cart",
+      "kind": "createStore",
+      "literalInit": false,
+      "reads": 3,
+      "dynamicKey": false,
+      "escapes": 0,
+      "propEscapes": 0,
+      "listEscapes": 1,
+      "setterEscapes": false,
+      "reconcile": false,
+      "readKeys": [
+        "reduce",
+        "map"
+      ],
+      "writtenKeys": [],
+      "staticKeys": [],
+      "s2full": false,
+      "s2row": false
+    },
+    {
+      "file": "examples/effect/src/log.ts",
+      "store": "entries",
+      "kind": "createStore",
+      "literalInit": true,
+      "reads": 1,
+      "dynamicKey": false,
+      "escapes": 0,
+      "propEscapes": 0,
+      "listEscapes": 0,
+      "setterEscapes": false,
+      "reconcile": false,
+      "readKeys": [],
+      "writtenKeys": [
+        "length"
+      ],
+      "staticKeys": [],
+      "s2full": true,
+      "s2row": true
+    },
+    {
+      "file": "examples/rendering/shared/src/components/Skeleton.tsx",
+      "store": "store",
+      "kind": "createStore",
+      "literalInit": false,
+      "reads": 2,
+      "dynamicKey": false,
+      "escapes": 1,
+      "propEscapes": 1,
+      "listEscapes": 0,
+      "setterEscapes": false,
+      "reconcile": false,
+      "readKeys": [
+        "items"
+      ],
+      "writtenKeys": [],
+      "staticKeys": [],
+      "s2full": false,
+      "s2row": false
+    },
+    {
+      "file": "examples/sync-blocks/src/app.tsx",
+      "store": "state",
+      "kind": "createStore",
+      "literalInit": true,
+      "reads": 2,
+      "dynamicKey": false,
+      "escapes": 2,
+      "propEscapes": 0,
+      "listEscapes": 0,
+      "setterEscapes": true,
+      "reconcile": false,
+      "readKeys": [],
+      "writtenKeys": [],
+      "staticKeys": [],
+      "s2full": false,
+      "s2row": false
+    },
+    {
+      "file": "../../../tmp/claude-0/-home-user-solid/a0006ce6-3b9c-5c6f-97ac-4edcac833d11/scratchpad/corpus/solid-devtools/examples/sandbox/src/App.tsx",
+      "store": "state",
+      "kind": "createMutable",
+      "literalInit": true,
+      "reads": 6,
+      "dynamicKey": false,
+      "escapes": 1,
+      "propEscapes": 0,
+      "listEscapes": 0,
+      "setterEscapes": true,
+      "reconcile": false,
+      "readKeys": [
+        "count",
+        "content"
+      ],
+      "writtenKeys": [],
+      "staticKeys": [],
+      "s2full": false,
+      "s2row": false
+    },
+    {
+      "file": "../../../tmp/claude-0/-home-user-solid/a0006ce6-3b9c-5c6f-97ac-4edcac833d11/scratchpad/corpus/solid-devtools/examples/sandbox/src/Recursive.tsx",
+      "store": "nodeSignals",
+      "kind": "createStore",
+      "literalInit": true,
+      "reads": 4,
+      "dynamicKey": false,
+      "escapes": 3,
+      "propEscapes": 0,
+      "listEscapes": 0,
+      "setterEscapes": false,
+      "reconcile": false,
+      "readKeys": [
+        "url",
+        "parents"
+      ],
+      "writtenKeys": [],
+      "staticKeys": [],
+      "s2full": false,
+      "s2row": false
+    },
+    {
+      "file": "../../../tmp/claude-0/-home-user-solid/a0006ce6-3b9c-5c6f-97ac-4edcac833d11/scratchpad/corpus/solid-devtools/examples/sandbox/src/Recursive.tsx",
+      "store": "data",
+      "kind": "createStore",
+      "literalInit": true,
+      "reads": 1,
+      "dynamicKey": false,
+      "escapes": 0,
+      "propEscapes": 0,
+      "listEscapes": 1,
+      "setterEscapes": false,
+      "reconcile": false,
+      "readKeys": [],
+      "writtenKeys": [],
+      "staticKeys": [],
+      "s2full": false,
+      "s2row": true
+    },
+    {
+      "file": "../../../tmp/claude-0/-home-user-solid/a0006ce6-3b9c-5c6f-97ac-4edcac833d11/scratchpad/corpus/solid-devtools/examples/sandbox/src/Theme.tsx",
+      "store": "theme",
+      "kind": "createStore",
+      "literalInit": true,
+      "reads": 4,
+      "dynamicKey": false,
+      "escapes": 2,
+      "propEscapes": 0,
+      "listEscapes": 0,
+      "setterEscapes": false,
+      "reconcile": false,
+      "readKeys": [
+        "color",
+        "title"
+      ],
+      "writtenKeys": [
+        "color",
+        "title"
+      ],
+      "staticKeys": [],
+      "s2full": false,
+      "s2row": false
+    },
+    {
+      "file": "../../../tmp/claude-0/-home-user-solid/a0006ce6-3b9c-5c6f-97ac-4edcac833d11/scratchpad/corpus/solid-devtools/examples/sandbox/src/Todos.tsx",
+      "store": "state",
+      "kind": "createStore",
+      "literalInit": false,
+      "reads": 2,
+      "dynamicKey": false,
+      "escapes": 2,
+      "propEscapes": 0,
+      "listEscapes": 0,
+      "setterEscapes": true,
+      "reconcile": false,
+      "readKeys": [],
+      "writtenKeys": [],
+      "staticKeys": [],
+      "s2full": false,
+      "s2row": false
+    },
+    {
+      "file": "../../../tmp/claude-0/-home-user-solid/a0006ce6-3b9c-5c6f-97ac-4edcac833d11/scratchpad/corpus/solid-realworld/src/pages/Article/Comments.js",
+      "store": "state",
+      "kind": "createStore",
+      "literalInit": true,
+      "reads": 4,
+      "dynamicKey": false,
+      "escapes": 2,
+      "propEscapes": 1,
+      "listEscapes": 0,
+      "setterEscapes": false,
+      "reconcile": false,
+      "readKeys": [
+        "body",
+        "errors",
+        "isCreatingComment"
+      ],
+      "writtenKeys": [
+        "body",
+        "isCreatingComment",
+        "errors"
+      ],
+      "staticKeys": [],
+      "s2full": false,
+      "s2row": false
+    },
+    {
+      "file": "../../../tmp/claude-0/-home-user-solid/a0006ce6-3b9c-5c6f-97ac-4edcac833d11/scratchpad/corpus/solid-realworld/src/pages/Auth.js",
+      "store": "state",
+      "kind": "createStore",
+      "literalInit": true,
+      "reads": 10,
+      "dynamicKey": false,
+      "escapes": 5,
+      "propEscapes": 1,
+      "listEscapes": 0,
+      "setterEscapes": false,
+      "reconcile": false,
+      "readKeys": [
+        "email",
+        "password",
+        "username",
+        "errors",
+        "inProgress"
+      ],
+      "writtenKeys": [
+        "inProgress",
+        "errors",
+        "username",
+        "email",
+        "password"
+      ],
+      "staticKeys": [],
+      "s2full": false,
+      "s2row": false
+    },
+    {
+      "file": "../../../tmp/claude-0/-home-user-solid/a0006ce6-3b9c-5c6f-97ac-4edcac833d11/scratchpad/corpus/solid-realworld/src/pages/Editor/Editor.js",
+      "store": "state",
+      "kind": "createStore",
+      "literalInit": true,
+      "reads": 14,
+      "dynamicKey": false,
+      "escapes": 2,
+      "propEscapes": 1,
+      "listEscapes": 1,
+      "setterEscapes": false,
+      "reconcile": false,
+      "readKeys": [
+        "tagInput",
+        "inProgress",
+        "errors",
+        "title",
+        "description",
+        "body",
+        "tagList"
+      ],
+      "writtenKeys": [
+        "tagList",
+        "tagInput",
+        "inProgress",
+        "errors"
+      ],
+      "staticKeys": [],
+      "s2full": false,
+      "s2row": false
+    },
+    {
+      "file": "../../../tmp/claude-0/-home-user-solid/a0006ce6-3b9c-5c6f-97ac-4edcac833d11/scratchpad/corpus/solid-realworld/src/pages/Settings.js",
+      "store": "state",
+      "kind": "createStore",
+      "literalInit": true,
+      "reads": 13,
+      "dynamicKey": false,
+      "escapes": 2,
+      "propEscapes": 1,
+      "listEscapes": 0,
+      "setterEscapes": false,
+      "reconcile": false,
+      "readKeys": [
+        "errors",
+        "image",
+        "updatingUser",
+        "username",
+        "bio",
+        "email",
+        "password"
+      ],
+      "writtenKeys": [
+        "updatingUser",
+        "errors"
+      ],
+      "staticKeys": [],
+      "s2full": false,
+      "s2row": false
+    },
+    {
+      "file": "../../../tmp/claude-0/-home-user-solid/a0006ce6-3b9c-5c6f-97ac-4edcac833d11/scratchpad/corpus/solid-realworld/src/store/index.js",
+      "store": "state",
+      "kind": "createStore",
+      "literalInit": true,
+      "reads": 5,
+      "dynamicKey": false,
+      "escapes": 5,
+      "propEscapes": 0,
+      "listEscapes": 0,
+      "setterEscapes": true,
+      "reconcile": false,
+      "readKeys": [],
+      "writtenKeys": [],
+      "staticKeys": [],
+      "s2full": false,
+      "s2row": false
+    }
+  ]
+}

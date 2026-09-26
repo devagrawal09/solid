@@ -1,0 +1,215 @@
+{
+  "n": 200,
+  "ops": 40,
+  "warmup": {
+    "mount": 300,
+    "update": 2000
+  },
+  "node": "v22.22.2",
+  "results": [
+    {
+      "scenario": "async-rows",
+      "cell": "baseline@prod",
+      "op": "mount",
+      "irPerOp": 6240954
+    },
+    {
+      "scenario": "async-rows",
+      "cell": "control@oracle",
+      "op": "mount",
+      "irPerOp": 6281234
+    },
+    {
+      "scenario": "async-rows",
+      "cell": "baseline@prod",
+      "op": "refetch",
+      "irPerOp": 3208262
+    },
+    {
+      "scenario": "async-rows",
+      "cell": "sync-source@prod",
+      "op": "mount",
+      "irPerOp": 1736162
+    },
+    {
+      "scenario": "async-rows",
+      "cell": "sync-source@prod",
+      "op": "refetch",
+      "irPerOp": 1365039
+    },
+    {
+      "scenario": "async-rows",
+      "cell": "control@oracle",
+      "op": "refetch",
+      "irPerOp": 3273992
+    },
+    {
+      "scenario": "async-rows",
+      "cell": "H9-statusless@oracle",
+      "op": "mount",
+      "irPerOp": 6224368
+    },
+    {
+      "scenario": "async-rows",
+      "cell": "H9-direct@prod",
+      "op": "mount",
+      "irPerOp": 3552822
+    },
+    {
+      "scenario": "async-rows",
+      "cell": "H9-statusless@oracle",
+      "op": "refetch",
+      "irPerOp": 2789027
+    },
+    {
+      "scenario": "async-rows",
+      "cell": "H9-direct@prod",
+      "op": "refetch",
+      "irPerOp": 1804379
+    },
+    {
+      "scenario": "store-rows",
+      "cell": "baseline@prod",
+      "op": "mount",
+      "irPerOp": 8334674
+    },
+    {
+      "scenario": "store-rows",
+      "cell": "baseline@prod",
+      "op": "update10th",
+      "irPerOp": 315210
+    },
+    {
+      "scenario": "store-rows",
+      "cell": "baseline@prod",
+      "op": "select",
+      "irPerOp": 604974
+    },
+    {
+      "scenario": "store-rows",
+      "cell": "R-path@prod",
+      "op": "update10th",
+      "irPerOp": 316427
+    },
+    {
+      "scenario": "store-rows",
+      "cell": "R-path@prod",
+      "op": "mount",
+      "irPerOp": 8300118
+    },
+    {
+      "scenario": "store-rows",
+      "cell": "R-path@prod",
+      "op": "select",
+      "irPerOp": 628596
+    },
+    {
+      "scenario": "store-rows",
+      "cell": "S1-handle@prod",
+      "op": "mount",
+      "irPerOp": 8815060
+    },
+    {
+      "scenario": "store-rows",
+      "cell": "S1-handle@prod",
+      "op": "update10th",
+      "irPerOp": 310278
+    },
+    {
+      "scenario": "store-rows",
+      "cell": "S1-handle@prod",
+      "op": "select",
+      "irPerOp": 547223
+    },
+    {
+      "scenario": "store-rows",
+      "cell": "S2-scalar@prod",
+      "op": "mount",
+      "irPerOp": 2022911
+    },
+    {
+      "scenario": "store-rows",
+      "cell": "S2-scalar@prod",
+      "op": "update10th",
+      "irPerOp": 104003
+    },
+    {
+      "scenario": "store-rows",
+      "cell": "S2-scalar@prod",
+      "op": "select",
+      "irPerOp": 429449
+    },
+    {
+      "scenario": "store-static",
+      "cell": "baseline@prod",
+      "op": "mount",
+      "irPerOp": 7279968
+    },
+    {
+      "scenario": "store-static",
+      "cell": "baseline@prod",
+      "op": "update10th",
+      "irPerOp": 305067
+    },
+    {
+      "scenario": "store-static",
+      "cell": "S4-static@prod",
+      "op": "update10th",
+      "irPerOp": 284975
+    },
+    {
+      "scenario": "store-static",
+      "cell": "S4-static@prod",
+      "op": "mount",
+      "irPerOp": 5807247
+    },
+    {
+      "scenario": "select",
+      "cell": "baseline@prod",
+      "op": "mount",
+      "irPerOp": 1233541
+    },
+    {
+      "scenario": "select",
+      "cell": "baseline@prod",
+      "op": "select",
+      "irPerOp": 429336
+    },
+    {
+      "scenario": "select",
+      "cell": "H1-fuse@oracle",
+      "op": "mount",
+      "irPerOp": 546231
+    },
+    {
+      "scenario": "select",
+      "cell": "H1-fuse@oracle",
+      "op": "select",
+      "irPerOp": 320761
+    },
+    {
+      "scenario": "select",
+      "cell": "R-projection@prod",
+      "op": "mount",
+      "irPerOp": 1578317
+    },
+    {
+      "scenario": "select",
+      "cell": "R-projection@prod",
+      "op": "select",
+      "irPerOp": 64119
+    },
+    {
+      "scenario": "action",
+      "cell": "baseline@prod",
+      "op": "write",
+      "irPerOp": 923450
+    },
+    {
+      "scenario": "action",
+      "cell": "A1-batch@prod",
+      "op": "write",
+      "irPerOp": 786684
+    }
+  ]
+}

@@ -19,18 +19,25 @@ import {
   CONFIG_ORACLE_DETACHED,
   CONFIG_ORACLE_DIRECT,
   CONFIG_ORACLE_LOCAL,
-  CONFIG_ORACLE_OWNERLESS
+  CONFIG_ORACLE_OWNERLESS,
+  CONFIG_ORACLE_STATUSLESS
 } from "../src/core/constants.js";
 import {
+  action,
+  createLoadingBoundary,
+  createOptimistic,
   createMemo,
   createRenderEffect,
   createRoot,
   createSignal,
+  createStore,
   flush,
   getNextChildId,
   getOwner,
+  isPending,
   latest,
-  onCleanup
+  onCleanup,
+  untrack
 } from "../src/index.js";
 
 const same = (a: unknown, b: unknown) => a === b;
@@ -266,5 +273,202 @@ describe("H8 ownerless / detached: memos and effects that own nothing", () => {
     };
     expect(run(false)).toBe(0);
     expect(run(true)).toBeGreaterThan(0);
+  });
+});
+
+describe("H9 statusless: pass pending status through a memo nobody inspects", () => {
+  // One async source (a manual thenable, resolved synchronously), a row memo
+  // over it, a render effect under a Loading boundary. `refetch` bumps the
+  // source; `probe` runs while the new flight is in flight.
+  const run = (
+    statusless: boolean,
+    probe: (row: () => number) => unknown,
+    answer: (v: number) => number = v => v * 10
+  ) => {
+    const log: unknown[] = [];
+    let resolve: ((v: number) => void) | null = null;
+    const [ver, setVer] = createSignal(0);
+    let row!: () => number;
+    const dispose = createRoot(d => {
+      const data = createMemo(() => {
+        const v = ver();
+        return { then: (res: (v: number) => void) => void (resolve = () => res(answer(v))) } as any;
+      });
+      const view = createLoadingBoundary(
+        () => {
+          row = createMemo(() => (data() as number) + 1, {
+            oracle: statusless ? CONFIG_ORACLE_STATUSLESS : 0
+          } as any);
+          createRenderEffect(row, v => void log.push(`effect ${v}`));
+          return "ready";
+        },
+        () => "loading"
+      );
+      createRenderEffect(view, v => void log.push(`view ${v}`));
+      return d;
+    });
+    flush();
+    resolve!(0);
+    flush();
+    setVer(1);
+    flush();
+    log.push(probe(row));
+    resolve!(0);
+    flush();
+    dispose();
+    return log;
+  };
+
+  it("is equivalent when only the boundary and the effect observe status", () => {
+    const reference = run(false, () => "-");
+    expect(run(true, () => "-")).toEqual(reference);
+    expect(reference).toEqual(["view loading", "view ready", "effect 1", "-", "effect 11"]);
+  });
+
+  it("settles the effect when the refetch lands on an equal value", () => {
+    const probe = () => "-";
+    const constant = () => 7;
+    const reference = run(false, probe, constant);
+    expect(run(true, probe, constant)).toEqual(reference);
+  });
+
+  it("changes isPending() on the transparent memo mid-flight", () => {
+    const probe = (row: () => number) => isPending(row);
+    expect(run(false, probe)).toEqual([
+      "view loading",
+      "view ready",
+      "effect 1",
+      true,
+      "effect 11"
+    ]);
+    expect(run(true, probe)).toEqual([
+      "view loading",
+      "view ready",
+      "effect 1",
+      false,
+      "effect 11"
+    ]);
+  });
+});
+
+describe("A1 sync action: a body with no yield runs as a plain batch", () => {
+  // The compiled form of `action(function* () { body })` when the body has no
+  // yield and no await: the writes as a plain batch, the call returning a
+  // settled promise. These pin the equivalence; the runtime cannot choose it
+  // by itself because it learns the body is synchronous only after running
+  // it, and adopting the first slice into a transaction afterwards breaks
+  // store, optimistic and until() tests (scripts/heuristics/rspec, R5).
+  const call = (asAction: boolean, body: () => void) =>
+    asAction
+      ? action(function* () {
+          body();
+        })()
+      : (body(), Promise.resolve());
+
+  it("is equivalent with an optimistic write in the body", async () => {
+    const run = async (asAction: boolean) => {
+      const log: unknown[] = [];
+      const [a, setA] = createSignal(0);
+      const [o, setO] = createOptimistic(0);
+      createRoot(() =>
+        createRenderEffect(
+          () => [a(), o()],
+          v => void log.push(JSON.stringify(v))
+        )
+      );
+      flush();
+      const p = call(asAction, () => {
+        setA(1);
+        setO(5);
+        log.push(`inside a=${a()} o=${o()}`);
+      });
+      log.push(`after-call a=${a()} o=${o()}`);
+      flush();
+      await p;
+      flush();
+      log.push(`settled a=${a()} o=${o()}`);
+      return log;
+    };
+    expect(await run(false)).toEqual(await run(true));
+  });
+
+  it("is equivalent when it writes a node an in-flight action holds", async () => {
+    const run = async (asAction: boolean) => {
+      const log: unknown[] = [];
+      const [x, setX] = createSignal(0);
+      const [y, setY] = createSignal(0);
+      createRoot(() =>
+        createRenderEffect(
+          () => [x(), y()],
+          v => void log.push(JSON.stringify(v))
+        )
+      );
+      flush();
+      let release!: () => void;
+      const slow = action(function* () {
+        setX(1);
+        yield new Promise<void>(r => (release = r));
+        setX(2);
+      });
+      const p1 = slow();
+      await Promise.resolve();
+      flush();
+      const p2 = call(asAction, () => {
+        setX(10);
+        setY(10);
+      });
+      flush();
+      await Promise.resolve();
+      flush();
+      log.push(`after x=${x()} y=${y()}`);
+      release();
+      await p1;
+      await p2;
+      await Promise.resolve();
+      flush();
+      log.push(`settled x=${x()} y=${y()}`);
+      return log;
+    };
+    const reference = await run(true);
+    expect(await run(false)).toEqual(reference);
+    expect(reference).toEqual(["[0,0]", "after x=0 y=0", "[2,10]", "settled x=2 y=10"]);
+  });
+});
+
+describe("S4 static store path: a field no writer reaches is read once", () => {
+  const run = (isStatic: boolean, writeId: boolean) => {
+    const log: unknown[] = [];
+    const [state, setState] = createStore({ rows: [{ id: 1, label: "a" }] });
+    const dispose = createRoot(d => {
+      const row = untrack(() => state.rows[0]);
+      if (isStatic) log.push(`id ${untrack(() => row.id)}`);
+      else
+        createRenderEffect(
+          () => row.id,
+          v => void log.push(`id ${v}`)
+        );
+      createRenderEffect(
+        () => row.label,
+        v => void log.push(`label ${v}`)
+      );
+      return d;
+    });
+    flush();
+    setState(s => {
+      s.rows[0].label = "b";
+      if (writeId) s.rows[0].id = 2;
+    });
+    flush();
+    dispose();
+    return log;
+  };
+
+  it("is equivalent when the program never writes the field", () => {
+    expect(run(true, false)).toEqual(run(false, false));
+  });
+
+  it("goes stale on one write to the field anywhere in the program", () => {
+    expect(run(false, true)).toEqual(["id 1", "label a", "label b", "id 2"]);
+    expect(run(true, true)).toEqual(["id 1", "label a", "label b"]);
   });
 });

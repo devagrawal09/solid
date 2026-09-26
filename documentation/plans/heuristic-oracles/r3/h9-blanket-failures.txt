@@ -1,0 +1,47 @@
+      Tests  45 failed | 1839 passed | 1 skipped (1885)
+ FAIL  tests/attribution-waterfall-eval.test.ts > ASYNC_WATERFALL > FINDING: one scope reading two async sources serializes them — and is caught
+ FAIL  tests/autodispose-pending-release.test.ts > #2934: derivatively-pending lazy memo release > released when upstream RESOLVES with no subscribers; revives on fresh read
+ FAIL  tests/createLoadingBoundary.on.test.ts > createLoadingBoundary with on option > handles async on source (on getter reads pending memo)
+ FAIL  tests/createLoadingBoundary.on.test.ts > createLoadingBoundary with on option > handles rapid on-value changes
+ FAIL  tests/createLoadingBoundary.on.test.ts > createLoadingBoundary with on option > multiple boundaries — one with on resets, sibling without on shows stale
+ FAIL  tests/createLoadingBoundary.on.test.ts > createLoadingBoundary with on option > shows fallback when on-value changes and data is pending
+ FAIL  tests/createLoadingBoundary.on.test.ts > createLoadingBoundary with on option > split async: boundary-caught does not hold transition for outside async
+ FAIL  tests/createMemo.test.ts > async compute > isPending with chained async memos
+ FAIL  tests/createMemo.test.ts > async compute > isPending with sync memo depending on async memo
+ FAIL  tests/createMemo.test.ts > async compute > keeps shared downstream pending after one async source settles unchanged
+ FAIL  tests/createMemo.test.ts > isPending and latest with async upstream and downstream > chained async - [isPending(() => latest(x)), latest(x)] pairs track each node's own resolution
+ FAIL  tests/createMemo.test.ts > isPending and latest with async upstream and downstream > chained async - each [isPending(x), x()] pair tracks its own resolution atomically
+ FAIL  tests/createOptimistic.test.ts > createOptimistic > async chain with isPending (nested lanes) > isPending shows optimistic pending state during mismatch correction
+ FAIL  tests/createOptimistic.test.ts > createOptimistic > async chain with isPending (nested lanes) > isPending tracks optimistic node state alongside value effects
+ FAIL  tests/createOptimistic.test.ts > createOptimistic > async chain with isPending (nested lanes) > multiple isPending effects track independently
+ FAIL  tests/createOptimistic.test.ts > createOptimistic > async chain: signal -> async memo -> optimistic -> async memo -> effect > second async resolves first, optimistic value matches
+ FAIL  tests/createOptimistic.test.ts > createOptimistic > isPending and latest() with async optimistic > optimistic value matches computed result
+ FAIL  tests/createOptimistic.test.ts > createOptimistic > parallel independent optimistic with latest() - checkout pattern > 3-optimistic-node checkout: latest() text and isPending opacity update independently
+ FAIL  tests/createOptimistic.test.ts > createOptimistic > parallel independent optimistic with latest() - checkout pattern > checkout: combined style effect with multiple isPending reads matches separate effects
+ FAIL  tests/createOptimistic.test.ts > createOptimistic > parallel independent optimistic with latest() - checkout pattern > rapid action: correction should not be blocked when lane is reused across actions
+ FAIL  tests/createOptimistic.test.ts > createOptimistic > parallel independent optimistic with latest() - checkout pattern > rapid action: unchanged override value should still dirty downstream to invalidate stale _inFlight
+ FAIL  tests/createRevealOrder.test.ts > createRevealOrder > does not retroactively collapse later slots after graduation
+ FAIL  tests/createRevealOrder.test.ts > createRevealOrder > nested on-reset does not re-gate revealed outer siblings
+ FAIL  tests/createRevealOrder.test.ts > createRevealOrder > nested together on-reset does not re-gate revealed outer siblings
+ FAIL  tests/error-silent-recovery.test.ts > silent error recovery (#2949) > async flavor: rejected async memo recovering to unchanged value reveals fresh siblings
+ FAIL  tests/heuristic-oracles.test.ts > H9 statusless: pass pending status through a memo nobody inspects > changes isPending() on the transparent memo mid-flight
+ FAIL  tests/lane-hold-on-observation.test.ts > lane async holds on observation, like a transaction (#3289) > createOptimistic lane > derived async caught by a fallback-showing boundary does not hold the lane
+ FAIL  tests/lane-hold-on-observation.test.ts > lane async holds on observation, like a transaction (#3289) > latest() lane (GabbeV's reduction) > a fallback-showing boundary around the memo does not hold latest(b)
+ FAIL  tests/late-pending-equality.test.ts > keeps a dependent pending through another path (indirect: false)
+ FAIL  tests/late-pending-equality.test.ts > keeps a dependent pending through another path (indirect: true)
+ FAIL  tests/late-pending-equality.test.ts > settles a branch immediately after it drops 2 pending sources
+ FAIL  tests/late-pending-equality.test.ts > settles a branch immediately after it drops 3 pending sources
+ FAIL  tests/late-pending-equality.test.ts > settles converging unchanged branches before their shared source resolves
+ FAIL  tests/scheduler-livelock.test.ts > disposing a root that owns two boundary queues does not skip a later sibling
+ FAIL  tests/scheduler-livelock.test.ts > disposing the current boundary queue does not skip its sibling
+ FAIL  tests/scheduler-livelock.test.ts > isPending(() => latest(x)) in a user effect does not loop on refetch (#2843)
+ FAIL  tests/snapshot.test.ts > pending projection skips snapshot capture > snapshot is not frozen at the empty pending state
+ FAIL  tests/snapshot.test.ts > pending projection skips snapshot capture > store properties are not snapshot-frozen while projection is pending
+ FAIL  tests/spec-async-semantics.test.ts > A15 (was B3): overlapping transitions settle as one unit > lets a reset loading boundary catch an existing flight without holding the reveal
+ FAIL  tests/superseded-flight-pending-source.test.ts > superseded flight pending-source ownership (#3226) > keeps the synchronous settle and error paths free of stale entries
+ FAIL  tests/superseded-flight-pending-source.test.ts > superseded flight pending-source ownership (#3226) > retires a replacement flight that rejects into another pending source
+ FAIL  tests/superseded-flight-pending-source.test.ts > superseded flight pending-source ownership (#3226) > retires self and propagated entries before re-parking on another source
+ FAIL  tests/transitionEntanglement.test.ts > createOptimistic + mid-memo + plain-signal entanglement > Shape A — optimistic O1 DIFFERS from committed: E1 observes 99:a then 2:b
+ FAIL  tests/transitionEntanglement.test.ts > createOptimistic + mid-memo + plain-signal entanglement > Shape B — optimistic O1 MATCHES committed: E1 observes 2:a then 2:b
+ FAIL  tests/treeshake.test.ts > pay-for-use tree-shaking (#2883) > core floor sheds every optional feature module
+⎯⎯⎯⎯⎯⎯ Failed Tests 45 ⎯⎯⎯⎯⎯⎯⎯
