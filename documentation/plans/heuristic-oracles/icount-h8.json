@@ -1,0 +1,468 @@
+{
+  "n": 200,
+  "ops": 40,
+  "warmup": {
+    "mount": 300,
+    "update": 2000
+  },
+  "node": "v22.22.2",
+  "date": "2026-09-26T09:02:24.429Z",
+  "results": [
+    {
+      "scenario": "rows",
+      "cell": "baseline@prod",
+      "op": "update10th",
+      "irPerOp": 106907
+    },
+    {
+      "scenario": "rows",
+      "cell": "baseline@prod",
+      "op": "mount",
+      "irPerOp": 1950251
+    },
+    {
+      "scenario": "rows",
+      "cell": "control@oracle",
+      "op": "mount",
+      "irPerOp": 1992780
+    },
+    {
+      "scenario": "rows",
+      "cell": "baseline@prod",
+      "op": "select",
+      "irPerOp": 428373
+    },
+    {
+      "scenario": "rows",
+      "cell": "control@oracle",
+      "op": "update10th",
+      "irPerOp": 105717
+    },
+    {
+      "scenario": "rows",
+      "cell": "H1-fuse@oracle",
+      "op": "update10th",
+      "irPerOp": 102166
+    },
+    {
+      "scenario": "rows",
+      "cell": "H1-fuse@oracle",
+      "op": "mount",
+      "irPerOp": 1207888
+    },
+    {
+      "scenario": "rows",
+      "cell": "control@oracle",
+      "op": "select",
+      "irPerOp": 430974
+    },
+    {
+      "scenario": "rows",
+      "cell": "H1-fuse@oracle",
+      "op": "select",
+      "irPerOp": 429828
+    },
+    {
+      "scenario": "rows",
+      "cell": "H8a-ownerless@oracle",
+      "op": "update10th",
+      "irPerOp": 101236
+    },
+    {
+      "scenario": "rows",
+      "cell": "H8a-ownerless@oracle",
+      "op": "mount",
+      "irPerOp": 2061760
+    },
+    {
+      "scenario": "rows",
+      "cell": "H8a-ownerless@oracle",
+      "op": "select",
+      "irPerOp": 430345
+    },
+    {
+      "scenario": "rows",
+      "cell": "H8b-detached@oracle",
+      "op": "update10th",
+      "irPerOp": 101425
+    },
+    {
+      "scenario": "rows",
+      "cell": "H8b-detached@oracle",
+      "op": "mount",
+      "irPerOp": 1798531
+    },
+    {
+      "scenario": "rows",
+      "cell": "H8b-detached@oracle",
+      "op": "select",
+      "irPerOp": 430334
+    },
+    {
+      "scenario": "rows",
+      "cell": "H1+H8b@oracle",
+      "op": "mount",
+      "irPerOp": 1171510
+    },
+    {
+      "scenario": "rows",
+      "cell": "H1+H8b@oracle",
+      "op": "update10th",
+      "irPerOp": 102256
+    },
+    {
+      "scenario": "rows",
+      "cell": "H1+H8b@oracle",
+      "op": "select",
+      "irPerOp": 429336
+    },
+    {
+      "scenario": "chain",
+      "cell": "baseline@prod",
+      "op": "mount",
+      "irPerOp": 1878338
+    },
+    {
+      "scenario": "chain",
+      "cell": "control@oracle",
+      "op": "mount",
+      "irPerOp": 1902564
+    },
+    {
+      "scenario": "chain",
+      "cell": "H1-fuse@oracle",
+      "op": "mount",
+      "irPerOp": 1312854
+    },
+    {
+      "scenario": "chain",
+      "cell": "baseline@prod",
+      "op": "update",
+      "irPerOp": 1752779
+    },
+    {
+      "scenario": "chain",
+      "cell": "control@oracle",
+      "op": "update",
+      "irPerOp": 1763687
+    },
+    {
+      "scenario": "chain",
+      "cell": "H1-fuse@oracle",
+      "op": "update",
+      "irPerOp": 1219093
+    },
+    {
+      "scenario": "chain",
+      "cell": "H8a-ownerless@oracle",
+      "op": "mount",
+      "irPerOp": 1954959
+    },
+    {
+      "scenario": "chain",
+      "cell": "H8b-detached@oracle",
+      "op": "mount",
+      "irPerOp": 1793050
+    },
+    {
+      "scenario": "todos",
+      "cell": "baseline@prod",
+      "op": "mount",
+      "irPerOp": 2729130
+    },
+    {
+      "scenario": "todos",
+      "cell": "baseline@prod",
+      "op": "toggle",
+      "irPerOp": 106941
+    },
+    {
+      "scenario": "chain",
+      "cell": "H8a-ownerless@oracle",
+      "op": "update",
+      "irPerOp": 1755299
+    },
+    {
+      "scenario": "chain",
+      "cell": "H8b-detached@oracle",
+      "op": "update",
+      "irPerOp": 1755197
+    },
+    {
+      "scenario": "todos",
+      "cell": "control@oracle",
+      "op": "toggle",
+      "irPerOp": 106994
+    },
+    {
+      "scenario": "todos",
+      "cell": "control@oracle",
+      "op": "mount",
+      "irPerOp": 2716698
+    },
+    {
+      "scenario": "todos",
+      "cell": "baseline@prod",
+      "op": "filter",
+      "irPerOp": 1020870
+    },
+    {
+      "scenario": "todos",
+      "cell": "H1-fuse@oracle",
+      "op": "toggle",
+      "irPerOp": 107070
+    },
+    {
+      "scenario": "todos",
+      "cell": "H1-fuse@oracle",
+      "op": "mount",
+      "irPerOp": 2306182
+    },
+    {
+      "scenario": "todos",
+      "cell": "control@oracle",
+      "op": "filter",
+      "irPerOp": 1025145
+    },
+    {
+      "scenario": "todos",
+      "cell": "H1-fuse@oracle",
+      "op": "filter",
+      "irPerOp": 631319
+    },
+    {
+      "scenario": "todos",
+      "cell": "H8a-ownerless@oracle",
+      "op": "toggle",
+      "irPerOp": 107038
+    },
+    {
+      "scenario": "todos",
+      "cell": "H8a-ownerless@oracle",
+      "op": "mount",
+      "irPerOp": 2844502
+    },
+    {
+      "scenario": "todos",
+      "cell": "H8b-detached@oracle",
+      "op": "toggle",
+      "irPerOp": 106997
+    },
+    {
+      "scenario": "todos",
+      "cell": "H8b-detached@oracle",
+      "op": "mount",
+      "irPerOp": 2506768
+    },
+    {
+      "scenario": "todos",
+      "cell": "H8a-ownerless@oracle",
+      "op": "filter",
+      "irPerOp": 1021931
+    },
+    {
+      "scenario": "rows-ids",
+      "cell": "baseline@prod",
+      "op": "update10th",
+      "irPerOp": 99067
+    },
+    {
+      "scenario": "rows-ids",
+      "cell": "baseline@prod",
+      "op": "mount",
+      "irPerOp": 2206547
+    },
+    {
+      "scenario": "todos",
+      "cell": "H8b-detached@oracle",
+      "op": "filter",
+      "irPerOp": 1021905
+    },
+    {
+      "scenario": "rows-ids",
+      "cell": "baseline@prod",
+      "op": "select",
+      "irPerOp": 428281
+    },
+    {
+      "scenario": "rows-ids",
+      "cell": "control@oracle",
+      "op": "update10th",
+      "irPerOp": 99081
+    },
+    {
+      "scenario": "rows-ids",
+      "cell": "control@oracle",
+      "op": "mount",
+      "irPerOp": 2291178
+    },
+    {
+      "scenario": "rows-ids",
+      "cell": "control@oracle",
+      "op": "select",
+      "irPerOp": 431008
+    },
+    {
+      "scenario": "rows-ids",
+      "cell": "H1-fuse@oracle",
+      "op": "mount",
+      "irPerOp": 1401229
+    },
+    {
+      "scenario": "rows-ids",
+      "cell": "H1-fuse@oracle",
+      "op": "update10th",
+      "irPerOp": 102936
+    },
+    {
+      "scenario": "rows-ids",
+      "cell": "H1-fuse@oracle",
+      "op": "select",
+      "irPerOp": 329374
+    },
+    {
+      "scenario": "rows-ids",
+      "cell": "H8a-ownerless@oracle",
+      "op": "update10th",
+      "irPerOp": 101158
+    },
+    {
+      "scenario": "rows-ids",
+      "cell": "H8a-ownerless@oracle",
+      "op": "mount",
+      "irPerOp": 2064311
+    },
+    {
+      "scenario": "rows-ids",
+      "cell": "H8a-ownerless@oracle",
+      "op": "select",
+      "irPerOp": 430383
+    },
+    {
+      "scenario": "rows-ids",
+      "cell": "H8b-detached@oracle",
+      "op": "mount",
+      "irPerOp": 1801051
+    },
+    {
+      "scenario": "rows-ids",
+      "cell": "H8b-detached@oracle",
+      "op": "update10th",
+      "irPerOp": 101048
+    },
+    {
+      "scenario": "rows-ids",
+      "cell": "H8b-detached@oracle",
+      "op": "select",
+      "irPerOp": 430326
+    },
+    {
+      "scenario": "rows-ids",
+      "cell": "H1+H8b@oracle",
+      "op": "mount",
+      "irPerOp": 1171930
+    },
+    {
+      "scenario": "rows-ids",
+      "cell": "H1+H8b@oracle",
+      "op": "update10th",
+      "irPerOp": 102366
+    },
+    {
+      "scenario": "rows-ids",
+      "cell": "H1+H8b@oracle",
+      "op": "select",
+      "irPerOp": 429463
+    },
+    {
+      "scenario": "todos-ids",
+      "cell": "baseline@prod",
+      "op": "toggle",
+      "irPerOp": 106939
+    },
+    {
+      "scenario": "todos-ids",
+      "cell": "baseline@prod",
+      "op": "mount",
+      "irPerOp": 3123845
+    },
+    {
+      "scenario": "todos-ids",
+      "cell": "control@oracle",
+      "op": "toggle",
+      "irPerOp": 106933
+    },
+    {
+      "scenario": "todos-ids",
+      "cell": "control@oracle",
+      "op": "mount",
+      "irPerOp": 3146568
+    },
+    {
+      "scenario": "todos-ids",
+      "cell": "baseline@prod",
+      "op": "filter",
+      "irPerOp": 1020867
+    },
+    {
+      "scenario": "todos-ids",
+      "cell": "H1-fuse@oracle",
+      "op": "toggle",
+      "irPerOp": 107006
+    },
+    {
+      "scenario": "todos-ids",
+      "cell": "H1-fuse@oracle",
+      "op": "mount",
+      "irPerOp": 2563689
+    },
+    {
+      "scenario": "todos-ids",
+      "cell": "control@oracle",
+      "op": "filter",
+      "irPerOp": 1025160
+    },
+    {
+      "scenario": "todos-ids",
+      "cell": "H1-fuse@oracle",
+      "op": "filter",
+      "irPerOp": 636473
+    },
+    {
+      "scenario": "todos-ids",
+      "cell": "H8a-ownerless@oracle",
+      "op": "toggle",
+      "irPerOp": 106997
+    },
+    {
+      "scenario": "todos-ids",
+      "cell": "H8a-ownerless@oracle",
+      "op": "mount",
+      "irPerOp": 2884111
+    },
+    {
+      "scenario": "todos-ids",
+      "cell": "H8b-detached@oracle",
+      "op": "mount",
+      "irPerOp": 2543366
+    },
+    {
+      "scenario": "todos-ids",
+      "cell": "H8b-detached@oracle",
+      "op": "toggle",
+      "irPerOp": 106984
+    },
+    {
+      "scenario": "todos-ids",
+      "cell": "H8a-ownerless@oracle",
+      "op": "filter",
+      "irPerOp": 1021971
+    },
+    {
+      "scenario": "todos-ids",
+      "cell": "H8b-detached@oracle",
+      "op": "filter",
+      "irPerOp": 1021826
+    }
+  ]
+}
