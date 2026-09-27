@@ -1,0 +1,345 @@
+/*
+ * Generator blocks v2 (documentation/plans/generator-blocks-v2.md).
+ *
+ * Every kind of block has its own constructor, and each kind admits a fixed
+ * set of operations:
+ *
+ *   $component(function* (props) { setup; return function* () { view } })
+ *       setup: $signal, $store, $memo, $effect, $cleanup, yield* Ctx
+ *       view:  reads only (the existing JSX host)
+ *   $memo(function* () {…})     reads, raise, attempt (sync or async)
+ *   $effect(function* () {…})   reads, writes, $cleanup, raise, attempt (sync)
+ *   $event(function* (e) {…})   reads, writes, $flush, raise, attempt (sync or async)
+ *
+ * Everything runs on the generator driver in `generator.ts`: operations are
+ * yielded, the driver checks the running block's host and performs them.
+ * A component's pending and failures travel with the value it renders (its
+ * `View`), so `JSX.Element` can admit settled views only.
+ */
+import type { META } from "./generator.js";
+import {
+  $,
+  COMPONENT,
+  EFFECT,
+  OP,
+  dispatchBlock,
+  readProp,
+  runBlockAs,
+  type AsyncOp,
+  type BlockAsync,
+  type BlockErrors,
+  type BlockMeta,
+  type Block,
+  type CleanupOp,
+  type CreateOp,
+  type FlushOp,
+  type Op,
+  type PropRead,
+  type ReadOp,
+  type ReadsOf,
+  type TasksOf,
+  type FailuresOf,
+  type WritesOf,
+  type WriteOp,
+  type ContextOp,
+  type PathKey
+} from "./generator.js";
+import { getOwner, untrack } from "./core/index.js";
+import { getContext, setContextIterator, type Context } from "./core/context.js";
+import {
+  createMemo,
+  createSignal,
+  createTrackedEffect,
+  type SignalOptions,
+  type MemoOptions,
+  type SourceAccessor,
+  type Setter
+} from "./signals.js";
+import { createStore, type Store, type StoreSetter } from "./store/index.js";
+
+// --- types -------------------------------------------------------------------
+
+/** Operations a component's setup may yield. */
+export type SetupOp = CreateOp<any, any> | CleanupOp | ContextOp<any, any>;
+/** Operations a memo may yield. */
+export type MemoOp = ReadOp<any> | PropRead<any, any> | AsyncOp<any, any> | RaiseLike | AttemptLike;
+/** Operations an effect may yield. */
+export type EffectOp =
+  | ReadOp<any>
+  | PropRead<any, any>
+  | WriteOp<any>
+  | CleanupOp
+  | RaiseLike
+  | AttemptLike;
+/** Operations an event may yield. */
+export type EventOp =
+  | ReadOp<any>
+  | PropRead<any, any>
+  | WriteOp<any>
+  | FlushOp
+  | AsyncOp<any, any>
+  | RaiseLike
+  | AttemptLike;
+/** Operations a view may yield: reads (child views are reads of their view). */
+export type ViewOp = ReadOp<any> | PropRead<any, any>;
+type RaiseLike = Extract<Op, { readonly [OP]: "raise" }>;
+type AttemptLike = Extract<Op, { readonly [OP]: "attempt" }>;
+
+declare const PENDING: unique symbol;
+declare const FAILS: unique symbol;
+declare const VIEW_BRAND: unique symbol;
+declare const COMPONENT_BRAND: unique symbol;
+
+/**
+ * What a component renders. `Pending` / `Failures` are the effects it has not
+ * handled: a view is *settled* when neither remains, and only settled views
+ * are JSX elements. Structurally a read source, so `yield* view` (inside
+ * another view) propagates its effects into the parent.
+ */
+export interface View<Pending extends boolean = boolean, Failures = unknown> {
+  readonly [VIEW_BRAND]: true;
+  readonly [PENDING]: Pending;
+  readonly [FAILS]: Failures;
+  readonly [META]: BlockMeta<
+    never,
+    Pending extends true ? AsyncOp<unknown, never> : never,
+    Failures,
+    never
+  >;
+  [Symbol.iterator](): Generator<ReadOp<View<Pending, Failures>>, View<Pending, Failures>, any>;
+}
+/** A view with nothing left to handle. */
+export type SettledView = View<false, never>;
+
+/** Pending / failures of a view body's operations (own, plus inherited through reads). */
+type ViewBlock<VY> = Block<unknown, ReadsOf<VY>, TasksOf<VY>, FailuresOf<VY>, never>;
+export type ViewOf<VY> = View<BlockAsync<ViewBlock<VY>>, BlockErrors<ViewBlock<VY>>>;
+
+/**
+ * Props as a component sees them: every prop is a read (`yield* props.id`).
+ * Passing `props.id` on to a child passes the read, not its value.
+ */
+export type TypedProps<P> = { readonly [K in keyof P & PathKey]-?: PropRead<P, [K]> };
+/** What callers may pass for a prop: the value, or something readable for it. */
+export type PropsInput<P> = {
+  [K in keyof P]: P[K] | SourceAccessor<P[K]> | PropRead<any, any>;
+};
+
+/** A `$component`: calling it renders it and returns its view. */
+export interface Component<P = {}, Pending extends boolean = boolean, Failures = unknown> {
+  (props: PropsInput<P>): View<Pending, Failures>;
+  readonly [COMPONENT_BRAND]: true;
+}
+
+/** A `$signal` setter: writes when called; `yield*` on the receipt is the new value. */
+export type BlockSetter<T> = (value: T | ((prev: T) => T)) => WriteReceipt<T>;
+export interface WriteReceipt<T> {
+  [Symbol.iterator](): Generator<WriteOp<Setter<T>>, T, any>;
+}
+export type BlockStoreSetter<T> = (fn: (draft: T) => T | void) => WriteReceipt<T>;
+
+/** A memo's accessor, carrying its body's effects for readers. */
+export type MemoAccessor<R, Y> = SourceAccessor<R> & {
+  readonly [META]: BlockMeta<ReadsOf<Y>, TasksOf<Y>, FailuresOf<Y>, never>;
+};
+
+/** An event handler built by `$event`: call it with the event. */
+export interface EventHandler<E = unknown, Y = unknown> {
+  (event: E): void;
+  readonly [META]: BlockMeta<ReadsOf<Y>, TasksOf<Y>, FailuresOf<Y>, WritesOf<Y>>;
+}
+
+// --- operations --------------------------------------------------------------
+
+function* opIterator(this: any): Generator<any, any, any> {
+  this.delegated = true;
+  return yield this;
+}
+function op<T extends object>(fields: T): T {
+  return Object.assign(fields, { delegated: false, [Symbol.iterator]: opIterator });
+}
+
+/** `yield* $signal(value)` — create a signal in a component's setup. */
+export function $signal<T>(
+  value: T,
+  options?: SignalOptions<T>
+): CreateOp<[get: SourceAccessor<T>, set: BlockSetter<T>], "signal"> {
+  return op({
+    [OP]: "create",
+    kind: "signal",
+    make: () => {
+      const [get, set] = createSignal(value as any, options as any) as [
+        SourceAccessor<T>,
+        Setter<T>
+      ];
+      return [get, blockSetter(set as any)];
+    }
+  }) as any;
+}
+
+/** `yield* $store(value)` — create a store in a component's setup. */
+export function $store<T extends object>(
+  value: T
+): CreateOp<[get: Store<T>, set: BlockStoreSetter<T>], "store"> {
+  return op({
+    [OP]: "create",
+    kind: "store",
+    make: () => {
+      const [get, set] = createStore(value as any) as [Store<T>, StoreSetter<T>];
+      return [get, blockSetter(set as any)];
+    }
+  }) as any;
+}
+
+/** `yield* $memo(function* () {…})` — create a memo in a component's setup. */
+export function $memo<Y extends MemoOp, R>(
+  body: () => Generator<Y, R, any>,
+  options?: MemoOptions<R>
+): CreateOp<MemoAccessor<R, Y>, "memo"> {
+  return op({
+    [OP]: "create",
+    kind: "memo",
+    make: () => createMemo($(body as any) as any, options as any)
+  }) as any;
+}
+
+/**
+ * `yield* $effect(function* () {…})` — create an effect in a component's
+ * setup. It reads, writes (deferred until flush) and cleans up. Compiled, the
+ * compiler moves every read into the effect's compute phase; uncompiled it
+ * runs as one tracked pass.
+ */
+export function $effect<Y extends EffectOp>(
+  body: () => Generator<Y, void, any>
+): CreateOp<void, "effect"> {
+  return op({
+    [OP]: "create",
+    kind: "effect",
+    make: () => {
+      const block = $(body as any);
+      createTrackedEffect(() => {
+        runBlockAs(EFFECT, block as any, undefined);
+      });
+    }
+  }) as any;
+}
+
+/** `yield* $cleanup(fn)` — run `fn` when the component (or the effect run) is disposed. */
+export function $cleanup(fn: () => void): CleanupOp {
+  return op({ [OP]: "cleanup", fn }) as any;
+}
+
+/** `yield* $flush()` — drain pending writes now (event blocks only). */
+export function $flush(): FlushOp {
+  return op({ [OP]: "flush" }) as any;
+}
+
+/** A setter whose calls return a receipt: `yield* set(v)` is the new value. */
+function blockSetter(set: (value: any) => any): (value: any) => WriteReceipt<any> {
+  return (value: any) => {
+    const next = set(value);
+    return receipt(next);
+  };
+}
+function receipt<T>(value: T): WriteReceipt<T> {
+  return {
+    *[Symbol.iterator]() {
+      return value;
+    }
+  } as any;
+}
+
+// --- context ------------------------------------------------------------------
+
+function contextOp(context: Context<any>): ContextOp<any, any> {
+  return op({ [OP]: "context", context, read: () => getContext(context) }) as any;
+}
+setContextIterator(function* (context) {
+  return yield* contextOp(context);
+});
+
+// --- $event ------------------------------------------------------------------
+
+/**
+ * `$event(function* (e) {…})` — an event handler. Reads return the current
+ * value, writes are allowed, an async `attempt` suspends it, and a failure is
+ * routed to the nearest error boundary above where the handler was created.
+ */
+export function $event<E = unknown, Y extends EventOp = never>(
+  body: (event: E) => Generator<Y, unknown, any>
+): EventHandler<E, Y> {
+  const block = $(body as any) as any;
+  const owner = getOwner();
+  const handler = (event: E) => dispatchBlock(block, event, owner);
+  return handler as any;
+}
+
+// --- $component ----------------------------------------------------------------
+
+const PROPS_COMPILED = 1;
+
+/**
+ * `$component(function* (props) { setup; return function* () { view } })`.
+ *
+ * The setup runs once, under the component's owner and untracked: it creates
+ * state and reads context. The returned generator is the view: it only
+ * reads, and it is rendered where the component is used. Calling the
+ * component returns its view, so `yield* Child(props)` inside a view renders
+ * the child and carries its pending / failures into the parent's type.
+ */
+export function $component<P = {}, Y extends SetupOp = never, VY extends ViewOp = never>(
+  body: (props: TypedProps<P>) => Generator<Y, () => Generator<VY, unknown, any>, any>,
+  flags: number = 0
+): Component<P, ViewOf<VY>[typeof PENDING], ViewOf<VY>[typeof FAILS]> {
+  const setup = $(body as any) as any;
+  const component = function (props: any) {
+    return untrack(() => {
+      const viewBody = runBlockAs(
+        COMPONENT,
+        setup,
+        flags & PROPS_COMPILED ? props : typedProps(props)
+      );
+      if (typeof viewBody !== "function") {
+        throw new TypeError(
+          "[COMPONENT_VIEW] A $component's setup must return its view: `return function* () { return <…/> }`"
+        );
+      }
+      return view(viewBody as any);
+    });
+  };
+  (component as any)[COMPONENT_MARK] = true;
+  return component as any;
+}
+
+/** @internal Runtime brand of `$component` functions. */
+export const COMPONENT_MARK = Symbol("component");
+/** @internal Runtime brand of views. */
+export const VIEW_MARK = Symbol("view");
+
+export function isComponent(value: unknown): boolean {
+  return typeof value === "function" && (value as any)[COMPONENT_MARK] === true;
+}
+
+/** A view: a JSX-host block. `yield*` on it evaluates to the view itself. */
+function view(body: () => Generator<any, unknown, any>): unknown {
+  const block = $(body as any) as any;
+  block[VIEW_MARK] = true;
+  block[Symbol.iterator] = function* () {
+    return block;
+  };
+  return block;
+}
+
+/**
+ * Props as reads: `props.x` is a prop read (`yield* props.x` performs it);
+ * forwarding `props.x` to a child forwards the read.
+ */
+function typedProps(props: any): any {
+  if (props == null) return props;
+  return new Proxy(props, {
+    get(target, key) {
+      if (typeof key === "symbol") return target[key];
+      return readProp(target, [key]);
+    }
+  });
+}

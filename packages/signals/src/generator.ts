@@ -2,6 +2,7 @@ import { markAsyncCapability } from "./core/dev.js";
 import { STATUS_ERROR } from "./core/constants.js";
 import { unwrapStatusError } from "./core/error.js";
 import { blockGuard } from "./core/core.js";
+import { flush } from "./core/scheduler.js";
 import {
   cleanup,
   effect,
@@ -253,6 +254,39 @@ export interface CallOp<B extends AnyBlock> {
   readonly input: BlockInput<B>;
   [Symbol.iterator](): Generator<BlockOps<B>, BlockValue<B>, any>;
 }
+/**
+ * `yield* $signal(v)` / `$store` / `$memo` / `$effect` — create owned state in
+ * a component's setup (generator blocks v2). The driver runs `make` under the
+ * component's owner and resumes with its result.
+ */
+export interface CreateOp<V = unknown, K extends string = string> {
+  readonly [OP]: "create";
+  readonly kind: K;
+  readonly make: () => V;
+  delegated: boolean;
+  [Symbol.iterator](): Generator<CreateOp<V, K>, V, any>;
+}
+/** `yield* $cleanup(fn)` — register a cleanup on the running component or effect. */
+export interface CleanupOp {
+  readonly [OP]: "cleanup";
+  readonly fn: () => void;
+  delegated: boolean;
+  [Symbol.iterator](): Generator<CleanupOp, void, any>;
+}
+/** `yield* Ctx` — read a context in a component's setup. */
+export interface ContextOp<T = unknown, C = unknown> {
+  readonly [OP]: "context";
+  readonly context: C;
+  readonly read: () => T;
+  delegated: boolean;
+  [Symbol.iterator](): Generator<ContextOp<T, C>, T, any>;
+}
+/** `yield* $flush()` — drain pending writes synchronously (event blocks only). */
+export interface FlushOp {
+  readonly [OP]: "flush";
+  delegated: boolean;
+  [Symbol.iterator](): Generator<FlushOp, void, any>;
+}
 export type Op =
   | ReadOp<any>
   | StoreReadOp<any, any>
@@ -262,7 +296,11 @@ export type Op =
   | RaiseOp<any>
   | AttemptOp<any, any>
   | WriteOp<any>
-  | CallOp<any>;
+  | CallOp<any>
+  | CreateOp<any, any>
+  | CleanupOp
+  | ContextOp<any, any>
+  | FlushOp;
 
 export interface BlockMeta<Reads, Tasks, Failures, Writes> {
   readonly reads: Reads;
@@ -691,6 +729,9 @@ function walkHandles(root: unknown, path: readonly PathKey[], start = 0): unknow
  * block` on a lowered identifier.
  */
 function readThrough(value: unknown): unknown {
+  // A forwarded prop read (`Child({ id: props.id })` in a v2 component)
+  // arrives as the parent's read operation: perform it.
+  if (isOp(value) && value[OP] === "read") return readThrough(value.source());
   return typeof value === "function" &&
     ((value as any)[BLOCK] || Symbol.iterator in (value as object))
     ? perform(value as SourceAccessor<unknown>)
@@ -1140,11 +1181,21 @@ export function call<B extends AnyBlock>(block: B, input: BlockInput<B>): CallOp
 
 // --- hosts ---------------------------------------------------------------------------
 
-const REACTIVE = 0;
-const JSX = 1;
-const EVENT = 2;
-type Host = typeof REACTIVE | typeof JSX | typeof EVENT;
-const HOST_NAMES = ["reactive", "jsx", "event"] as const;
+// Hosts. v2 names: memo = REACTIVE, view = JSX; COMPONENT is a component's
+// setup, EFFECT a `$effect` / generator `createEffect` body.
+/** @internal */
+export const REACTIVE = 0;
+/** @internal */
+export const JSX = 1;
+/** @internal */
+export const EVENT = 2;
+/** @internal */
+export const COMPONENT = 3;
+/** @internal */
+export const EFFECT = 4;
+/** @internal */
+export type Host = typeof REACTIVE | typeof JSX | typeof EVENT | typeof COMPONENT | typeof EFFECT;
+const HOST_NAMES = ["reactive", "jsx", "event", "component", "effect"] as const;
 
 /** The host of the innermost running block. */
 let currentHost: Host = REACTIVE;
@@ -1155,7 +1206,8 @@ export function isBlock(value: unknown): value is AnyBlock {
   return typeof value === "function" && (value as any)[BLOCK] === true;
 }
 
-function runBlockAs<B extends AnyBlock>(host: Host, block: B, input: unknown): unknown {
+/** @internal Run a block under a host (the host decides which operations it admits). */
+export function runBlockAs<B extends AnyBlock>(host: Host, block: B, input: unknown): unknown {
   pendingHost = host;
   try {
     return block(input);
@@ -1440,8 +1492,23 @@ export function perform(target: unknown): unknown {
     switch (target[OP]) {
       case "read":
         return readGuarded(target.source);
-      case "attempt":
-        return readGuarded(target.run);
+      case "attempt": {
+        const value = readGuarded(target.run);
+        if (isThenableValue(value)) {
+          throw new TypeError(
+            "[ASYNC_OP_OUTSIDE_DRIVER] An async `attempt` can only be performed by the generator driver. Keep `yield* attempt(...)` inline in the block so the compiler leaves it to the runtime"
+          );
+        }
+        return value;
+      }
+      case "create":
+        return readGuarded(target.make);
+      case "cleanup":
+        return void cleanup(target.fn);
+      case "context":
+        return readGuarded(target.read);
+      case "flush":
+        return void flush();
       case "write":
         return readGuarded(() => target.target(target.value));
       case "call":
@@ -1470,8 +1537,30 @@ function asyncBlockError(): TypeError {
   );
 }
 
+/**
+ * Which hosts admit each operation. v1 blocks keep their rules (reactive: no
+ * writes; jsx: reads only; event: everything v1 had); the v2 operations are
+ * admitted only where the design allows them (generator-blocks-v2.md).
+ */
+const ALLOWED: Record<Op[typeof OP], number> = {
+  read: bit(REACTIVE) | bit(JSX) | bit(EVENT) | bit(EFFECT),
+  call: bit(REACTIVE) | bit(JSX) | bit(EVENT) | bit(EFFECT),
+  wait: bit(REACTIVE) | bit(EVENT),
+  attempt: bit(REACTIVE) | bit(EVENT) | bit(EFFECT),
+  raise: bit(REACTIVE) | bit(EVENT) | bit(EFFECT),
+  write: bit(EVENT) | bit(EFFECT),
+  create: bit(COMPONENT),
+  cleanup: bit(COMPONENT) | bit(EFFECT),
+  context: bit(COMPONENT),
+  flush: bit(EVENT)
+};
+function bit(host: Host): number {
+  return 1 << host;
+}
+
 function checkHost(host: Host, kind: Op[typeof OP]): void {
-  if (host === JSX && kind !== "read" && kind !== "call") {
+  if (ALLOWED[kind] & bit(host)) return;
+  if (host === JSX) {
     throw new Error(
       `[OP_NOT_ALLOWED_IN_JSX] A block rendered as JSX may only read signals; \`${kind}\` belongs in a reactive computation or an event block (host: ${HOST_NAMES[host]})`
     );
@@ -1481,7 +1570,18 @@ function checkHost(host: Host, kind: Op[typeof OP]): void {
       "[WRITE_IN_REACTIVE_BLOCK] A reactive computation may not write; move the write into an event block or the effect phase (host: reactive)"
     );
   }
+  throw new Error(
+    `[OP_NOT_ALLOWED] \`${kind}\` is not allowed in a ${HOST_NAMES[host]} block. ${HOST_RULES[host]}`
+  );
 }
+
+const HOST_RULES = [
+  "A memo reads, attempts and raises; it may not write, create, clean up, read context or flush.",
+  "A view only reads.",
+  "An event reads, writes, attempts, raises and flushes; it may not create, clean up or read context.",
+  "A component's setup creates ($signal, $store, $memo, $effect), cleans up and reads context; reads belong in its view.",
+  "An effect reads, writes, cleans up, attempts (synchronously) and raises."
+] as const;
 
 // --- driver -----------------------------------------------------------------------------
 
@@ -1520,15 +1620,55 @@ function step<R>(
     checkHost(state.host, op[OP]);
     switch (op[OP]) {
       case "read":
-        if (state.waited) {
+        // After a suspension the read is untracked: fine in an event (it
+        // reads the current value), an error in a computation.
+        if (state.waited && state.host === REACTIVE) {
           throw new Error(
-            "[READ_AFTER_WAIT] A signal was read after the block's first `yield* wait(...)`. Reads after a suspension are not tracked; read every signal before the first wait"
+            "[READ_AFTER_WAIT] A signal was read after the block's first suspension (`yield* wait(...)` or an async `yield* attempt(...)`). Reads after a suspension are not tracked; read every signal before the first suspension"
           );
         }
-        result = settle(iterator, op.source);
+        result = state.waited
+          ? settle(iterator, () => untrack(op.source))
+          : settle(iterator, op.source);
         continue;
-      case "attempt":
-        result = settle(iterator, op.run);
+      case "attempt": {
+        // `attempt(fn)`: run `fn`; a promise result suspends the block like
+        // `wait` (the rejection is thrown at the `yield*`).
+        let value: unknown;
+        try {
+          value = readGuarded(op.run);
+        } catch (error) {
+          result = iterator.throw(unwrapStatusError(error));
+          continue;
+        }
+        if (isThenableValue(value)) {
+          if (state.host === EFFECT) {
+            throw new Error(
+              "[ASYNC_IN_EFFECT] An effect block cannot suspend; `attempt` returned a promise. Start async work from an event block, or read an async memo"
+            );
+          }
+          state.waited = true;
+          return Promise.resolve(value as PromiseLike<unknown>).then(
+            v => resume(iterator, state, () => iterator.next(v)),
+            error => resume(iterator, state, () => iterator.throw(error))
+          );
+        }
+        result = iterator.next(value);
+        continue;
+      }
+      case "create":
+        result = settle(iterator, op.make);
+        continue;
+      case "cleanup": {
+        const fn = op.fn;
+        result = settle(iterator, () => void cleanup(fn));
+        continue;
+      }
+      case "context":
+        result = settle(iterator, op.read);
+        continue;
+      case "flush":
+        result = settle(iterator, () => void flush());
         continue;
       case "write": {
         const { target, value } = op;

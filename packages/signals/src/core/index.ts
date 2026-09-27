@@ -47,6 +47,7 @@ export {
   getContext,
   setContext,
   type Context,
+  iterateContext,
   type ContextRecord
 } from "./context.js";
 export { handleAsync } from "./async.js";

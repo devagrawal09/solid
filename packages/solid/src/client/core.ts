@@ -5,7 +5,8 @@ import {
   untrack,
   setContext,
   getContext,
-  flatten
+  flatten,
+  iterateContext
 } from "@solidjs/signals";
 import type { Accessor, EffectOptions } from "@solidjs/signals";
 import type { ArrayElement, Element as SolidElement } from "../types.js";
@@ -113,6 +114,8 @@ export function createContext<T>(defaultValue?: T, options?: EffectOptions): Con
   }
   provider.id = id;
   provider.defaultValue = defaultValue;
+  // `yield* Ctx` in a `$component` setup (generator blocks v2).
+  (provider as any)[Symbol.iterator] = iterateContext;
   return provider as unknown as Context<T>;
 }
 

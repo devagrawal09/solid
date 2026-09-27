@@ -30,7 +30,8 @@ export {
   enforceLoadingBoundary,
   enableExternalSource,
   resetErrorHalt,
-  statusFree
+  statusFree,
+  iterateContext
 } from "./core/index.js";
 import { DEV as _DEV, OBSERVE as _OBSERVE, type Dev, type Observe } from "./core/index.js";
 /**
@@ -115,6 +116,36 @@ export {
   dispatchBlock,
   blockScope
 } from "./generator.js";
+export {
+  $component,
+  $memo,
+  $effect,
+  $event,
+  $signal,
+  $store,
+  $cleanup,
+  $flush,
+  isComponent
+} from "./block-api.js";
+export type {
+  View,
+  SettledView,
+  ViewOf,
+  TypedProps,
+  PropsInput,
+  Component as BlockComponent,
+  BlockSetter,
+  BlockStoreSetter,
+  WriteReceipt,
+  MemoAccessor,
+  EventHandler,
+  SetupOp,
+  MemoOp,
+  EffectOp,
+  EventOp,
+  ViewOp
+} from "./block-api.js";
+export type { CreateOp, CleanupOp, ContextOp, FlushOp } from "./generator.js";
 export type {
   Block,
   AnyBlock,

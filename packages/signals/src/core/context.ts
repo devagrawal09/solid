@@ -1,10 +1,26 @@
 import { ContextNotFoundError, NoOwnerError } from "./error.js";
 import { getOwner } from "./owner.js";
 import type { Owner } from "./types.js";
+import type { ContextOp } from "../generator.js";
 
 export interface Context<T> {
   readonly id: symbol;
   readonly defaultValue: T | undefined;
+  /** `yield* Ctx` in a `$component`'s setup reads the context (generator blocks v2). */
+  [Symbol.iterator](): Generator<ContextOp<T, Context<T>>, T, any>;
+}
+
+/** Installed by the block API: the iterator behind `yield* Ctx`. */
+let contextIterator: ((context: Context<any>) => Generator<any, any, any>) | null = null;
+/** @internal */
+export function setContextIterator(fn: (context: Context<any>) => Generator<any, any, any>): void {
+  contextIterator = fn;
+}
+/** @internal `yield* Ctx` for any context object (signals' and solid-js' providers). */
+export function iterateContext(this: Context<any>): Generator<any, any, any> {
+  if (!contextIterator)
+    throw new TypeError("[CONTEXT_NOT_ITERABLE] `yield* Ctx` requires the block API");
+  return contextIterator(this);
 }
 
 export type ContextRecord = Record<string | symbol, unknown>;
@@ -18,7 +34,7 @@ export type ContextRecord = Record<string | symbol, unknown>;
  * via a `setContext` call.
  */
 export function createContext<T>(defaultValue?: T, description?: string): Context<T> {
-  return { id: Symbol(description), defaultValue };
+  return { id: Symbol(description), defaultValue, [Symbol.iterator]: iterateContext } as Context<T>;
 }
 
 /**
