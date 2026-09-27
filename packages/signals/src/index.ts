@@ -115,6 +115,7 @@ export {
   BLOCK_SYNC,
   BLOCK_NOTHROW,
   isBlock,
+  outsideBlock,
   renderBlock,
   dispatchBlock,
   blockScope
@@ -138,6 +139,7 @@ export type {
   NonView,
   ViewOf,
   TypedProps,
+  PropPath,
   TypedStore,
   StoreSource,
   PropsInput,

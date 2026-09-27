@@ -478,6 +478,20 @@ export function* accessorIterator<T>(
  * `createOptimisticStore` forms) keeps the block's metadata and colors the
  * reader transitively (see the module notes).
  */
+/** Phantom brand of a typed (`$store`) store: the value it holds. */
+declare const STORE_VALUE: unique symbol;
+export interface StoreValueBrand<T> {
+  readonly [STORE_VALUE]: T;
+}
+// A `$store` store (`TypedStore<T>`): the selector sees the plain value.
+export function readStore<T, R>(
+  store: StoreValueBrand<T>,
+  selector: (state: T) => R
+): StoreReadOp<T & object, R>;
+export function readStore<S extends object, R>(
+  store: S,
+  selector: (state: S) => R
+): StoreReadOp<S, R>;
 export function readStore<S extends object, R>(
   store: S,
   selector: (state: S) => R
@@ -807,9 +821,23 @@ export function readProp<R, const P extends readonly PathKey[]>(
 // common depths without an argument array; `readPathN` takes the keys as an
 // array (the compiler hoists all-literal key arrays to module constants).
 
+// A `$component`'s typed props (a proxy whose keys are prop reads): a lowered
+// path read walks the raw props, so `yield* props.todo.id` is one walk.
+let typedPropsCreated = false;
+const typedPropsTargets = new WeakMap<object, object>();
+/** @internal Register a typed-props proxy and the props it wraps. */
+export function registerTypedProps(proxy: object, target: object): void {
+  typedPropsCreated = true;
+  typedPropsTargets.set(proxy, target);
+}
+function propsTarget(root: any): any {
+  return (root !== null && typeof root === "object" && typedPropsTargets.get(root)) || root;
+}
+
 /** `yield* root[k0]`, lowered. */
 export function readPath1<R, const K0 extends PathKey>(root: R, k0: K0): PathResult<R, [K0]>;
 export function readPath1(root: any, k0: PathKey): any {
+  if (typedPropsCreated) root = propsTarget(root);
   if (tokensCreated && isToken(root)) return perform(readPath(root, [k0]));
   if (!blockGuard) return readThrough(hop(root, k0));
   const prev = setBlockGuard(false);
@@ -827,6 +855,7 @@ export function readPath2<R, const K0 extends PathKey, const K1 extends PathKey>
   k1: K1
 ): PathResult<R, [K0, K1]>;
 export function readPath2(root: any, k0: PathKey, k1: PathKey): any {
+  if (typedPropsCreated) root = propsTarget(root);
   if (tokensCreated && isToken(root)) return perform(readPath(root, [k0, k1]));
   if (!blockGuard) return readThrough(hop(hop(root, k0), k1));
   const prev = setBlockGuard(false);
@@ -845,6 +874,7 @@ export function readPath3<
   const K2 extends PathKey
 >(root: R, k0: K0, k1: K1, k2: K2): PathResult<R, [K0, K1, K2]>;
 export function readPath3(root: any, k0: PathKey, k1: PathKey, k2: PathKey): any {
+  if (typedPropsCreated) root = propsTarget(root);
   if (tokensCreated && isToken(root)) return perform(readPath(root, [k0, k1, k2]));
   if (!blockGuard) return readThrough(hop(hop(hop(root, k0), k1), k2));
   const prev = setBlockGuard(false);
@@ -864,6 +894,7 @@ export function readPath4<
   const K3 extends PathKey
 >(root: R, k0: K0, k1: K1, k2: K2, k3: K3): PathResult<R, [K0, K1, K2, K3]>;
 export function readPath4(root: any, k0: PathKey, k1: PathKey, k2: PathKey, k3: PathKey): any {
+  if (typedPropsCreated) root = propsTarget(root);
   if (tokensCreated && isToken(root)) return perform(readPath(root, [k0, k1, k2, k3]));
   if (!blockGuard) return readThrough(hop(hop(hop(hop(root, k0), k1), k2), k3));
   const prev = setBlockGuard(false);
@@ -880,6 +911,7 @@ export function readPathN<R, const P extends readonly PathKey[]>(
   keys: P
 ): PathResult<R, P>;
 export function readPathN(root: any, keys: readonly PathKey[]): any {
+  if (typedPropsCreated) root = propsTarget(root);
   if (tokensCreated && isToken(root)) return perform(readPath(root, keys));
   if (!blockGuard) return readThrough(walkProxies(root, keys));
   const prev = setBlockGuard(false);
@@ -1590,9 +1622,19 @@ export function perform(target: unknown): unknown {
         );
     }
   }
-  // Setter receipts and context objects: step their iterator here.
-  if (ownIterator(target)) return stepSync(target as any);
+  // Setter receipts, context objects and helper generators (`yield*
+  // useTodos()`): step their iterator here.
+  if (ownIterator(target) || isGeneratorObject(target)) return stepSync(target as any);
   throw invalidYield(target);
+}
+
+function isGeneratorObject(target: unknown): boolean {
+  return (
+    target != null &&
+    typeof (target as any).next === "function" &&
+    typeof (target as any).throw === "function" &&
+    typeof (target as any)[Symbol.iterator] === "function"
+  );
 }
 
 function ownIterator(target: unknown): boolean {
@@ -1820,6 +1862,14 @@ function resume<R>(
 
 /** Perform one operation with the strict guard lowered around it (every
  * tier: the store proxy answers a raised guard with a path token). */
+/**
+ * @internal Run framework plumbing that reads signals (dev tooling such as the
+ * HMR registry) inside a block without tripping the strict read guard.
+ */
+export function outsideBlock<T>(run: () => T): T {
+  return readGuarded(run);
+}
+
 function readGuarded<T>(run: () => T): T {
   const prevGuard = setBlockGuard(false);
   try {

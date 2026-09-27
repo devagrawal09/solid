@@ -30,6 +30,7 @@ import {
   createSignal,
   getOwner,
   onCleanup,
+  outsideBlock,
   resetErrorHalt,
   sharedConfig,
   untrack,
@@ -87,7 +88,7 @@ function createProxy<P extends Record<string, any>>(
         instances.count--;
       });
     }
-    const s = untrack(source);
+    const s = outsideBlock(() => untrack(source));
     if (!s || $DEVCOMP in s) {
       return createMemo(
         () => {
@@ -114,10 +115,12 @@ function createProxy<P extends Record<string, any>>(
       if (property === "location" || property === "name") {
         return (HMRComp as any)[property];
       }
-      return (untrack(source) as any)[property];
+      // `outsideBlock`: a `yield* Ctx` inside a block reads the registration
+      // here, which is plumbing, not a reactive read of the block.
+      return (outsideBlock(() => untrack(source)) as any)[property];
     },
     set(_, property, value) {
-      (untrack(source) as any)[property] = value;
+      (outsideBlock(() => untrack(source)) as any)[property] = value;
       return true;
     }
   });

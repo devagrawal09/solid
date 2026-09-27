@@ -23,6 +23,7 @@ import {
   EFFECT,
   OP,
   VIEW,
+  registerTypedProps,
   collectCleanups,
   isBlock,
   dispatchBlock,
@@ -39,6 +40,9 @@ import {
   type Op,
   type PropRead,
   type ReadOp,
+  type StoreRead,
+  type StoreReadOp,
+  type StoreValueBrand,
   type ReadsOf,
   type TasksOf,
   type FailuresOf,
@@ -66,26 +70,21 @@ import { createStore, type Store, type StoreSetter } from "./store/index.js";
 /** Operations a component's setup may yield. */
 export type SetupOp = CreateOp<any, any> | CleanupOp | ContextOp<any, any>;
 /** Operations a memo may yield. */
-export type MemoOp = ReadOp<any> | PropRead<any, any> | AsyncOp<any, any> | RaiseLike | AttemptLike;
+export type MemoOp = ReadLike | AsyncOp<any, any> | RaiseLike | AttemptLike;
 /** Operations an effect may yield. */
-export type EffectOp =
-  | ReadOp<any>
-  | PropRead<any, any>
-  | WriteOp<any>
-  | CleanupOp
-  | RaiseLike
-  | AttemptLike;
+export type EffectOp = ReadLike | WriteOp<any> | CleanupOp | RaiseLike | AttemptLike;
 /** Operations an event may yield. */
 export type EventOp =
-  | ReadOp<any>
-  | PropRead<any, any>
+  | ReadLike
   | WriteOp<any>
   | FlushOp
   | AsyncOp<any, any>
   | RaiseLike
   | AttemptLike;
 /** Operations a view may yield: reads (child views are reads of their view). */
-export type ViewOp = ReadOp<any> | PropRead<any, any>;
+export type ViewOp = ReadLike;
+/** A read: of a source, a prop path, a store path or a store selector. */
+type ReadLike = ReadOp<any> | PropRead<any, any> | StoreRead<any, any> | StoreReadOp<any, any>;
 type RaiseLike = Extract<Op, { readonly [OP]: "raise" }>;
 type AttemptLike = Extract<Op, { readonly [OP]: "attempt" }>;
 
@@ -133,7 +132,19 @@ export type ViewOf<VY> = 0 extends 1 & VY
  * Props as a component sees them: every prop is a read (`yield* props.id`).
  * Passing `props.id` on to a child passes the read, not its value.
  */
-export type TypedProps<P> = { readonly [K in keyof P & PathKey]-?: PropRead<P, [K]> };
+export type TypedProps<P> = { readonly [K in keyof P & PathKey]-?: PropPath<P, [K], P[K]> };
+/**
+ * A prop read, which also reads deeper (`yield* props.todo.title` is one
+ * tracked walk of the props, compiled). Functions and arrays stop the path.
+ */
+export type PropPath<P, Path extends readonly PathKey[], V> = PropRead<P, Path> &
+  (V extends (...args: any[]) => any
+    ? unknown
+    : V extends readonly any[]
+      ? unknown
+      : V extends object
+        ? { readonly [K in keyof V & PathKey]-?: PropPath<P, [...Path, K], V[K]> }
+        : unknown);
 /** What callers may pass for a prop: the value, or something readable for it. */
 export type PropsInput<P> = {
   [K in keyof P]: P[K] | SourceAccessor<P[K]> | PropRead<any, any>;
@@ -151,11 +162,12 @@ export interface Component<P = {}, Pending extends boolean = boolean, Failures =
  * property access inside a block with a path token; `yield*` performs the
  * tracked read.)
  */
-export type TypedStore<T> = T extends readonly (infer U)[]
+export type TypedStore<T> = (T extends readonly (infer U)[]
   ? { readonly [n: number]: StoreSource<U>; readonly length: StoreSource<number> }
   : T extends object
     ? { readonly [K in keyof T]-?: StoreSource<T[K]> }
-    : never;
+    : never) &
+  StoreValueBrand<T>;
 /** One store path: readable with `yield*`, and walkable further when it holds an object. */
 export type StoreSource<V> = {
   [Symbol.iterator](): Generator<ReadOp<SourceAccessor<V>>, V, any>;
@@ -405,15 +417,33 @@ function view(body: () => Generator<any, unknown, any>): unknown {
 }
 
 /**
+ * A prop read that reads deeper on property access: `yield* props.todo.id`
+ * on the driver (compiled, it is one path read of the raw props). The read's
+ * own fields (`source`, `root`, `path`, `kind`, `delegated`) shadow props of
+ * those names below the first level.
+ */
+function propChain(root: object, path: string[]): unknown {
+  const read = readProp(root, path) as any;
+  return new Proxy(read, {
+    get(target, key) {
+      if (typeof key === "symbol" || key in target) return target[key];
+      return propChain(root, [...path, key]);
+    }
+  });
+}
+
+/**
  * Props as reads: `props.x` is a prop read (`yield* props.x` performs it);
  * forwarding `props.x` to a child forwards the read.
  */
 function typedProps(props: any): any {
   if (props == null) return props;
-  return new Proxy(props, {
+  const proxy = new Proxy(props, {
     get(target, key) {
       if (typeof key === "symbol") return target[key];
-      return readProp(target, [key]);
+      return propChain(target, [key]);
     }
   });
+  registerTypedProps(proxy, props);
+  return proxy;
 }

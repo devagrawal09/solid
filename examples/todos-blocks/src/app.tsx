@@ -1,134 +1,142 @@
-// TodoMVC from `examples/todos`, with every reactive boundary written as a
-// `$` typed block:
+// TodoMVC from `examples/todos`, written with generator blocks v2
+// (documentation/plans/generator-blocks-v2.md):
 //
-// - derived computations are `createMemo($(function* () { … }))`,
-// - each component's view is a JSX block (reads only: `yield* signal`,
-//   `yield* todo.title` — the direct property syntax, one tracked path read
-//   of the store proxy — and `yield* readStore(store, selector)` for
-//   structural reads such as `filter` / `every`),
-// - each DOM handler is an event block (`onKeyDown={submit}`), where the
-//   `action`s from `./todos` are invoked through `attempt(...)`.
+// - each component is a `$component`: its setup reads context
+//   (`yield* TodosContext`) and creates memos (`yield* $memo(…)`) and event
+//   handlers (`$event(…)`); the view it returns only reads — `yield* signal`,
+//   `yield* props.todo.title` (one tracked walk of the props, compiled) and
+//   `yield* readStore(store, selector)` for structural reads;
+// - each DOM handler is an `$event`, where the `action`s from `./todos` run
+//   through `yield* attempt(() => …)` (an action returns a promise, so the
+//   handler suspends until it settles).
 //
 // Kept as ordinary code, on purpose:
 // - `createTodos()` / the `action` generators in `./todos` — actions are
 //   Solid's transaction dialect (`yield` there means "await inside the
-//   transaction"); a `$` block calls them as an untyped fallible step
-//   (`attempt`), which is the honest record: the block cannot see their
-//   effects.
+//   transaction");
 // - the `<Show when={…}>{error => …}</Show>` keyed child and the `<Errored>`
-//   fallback: their `error` argument is typed as a plain `Accessor`, not an
-//   iterable `SourceAccessor`, so they stay ordinary render callbacks rather
-//   than widening their types.
-// - the static markup (`<h1>`, labels, the filter links' text).
+//   fallback: render callbacks, not blocks;
+// - `App` itself: a plain component rendering the block components as tags
+//   (they are settled — nothing they read can suspend or fail at the type
+//   level — so JSX admits them).
 import {
-  $,
+  $component,
+  $event,
+  $memo,
   attempt,
   createContext,
-  createMemo,
   Errored,
   For,
   Loading,
   readStore,
   Show,
-  useContext,
-  type SourceAccessor
+  type SourceAccessor,
+  type TypedProps
 } from "solid-js";
 import { createTodos, type Todo } from "./todos";
 import { createHashFilter, type Filter } from "./filter";
 
 const TodosContext = createContext<ReturnType<typeof createTodos>>();
 
-function Header() {
-  const [, { addTodo }] = useContext(TodosContext);
-  const submit = $(function* (e: KeyboardEvent & { currentTarget: HTMLInputElement }) {
+/** The todos store and actions from context (provided by `App`). */
+function* useTodos() {
+  const value = yield* TodosContext;
+  if (!value) throw new Error("TodosContext is not provided");
+  return value;
+}
+
+const Header = $component(function* () {
+  const [, { addTodo }] = yield* useTodos();
+  const submit = $event(function* (e: KeyboardEvent & { currentTarget: HTMLInputElement }) {
     if (e.key !== "Enter") return;
     const input = e.currentTarget;
     const title = input.value.trim();
     if (!title) return;
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    yield* attempt(() => addTodo({ id, title, completed: false }));
     input.value = "";
+    // The action writes optimistically at once; the handler then waits for it.
+    yield* attempt(() => addTodo({ id, title, completed: false }));
   });
-  return (
-    <header class="header">
-      <h1>todos</h1>
-      <input class="new-todo" placeholder="What needs to be done?" autofocus onKeyDown={submit} />
-    </header>
-  );
-}
+  return function* () {
+    return (
+      <header class="header">
+        <h1>todos</h1>
+        <input class="new-todo" placeholder="What needs to be done?" autofocus onKeyDown={submit} />
+      </header>
+    );
+  };
+});
 
-function TodoItem(props: { todo: Todo }) {
-  const [, { toggleTodo, removeTodo, retryTodo }] = useContext(TodosContext);
-  // `todo` is a row of the todos store (a static prop, not a reactive read);
-  // `yield* todo.field` is one tracked read of that field through the proxy
-  // (the compiler lowers it to `perform(readPath(todo, ["field"]))`).
-  const todo = props.todo;
-  const toggle = $(function* (e: InputEvent & { currentTarget: HTMLInputElement }) {
-    const id = yield* todo.id;
+const TodoItem = $component(function* (props: TypedProps<{ todo: Todo }>) {
+  const [, { toggleTodo, removeTodo, retryTodo }] = yield* useTodos();
+  const toggle = $event(function* (e: InputEvent & { currentTarget: HTMLInputElement }) {
+    const id = yield* props.todo.id;
     yield* attempt(() => toggleTodo(id, e.currentTarget.checked));
   });
-  const remove = $(function* () {
-    const id = yield* todo.id;
+  const remove = $event(function* () {
+    const id = yield* props.todo.id;
     yield* attempt(() => removeTodo(id));
   });
-  const retry = $(function* () {
-    // `retryTodo` reads the row itself: hand it the proxy, not a value read.
+  const retry = $event(function* () {
+    // `retryTodo` reads the row itself: hand it the row, not a field.
+    const todo = yield* props.todo;
     yield* attempt(() => retryTodo(todo));
   });
-  return $(function* () {
+  return function* () {
     return (
       <li
         class={[
           "todo",
           {
-            completed: yield* todo.completed,
-            pending: !!(yield* todo.pending),
-            errored: !!(yield* todo.error)
+            completed: yield* props.todo.completed,
+            pending: !!(yield* props.todo.pending),
+            errored: !!(yield* props.todo.error)
           }
         ]}
       >
         <div class="view">
-          <input class="toggle" type="checkbox" checked={yield* todo.completed} onInput={toggle} />
-          <label>{yield* todo.title}</label>
-          <Show when={yield* todo.error}>
+          <input
+            class="toggle"
+            type="checkbox"
+            checked={yield* props.todo.completed}
+            onInput={toggle}
+          />
+          <label>{yield* props.todo.title}</label>
+          <Show when={yield* props.todo.error}>
             {error => <button class="retry" title={`Retry ${error().type}`} onClick={retry} />}
           </Show>
           <button class="destroy" onClick={remove} />
         </div>
       </li>
     );
-  });
-}
+  };
+});
 
-function MainSection(props: { filter: SourceAccessor<Filter> }) {
-  const [todos, { toggleAll }] = useContext(TodosContext);
-  const filtered = createMemo(
-    $(function* () {
-      const f = yield* props.filter;
-      return yield* readStore(todos, t =>
-        f === "active"
-          ? t.filter(x => !x.completed)
-          : f === "completed"
-            ? t.filter(x => x.completed)
-            : t
-      );
-    })
-  );
-  const allCompleted = createMemo(
-    $(function* () {
-      return yield* readStore(todos, t => t.length > 0 && t.every(x => x.completed));
-    })
-  );
-  const toggle = $(function* () {
+const MainSection = $component(function* (props: TypedProps<{ filter: SourceAccessor<Filter> }>) {
+  const [todos, { toggleAll }] = yield* useTodos();
+  const filtered = yield* $memo(function* () {
+    const f = yield* props.filter;
+    return yield* readStore(todos, t =>
+      f === "active"
+        ? t.filter(x => !x.completed)
+        : f === "completed"
+          ? t.filter(x => x.completed)
+          : t
+    );
+  });
+  const allCompleted = yield* $memo(function* () {
+    return yield* readStore(todos, t => t.length > 0 && t.every(x => x.completed));
+  });
+  const toggle = $event(function* () {
     const completed = yield* allCompleted;
     yield* attempt(() => toggleAll(!completed));
   });
-  return $(function* () {
+  return function* () {
     return (
-      <Show when={(yield* todos.length) > 0}>
+      <Show when={(yield* readStore(todos, t => t.length)) > 0}>
         <section class="main">
           {/* `input` (delegated) rather than `change`: a non-delegated event
-              is bound natively and would not reach the event-block sink. */}
+              is bound natively. */}
           <input
             id="toggle-all"
             class="toggle-all"
@@ -143,27 +151,23 @@ function MainSection(props: { filter: SourceAccessor<Filter> }) {
         </section>
       </Show>
     );
-  });
-}
+  };
+});
 
-function Footer(props: { filter: SourceAccessor<Filter> }) {
-  const [todos, { clearCompleted }] = useContext(TodosContext);
-  const remaining = createMemo(
-    $(function* () {
-      return yield* readStore(todos, t => t.filter(x => !x.completed).length);
-    })
-  );
-  const completed = createMemo(
-    $(function* () {
-      return (yield* todos.length) - (yield* remaining);
-    })
-  );
-  const clear = $(function* () {
+const Footer = $component(function* (props: TypedProps<{ filter: SourceAccessor<Filter> }>) {
+  const [todos, { clearCompleted }] = yield* useTodos();
+  const remaining = yield* $memo(function* () {
+    return yield* readStore(todos, t => t.filter(x => !x.completed).length);
+  });
+  const completed = yield* $memo(function* () {
+    return (yield* readStore(todos, t => t.length)) - (yield* remaining);
+  });
+  const clear = $event(function* () {
     yield* attempt(() => clearCompleted());
   });
-  return $(function* () {
+  return function* () {
     return (
-      <Show when={(yield* todos.length) > 0}>
+      <Show when={(yield* readStore(todos, t => t.length)) > 0}>
         <footer class="footer">
           <span class="todo-count">
             <strong>{yield* remaining}</strong> {(yield* remaining) === 1 ? "item" : "items"} left
@@ -193,8 +197,8 @@ function Footer(props: { filter: SourceAccessor<Filter> }) {
         </footer>
       </Show>
     );
-  });
-}
+  };
+});
 
 export function App() {
   const filter = createHashFilter();

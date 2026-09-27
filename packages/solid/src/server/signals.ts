@@ -77,6 +77,7 @@ export {
   BLOCK_SYNC,
   BLOCK_NOTHROW,
   isBlock,
+  outsideBlock,
   renderBlock,
   dispatchBlock
 } from "@solidjs/signals";

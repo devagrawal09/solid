@@ -16,6 +16,7 @@ import {
   createMemo,
   createSignal,
   raise,
+  readStore,
   type BlockComponent,
   type SourceAccessor,
   type TypedProps,
@@ -163,4 +164,25 @@ createEffect(function* () {
 // @ts-expect-error an effect block may not suspend
 createEffect(function* () {
   yield* attempt(() => fetchUser("x"));
+});
+
+// --- nested prop paths --------------------------------------------------------------------
+$component(function* (props: TypedProps<{ todo: { id: string; done: boolean } }>) {
+  return function* () {
+    const id: string = yield* props.todo.id;
+    const done: boolean = yield* props.todo.done;
+    return `${id}${done}`;
+  };
+});
+
+// --- readStore over a $store store sees the plain value ------------------------------------
+$component(function* () {
+  const [state] = yield* $store({ items: [{ done: false }] });
+  const open = yield* $memo(function* () {
+    return yield* readStore(state, s => s.items.filter(i => !i.done).length);
+  });
+  return function* () {
+    const n: number = yield* open;
+    return n;
+  };
 });

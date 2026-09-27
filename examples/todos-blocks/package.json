@@ -1,6 +1,6 @@
 {
   "name": "todos-blocks-example",
-  "description": "The TodoMVC example (examples/todos) rewritten with `$` typed generator blocks — yield* signal reads, direct property reads (yield* todo.title), readStore selectors, event blocks with attempt/write, and JSX blocks — compiled through the native compiler's block lowering and typechecked with solid-tsc",
+  "description": "The TodoMVC example (examples/todos) rewritten with generator blocks v2 — $component setups and views, $memo, $event handlers with attempt, yield* Ctx, yield* props.todo.title path reads and readStore selectors — compiled through the native compiler's block lowering",
   "version": "0.0.0",
   "private": true,
   "author": "Ryan Carniato",

@@ -1,6 +1,6 @@
 {
   "name": "sync-blocks-example",
-  "description": "An async-free app in `$` typed generator blocks (local todo list + typed converter). Track A stage 2: the capability linker proves its client graph async-free and selects the async-free runtime (@solidjs/signals/sync).",
+  "description": "An async-free app in generator blocks v2 ($component, $signal, $store, $memo, $event; local todo list + typed converter). Track A stage 2: the capability linker proves its client graph async-free and selects the async-free runtime (@solidjs/signals/sync).",
   "version": "0.0.0",
   "private": true,
   "license": "MIT",

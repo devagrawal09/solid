@@ -1,14 +1,14 @@
 /**
  * @vitest-environment jsdom
  */
-// The important user flows of the `$`-block TodoMVC, driven through the
-// real DOM (jsdom) with the app compiled by the native compiler — i.e. every
-// block in `src/app.tsx` runs in lowered (call-form) mode. The last test
-// exercises the runtime generator driver on the same store, for a block the
-// compiler leaves alone (it waits).
+// The important user flows of the blocks-v2 TodoMVC, driven through the
+// real DOM (jsdom) with the app compiled by the native compiler — component
+// setups, views and memos run lowered (call form); the event handlers that
+// `attempt` an action stay generators on the runtime driver (the attempt is
+// async). The last test runs a memo on the driver against the same store.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "@solidjs/web";
-import { $, createMemo, createRoot, flush, readStore, wait } from "solid-js";
+import { attempt, createMemo, createRoot, flush, readStore } from "solid-js";
 import { App } from "../src/app";
 import { createTodos } from "../src/todos";
 
@@ -67,7 +67,7 @@ function click(selector: string) {
   container.querySelector<HTMLElement>(selector)!.click();
 }
 
-describe("todos with $ blocks", () => {
+describe("todos with generator blocks", () => {
   it("shows the loading fallback, then the persisted todos", async () => {
     expect(container.querySelector(".loading")?.textContent).toBe("Loading…");
     await settle();
@@ -169,19 +169,17 @@ describe("todos with $ blocks", () => {
   });
 
   it("runtime driver: a block the compiler leaves alone reads the same store", async () => {
-    // `wait` makes this block unlowerable, so it runs on the generator
-    // driver; its store read tracks like the compiled blocks in the app.
+    // An async `attempt` keeps this memo on the generator driver; its store
+    // read tracks like the compiled blocks in the app.
     await settle();
     let summary!: () => string;
     createRoot(() => {
       const [todos] = createTodos();
-      summary = createMemo(
-        $(function* () {
-          const remaining = yield* readStore(todos, t => t.filter(x => !x.completed).length);
-          const prefix = yield* wait(Promise.resolve("left:"));
-          return `${prefix}${remaining}`;
-        })
-      );
+      summary = createMemo(function* () {
+        const remaining = yield* readStore(todos, t => t.filter(x => !x.completed).length);
+        const prefix = yield* attempt(() => Promise.resolve("left:"));
+        return `${prefix}${remaining}`;
+      });
     });
     await settle();
     expect(summary()).toBe("left:1");
