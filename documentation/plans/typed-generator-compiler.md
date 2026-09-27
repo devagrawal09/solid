@@ -22,6 +22,15 @@ Current exploration work:
 
 ## Recent Changes
 
+### 2026-09-27 (resumability)
+
+- Challenge 2 measured; see [resumability.md](./resumability.md).
+  - **Lazy hydration:** correct only with hydrate-before-write, and runtime-only lazy hydration just moves the whole cost to the first click.
+  - **Pruning:** naive resumability ships 2.2× the pruned HTML on a mostly static page and loses on slow networks.
+  - **Pruned resumability** (live closure only) cuts load plus first-click CPU about 3× against the best hydration strategies. It costs +5 to +8 KB gzipped when most of the page is live and −5 KB when most is static.
+  - **Break-even** is 0.4–2.6 Mbps against today's hydration.
+- Found: Solid 2 closes hydration globally after the first pass, so islands cannot be hydrated at different times; late islands are client-rendered.
+
 ### 2026-09-26 (heuristic oracles)
 
 - Priced compiler-licensed runtime shortcuts before building their proofs; see [heuristic-oracles.md](./heuristic-oracles.md). Each shortcut is assumed per node behind `__ORACLE__` (folded out of shipped builds), gated for equivalence, shown unsafe on ordinary code, measured, and counted in real code.
