@@ -47,6 +47,8 @@ export {
   $component,
   $memo,
   $effect,
+  $settled,
+  settledBlock,
   $event,
   $signal,
   $store,
@@ -3125,6 +3127,10 @@ export function syncAction<T extends (...args: any[]) => any>(fn: T): T {
   return fn;
 }
 
+export function onSettled<F extends () => Generator<EffectOp, void, any>>(
+  callback: GeneratorBody<F, EffectOp>
+): void;
+export function onSettled(callback: () => void | (() => void)): void;
 export function onSettled(callback: () => void | (() => void)): void {
   // No-op on server, but allocate computation ID for hydration tree alignment
   // (on the client, onSettled calls createTrackedEffect which allocates an ID)
@@ -3166,4 +3172,11 @@ export function storeHasOptimisticFamily(_proxy: any): boolean {
 }
 
 // Generator blocks v2: `$signal` / `$memo` / `$store` / `$effect` use the server primitives.
-setBlockPrimitives({ createSignal, createMemo, createStore, createTrackedEffect, createEffect });
+setBlockPrimitives({
+  createSignal,
+  createMemo,
+  createStore,
+  createTrackedEffect,
+  createEffect,
+  onSettled
+});

@@ -8,6 +8,7 @@ import {
   $event,
   $flush,
   $memo,
+  $settled,
   $signal,
   $store,
   attempt,
@@ -184,5 +185,22 @@ $component(function* () {
   return function* () {
     const n: number = yield* open;
     return n;
+  };
+});
+
+// --- $settled: a run-once effect (effect rules) ------------------------------------------------
+$component(function* () {
+  const [n, setN] = yield* $signal(0);
+  yield* $settled(function* () {
+    const v: number = yield* n;
+    yield* setN(v + 1);
+    yield* $cleanup(() => {});
+  });
+  // @ts-expect-error a settled effect may not suspend
+  yield* $settled(function* () {
+    yield* attempt(() => fetchUser("x"));
+  });
+  return function* () {
+    return 1;
   };
 });

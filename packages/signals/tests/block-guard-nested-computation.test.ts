@@ -9,14 +9,22 @@
 //
 // Also run under the production tier:
 //   SIGNALS_TIER=prod npx vitest run tests/block-guard-nested-computation.test.ts
-import { $, createMemo, createRoot, createStore, flush, renderBlock } from "../src/index.js";
+import {
+  $,
+  createMemo,
+  createRoot,
+  createStore,
+  flush,
+  renderBlock,
+  type SourceAccessor
+} from "../src/index.js";
 
 afterEach(() => flush());
 
 describe("strict guard and computations created inside a block", () => {
   it("a memo created in a block body reads a store directly", () => {
     const [s] = createStore({ items: [1, 2, 3] });
-    let inner!: () => number;
+    let inner!: SourceAccessor<number>;
     const outer = createRoot(() =>
       createMemo(
         $(function* () {
@@ -31,7 +39,7 @@ describe("strict guard and computations created inside a block", () => {
 
   it("a view block's nested computation tracks the store", () => {
     const [s, set] = createStore({ items: [1, 2, 3] });
-    let inner!: () => number;
+    let inner!: SourceAccessor<number>;
     createRoot(() =>
       renderBlock(
         $(function* () {

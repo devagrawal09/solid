@@ -12,6 +12,7 @@ import {
   $event,
   $flush,
   $memo,
+  $settled,
   $signal,
   $store,
   attempt,
@@ -22,6 +23,7 @@ import {
   createRoot,
   createSignal,
   flush,
+  onSettled,
   raise,
   renderBlock,
   resetErrorHalt,
@@ -428,5 +430,53 @@ describe("call form (compiled bodies)", () => {
     flush();
     expect(seen).toEqual([2]);
     expect(out).toEqual(["dark:1:child", "dark:2:child"]);
+  });
+});
+
+describe("$settled / onSettled(function* …): a run-once effect", () => {
+  it("runs once after settling; reads are values, not subscriptions; cleanup on dispose", () => {
+    const log: string[] = [];
+    let setA!: (v: number) => any;
+    const C = $component(function* () {
+      const [a, _setA] = yield* $signal(1);
+      const [b, setB] = yield* $signal(0);
+      setA = _setA;
+      yield* $settled(function* () {
+        const v = yield* a;
+        log.push(`settled ${v}`);
+        yield* setB(v * 10);
+        yield* $cleanup(() => log.push("cleanup"));
+      });
+      return function* () {
+        return yield* b;
+      };
+    });
+    const { out, dispose } = mount(C, {});
+    flush();
+    setA(2);
+    flush();
+    expect(log).toEqual(["settled 1"]);
+    expect(out.at(-1)).toBe(10);
+    dispose();
+    expect(log).toEqual(["settled 1", "cleanup"]);
+  });
+
+  it("plain onSettled accepts a generator body", () => {
+    const log: string[] = [];
+    const [a, setA] = createSignal(1);
+    let dispose!: () => void;
+    createRoot(d => {
+      dispose = d;
+      onSettled(function* () {
+        log.push(`run ${yield* a}`);
+        yield* $cleanup(() => log.push("cleanup"));
+      });
+    });
+    flush();
+    setA(2);
+    flush();
+    expect(log).toEqual(["run 1"]);
+    dispose();
+    expect(log).toEqual(["run 1", "cleanup"]);
   });
 });

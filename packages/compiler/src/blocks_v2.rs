@@ -66,6 +66,7 @@ const BOUNDARY_SOURCES: &[&str] = &["solid-js", "@solidjs/web"];
 /// The local name the wrapped bodies call.
 pub(crate) const BLOCK_LOCAL: &str = "_$$";
 const EFFECT_BLOCK_LOCAL: &str = "_$effectBlock";
+const SETTLED_BLOCK_LOCAL: &str = "_$settledBlock";
 const VALUES_PARAM: &str = "_$v";
 
 /// The kind of a v2 block body, which decides the operations it admits.
@@ -140,6 +141,10 @@ enum Name {
     Attempt,
     CreateMemo,
     CreateEffect,
+    /// `$settled(function* …)`: a run-once effect created in setup.
+    Settled,
+    /// `onSettled(function* …)`: the plain host's run-once effect.
+    OnSettled,
     Boundary,
 }
 
@@ -245,6 +250,7 @@ pub(crate) fn transform_blocks_v2<'a>(
         bodies: V2Bodies::default(),
         uses_block: false,
         uses_effect_block: false,
+        uses_settled_block: false,
     };
     rewriter.visit_program(program);
     let mut needed = Vec::new();
@@ -253,6 +259,9 @@ pub(crate) fn transform_blocks_v2<'a>(
     }
     if rewriter.uses_effect_block {
         needed.push(("effectBlock", EFFECT_BLOCK_LOCAL));
+    }
+    if rewriter.uses_settled_block {
+        needed.push(("settledBlock", SETTLED_BLOCK_LOCAL));
     }
     add_imports(allocator, program, import_span, &needed);
     Ok(rewriter.bodies)
@@ -292,6 +301,8 @@ fn name_of(source: &str, imported: &str) -> Option<Name> {
             "attempt" => Name::Attempt,
             "createMemo" => Name::CreateMemo,
             "createEffect" => Name::CreateEffect,
+            "$settled" => Name::Settled,
+            "onSettled" => Name::OnSettled,
             _ => return boundary(source, imported),
         };
         return Some(name);
@@ -432,12 +443,17 @@ struct Plan {
     effects: Vec<(Span, EffectPlan)>,
     /// Component calls whose object literal props become getters.
     lazy: HashSet<Span>,
+    /// `onSettled(function* …)` calls, whose callee becomes `settledBlock`.
+    settled: HashSet<Span>,
     error: Option<String>,
 }
 
 impl Plan {
     fn is_empty(&self) -> bool {
-        self.wraps.is_empty() && self.effects.is_empty() && self.lazy.is_empty()
+        self.wraps.is_empty()
+            && self.effects.is_empty()
+            && self.lazy.is_empty()
+            && self.settled.is_empty()
     }
 }
 
@@ -496,6 +512,15 @@ impl Analysis<'_> {
             Name::Event if call.arguments.len() == 1 => {
                 self.plan.wraps.push((function.span, V2Kind::Event));
                 self.check_body(function, V2Kind::Event);
+            }
+            // A run-once effect: effect rules, no split (it never re-runs, so
+            // there is no compute half to subscribe).
+            Name::Settled | Name::OnSettled if call.arguments.len() == 1 => {
+                self.plan.wraps.push((function.span, V2Kind::Effect));
+                self.check_body(function, V2Kind::Effect);
+                if name == Name::OnSettled {
+                    self.plan.settled.insert(call.span);
+                }
             }
             Name::Effect | Name::CreateEffect if call.arguments.len() == 1 => {
                 self.check_body(function, V2Kind::Effect);
@@ -561,7 +586,9 @@ impl Analysis<'_> {
             Expression::CallExpression(call) => {
                 if let Some(name) = callee_name(self.scoping, self.names, call) {
                     return match name {
-                        Name::Signal | Name::Store | Name::Memo | Name::Effect => OpClass::Create,
+                        Name::Signal | Name::Store | Name::Memo | Name::Effect | Name::Settled => {
+                            OpClass::Create
+                        }
                         Name::Cleanup => OpClass::Cleanup,
                         Name::Flush => OpClass::Flush,
                         Name::Raise => OpClass::Raise,
@@ -806,6 +833,7 @@ struct Rewriter<'a> {
     bodies: V2Bodies,
     uses_block: bool,
     uses_effect_block: bool,
+    uses_settled_block: bool,
 }
 
 impl<'a> VisitMut<'a> for Rewriter<'a> {
@@ -823,6 +851,13 @@ impl<'a> VisitMut<'a> for Rewriter<'a> {
             Expression::CallExpression(call) => {
                 if self.plan.lazy.contains(&call.span) {
                     self.make_props_lazy(call);
+                }
+                if self.plan.settled.contains(&call.span) {
+                    let ast = AstBuilder::new(self.allocator);
+                    let callee_span = call.callee.span();
+                    call.callee =
+                        ast.expression_identifier(callee_span, ast.ident(SETTLED_BLOCK_LOCAL));
+                    self.uses_settled_block = true;
                 }
                 if let Some(index) = self.plan.effects.iter().position(|(s, _)| *s == call.span) {
                     let (_, effect) = self.plan.effects.remove(index);
@@ -1293,5 +1328,40 @@ const h = $event(function* () { yield* attempt(() => save()); });
         // Wrapped, but left as generators for the runtime driver.
         assert!(out.contains("$memo(_$$(function*"), "{out}");
         assert!(out.contains("$event(_$$(function*"), "{out}");
+    }
+
+    #[test]
+    fn settled_bodies_run_once_as_effects() {
+        let out = ssr(
+            r#"import { $component, $settled, $event, $cleanup, onSettled } from "solid-js";
+export const App = $component(function* () {
+  yield* $settled(function* () {
+    const sync = $event(function* () { log(1); });
+    window.addEventListener("hashchange", sync);
+    yield* $cleanup(() => window.removeEventListener("hashchange", sync));
+  });
+  return function* () { return 1; };
+});
+onSettled(function* () { yield* $cleanup(() => log(2)); });
+"#,
+        )
+        .unwrap();
+        assert!(!out.contains("yield"), "{out}");
+        assert!(out.contains("$settled(_$$(function()"), "{out}");
+        assert!(!out.contains("_$v"), "{out}");
+        assert!(out.contains("_$settledBlock(_$$(function()"), "{out}");
+        assert!(out.contains("settledBlock as _$settledBlock"), "{out}");
+
+        let flush_in_settled = ssr(r#"import { $component, $settled, $flush } from "solid-js";
+export const C = $component(function* () {
+  yield* $settled(function* () { yield* $flush(); });
+  return function* () { return 1; };
+});
+"#)
+        .unwrap_err();
+        assert!(
+            flush_in_settled.contains("[OP_NOT_ALLOWED] `flush`"),
+            "{flush_in_settled}"
+        );
     }
 }

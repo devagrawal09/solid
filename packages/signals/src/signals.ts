@@ -482,7 +482,7 @@ export function createSignal<T>(
 // built, so the core floor does not carry the driver (pay-for-use). The hook
 // returns the memo compute / creates the effect for a generator body, and
 // returns undefined for anything else.
-let generatorHook: ((fn: unknown, effect?: boolean) => any) | null = null;
+let generatorHook: ((fn: unknown, effect?: boolean | "settled") => any) | null = null;
 /** @internal */
 export function installGeneratorHook(hook: NonNullable<typeof generatorHook>): void {
   generatorHook = hook;
@@ -1306,7 +1306,14 @@ export function createOptimistic<T>(
  * @param callback Function to run; may return a cleanup function that fires
  *   on owner disposal
  */
+export function onSettled<F extends () => Generator<EffectOp, void, any>>(
+  callback: GeneratorBody<F, EffectOp>
+): void;
+export function onSettled(callback: () => void | (() => void)): void;
 export function onSettled(callback: () => void | (() => void)): void {
+  // A generator body is a run-once effect block (reads, writes, `$cleanup`).
+  if (__DEV__) checkGeneratorHook(callback);
+  if (generatorHook) callback = generatorHook(callback, "settled") || callback;
   const owner = getOwner();
   owner && !(owner._config & CONFIG_CHILDREN_FORBIDDEN)
     ? trackedEffect(() => untrack(callback), __OBSERVE__ ? { name: "onSettled" } : undefined)

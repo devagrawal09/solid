@@ -30,6 +30,7 @@ editor.
 | `$component(function* (props: TypedProps<P>) { …; return function* () { return <…/> } })` | component (setup) + returned **view** | setup: `$signal`, `$memo`, `$store`, `$effect`, `$cleanup`, `yield* Ctx`; view: reads only |
 | `$memo(function* () {…})` | memo | reads, `raise`, `attempt` (sync or async) |
 | `$effect(function* () {…})` | effect | reads, writes, `$cleanup`, `raise`, `attempt` |
+| `$settled(function* () {…})` (setup) / `onSettled(function* () {…})` | run-once effect: runs after the graph settles, never re-runs | effect rules; reads are current values, not subscriptions |
 | `$event(function* (e) {…})` | event | reads (current value), writes, `$flush`, `raise`, `attempt` (sync or async) |
 
 Operations (always `yield*`):

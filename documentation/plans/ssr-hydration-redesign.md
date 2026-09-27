@@ -389,15 +389,46 @@ Compat (non-strict) code stays on today's pipeline throughout. An unknown librar
 | **`hackernews-spa` production build: toggles never become interactive** under CPU throttling, although `_$HY.done` is set and the server nodes are in place | open | `probe-twin-toggle.mjs`: 3–4/6 loads at 4×, 0/6 at 1× in one series, 1/7 at 1× in another |
 | **`hackernews` (server components): a load renders "Uncaught Client Exception"** instead of the thread | open | 1/7 loads at 1× in `measure-twins.mjs` |
 
+## Decisions (after review)
+
+1. **Islands are cut from the live graph, not from components.** Component
+   boundaries are not a concern, as at runtime: an island is a connected group
+   of live things — the state a setup creates, every view hole (in any
+   component) that reads it, and every handler that writes it. Everything else
+   is inert HTML, even inside a "live" component; one island may span a parent
+   and its children, and two unrelated pieces of state in one component are two
+   islands. Anchors move from component roots to island roots; holes are
+   addressed by static paths from them (§3.2).
+2. **Prefetch is configurable at three levels.** App default (`load` / `idle` /
+   `visible` / `intent` (hover, focus, pointerdown) / `interaction`), per-island
+   overrides in source (`$event(fn, { prefetch })`, a JSX attribute, or a pragma),
+   and budgets/signals (per-route byte budget, `saveData` / slow network, usage
+   data). Mechanisms underneath: `modulepreload`, service-worker precache,
+   speculation rules. Proposed default: `visible` + `intent`, `interaction` under
+   `saveData`.
+3. **Load-time listeners live in effects; `onSettled` is a run-once effect.**
+   `$settled(function* …)` (and `onSettled(function* …)`) is an effect block run
+   once after the graph settles, never re-run: effect rules (reads are values,
+   writes, `$cleanup`, no async). A listener registered there is an `$event`, so
+   the types separate what runs at load (the settled body — a few lines, shipped
+   eagerly with the listener as a lazy stub) from what waits for the listener
+   (the `$event` and the island it writes). A settled body that writes at load
+   (e.g. syncing state the server could not see, like the URL hash) makes its
+   island activate at load, only when the value differs from the server's.
+   Implemented: `$settled`, generator `onSettled`, compiler lowering;
+   `examples/todos-blocks`' hash filter uses it.
+4. **Islands use the smallest runtime their graph allows** — tiers: no reactive
+   runtime (fixed synchronous graphs compile to direct DOM updates), a small
+   push kernel (dynamic reads, memos, shared state), the full core (async,
+   transitions, optimistic, stores). Islands sharing state share one runtime;
+   every tier is proven equivalent in the conformance harness. Prototype and
+   measurements: `island-runtime-tiers.md` (in progress).
+
 ## Open questions
 
-1. **Where do island boundaries go when a component is partly live?** Today's unit is the component. Should the compiler split a component's view into an inert template plus live sub-islands, with a finer anchor per live hole group?
-2. **Prefetch policy defaults** for lazy islands: viewport vs hover vs idle, and a byte budget per route.
-3. **Can load-time effects be typed as event sources** (`$event` on `window` / `document` / timers), so the linker can defer them? This would turn todos' App from hot to lazy.
-4. **Should the island runtime be a smaller core than the signals core?** Toggle needs only signals and render effects. At 9.6 KB gz, that runtime is the entire remaining JS.
-5. **Store serialization granularity:** live paths vs whole store vs per-row. It interacts with Track B handle stores and projections.
-6. **How does the dev verifier report without making dev builds diverge from production** in timing-sensitive code (streaming, boundaries)?
-7. **Unifying with server components:** should an inert region become a server component automatically on navigation (frames), or should route chunks be the default and SC opt-in?
+1. **Store serialization granularity:** live paths vs whole store vs per-row. It interacts with Track B handle stores and projections.
+2. **How does the dev verifier report without making dev builds diverge from production** in timing-sensitive code (streaming, boundaries)?
+3. **Unifying with server components:** should an inert region become a server component automatically on navigation (frames), or should route chunks be the default and SC opt-in?
 
 ## Reproduce
 

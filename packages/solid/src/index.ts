@@ -3,6 +3,8 @@ export {
   $component,
   $memo,
   $effect,
+  $settled,
+  settledBlock,
   $event,
   $signal,
   $store,

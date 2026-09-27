@@ -1258,14 +1258,34 @@ export function isGeneratorFunction(value: unknown): value is (...args: any[]) =
  * tracked effect (reads, writes and `$cleanup` in one pass; writes deferred
  * until flush), which returns true. Anything else returns undefined.
  */
-function generatorBody(fn: unknown, asEffect?: boolean): unknown {
+function generatorBody(fn: unknown, asEffect?: boolean | "settled"): unknown {
   if (!isGeneratorFunction(fn)) return undefined;
   const block = $(fn as any) as AnyBlock;
   if (!asEffect) return block;
+  if (asEffect === "settled") return settledCallback(block);
   trackedEffect(() => {
     runBlockAs(EFFECT, block, undefined);
   });
   return true;
+}
+
+/**
+ * @internal `onSettled(function* …)` / `$settled(…)`: an effect block run
+ * once after the graph settles, never re-run (its reads are current values,
+ * not subscriptions). Returns the `onSettled` callback: it runs the block
+ * under the effect host and hands back its `$cleanup`s as the cleanup.
+ */
+export function settledCallback(block: AnyBlock): () => void | (() => void) {
+  return () => {
+    const cleanups = collectCleanups(() => {
+      runBlockAs(EFFECT, block, undefined);
+    });
+    return cleanups.length
+      ? () => {
+          for (const fn of cleanups) fn();
+        }
+      : undefined;
+  };
 }
 
 /**

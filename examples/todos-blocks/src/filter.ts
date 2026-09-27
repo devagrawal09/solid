@@ -1,4 +1,4 @@
-import { createSignal, onSettled, type SourceAccessor } from "solid-js";
+import { $cleanup, $event, createSignal, onSettled, type SourceAccessor } from "solid-js";
 
 export type Filter = "all" | "active" | "completed";
 
@@ -14,9 +14,9 @@ function parseHash(hash: string): Filter {
  * Returns just the accessor — the value is set externally via `location.hash`
  * (see the `<a href="#/...">` links in `<Footer>`), so there's no public
  * setter. The `hashchange` listener is attached after the current activity
- * settles (post-render / post-transition) and removed via the returned
- * cleanup on owner disposal, so this is safe to call from any owner scope
- * and doesn't leak across SSR requests.
+ * settles (post-render / post-transition), in a run-once effect block, and
+ * removed by its `$cleanup` on owner disposal, so this is safe to call from
+ * any owner scope and doesn't leak across SSR requests.
  *
  * Typed as the signal's own `SourceAccessor` (what `createSignal` returns)
  * rather than a bare `() => Filter`, so `$` blocks can read it with
@@ -24,10 +24,15 @@ function parseHash(hash: string): Filter {
  */
 export function createHashFilter(): SourceAccessor<Filter> {
   const [filter, setFilter] = createSignal<Filter>(parseHash(location.hash));
-  onSettled(() => {
-    const onChange = () => setFilter(parseHash(location.hash));
-    window.addEventListener("hashchange", onChange);
-    return () => window.removeEventListener("hashchange", onChange);
+  // A run-once effect: at load it only registers the listener; the `$event`
+  // is what runs when the hash changes. Typed this way, the compiler knows
+  // the load-time work (this body) apart from the listener's work.
+  onSettled(function* () {
+    const sync = $event(function* () {
+      setFilter(parseHash(location.hash));
+    });
+    window.addEventListener("hashchange", sync);
+    yield* $cleanup(() => window.removeEventListener("hashchange", sync));
   });
   return filter;
 }

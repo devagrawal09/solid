@@ -23,6 +23,7 @@ import {
   EFFECT,
   OP,
   VIEW,
+  settledCallback,
   inBlock,
   lazyView,
   registerTypedProps,
@@ -60,6 +61,7 @@ import {
   createMemo,
   createSignal,
   createTrackedEffect,
+  onSettled,
   type SignalOptions,
   type MemoOptions,
   type SourceAccessor,
@@ -215,12 +217,20 @@ export interface EventHandler<E = unknown, Y = unknown> {
  * (hydration-aware on the client, the server implementations on the server)
  * so a `$memo` in a `solid-js` app is a `solid-js` memo.
  */
-const primitives = { createSignal, createMemo, createStore, createTrackedEffect, createEffect } as {
+const primitives = {
+  createSignal,
+  createMemo,
+  createStore,
+  createTrackedEffect,
+  createEffect,
+  onSettled
+} as {
   createSignal: (value: any, options?: any) => any;
   createMemo: (fn: any, options?: any) => any;
   createStore: (value: any, options?: any) => any;
   createTrackedEffect: (fn: () => void) => void;
   createEffect: (compute: any, effect: any) => void;
+  onSettled: (callback: () => void | (() => void)) => void;
 };
 
 /** A generator body, or the block the compiler already built from it. */
@@ -325,6 +335,29 @@ export function effectBlock(body: unknown, compute?: unknown): void {
         }
       : undefined;
   });
+}
+
+/**
+ * `yield* $settled(function* () {…})` — an effect that runs once, after the
+ * graph settles, and never re-runs: `onSettled` as a block. It may read
+ * (current values, not subscriptions), write, and register `$cleanup`s
+ * (run when the component is disposed). Listeners set up at load belong
+ * here, so the compiler knows exactly what runs at load (the body) and what
+ * waits for the listener (the `$event` it registers).
+ */
+export function $settled<Y extends EffectOp>(
+  body: () => Generator<Y, void, any>
+): CreateOp<void, "settled"> {
+  return op({
+    [OP]: "create",
+    kind: "settled",
+    make: () => settledBlock(body)
+  }) as any;
+}
+
+/** @internal Create a run-once effect block (compiled `onSettled(function* …)`). */
+export function settledBlock(body: unknown): void {
+  primitives.onSettled(settledCallback(toBlock(body)));
 }
 
 /** `yield* $cleanup(fn)` — run `fn` when the component (or the effect run) is disposed. */
