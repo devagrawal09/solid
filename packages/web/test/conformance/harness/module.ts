@@ -55,6 +55,28 @@ export function compile(
   return { code, stats: lowering(code) };
 }
 
+// TypeScript's transpiler: a generic JSX transform, nothing Solid-specific
+// (esbuild cannot load under jsdom).
+const ts = require("typescript") as typeof import("typescript");
+
+/**
+ * The no-Solid-compiler pipeline: a generic JSX transform (automatic runtime,
+ * `@solidjs/h/jsx-runtime`). `yield*` inside JSX stays inside the generator
+ * (the transform does not wrap expressions in closures), so the same source
+ * runs on the generator driver.
+ */
+export function compileJsx(source: string): CompiledModule {
+  const { outputText } = ts.transpileModule(source, {
+    compilerOptions: {
+      jsx: ts.JsxEmit.ReactJSX,
+      jsxImportSource: "@solidjs/h",
+      module: ts.ModuleKind.ESNext,
+      target: ts.ScriptTarget.ES2022
+    }
+  });
+  return { code: outputText, stats: lowering(outputText) };
+}
+
 const IMPORT = /^import\s+(.+?)\s+from\s+"([^"]+)";?\s*$/;
 const EXPORT_DECL = /^export\s+(?:async\s+)?(function\*?|const|let|class)\s+([\w$]+)/;
 /** `export let a, b, c;` — declarations without initializers. */
@@ -84,6 +106,17 @@ function bindings(clause: string, spec: string): string {
  */
 export function evaluate(code: string, modules: Record<string, unknown>): Record<string, any> {
   const exported: string[] = [];
+  // `export { a, b };` (esbuild's export list, possibly multi-line).
+  code = code.replace(/^export\s*\{([^}]*)\};?\s*$/gm, (_, names: string) => {
+    for (const part of names.split(",")) {
+      const name = part.trim();
+      if (!name) continue;
+      if (/\sas\s/.test(name))
+        throw new Error(`[conformance] unsupported export alias \`${name}\``);
+      exported.push(name);
+    }
+    return "";
+  });
   const lines = code.split("\n").map(line => {
     const imp = line.match(IMPORT);
     if (imp) return bindings(imp[1], imp[2]);

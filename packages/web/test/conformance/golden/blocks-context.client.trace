@@ -1,0 +1,5 @@
+## mount
+value theme = "dark"
+## initial
+html = <b class="theme">dark</b>
+## teardown

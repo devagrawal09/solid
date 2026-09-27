@@ -5,6 +5,7 @@ import { blockGuard } from "./core/core.js";
 import { flush } from "./core/scheduler.js";
 import {
   cleanup,
+  createOwner,
   effect,
   getOwner,
   idScopeEndCount,
@@ -1275,7 +1276,7 @@ function generatorBody(fn: unknown, asEffect?: boolean): unknown {
  */
 export function renderBlock<B extends AnyBlock>(block: B): BlockValue<B> {
   // A deferred component call (`lazyView`) resolves to its view first.
-  if (!(block as any)[BLOCK] && (block as any)[VIEW]) return renderBlock((block as any)());
+  if (!(block as any)[BLOCK] && (block as any)[VIEW]) return renderBlock((block as any)()) as any;
   return runBlockAs(JSX, block, undefined) as BlockValue<B>;
 }
 
@@ -1851,7 +1852,28 @@ export function inBlock(): boolean {
  * `yield* thunk` evaluates to the thunk (a view).
  */
 export function lazyView<T>(make: () => T): () => T {
-  const thunk = () => readGuarded(() => untrack(make));
+  // One instance per deferred call, created under the owner ABOVE the
+  // computation that first resolves it (a boundary's children computation,
+  // an insert effect). That computation re-running — its view read a pending
+  // memo that settled — reuses the instance instead of re-creating it (and
+  // re-starting its fetches); the instance lives until that owner is
+  // disposed, like a component the compiler created in a prop getter.
+  let instance: { value: T } | undefined;
+  const thunk = () =>
+    readGuarded(() => {
+      if (instance) return instance.value;
+      const current = getOwner() as any;
+      const host = current && current._parent ? current._parent : current;
+      const owner = runWithOwner(host, () => createOwner());
+      const value = runWithOwner(owner, () => {
+        cleanup(() => {
+          instance = undefined;
+        });
+        return untrack(make);
+      });
+      instance = { value };
+      return value;
+    });
   (thunk as any)[VIEW] = true;
   (thunk as any)[Symbol.iterator] = function* () {
     return thunk;

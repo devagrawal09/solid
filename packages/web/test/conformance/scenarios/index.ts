@@ -1,4 +1,5 @@
 import type { Scenario } from "../harness/types.js";
+import { blocksScenarios } from "./blocks.js";
 import { boundaryScenarios } from "./boundaries.js";
 import { eventScenarios } from "./events.js";
 import { pathScenarios } from "./paths.js";
@@ -10,5 +11,6 @@ export const scenarios: Scenario[] = [
   ...boundaryScenarios,
   ...eventScenarios,
   ...pathScenarios,
-  ...ssrScenarios
+  ...ssrScenarios,
+  ...blocksScenarios
 ];

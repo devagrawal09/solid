@@ -4,13 +4,15 @@
  * `solid-js` / `@solidjs/web` namespaces its project resolved, so compiled
  * scenario code runs against exactly that build.
  */
-import { compile, evaluate } from "./module.js";
+import { compile, compileJsx, evaluate } from "./module.js";
 import { Recorder, controller, drain, format, probe, NotFound, Forbidden } from "./trace.js";
 import type { DriverContext, ModeAdapter, Observation, Scenario } from "./types.js";
 
 export interface Runtime {
   solid: any;
   web: any;
+  /** `@solidjs/h/jsx-runtime` bound to the same builds (the `jsx` pipeline). */
+  jsx?: any;
 }
 
 /** The server markup a hydrate mode consumes (written by the server spec). */
@@ -24,11 +26,12 @@ function load(scenario: Scenario, mode: ModeAdapter, runtime: Runtime, recorder:
   if (source === undefined) {
     throw new Error(`[conformance] ${scenario.name} has no ${mode.source} source for ${mode.id}`);
   }
-  const compiled = compile(source, mode.compile);
+  const compiled = mode.pipeline === "jsx" ? compileJsx(source) : compile(source, mode.compile);
   const h = probe(recorder, runtime.solid);
   const app = evaluate(compiled.code, {
     "solid-js": runtime.solid,
     "@solidjs/web": runtime.web,
+    ...(runtime.jsx ? { "@solidjs/h/jsx-runtime": runtime.jsx } : {}),
     conformance: { h, NotFound, Forbidden }
   });
   return { app, stats: compiled.stats, code: compiled.code };

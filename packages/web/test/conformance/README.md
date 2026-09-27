@@ -132,6 +132,24 @@ match exactly once, so a self-test cannot pass vacuously.
    (`differs`, with a precise reason) or a defect (`known-defect`, pinned). Do
    not change production semantics to make a scenario pass in this harness.
 
+## Generator blocks v2: compiled vs no Solid compiler
+
+Scenarios in `scenarios/blocks.ts` carry a `blocks` source (generator blocks v2:
+`$component` / `$memo` / `$effect` / `$event`) next to the handwritten
+`reference`. Two client modes run that one source and are judged against the
+handwritten oracle, so the matrix measures feature equivalence directly:
+
+- `client/blocks-compiled`: the Solid compiler (`transform()`), which lowers
+  bodies, splits effects and makes component / boundary calls lazy.
+- `client/blocks-uncompiled`: **no Solid compiler** — TypeScript's generic JSX
+  transform (automatic runtime, `@solidjs/h/jsx-runtime`); every block runs on
+  the generator driver and component / boundary calls made inside a view are
+  deferred at runtime (`lazyView`). Needs a built `packages/h`.
+
+`CONFORMANCE_DUMP=1` prints both traces side by side for every divergence
+(`CONFORMANCE_DUMP=json` prints the candidate trace as JSON, for declaring a
+`differs` expectation).
+
 ## Adding a mode (the adapter contract)
 
 A mode is a `ModeAdapter` in `harness/modes.ts`:

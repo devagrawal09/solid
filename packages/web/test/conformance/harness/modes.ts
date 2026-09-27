@@ -49,6 +49,25 @@ export const modes: ModeAdapter[] = [
     reference: "client/reference",
     available: () => compilerSupports("hostFusion")
   },
+  // --- client: generator blocks v2, compiled vs no Solid compiler ----------------
+  {
+    id: "client/blocks-compiled",
+    title: "blocks v2 through the Solid compiler (lowered bodies, split effects, lazy props)",
+    environment: "client",
+    source: "blocks",
+    compile: { generate: "dom" },
+    reference: "client/reference"
+  },
+  {
+    id: "client/blocks-uncompiled",
+    title:
+      "blocks v2 with no Solid compiler (generic JSX transform + @solidjs/h, generator driver)",
+    environment: "client",
+    source: "blocks",
+    compile: {},
+    pipeline: "jsx",
+    reference: "client/reference"
+  },
   // --- server: SSR ---------------------------------------------------------------
   {
     id: "server/reference",

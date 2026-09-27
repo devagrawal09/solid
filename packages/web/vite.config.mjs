@@ -62,7 +62,11 @@ export default defineConfig({
       "@solidjs/web/serialization": resolve(
         rootDir,
         "serialization/src/serializer.ts"
-      )
+      ),
+      // The conformance harness's no-Solid-compiler mode (generic JSX
+      // transform + hyperscript runtime); the built package, same builds.
+      "@solidjs/h/jsx-runtime": resolve(rootDir, "../h/jsx-runtime/dist/jsx.js"),
+      "@solidjs/h": resolve(rootDir, "../h/dist/h.js")
     }
   }
 });

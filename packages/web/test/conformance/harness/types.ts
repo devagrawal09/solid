@@ -13,9 +13,12 @@ import type { CompileOptions, LoweringStats } from "./module.js";
  * - `reference`: handwritten ordinary Solid (accessor calls, plain
  *   callbacks) — the oracle.
  * - `generator`: the same program written with `$` blocks.
+ * - `blocks`: the same program written with generator blocks v2
+ *   (`$component` / `$memo` / `$effect` / `$event`), run both through the
+ *   Solid compiler and through a generic JSX transform with no Solid compiler.
  * - `strict` (reserved): the future non-generator strict frontend.
  */
-export type SourceKind = "reference" | "generator" | "strict";
+export type SourceKind = "reference" | "generator" | "blocks" | "strict";
 
 /**
  * Where a mode executes. Each environment is one vitest project in this
@@ -51,6 +54,12 @@ export interface ModeAdapter {
   environment: Environment;
   source: SourceKind;
   compile: CompileOptions;
+  /**
+   * How the source becomes JavaScript. `solid` (default): the native Solid
+   * compiler's `transform()` with `compile`. `jsx`: a generic JSX transform
+   * (esbuild, automatic runtime, `@solidjs/h`) — no Solid compiler at all.
+   */
+  pipeline?: "solid" | "jsx";
   reference?: ModeId;
   pairedWith?: ModeId;
   available?(): string | undefined;

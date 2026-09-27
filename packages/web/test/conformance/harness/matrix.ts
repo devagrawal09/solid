@@ -2,7 +2,7 @@
  * The coverage matrix (COVERAGE.md), generated from the scenario and mode
  * registries so the documented coverage cannot drift from what runs.
  */
-import { compile } from "./module.js";
+import { compile, compileJsx } from "./module.js";
 import { modes, plannedModes } from "./modes.js";
 import { exclusion, expectationFor } from "./register.js";
 import type { Scenario } from "./types.js";
@@ -58,16 +58,26 @@ export function coverageMatrix(scenarios: Scenario[]): string {
   out.push("## What each generator mode actually ran (compiled output facts)");
   out.push("");
   out.push(
-    "`$(` blocks left / `function*` bodies left (runtime driver) / `_$perform(` call-form operations, in the client build of the `$` source."
+    "`$(` blocks left / `function*` bodies left (runtime driver) / `_$perform(` call-form operations, in the client build of the mode's source (`$` or blocks v2)."
   );
   out.push("");
-  out.push("| scenario | c/runtime | c/compiled | c/fused |");
-  out.push("| --- | --- | --- | --- |");
+  const factModes = [
+    "client/runtime",
+    "client/compiled",
+    "client/fused",
+    "client/blocks-compiled",
+    "client/blocks-uncompiled"
+  ];
+  out.push(`| scenario | ${factModes.map(id => id.replace("client/", "c/")).join(" | ")} |`);
+  out.push(`| --- | ${factModes.map(() => "---").join(" | ")} |`);
   for (const scenario of scenarios) {
-    const cells = ["client/runtime", "client/compiled", "client/fused"].map(id => {
+    const cells = factModes.map(id => {
       const mode = modes.find(m => m.id === id)!;
+      const source = scenario.sources[mode.source];
+      if (source === undefined) return "–";
       try {
-        const { stats } = compile(scenario.sources.generator!, mode.compile);
+        const { stats } =
+          mode.pipeline === "jsx" ? compileJsx(source) : compile(source, mode.compile);
         return `${stats.blocks} / ${stats.generators} / ${stats.performs}`;
       } catch (error) {
         return `compile error: ${(error as Error).message.split("\n", 1)[0]}`;

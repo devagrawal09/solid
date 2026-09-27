@@ -74,6 +74,22 @@ export function registerEnvironment(
           }
           const reference = await observed(modeById(mode.reference));
           const verdict = judge(expectation, reference.trace, observation.trace);
+          // CONFORMANCE_DUMP=1: print both traces side by side on divergence.
+          if (!verdict.ok && process.env.CONFORMANCE_DUMP === "json") {
+            process.stderr.write(
+              `@@TRACE ${JSON.stringify({ scenario: scenario.name, mode: mode.id, trace: observation.trace })}\n`
+            );
+          }
+          if (!verdict.ok && process.env.CONFORMANCE_DUMP === "1") {
+            const rows = Math.max(reference.trace.length, observation.trace.length);
+            const lines = [`--- ${scenario.name}: ${mode.reference} | ${mode.id}`];
+            for (let i = 0; i < rows; i++) {
+              const a = reference.trace[i] ?? "",
+                b = observation.trace[i] ?? "";
+              lines.push(`${a === b ? " " : "≠"} ${a.padEnd(48)} | ${b}`);
+            }
+            process.stderr.write(lines.join("\n") + "\n");
+          }
           expect(verdict.ok, `${scenario.name} / ${mode.id}: ${verdict.message}`).toBe(true);
         });
       }
