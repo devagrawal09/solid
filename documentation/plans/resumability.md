@@ -247,6 +247,16 @@ Same run (F and F-linked timed together, mean of two runs; data in `results-{1,2
 
 The total is the same within ±5%. The oracle's numbers for F therefore stand for the real runtime with a compiler-derived map.
 
+## Stage 5: C compiled
+
+Strategy **C-compiled** replaces the hand-written resumable client with the output of `compileResumable(app-islands.jsx)` ([compiler-heuristics-build.md, Stage 5](./compiler-heuristics-build.md#stage-5-pruned-resumability-compiled)).
+- It derives the same live closure: 3 cells and 4 sites, with the footer and static ids pruned.
+- It passes the equivalence and node-identity gate.
+- It costs 32–66% more CPU than the hand-written C, mainly from eager family state and per-cell (not per-member) waking.
+- It ships 11.8 KB less HTML, because its subscribers are derived statically, not serialized.
+
+At 4× CPU it still needs 114–124 ms in total, against 171–189 ms for D and F, and ships fewer bytes than either. The verdict below holds for compiled output, not only for a hand-written stand-in.
+
 ## Verdict
 
 1. **Runtime-only lazy hydration only moves the cost.** E-lazy's total CPU equals A's (171 vs 175 ms at 4× and m = 0; 361 vs 352 ms at m = 5,000). It pays at the first click instead of at load, with 131–321 ms first-click latency on 4× CPU. That confirms the correctness argument: without a map, the first write must hydrate everything.
@@ -270,7 +280,7 @@ The total is the same within ±5%. The oracle's numbers for F therefore stand fo
 ## Limits
 
 - One app shape.
-- B and C are hand-written stand-ins for a resumable compiler. Their JS excludes component code, and real handlers can pull in more.
+- B and C are hand-written stand-ins for a resumable compiler. Their JS excludes component code, and real handlers can pull in more. C-compiled (stage 5) is compiler output for the same app.
 - The serialization format is plain JSON and could be denser.
 - The network model has no TCP slow start or streaming; it computes `RTT + bytes / bandwidth`.
 - F relies on the staggered-hydration oracle above. F-linked (stage 3) does not: it matches F within ±5% (see below).

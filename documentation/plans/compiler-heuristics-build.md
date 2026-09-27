@@ -197,3 +197,26 @@ The A/A control is within ±3%, except rows mount at −9% / −12% (GC-heavy). 
 - **End to end** (`scripts/heuristics/resume`, strategy **C-compiled** on `app-islands.jsx`):
   - The compiler finds 3 live cells (`selected`, `renames`, `labels`) and 4 live sites: row class, row label, detail text and header count. It prunes the footer and the static row ids, exactly the closure the hand-written C serializes.
   - It passes the equivalence and node-identity gate.
+
+Same run (C and C-compiled timed together, mean of two runs; data in `resumability/results-{1,2}-ccompiled.json`). Cells show hand C / C-compiled; times in ms, bytes gzipped in KB:
+
+| footer m | CPU | load | first click | rest | total | HTML | JS |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 1x | 2.6 / 5.6 | 11.1 / 16.5 | 4.8 / 8.6 | 18.6 / 30.8 (+66%) | 33.0 / 21.8 | 19.5 / 19.9 |
+| 1000 | 1x | 2.5 / 5.5 | 12.5 / 18.3 | 6.2 / 7.5 | 21.3 / 31.3 (+47%) | 40.6 / 28.9 | 19.5 / 19.9 |
+| 5000 | 1x | 2.6 / 5.4 | 12.1 / 16.5 | 5.2 / 7.1 | 19.9 / 29.0 (+46%) | 68.6 / 56.8 | 19.5 / 19.9 |
+| 0 | 4x | 12.6 / 24.6 | 43.1 / 65.3 | 27.7 / 34.1 | 83.4 / 124.0 (+49%) | 33.0 / 21.8 | 19.5 / 19.9 |
+| 1000 | 4x | 12.4 / 24.3 | 44.0 / 59.8 | 25.1 / 31.1 | 81.5 / 115.2 (+41%) | 40.6 / 28.9 | 19.5 / 19.9 |
+| 5000 | 4x | 12.7 / 23.6 | 46.5 / 59.6 | 27.4 / 31.1 | 86.6 / 114.3 (+32%) | 68.6 / 56.8 | 19.5 / 19.9 |
+
+- **Against the hand-written C:** 32–66% more CPU, and 11.8 KB *less* HTML.
+  - **Fewer bytes:** the compiled page serializes no subscriber table. Subscribers are derived statically from each site's read set, so the payload is only the cell values and one `[site, captures]` pair per instance.
+  - **More CPU, for three reasons:**
+    - It builds its state at module evaluation: the JSON parse and 1,000 label signals, where hand C creates labels on demand. That is load +3 ms at 1×, +12 ms at 4×.
+    - Waking is per cell, not per family member: the first rename binds all 1,000 label sites, where hand C binds one.
+    - It iterates the instance table on each wake.
+- **Against hydration** (same tables as above; D and F at 4×: 171–189 ms total, 150–164 ms for load plus first click):
+  - C-compiled needs **114–124 ms total and 84–90 ms for load plus first click**.
+  - It also ships fewer bytes than D or F at every live fraction: HTML +7.5 KB to −6.6 KB, JS −10 KB.
+  - So the compiled resumable page beats both hydration strategies at every bandwidth in this app.
+- **Headroom left:** lazy family members (create a label's signal on first read or write), and per-member wake keys (a site that reads `X[capture][0]()` subscribes to `X:capture`). Both would recover most of the gap to the hand-written C.
