@@ -1,5 +1,6 @@
 import { CONFIG_HAS_LANE, NOT_PENDING } from "./constants.js";
 import { ext } from "./core.js";
+import { markFeature } from "./dev.js";
 import {
   activeTransition,
   currentTransition,
@@ -38,6 +39,7 @@ export const activeLanes = new Set<OptimisticLane>();
  * Reuses lane for multiple writes to the same signal.
  */
 export function getOrCreateLane(signal: Signal<any>): OptimisticLane {
+  if (__TEST__) markFeature("OPTIMISTIC");
   let lane = signalLanes.get(signal);
   if (lane) {
     return findLane(lane);

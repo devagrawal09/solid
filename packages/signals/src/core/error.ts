@@ -92,3 +92,20 @@ export class ContextNotFoundError extends Error {
     );
   }
 }
+
+/**
+ * Reached a feature whose link-time switch is off (core/features.ts): the
+ * capability linker proved the application graph never uses it, so reaching
+ * it means a module summary or manifest was wrong. The sliced twin of the
+ * async-free entry's `[ASYNC_CAPABILITY_EXCLUDED]`.
+ */
+export function featureExcluded(feature: string): never {
+  throw new Error(
+    __DEV__
+      ? `[FEATURE_EXCLUDED] ${feature} is not part of this runtime slice. The capability ` +
+          `linker switched it off because it proved this application graph never uses it; ` +
+          `reaching it means a module summary or manifest was wrong. Build without the ` +
+          `capability linker to restore the full runtime, and report the summary.`
+      : `[FEATURE_EXCLUDED] ${feature}`
+  );
+}

@@ -1,4 +1,4 @@
-import { markAsyncCapability } from "./core/dev.js";
+import { markAsyncCapability, markFeature } from "./core/dev.js";
 import type { Computed, Disposable, Owner, Refreshable } from "./core/index.js";
 import {
   $REFRESH,
@@ -46,6 +46,7 @@ import {
   type ReadOp
 } from "./generator.js";
 import { emitDiagnostic, registerGraph, reportDiagnostic } from "./core/dev.js";
+import { ITERABLE } from "./core/features.js";
 import { installOptimisticEngine } from "./core/optimistic.js";
 import {
   activeTransition,
@@ -147,8 +148,17 @@ export function accessor<T>(node: any): SourceAccessor<T> {
   (fn as any)[$REFRESH] = node;
   // Same two extra properties on every accessor, in the same order, so the
   // bound functions share one shape.
-  (fn as any)[Symbol.iterator] = accessorIterator;
+  // Generator-free slice (core/features.ts ITERABLE off): no block yields an
+  // accessor, so accessors carry only the refresh brand.
+  if (ITERABLE) (fn as any)[Symbol.iterator] = __TEST__ ? censusAccessorIterator : accessorIterator;
   return fn;
+}
+
+/** Test-only: the accessor iterator with the ITERABLE census mark (see
+ * markFeature). Delegates to the shared generator unchanged. */
+function censusAccessorIterator(this: any) {
+  markFeature("ITERABLE");
+  return (accessorIterator as any).call(this);
 }
 
 /**

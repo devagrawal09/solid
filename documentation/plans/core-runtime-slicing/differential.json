@@ -1,0 +1,125 @@
+{
+  "tests": 1922,
+  "featureCounts": {
+    "COMPILED_SEAMS": 16,
+    "STORES": 439,
+    "OPTIMISTIC": 519,
+    "VERDICTS": 302,
+    "ITERABLE": 48,
+    "SNAPSHOTS": 20
+  },
+  "results": [
+    {
+      "config": "full −OPTIMISTIC (and VERDICTS)",
+      "off": [
+        "OPTIMISTIC",
+        "VERDICTS"
+      ],
+      "passed": 1403,
+      "skipped": 521,
+      "regressions": [],
+      "sensitivity": {
+        "featureUsers": 520,
+        "failWithSwitchOff": 518
+      }
+    },
+    {
+      "config": "full −VERDICTS",
+      "off": [
+        "VERDICTS"
+      ],
+      "passed": 1621,
+      "skipped": 303,
+      "regressions": [],
+      "sensitivity": {
+        "featureUsers": 302,
+        "failWithSwitchOff": 300
+      }
+    },
+    {
+      "config": "full −STORES",
+      "off": [
+        "STORES"
+      ],
+      "passed": 1483,
+      "skipped": 441,
+      "regressions": [],
+      "sensitivity": {
+        "hung": true
+      }
+    },
+    {
+      "config": "full −SNAPSHOTS",
+      "off": [
+        "SNAPSHOTS"
+      ],
+      "passed": 1903,
+      "skipped": 21,
+      "regressions": [],
+      "sensitivity": {
+        "featureUsers": 20,
+        "failWithSwitchOff": 20
+      }
+    },
+    {
+      "config": "full −ITERABLE",
+      "off": [
+        "ITERABLE"
+      ],
+      "passed": 1875,
+      "skipped": 49,
+      "regressions": [],
+      "sensitivity": {
+        "featureUsers": 48,
+        "failWithSwitchOff": 42
+      }
+    },
+    {
+      "config": "full −COMPILED_SEAMS",
+      "off": [
+        "COMPILED_SEAMS"
+      ],
+      "passed": 1907,
+      "skipped": 17,
+      "regressions": [],
+      "sensitivity": {
+        "featureUsers": 16,
+        "failWithSwitchOff": 7
+      }
+    },
+    {
+      "config": "full −all",
+      "off": [
+        "OPTIMISTIC",
+        "VERDICTS",
+        "STORES",
+        "SNAPSHOTS",
+        "ITERABLE",
+        "COMPILED_SEAMS"
+      ],
+      "passed": 1108,
+      "skipped": 816,
+      "regressions": [],
+      "sensitivity": {
+        "featureUsers": 815,
+        "failWithSwitchOff": 785
+      }
+    },
+    {
+      "config": "sync −all",
+      "off": [
+        "STORES",
+        "SNAPSHOTS",
+        "ITERABLE",
+        "COMPILED_SEAMS"
+      ],
+      "passed": 709,
+      "skipped": 1215,
+      "regressions": [],
+      "sensitivity": {
+        "featureUsers": 506,
+        "failWithSwitchOff": 480
+      }
+    }
+  ]
+}

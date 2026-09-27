@@ -10,6 +10,8 @@ const out = process.env.SIGNALS_CENSUS!;
 
 beforeEach(() => {
   (globalThis as any).__SOLID_ASYNC_CAPABILITY__ = false;
+  // Link-time feature switches touched (markFeature; core-runtime slicing).
+  (globalThis as any).__SOLID_FEATURES__ = {};
 });
 
 afterEach(ctx => {
@@ -23,7 +25,8 @@ afterEach(ctx => {
     JSON.stringify({
       file: ctx.task.file?.filepath,
       fullName: titles.join(" "),
-      asyncCapability: (globalThis as any).__SOLID_ASYNC_CAPABILITY__ === true
+      asyncCapability: (globalThis as any).__SOLID_ASYNC_CAPABILITY__ === true,
+      features: Object.keys((globalThis as any).__SOLID_FEATURES__ ?? {})
     }) + "\n"
   );
 });

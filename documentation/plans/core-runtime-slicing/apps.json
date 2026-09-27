@@ -1,0 +1,539 @@
+{
+  "sync-blocks": {
+    "baseline": {
+      "min": 76146,
+      "gz": 27691,
+      "chunks": [
+        [
+          "assets/index-S9lbu-V0.js",
+          76146
+        ]
+      ],
+      "decision": null,
+      "byPackage": {
+        "app": 5393,
+        "signals": 355971,
+        "solid": 2379,
+        "web": 19661
+      },
+      "byModule": {
+        "core/constants.js": 11536,
+        "core/lanes.js": 3108,
+        "core/scheduler.js": 41196,
+        "core/heap.js": 4974,
+        "core/owner.js": 9126,
+        "core/graph.js": 5745,
+        "core/async.js": 30826,
+        "core/core.js": 52015,
+        "core/error.js": 2010,
+        "core/effect.js": 6914,
+        "generator.js": 31872,
+        "signals.js": 6000,
+        "store/next/target.js": 1925,
+        "store/store.js": 5345,
+        "store/next/store.js": 95074,
+        "store/next/reconcile.js": 18364,
+        "store/next/projection.js": 8177,
+        "store/index.js": 153,
+        "block-api.js": 5196,
+        "boundaries.js": 2830,
+        "core/attribution-hooks.js": 21,
+        "map.js": 13564
+      }
+    },
+    "async": {
+      "min": 66632,
+      "gz": 24281,
+      "chunks": [
+        [
+          "assets/index-DZIzM3BT.js",
+          66632
+        ]
+      ],
+      "decision": {
+        "asyncFree": true,
+        "firstReason": null,
+        "off": []
+      },
+      "byPackage": {
+        "app": 5393,
+        "signals": 289503,
+        "solid": 2379,
+        "web": 19661
+      },
+      "byModule": {
+        "core/features.js": 1566,
+        "core/constants.js": 9653,
+        "core/error.js": 2379,
+        "core/owner.js": 9118,
+        "core/graph.js": 5735,
+        "core/scheduler.js": 24796,
+        "core/heap.js": 4953,
+        "core/async.js": 2994,
+        "core/core.js": 34888,
+        "core/effect.js": 5536,
+        "signals.js": 6000,
+        "generator.js": 31842,
+        "store/store.js": 5345,
+        "store/next/target.js": 1925,
+        "store/next/store.js": 94885,
+        "store/next/reconcile.js": 18364,
+        "store/next/projection.js": 8175,
+        "store/index.js": 153,
+        "block-api.js": 5196,
+        "boundaries.js": 2792,
+        "map.js": 13208
+      }
+    },
+    "sliced": {
+      "min": 66527,
+      "gz": 24237,
+      "chunks": [
+        [
+          "assets/index-DsgBZ_-U.js",
+          66527
+        ]
+      ],
+      "decision": {
+        "asyncFree": true,
+        "firstReason": null,
+        "off": [
+          "OPTIMISTIC",
+          "VERDICTS",
+          "SNAPSHOTS"
+        ]
+      },
+      "byPackage": {
+        "app": 5443,
+        "signals": 287566,
+        "solid": 2379,
+        "web": 19661
+      },
+      "byModule": {
+        "core/constants.js": 9574,
+        "core/error.js": 2379,
+        "core/owner.js": 9118,
+        "core/graph.js": 5735,
+        "core/scheduler.js": 24587,
+        "core/heap.js": 4953,
+        "core/async.js": 2994,
+        "core/core.js": 34805,
+        "core/effect.js": 5536,
+        "signals.js": 6000,
+        "generator.js": 31842,
+        "store/store.js": 5345,
+        "store/next/target.js": 1925,
+        "store/next/store.js": 94885,
+        "store/next/reconcile.js": 18364,
+        "store/next/projection.js": 8175,
+        "store/index.js": 153,
+        "block-api.js": 5196,
+        "boundaries.js": 2792,
+        "map.js": 13208
+      }
+    }
+  },
+  "todos-blocks": {
+    "baseline": {
+      "min": 94517,
+      "gz": 33942,
+      "chunks": [
+        [
+          "assets/index-DaHN8xx7.js",
+          94517
+        ]
+      ],
+      "decision": null,
+      "byPackage": {
+        "app": 14880,
+        "signals": 451213,
+        "solid": 3756,
+        "web": 16759
+      },
+      "byModule": {
+        "core/constants.js": 11536,
+        "core/lanes.js": 5873,
+        "core/scheduler.js": 45657,
+        "core/heap.js": 4974,
+        "core/owner.js": 9642,
+        "core/graph.js": 5745,
+        "core/async.js": 32870,
+        "core/core.js": 56915,
+        "core/error.js": 2184,
+        "core/context.js": 1816,
+        "core/optimistic.js": 20319,
+        "core/effect.js": 6914,
+        "core/action.js": 6848,
+        "generator.js": 35779,
+        "signals.js": 16037,
+        "store/next/target.js": 1972,
+        "store/store.js": 5345,
+        "store/next/store.js": 96383,
+        "store/next/reconcile.js": 18364,
+        "store/next/projection.js": 8194,
+        "store/index.js": 153,
+        "block-api.js": 4582,
+        "boundaries.js": 11700,
+        "core/attribution-hooks.js": 21,
+        "map.js": 13564,
+        "store/next/optimistic.js": 27826
+      }
+    },
+    "async": {
+      "min": 94517,
+      "gz": 33942,
+      "chunks": [
+        [
+          "assets/index-DaHN8xx7.js",
+          94517
+        ]
+      ],
+      "decision": {
+        "asyncFree": false,
+        "firstReason": "imports async capability `Loading` from solid-js",
+        "off": []
+      },
+      "byPackage": {
+        "app": 14880,
+        "signals": 451213,
+        "solid": 3756,
+        "web": 16759
+      },
+      "byModule": {
+        "core/constants.js": 11536,
+        "core/lanes.js": 5873,
+        "core/scheduler.js": 45657,
+        "core/heap.js": 4974,
+        "core/owner.js": 9642,
+        "core/graph.js": 5745,
+        "core/async.js": 32870,
+        "core/core.js": 56915,
+        "core/error.js": 2184,
+        "core/context.js": 1816,
+        "core/optimistic.js": 20319,
+        "core/effect.js": 6914,
+        "core/action.js": 6848,
+        "generator.js": 35779,
+        "signals.js": 16037,
+        "store/next/target.js": 1972,
+        "store/store.js": 5345,
+        "store/next/store.js": 96383,
+        "store/next/reconcile.js": 18364,
+        "store/next/projection.js": 8194,
+        "store/index.js": 153,
+        "block-api.js": 4582,
+        "boundaries.js": 11700,
+        "core/attribution-hooks.js": 21,
+        "map.js": 13564,
+        "store/next/optimistic.js": 27826
+      }
+    },
+    "sliced": {
+      "min": 94279,
+      "gz": 33905,
+      "chunks": [
+        [
+          "assets/index-C-rS4AbJ.js",
+          94279
+        ]
+      ],
+      "decision": {
+        "asyncFree": false,
+        "firstReason": "imports async capability `Loading` from solid-js",
+        "off": [
+          "VERDICTS",
+          "SNAPSHOTS"
+        ]
+      },
+      "byPackage": {
+        "app": 14904,
+        "signals": 449045,
+        "solid": 3756,
+        "web": 16759
+      },
+      "byModule": {
+        "core/constants.js": 10984,
+        "core/lanes.js": 5873,
+        "core/scheduler.js": 45457,
+        "core/heap.js": 4974,
+        "core/owner.js": 9642,
+        "core/graph.js": 5745,
+        "core/async.js": 32444,
+        "core/core.js": 55556,
+        "core/error.js": 2553,
+        "core/context.js": 1816,
+        "core/optimistic.js": 20319,
+        "core/effect.js": 6914,
+        "core/action.js": 6848,
+        "generator.js": 35779,
+        "signals.js": 16037,
+        "store/next/target.js": 1972,
+        "store/store.js": 5345,
+        "store/next/store.js": 96383,
+        "store/next/reconcile.js": 18364,
+        "store/next/projection.js": 8194,
+        "store/index.js": 153,
+        "block-api.js": 4582,
+        "boundaries.js": 11700,
+        "core/attribution-hooks.js": 21,
+        "map.js": 13564,
+        "store/next/optimistic.js": 27826
+      }
+    }
+  },
+  "todos": {
+    "baseline": {
+      "min": 86995,
+      "gz": 31458,
+      "chunks": [
+        [
+          "assets/index-CUzt1cMW.js",
+          86995
+        ]
+      ],
+      "decision": null,
+      "byPackage": {
+        "app": 13152,
+        "signals": 426088,
+        "solid": 3032,
+        "web": 16712
+      },
+      "byModule": {
+        "core/constants.js": 11536,
+        "core/lanes.js": 5873,
+        "core/scheduler.js": 45657,
+        "core/heap.js": 4974,
+        "core/owner.js": 9642,
+        "core/graph.js": 5745,
+        "core/async.js": 32870,
+        "core/core.js": 56915,
+        "core/error.js": 2184,
+        "core/context.js": 1584,
+        "core/optimistic.js": 20319,
+        "core/effect.js": 6914,
+        "core/action.js": 6848,
+        "generator.js": 21582,
+        "signals.js": 12170,
+        "store/next/target.js": 1972,
+        "store/store.js": 5345,
+        "store/next/store.js": 95364,
+        "store/next/reconcile.js": 18364,
+        "store/next/projection.js": 7119,
+        "boundaries.js": 11700,
+        "core/attribution-hooks.js": 21,
+        "map.js": 13564,
+        "store/next/optimistic.js": 27826
+      }
+    },
+    "async": {
+      "min": 86995,
+      "gz": 31458,
+      "chunks": [
+        [
+          "assets/index-CUzt1cMW.js",
+          86995
+        ]
+      ],
+      "decision": {
+        "asyncFree": false,
+        "firstReason": "imports async capability `Loading` from solid-js",
+        "off": []
+      },
+      "byPackage": {
+        "app": 13152,
+        "signals": 426088,
+        "solid": 3032,
+        "web": 16712
+      },
+      "byModule": {
+        "core/constants.js": 11536,
+        "core/lanes.js": 5873,
+        "core/scheduler.js": 45657,
+        "core/heap.js": 4974,
+        "core/owner.js": 9642,
+        "core/graph.js": 5745,
+        "core/async.js": 32870,
+        "core/core.js": 56915,
+        "core/error.js": 2184,
+        "core/context.js": 1584,
+        "core/optimistic.js": 20319,
+        "core/effect.js": 6914,
+        "core/action.js": 6848,
+        "generator.js": 21582,
+        "signals.js": 12170,
+        "store/next/target.js": 1972,
+        "store/store.js": 5345,
+        "store/next/store.js": 95364,
+        "store/next/reconcile.js": 18364,
+        "store/next/projection.js": 7119,
+        "boundaries.js": 11700,
+        "core/attribution-hooks.js": 21,
+        "map.js": 13564,
+        "store/next/optimistic.js": 27826
+      }
+    },
+    "sliced": {
+      "min": 86735,
+      "gz": 31405,
+      "chunks": [
+        [
+          "assets/index-BtDnLpq-.js",
+          86735
+        ]
+      ],
+      "decision": {
+        "asyncFree": false,
+        "firstReason": "imports async capability `Loading` from solid-js",
+        "off": [
+          "VERDICTS",
+          "SNAPSHOTS",
+          "ITERABLE"
+        ]
+      },
+      "byPackage": {
+        "app": 13176,
+        "signals": 423615,
+        "solid": 3032,
+        "web": 16712
+      },
+      "byModule": {
+        "core/constants.js": 10984,
+        "core/lanes.js": 5873,
+        "core/scheduler.js": 45457,
+        "core/heap.js": 4974,
+        "core/owner.js": 9642,
+        "core/graph.js": 5745,
+        "core/async.js": 32444,
+        "core/core.js": 55556,
+        "core/error.js": 2553,
+        "core/context.js": 1584,
+        "core/optimistic.js": 20319,
+        "core/effect.js": 6914,
+        "core/action.js": 6848,
+        "generator.js": 21582,
+        "signals.js": 11865,
+        "store/next/target.js": 1972,
+        "store/store.js": 5345,
+        "store/next/store.js": 95364,
+        "store/next/reconcile.js": 18364,
+        "store/next/projection.js": 7119,
+        "boundaries.js": 11700,
+        "core/attribution-hooks.js": 21,
+        "map.js": 13564,
+        "store/next/optimistic.js": 27826
+      }
+    }
+  },
+  "sierpinski": {
+    "baseline": {
+      "min": 36018,
+      "gz": 14121,
+      "chunks": [
+        [
+          "assets/index-C5pnyBlu.js",
+          36018
+        ]
+      ],
+      "decision": null,
+      "byPackage": {
+        "app": 4303,
+        "signals": 185675,
+        "solid": 691,
+        "web": 15887
+      },
+      "byModule": {
+        "core/constants.js": 11536,
+        "core/lanes.js": 3102,
+        "core/scheduler.js": 40621,
+        "core/heap.js": 4974,
+        "core/owner.js": 8379,
+        "core/graph.js": 5745,
+        "core/async.js": 30621,
+        "core/core.js": 48229,
+        "core/error.js": 2010,
+        "core/effect.js": 5456,
+        "generator.js": 10724,
+        "signals.js": 3985,
+        "boundaries.js": 10293
+      }
+    },
+    "async": {
+      "min": 36018,
+      "gz": 14121,
+      "chunks": [
+        [
+          "assets/index-C5pnyBlu.js",
+          36018
+        ]
+      ],
+      "decision": {
+        "asyncFree": false,
+        "firstReason": "imports async capability `Loading` from solid-js",
+        "off": []
+      },
+      "byPackage": {
+        "app": 4303,
+        "signals": 185675,
+        "solid": 691,
+        "web": 15887
+      },
+      "byModule": {
+        "core/constants.js": 11536,
+        "core/lanes.js": 3102,
+        "core/scheduler.js": 40621,
+        "core/heap.js": 4974,
+        "core/owner.js": 8379,
+        "core/graph.js": 5745,
+        "core/async.js": 30621,
+        "core/core.js": 48229,
+        "core/error.js": 2010,
+        "core/effect.js": 5456,
+        "generator.js": 10724,
+        "signals.js": 3985,
+        "boundaries.js": 10293
+      }
+    },
+    "sliced": {
+      "min": 33457,
+      "gz": 13143,
+      "chunks": [
+        [
+          "assets/index-CbDwfotg.js",
+          33457
+        ]
+      ],
+      "decision": {
+        "asyncFree": false,
+        "firstReason": "imports async capability `Loading` from solid-js",
+        "off": [
+          "OPTIMISTIC",
+          "VERDICTS",
+          "STORES",
+          "SNAPSHOTS",
+          "ITERABLE"
+        ]
+      },
+      "byPackage": {
+        "app": 4350,
+        "signals": 154075,
+        "solid": 691,
+        "web": 15887
+      },
+      "byModule": {
+        "core/constants.js": 5518,
+        "core/lanes.js": 3102,
+        "core/scheduler.js": 35327,
+        "core/heap.js": 4510,
+        "core/owner.js": 8379,
+        "core/graph.js": 5689,
+        "core/async.js": 27408,
+        "core/core.js": 37760,
+        "core/error.js": 2379,
+        "core/effect.js": 5456,
+        "generator.js": 4574,
+        "signals.js": 3680,
+        "boundaries.js": 10293
+      }
+    }
+  }
+}

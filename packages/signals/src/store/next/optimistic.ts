@@ -1,4 +1,6 @@
-import { markAsyncCapability } from "../../core/dev.js";
+import { markAsyncCapability, markFeature } from "../../core/dev.js";
+import { featureExcluded } from "../../core/error.js";
+import { OPTIMISTIC } from "../../core/features.js";
 /**
  * Store rewrite — optimistic stores (§3/§7, RUL-3): no store-side layer, no
  * backup snapshots. Nodes in an optimistic family are ARMED core signals
@@ -203,6 +205,8 @@ export function createOptimisticStoreNext<T extends object = {}>(
   third?: ProjectionOptions
 ): [get: Store<T>, set: StoreSetter<T>] {
   if (__TEST__) markAsyncCapability();
+  if (__TEST__) markFeature("OPTIMISTIC");
+  if (!OPTIMISTIC) featureExcluded("createOptimisticStore");
   // Engine first (armed nodes need optimisticWrite installed before any
   // node exists), then the next-shape hooks.
   installOptimisticEngine();

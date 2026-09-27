@@ -113,15 +113,22 @@ async function proveGraph({
   resolve,
   readFile = f => fs.readFileSync(f, "utf8"),
   typedSummary,
-  root
+  root,
+  compiledSeams = true
 }) {
   const reasons = [];
-  const reason = (file, line, message) =>
+  // `kind`: "async" — a fact about the graph's async use; "graph" — the graph
+  // is not fully known (a module without a summary or manifest, an
+  // unresolved or non-literal import). The feature proof (proveFeatures)
+  // needs a fully known graph; async facts don't matter to it.
+  const reason = (file, line, message, kind = "async") =>
     reasons.push({
       file: file ? path.relative(root, file) : null,
       line: line ?? null,
-      reason: message
+      reason: message,
+      kind
     });
+  const gap = (file, line, message) => reason(file, line, message, "graph");
   const libraries = new Map(); // package name → { manifest, names: Set }
   const app = [];
   const counts = {
@@ -135,6 +142,7 @@ async function proveGraph({
   };
   const seen = new Set();
   const queue = [...entries];
+  const yieldStar = [];
 
   const useLibrary = (pkg, names, file, line) => {
     let entry = libraries.get(pkg.name);
@@ -153,11 +161,11 @@ async function proveGraph({
   const edge = async (file, source, names, line) => {
     const resolved = await resolve(source, file);
     if (!resolved) {
-      reason(file, line, `unresolved import \`${source}\``);
+      gap(file, line, `unresolved import \`${source}\``);
       return;
     }
     if (resolved.startsWith("\0")) {
-      reason(file, line, `virtual module \`${source}\` has no summary`);
+      gap(file, line, `virtual module \`${source}\` has no summary`);
       return;
     }
     const id = stripQuery(resolved);
@@ -174,7 +182,7 @@ async function proveGraph({
       return;
     }
     if (!inApp) {
-      reason(file, line, `\`${source}\` (${pkg?.name ?? id}) has no capability manifest`);
+      gap(file, line, `\`${source}\` (${pkg?.name ?? id}) has no capability manifest`);
       return;
     }
     if (!seen.has(id)) queue.push(id);
@@ -186,15 +194,19 @@ async function proveGraph({
     seen.add(file);
     if (!SOURCE_RE.test(file)) {
       if (ASSET_RE.test(file)) counts.assets++;
-      else reason(file, null, "not a JavaScript / TypeScript module");
+      else gap(file, null, "not a JavaScript / TypeScript module");
       continue;
     }
     app.push(path.relative(root, file));
     let summary;
     try {
-      summary = summarizeCapabilities(readFile(file), { filename: file });
+      const source = readFile(file);
+      // A hand-written `yield*` may iterate an accessor (AccessorIterable)
+      // without importing any block API: the ITERABLE switch stays on.
+      if (/yield\s*\*/.test(source)) yieldStar.push(path.relative(root, file));
+      summary = summarizeCapabilities(source, { filename: file });
     } catch (error) {
-      reason(file, null, `no summary: ${String(error.message ?? error).split("\n")[0]}`);
+      gap(file, null, `no summary: ${String(error.message ?? error).split("\n")[0]}`);
       continue;
     }
     for (const imp of summary.imports) {
@@ -210,7 +222,7 @@ async function proveGraph({
       // A literal dynamic import is part of this graph (a lazy chunk), not an
       // async capability by itself: a Promise only becomes reactive async by
       // flowing into a compute, which the compute proofs catch.
-      if (dyn.source == null) reason(file, dyn.line, "unclassified dynamic import (non-literal)");
+      if (dyn.source == null) gap(file, dyn.line, "unclassified dynamic import (non-literal)");
       else await edge(file, dyn.source, ["*"], dyn.line);
     }
     for (const compute of summary.computes) {
@@ -273,16 +285,90 @@ async function proveGraph({
   if (!runtimeManifest?.asyncFreeEntry)
     reason(null, null, `${RUNTIME_PACKAGE} ships no async-free entry`);
 
+  const features = proveFeatures({
+    libraries,
+    complete: !reasons.some(r => r.kind === "graph"),
+    compiledSeams,
+    yieldStar
+  });
+
   return {
     asyncFree: reasons.length === 0,
     entry: reasons.length === 0 ? runtimeManifest.asyncFreeEntry : null,
     reasons,
+    features,
     modules: app,
     libraries: Object.fromEntries(
       [...libraries].map(([name, { names }]) => [name, [...names].sort()])
     ),
     counts
   };
+}
+
+// ---------------------------------------------------------------------------
+// Core runtime slicing (documentation/plans/core-runtime-slicing.md): the
+// link-time feature switches of @solidjs/signals (src/core/features.ts).
+//
+// A switch may be turned off for a graph only when the graph is fully known
+// (every module summarized or covered by a manifest, no unclassified dynamic
+// import) and no library name the graph imports is listed under that feature
+// in its package's manifest (`featureExports`; `"*"` — a namespace import —
+// uses every feature the package lists). OPTIMISTIC additionally requires
+// VERDICTS off: the verdict layer's companions are optimistic nodes.
+// COMPILED_SEAMS is decided by the compiler configuration, not by imports:
+// compiled output requests the seams (`noThrow`, effect `equals`,
+// `statusFree`) that the authored source never names, so it stays on unless
+// the build says its compiler passes emit none (`compiledSeams: false`).
+const FEATURE_SWITCHES = [
+  "OPTIMISTIC",
+  "VERDICTS",
+  "STORES",
+  "SNAPSHOTS",
+  "ITERABLE",
+  "COMPILED_SEAMS"
+];
+
+/**
+ * @returns {Record<string, { on: boolean, because: string[] }>}
+ */
+function proveFeatures({ libraries, complete, compiledSeams, yieldStar = [] }) {
+  const out = {};
+  for (const feature of FEATURE_SWITCHES) out[feature] = { on: false, because: [] };
+  const use = (feature, why) => {
+    out[feature].on = true;
+    if (out[feature].because.length < 8) out[feature].because.push(why);
+  };
+  if (!complete) for (const f of FEATURE_SWITCHES) use(f, "module graph not fully known");
+  for (const [pkg, { manifest, names }] of libraries) {
+    const featureExports = manifest?.featureExports;
+    if (!featureExports) {
+      // A manifest without feature facts says nothing about features.
+      for (const f of FEATURE_SWITCHES) use(f, `${pkg} declares no featureExports`);
+      continue;
+    }
+    for (const [feature, exportsOf] of Object.entries(featureExports)) {
+      if (!out[feature]) continue;
+      for (const name of names)
+        if (name === "*" ? exportsOf.length > 0 : exportsOf.includes(name))
+          use(feature, name === "*" ? `namespace import of ${pkg}` : `${pkg}: ${name}`);
+    }
+  }
+  for (const file of yieldStar) use("ITERABLE", `${file} uses yield*`);
+  if (compiledSeams)
+    use("COMPILED_SEAMS", "compiler passes may emit noThrow / equals / statusFree");
+  if (out.VERDICTS.on) use("OPTIMISTIC", "VERDICTS (companions are optimistic nodes)");
+  return out;
+}
+
+/** The features module a tier of @solidjs/signals ships, with the switches
+ * the proof turned off. `sync` is the async-free tree (OPTIMISTIC and VERDICTS
+ * are off there by construction). */
+function featuresModuleSource(features, tier) {
+  return FEATURE_SWITCHES.map(name => {
+    const on =
+      features[name].on && !(tier === "sync" && (name === "OPTIMISTIC" || name === "VERDICTS"));
+    return `export const ${name} = ${on};`;
+  }).join("\n");
 }
 
 /**
@@ -296,10 +382,18 @@ async function proveGraph({
  * @param {string | object} [options.typedSummary] `solid-tsc --capabilities`
  *   output (a path relative to the root, or the parsed object)
  * @param {string} [options.report] write the linker report (JSON) here
+ * @param {boolean} [options.features] slice the runtime's link-time feature
+ *   switches (default true): every switch the graph is proven not to use is
+ *   turned off in the @solidjs/signals tree the build resolves
+ * @param {boolean} [options.compiledSeams] whether the compiler passes of
+ *   this build may emit status-free / effect-equals seams (default true; pass
+ *   false only when blockProofs, host fusion and memo fusion are all off)
  */
 function solidCapabilities(options = {}) {
   let config;
   let decision = null;
+  const featureSlicing = options.features !== false;
+  const FEATURES_ID = "\0solid-features:";
   return {
     name: "solid:capabilities",
     enforce: "pre",
@@ -337,6 +431,7 @@ function solidCapabilities(options = {}) {
           entries,
           root,
           typedSummary,
+          compiledSeams: options.compiledSeams !== false,
           resolve: async (source, importer) => {
             const resolved = await this.resolve(source, importer, { skipSelf: true });
             return resolved && !resolved.external ? resolved.id : null;
@@ -353,12 +448,47 @@ function solidCapabilities(options = {}) {
         ? `async-free ${decision.graph} graph (${decision.modules.length} modules): ${RUNTIME_PACKAGE} → ${decision.entry}`
         : `${decision.graph} graph keeps the full runtime (${decision.reasons.length} reason${decision.reasons.length === 1 ? "" : "s"}; first: ${decision.reasons[0]?.reason})`;
       config?.logger?.info?.(`[solid:capabilities] ${summary}`);
+      if (featureSlicing && decision.features) {
+        const off = FEATURE_SWITCHES.filter(f => !decision.features[f].on);
+        config?.logger?.info?.(
+          `[solid:capabilities] ${decision.graph} runtime slice: ${off.length ? `switched off ${off.join(", ")}` : "every feature switch stays on"}`
+        );
+      }
     },
     async resolveId(source, importer, resolveOptions) {
-      if (source !== RUNTIME_PACKAGE || !decision?.asyncFree) return null;
-      return this.resolve(decision.entry, importer, { ...resolveOptions, skipSelf: true });
+      if (source === RUNTIME_PACKAGE) {
+        if (!decision?.asyncFree) return null;
+        return this.resolve(decision.entry, importer, { ...resolveOptions, skipSelf: true });
+      }
+      // The runtime's own features module (core/features.js in each
+      // published tree): substitute the proven switches.
+      if (
+        !featureSlicing ||
+        !decision?.features ||
+        !importer ||
+        !/(^|\/)features\.js$/.test(source) ||
+        FEATURE_SWITCHES.every(f => decision.features[f].on)
+      )
+        return null;
+      const resolved = await this.resolve(source, importer, { ...resolveOptions, skipSelf: true });
+      const tier =
+        resolved &&
+        /[\\/]dist[\\/](prod|observe|sync)[\\/]core[\\/]features\.js$/.exec(resolved.id);
+      if (!tier || packageOf(resolved.id)?.name !== RUNTIME_PACKAGE) return null;
+      return FEATURES_ID + tier[1];
+    },
+    load(id) {
+      if (!id.startsWith(FEATURES_ID)) return null;
+      return featuresModuleSource(decision.features, id.slice(FEATURES_ID.length));
     }
   };
 }
 
-module.exports = { proveGraph, solidCapabilities, packageOf, htmlEntries };
+module.exports = {
+  proveGraph,
+  proveFeatures,
+  solidCapabilities,
+  packageOf,
+  htmlEntries,
+  FEATURE_SWITCHES
+};

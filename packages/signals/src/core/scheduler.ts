@@ -31,6 +31,7 @@ import { attrHooks } from "./attribution-hooks.js";
 import { currentOptimisticLane, ext, slotUnobservedHook } from "./core.js";
 import { DEV, emitDiagnostic, GRAPH_SIZE_WARN_AT, noteFanOut, reportDiagnostic } from "./dev.js";
 import { NotReadyError } from "./error.js";
+import { OPTIMISTIC, SNAPSHOTS, STORES } from "./features.js";
 import { sweepDormant } from "./graph.js";
 import { deleteFromHeap, enqueueSub, runHeap, type Heap } from "./heap.js";
 import {
@@ -115,12 +116,14 @@ const transientStoreNodes = new Set<Signal<any>>();
 function canUseSimpleSyncFlush(queue: GlobalQueue): boolean {
   const batch = queue._batch;
   return (
-    (!__ASYNC__ || (transitions.size === 0 && activeLanes.size === 0)) &&
+    (!__ASYNC__ || (transitions.size === 0 && (!OPTIMISTIC || activeLanes.size === 0))) &&
     queue._children.length === 0 &&
-    batch._optimisticNodes.length === 0 &&
-    batch._affectsNodes.length === 0 &&
-    batch._optimisticStores.size === 0 &&
-    transientStoreNodes.size === 0
+    // Optimistic nodes/stores and affects() marks are async capabilities;
+    // the sliced runtimes never populate these containers.
+    (!__ASYNC__ || !OPTIMISTIC || batch._optimisticNodes.length === 0) &&
+    (!__ASYNC__ || batch._affectsNodes.length === 0) &&
+    (!__ASYNC__ || !OPTIMISTIC || !STORES || batch._optimisticStores.size === 0) &&
+    (!STORES || transientStoreNodes.size === 0)
   );
 }
 
@@ -498,7 +501,7 @@ export class Queue implements IQueue {
   enqueue(type: number, fn: QueueCallback): void {
     if (type) {
       // Route to lane's effect queue if we're in an optimistic recomputation
-      if (currentOptimisticLane) {
+      if (__ASYNC__ && OPTIMISTIC && currentOptimisticLane) {
         const lane = findLane(currentOptimisticLane);
         lane._effectQueues[type - 1].push(fn);
       } else {
@@ -780,6 +783,7 @@ export class GlobalQueue extends Queue {
       // mainline applies now.
       scheduled = dirtyQueue._max >= dirtyQueue._min || activeTransition !== null;
       // Run lane effects first (for ready lanes), then regular effects
+      // (No OPTIMISTIC switch: inside flush's try — see recompute.)
       __ASYNC__ && activeLanes.size && GlobalQueue._runLaneEffects!(EFFECT_RENDER);
       this.run(EFFECT_RENDER);
       __ASYNC__ && activeLanes.size && GlobalQueue._runLaneEffects!(EFFECT_USER);
@@ -897,13 +901,15 @@ export class GlobalQueue extends Queue {
         node._transition = activeTransition;
         activeTransition._pendingNodes.push(node);
       }
-      for (let i = 0; i < batch._optimisticNodes.length; i++) {
-        const node = batch._optimisticNodes[i];
-        node._transition = activeTransition;
-        activeTransition._optimisticNodes.push(node);
-      }
+      if (OPTIMISTIC)
+        for (let i = 0; i < batch._optimisticNodes.length; i++) {
+          const node = batch._optimisticNodes[i];
+          node._transition = activeTransition;
+          activeTransition._optimisticNodes.push(node);
+        }
       if (batch._affectsNodes.length) activeTransition._affectsNodes.push(...batch._affectsNodes);
-      for (const store of batch._optimisticStores) activeTransition._optimisticStores.add(store);
+      if (OPTIMISTIC && STORES)
+        for (const store of batch._optimisticStores) activeTransition._optimisticStores.add(store);
       // Gated readers recorded against the ambient batch move with it: their
       // replay-at-commit now happens at the transaction's completion.
       if (batch._gatedSubs.size) {
@@ -912,9 +918,10 @@ export class GlobalQueue extends Queue {
       }
       currentBatch = this._batch = activeTransition;
     }
-    for (const lane of activeLanes) {
-      if (!lane._transition) lane._transition = activeTransition;
-    }
+    if (OPTIMISTIC)
+      for (const lane of activeLanes) {
+        if (!lane._transition) lane._transition = activeTransition;
+      }
     // A transaction's ambient window is one flush. Entering must therefore
     // guarantee a flush: a transaction opened with no writes (an action whose
     // first statements only await) otherwise leaves activeTransition and the
@@ -985,12 +992,17 @@ export function insertSubs(node: Signal<any> | Computed<any>, optimistic: boolea
   // stays authoritative when a bit is set.
   const cfg = (node as any)._config as number;
   const sourceLane =
-    (cfg & CONFIG_HAS_LANE ? (node as any)._x?._optimisticLane : undefined) ||
-    currentOptimisticLane;
+    __ASYNC__ && OPTIMISTIC
+      ? (cfg & CONFIG_HAS_LANE ? (node as any)._x?._optimisticLane : undefined) ||
+        currentOptimisticLane
+      : undefined;
 
   const hasSnapshot =
-    (cfg & CONFIG_HAS_SNAPSHOT) !== 0 && (node as any)._x?._snapshotValue !== undefined;
-  const clearReask = reaskArmed;
+    SNAPSHOTS &&
+    (cfg & CONFIG_HAS_SNAPSHOT) !== 0 &&
+    (node as any)._x?._snapshotValue !== undefined;
+  // Re-ask marks are armed only by refresh(), an async capability.
+  const clearReask = __ASYNC__ && reaskArmed;
 
   // Observe-tier fan-out: this walk visits every subscriber edge anyway, so
   // the graph-size count is one local increment here and no field anywhere.
@@ -1016,7 +1028,9 @@ export function insertSubs(node: Signal<any> | Computed<any>, optimistic: boolea
       continue;
     }
 
-    if (__ASYNC__ && optimistic && sourceLane) {
+    if (!__ASYNC__ || !OPTIMISTIC) {
+      // Optimistic notifications need the optimistic engine (async runtime).
+    } else if (optimistic && sourceLane) {
       sub._flags |= REACTIVE_OPTIMISTIC_DIRTY;
       assignOrMergeLane(sub as any, sourceLane);
     } else if (optimistic) {
@@ -1113,7 +1127,7 @@ function commitPendingNodes() {
     // (staging already notified), so without a wake they'd hold the old
     // world forever.
     node._transition = null;
-    if (node._config & CONFIG_HELD_TRUTH) {
+    if (__ASYNC__ && OPTIMISTIC && node._config & CONFIG_HELD_TRUTH) {
       node._config &= ~CONFIG_HELD_TRUTH;
       heldRevealed.push(node);
     }
@@ -1145,7 +1159,10 @@ export function finalizePureQueue(
   // one window later. The slot meanwhile holds the frame that is on screen.
   const contested = completingTransition?._contested;
   const revertsOptimism =
-    resolvePending && (completingTransition ?? finalizingBatch)._optimisticNodes.length !== 0;
+    __ASYNC__ &&
+    OPTIMISTIC &&
+    resolvePending &&
+    (completingTransition ?? finalizingBatch)._optimisticNodes.length !== 0;
   if (contested && !revertsOptimism)
     for (const el of contested) if (!(el._flags & REACTIVE_DISPOSED)) enqueueSub(el);
   const ranHeap = dirtyQueue._max >= dirtyQueue._min;
@@ -1166,7 +1183,8 @@ export function finalizePureQueue(
     const batch = completingTransition ?? finalizingBatch;
     // Optimistic reversion: a non-empty batch means _optimisticWrite ran,
     // which installed the engine's hooks.
-    if (batch._optimisticNodes.length) GlobalQueue._resolveOptimistic!(batch._optimisticNodes);
+    if (__ASYNC__ && OPTIMISTIC && batch._optimisticNodes.length)
+      GlobalQueue._resolveOptimistic!(batch._optimisticNodes);
     if (contested && revertsOptimism) {
       for (const el of contested) if (!(el._flags & REACTIVE_DISPOSED)) enqueueSub(el);
       schedule();
@@ -1192,7 +1210,7 @@ export function finalizePureQueue(
     // held boundary display state through the visual channel, and their
     // release is the display-state update point — re-run the boundary sweep
     // (the earlier sweep above ran while the marks were still live).
-    if (batch._affectsNodes.length) {
+    if (__ASYNC__ && batch._affectsNodes.length) {
       GlobalQueue._releaseAffectsMarks!(batch._affectsNodes);
       if (globalQueue._children.length) checkBoundaryChildren(globalQueue);
     }
@@ -1200,7 +1218,7 @@ export function finalizePureQueue(
     // hook; the hook iterates, clears, and schedules (keeping the loop out of
     // core lets esbuild shake it — rollup already folds the null guard). The
     // completing transition scopes the clear to its own layer keys (#2899).
-    if (batch._optimisticStores.size)
+    if (__ASYNC__ && OPTIMISTIC && STORES && batch._optimisticStores.size)
       GlobalQueue._clearOptimisticStores!(batch._optimisticStores, completingTransition);
     // Held-truth reveal wake (#3164), post-revert by construction: this
     // finalize committed confirming truth whose subscribers were masked all
@@ -1211,16 +1229,17 @@ export function finalizePureQueue(
     // clears above — means every apply paints the settled view; a wake at
     // commit time would recompute them in the window where truth is
     // committed but the settling transaction's overrides still display.
-    if (heldRevealed.length !== 0) {
+    if (__ASYNC__ && OPTIMISTIC && heldRevealed.length !== 0) {
       while (heldRevealed.length) insertSubs(heldRevealed.pop()!);
       if (dirtyQueue._max >= dirtyQueue._min) {
         runHeap(dirtyQueue, GlobalQueue._update);
         commitPendingNodes();
       }
     }
-    sweepTransientStoreNodes();
+    if (STORES) sweepTransientStoreNodes();
     // Lanes only enter activeLanes through the engine's getOrCreateLane.
-    if (__ASYNC__ && activeLanes.size) GlobalQueue._cleanupLanes!(completingTransition);
+    if (__ASYNC__ && OPTIMISTIC && activeLanes.size)
+      GlobalQueue._cleanupLanes!(completingTransition);
   }
 }
 
@@ -1399,7 +1418,7 @@ function reporterBlocksSource(reporter: Computed<any>, source: Computed<any>): b
   for (let dep = reporter._deps; dep; dep = dep._nextDep) {
     let current = dep._dep as Signal<any> | Computed<any> | undefined;
     while (current) {
-      if (current === source || (current as any)._firewall === source) return true;
+      if (current === source || (STORES && (current as any)._firewall === source)) return true;
       current = current._x?._parentSource;
     }
   }

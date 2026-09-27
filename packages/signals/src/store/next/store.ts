@@ -55,6 +55,7 @@ import {
   insertSubs,
   type Transition
 } from "../../core/scheduler.js";
+import { markFeature } from "../../core/dev.js";
 import { devTrackHeldPending } from "../../core/invariants.js";
 import { getObserver, getOwner } from "../../core/owner.js";
 import {
@@ -357,6 +358,7 @@ export function getNode(
     if (target.fam?.opt) {
       ext(created)._overrideValue = NOT_PENDING;
       created._config |= CONFIG_OPTIMISTIC;
+      if (__TEST__) markFeature("OPTIMISTIC");
     }
     // A node born inside a live mark's identity scope inherits the mark
     // (the declaration walk could only cover nodes existing then).
@@ -431,6 +433,7 @@ export function getHasNode(
     if (target.fam?.opt) {
       ext(created)._overrideValue = NOT_PENDING;
       created._config |= CONFIG_OPTIMISTIC;
+      if (__TEST__) markFeature("OPTIMISTIC");
     }
     if (affectsScopesLive()) inheritAffectsMarks(created as any, target.v, key);
     nodes[key] = node;
@@ -459,6 +462,7 @@ export function getKeySetNode(target: StoreNextTarget): Signal<number> {
     if (target.fam?.opt) {
       ext(created)._overrideValue = NOT_PENDING;
       created._config |= CONFIG_OPTIMISTIC;
+      if (__TEST__) markFeature("OPTIMISTIC");
     }
     target.k = k;
     markDescendants(target);
@@ -486,6 +490,7 @@ function getDeepNode(target: StoreNextTarget): Signal<number> {
     if (target.fam?.opt) {
       ext(created)._overrideValue = NOT_PENDING;
       created._config |= CONFIG_OPTIMISTIC;
+      if (__TEST__) markFeature("OPTIMISTIC");
     }
     if (affectsScopesLive()) inheritAffectsMarks(created as any, target.v, $TRACK);
     target.dk = dk;

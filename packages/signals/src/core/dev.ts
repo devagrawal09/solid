@@ -40,6 +40,18 @@ export function markAsyncCapability(): void {
   (globalThis as any).__SOLID_ASYNC_CAPABILITY__ = true;
 }
 
+/**
+ * Test-only census of the link-time feature switches (core/features.ts,
+ * documentation/plans/core-runtime-slicing.md): every entry point of a
+ * switchable feature marks the running test with the switch's name. The
+ * slices differential (scripts/slices-differential.mjs) requires every test
+ * that never marks a switch to pass unchanged with that switch off. Called
+ * behind `__TEST__` only — no build carries it.
+ */
+export function markFeature(name: string): void {
+  ((globalThis as any).__SOLID_FEATURES__ ??= {})[name] = true;
+}
+
 export type DiagnosticCode =
   | "STRICT_READ_UNTRACKED"
   | "PENDING_ASYNC_UNTRACKED_READ"

@@ -60,7 +60,8 @@ import {
   STORE_SNAPSHOT_PROPS,
   type Refreshable
 } from "./constants.js";
-import { NotReadyError } from "./error.js";
+import { featureExcluded, NotReadyError } from "./error.js";
+import { COMPILED_SEAMS, OPTIMISTIC, SNAPSHOTS, STORES, VERDICTS } from "./features.js";
 import { dormantNodes, link, trimStaleDeps } from "./graph.js";
 import {
   deleteFromHeap,
@@ -77,6 +78,7 @@ import {
   DEV,
   emitDiagnostic,
   GRAPH_SIZE_WARN_AT,
+  markFeature,
   noteFanIn,
   reportDiagnostic,
   throwPendingUntrackedRead,
@@ -145,10 +147,14 @@ export const REACTIVE_WRITE_IN_OWNED_SCOPE_REFRESH_MESSAGE =
 export let tracking = false;
 /** @internal verdict-module glue */
 export function setPendingCheckActive(v: boolean): void {
+  if (__TEST__ && v) markFeature("VERDICTS");
+  if (!VERDICTS && v) featureExcluded("isPending");
   pendingCheckActive = v;
 }
 /** @internal verdict-module glue */
 export function setLatestReadActive(v: boolean): void {
+  if (__TEST__ && v) markFeature("VERDICTS");
+  if (!VERDICTS && v) featureExcluded("latest");
   latestReadActive = v;
 }
 /** @internal verdict-module glue */
@@ -185,6 +191,8 @@ function ownerInSnapshotScope(owner: Owner | null): boolean {
 }
 
 export function setSnapshotCapture(active: boolean): void {
+  if (__TEST__ && active) markFeature("SNAPSHOTS");
+  if (!SNAPSHOTS && active) featureExcluded("hydration snapshots");
   snapshotCaptureActive = active;
   if (active && !snapshotSources) snapshotSources = new Set();
 }
@@ -240,6 +248,7 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   // installed (status-free.ts, pulled in by compiled `$` output). The hook
   // declines outside the plain world; then the full path below runs.
   if (
+    COMPILED_SEAMS &&
     (el._config & CONFIG_STATUS_FREE) === CONFIG_STATUS_FREE &&
     GlobalQueue._recomputeStatusFree !== null &&
     GlobalQueue._recomputeStatusFree(el, create)
@@ -286,9 +295,10 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   }
 
   // Optimistic state and its lanes ride transactions: async capabilities.
-  let isOptimisticDirty = __ASYNC__ && !!(el._flags & REACTIVE_OPTIMISTIC_DIRTY);
+  let isOptimisticDirty = __ASYNC__ && OPTIMISTIC && !!(el._flags & REACTIVE_OPTIMISTIC_DIRTY);
   const hasOverride =
     __ASYNC__ &&
+    OPTIMISTIC &&
     (el._config & CONFIG_OPTIMISTIC) !== 0 &&
     el._x?._overrideValue !== NOT_PENDING &&
     el._x?._overrideValue !== undefined;
@@ -350,8 +360,8 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   // Lane posture lives with the engine: OPTIMISTIC_DIRTY is only ever set by
   // engine-driven paths, and _optimisticNodes is only pushed by
   // _optimisticWrite, so the hook is installed whenever either gate holds.
-  if (!__ASYNC__) {
-    // No lanes and no transactions exist in the async-free runtime.
+  if (!__ASYNC__ || !OPTIMISTIC) {
+    // No lanes exist in the async-free or the optimistic-free runtime.
   } else if (isOptimisticDirty) {
     const lane = GlobalQueue._recomputeLane!(el, true);
     if (lane) currentOptimisticLane = lane;
@@ -418,6 +428,8 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
     if (el._statusFlags !== 0 || el._x !== null) clearStatus(el, create);
     // _optimisticLane is only ever assigned by engine paths (CONFIG_HAS_LANE
     // is their sticky presence mark).
+    // (No OPTIMISTIC switch here: inside a try, a `true` switch would not
+    // fold in the published default; the bit test already costs nothing.)
     if (__ASYNC__ && el._config & CONFIG_HAS_LANE && el._x?._optimisticLane)
       GlobalQueue._laneAsyncSettled!(el);
   } catch (e) {
@@ -436,7 +448,8 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
     } else {
       // Track pending async in the lane (not the lane's source — it creates the lane
       // but doesn't belong to it). Set lane BEFORE notifyStatus for downstream propagation.
-      if (__ASYNC__ && notReady && currentOptimisticLane) GlobalQueue._laneAsyncPending!(el);
+      if (__ASYNC__ && OPTIMISTIC && notReady && currentOptimisticLane)
+        GlobalQueue._laneAsyncPending!(el);
       let reaskChanged = false;
       if (__ASYNC__ && notReady) {
         ext(el)._blocked = true;
@@ -498,6 +511,8 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
     let valueChanged = false;
     try {
       valueChanged =
+        // (CONFIG_EFFECT_EQUALS is only set with COMPILED_SEAMS on; no switch
+        // here — inside a try it would not fold in the published default.)
         (wasUninitialized && (!isEffect || (el._config & CONFIG_EFFECT_EQUALS) !== 0)) ||
         !el._equals ||
         !el._equals(compareValue, value);
@@ -620,6 +635,7 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
         // pending value commits before effects run.
         if (
           __ASYNC__ &&
+          VERDICTS &&
           (activeTransition || el._transition) &&
           GlobalQueue._syncCompanions !== null
         )
@@ -786,7 +802,9 @@ function updateIfNecessary(el: Computed<unknown>): void {
   if (el._flags & REACTIVE_CHECK) {
     for (let d = el._deps; d; d = d._nextDep) {
       const dep1 = d._dep;
-      const dep = (dep1 as FirewallSignal<unknown>)._firewall || dep1;
+      const dep = (
+        STORES ? (dep1 as FirewallSignal<unknown>)._firewall || dep1 : dep1
+      ) as Computed<any>;
       if ((dep as Computed<unknown>)._fn) {
         updateIfNecessary(dep);
       }
@@ -836,9 +854,11 @@ export function computed<T>(
           (options?.ownedWrite ? CONFIG_OWNED_WRITE : 0) |
           (!context || options?.lazy ? CONFIG_AUTO_DISPOSE : 0) |
           (options?.sync ? CONFIG_SYNC : 0) |
-          (options?.noThrow ? CONFIG_NOTHROW : 0) |
+          (COMPILED_SEAMS && options?.noThrow ? CONFIG_NOTHROW : 0) |
           (options?._noSnapshot ? CONFIG_NO_SNAPSHOT : 0) |
-          (snapshotCaptureActive && ownerInSnapshotScope(context) ? CONFIG_IN_SNAPSHOT_SCOPE : 0),
+          (SNAPSHOTS && snapshotCaptureActive && ownerInSnapshotScope(context)
+            ? CONFIG_IN_SNAPSHOT_SCOPE
+            : 0),
         _equals: options?.equals ?? isEqual,
         _disposal: null,
         _queue: context?._queue ?? globalQueue,
@@ -875,9 +895,11 @@ export function computed<T>(
           (options?.ownedWrite ? CONFIG_OWNED_WRITE : 0) |
           (!context || options?.lazy ? CONFIG_AUTO_DISPOSE : 0) |
           (options?.sync ? CONFIG_SYNC : 0) |
-          (options?.noThrow ? CONFIG_NOTHROW : 0) |
+          (COMPILED_SEAMS && options?.noThrow ? CONFIG_NOTHROW : 0) |
           (options?._noSnapshot ? CONFIG_NO_SNAPSHOT : 0) |
-          (snapshotCaptureActive && ownerInSnapshotScope(context) ? CONFIG_IN_SNAPSHOT_SCOPE : 0),
+          (SNAPSHOTS && snapshotCaptureActive && ownerInSnapshotScope(context)
+            ? CONFIG_IN_SNAPSHOT_SCOPE
+            : 0),
         _equals: options?.equals ?? isEqual,
         _disposal: null,
         _queue: context?._queue ?? globalQueue,
@@ -911,6 +933,7 @@ export function computed<T>(
         // allocation spills to a backing store and creation cost ~4x's).
         _x: null
       } as Computed<T>);
+  if (__TEST__ && options?.noThrow) markFeature("COMPILED_SEAMS");
   if (options?.unobserved) (ext(self) as NodeExtension)._unobserved = options.unobserved;
   // Oracle bits (CONFIG_ORACLE_*): assumed facts, measurement builds only.
   // The option is unprefixed so prod property mangling leaves it readable.
@@ -976,9 +999,11 @@ export function createEffectNode<T>(
           (transparent ? CONFIG_TRANSPARENT : 0) |
           (options?.ownedWrite ? CONFIG_OWNED_WRITE : 0) |
           (options?.sync ? CONFIG_SYNC : 0) |
-          (options?.noThrow ? CONFIG_NOTHROW : 0) |
+          (COMPILED_SEAMS && options?.noThrow ? CONFIG_NOTHROW : 0) |
           (options?._extraConfig ?? 0) |
-          (snapshotCaptureActive && ownerInSnapshotScope(context) ? CONFIG_IN_SNAPSHOT_SCOPE : 0),
+          (SNAPSHOTS && snapshotCaptureActive && ownerInSnapshotScope(context)
+            ? CONFIG_IN_SNAPSHOT_SCOPE
+            : 0),
         _equals: false as unknown as Computed<T>["_equals"],
         _disposal: null,
         _queue: context?._queue ?? globalQueue,
@@ -1021,9 +1046,11 @@ export function createEffectNode<T>(
           (transparent ? CONFIG_TRANSPARENT : 0) |
           (options?.ownedWrite ? CONFIG_OWNED_WRITE : 0) |
           (options?.sync ? CONFIG_SYNC : 0) |
-          (options?.noThrow ? CONFIG_NOTHROW : 0) |
+          (COMPILED_SEAMS && options?.noThrow ? CONFIG_NOTHROW : 0) |
           (options?._extraConfig ?? 0) |
-          (snapshotCaptureActive && ownerInSnapshotScope(context) ? CONFIG_IN_SNAPSHOT_SCOPE : 0),
+          (SNAPSHOTS && snapshotCaptureActive && ownerInSnapshotScope(context)
+            ? CONFIG_IN_SNAPSHOT_SCOPE
+            : 0),
         _equals: false as unknown as Computed<T>["_equals"],
         _disposal: null,
         _queue: context?._queue ?? globalQueue,
@@ -1067,7 +1094,8 @@ export function createEffectNode<T>(
   if (options?.unobserved) ext(self)._unobserved = options.unobserved;
   // `equals`: an equality cut-off for the effect phase (compiled memo
   // fusion — a memo inlined into its only reader keeps its cut-off here).
-  if (options?.equals) {
+  if (__TEST__ && (options?.equals || options?.noThrow)) markFeature("COMPILED_SEAMS");
+  if (COMPILED_SEAMS && options?.equals) {
     self._equals = options.equals;
     self._config |= CONFIG_EFFECT_EQUALS;
   }
@@ -1134,7 +1162,7 @@ function setupComputedNode<T>(self: Computed<T>, options: NodeOptions<T> | undef
   if (parent) self._height = parent._height + 1;
   if (GlobalQueue._wireExternalSource !== null) GlobalQueue._wireExternalSource(self);
   !options?.lazy && recompute(self, true);
-  if (snapshotCaptureActive && !options?.lazy) {
+  if (SNAPSHOTS && snapshotCaptureActive && !options?.lazy) {
     if (!(self._statusFlags & STATUS_PENDING) && !(self._config & CONFIG_NO_SNAPSHOT)) {
       ext(self)._snapshotValue = self._value === undefined ? NO_SNAPSHOT : self._value;
       self._config |= CONFIG_HAS_SNAPSHOT;
@@ -1178,32 +1206,55 @@ export function signal<T>(
         _name: options?.name ?? "signal",
         _owner: null as Owner | null
       }
-    : {
-        _equals: options?.equals ?? isEqual,
-        _config:
-          (options?.ownedWrite ? CONFIG_OWNED_WRITE : 0) |
-          (options?._noSnapshot ? CONFIG_NO_SNAPSHOT : 0),
-        _value: v,
-        _subs: null,
-        _subsTail: null,
-        _time: clock,
-        _firewall: firewall,
-        _nextChild: firewall?._x?._child || null,
-        _prevChild: null,
-        _pendingValue: NOT_PENDING,
-        // Signal-literal diet (§12e): NO _time/_fn/_statusFlags slots. Stores
-        // materialize one signal per touched leaf, so signal bytes are store
-        // bytes. _time is write-only on signals (every read site is computed-
-        // typed error-retry gating); _fn/_statusFlags read falsy-identically as
-        // missing properties on the shared paths (undefined masks to 0).
-        _transition: null,
-        _notifiedAt: -1,
-        _x: null
-      };
+    : !STORES
+      ? // Store-free slice (core/features.ts): no firewall children exist, so
+        // the three child-chain slots leave the literal — every signal in the
+        // graph shares this smaller shape, and read()/markNode never probe
+        // `_firewall`.
+        {
+          _equals: options?.equals ?? isEqual,
+          _config:
+            (options?.ownedWrite ? CONFIG_OWNED_WRITE : 0) |
+            (options?._noSnapshot ? CONFIG_NO_SNAPSHOT : 0),
+          _value: v,
+          _subs: null,
+          _subsTail: null,
+          _time: clock,
+          _pendingValue: NOT_PENDING,
+          _transition: null,
+          _notifiedAt: -1,
+          _x: null
+        }
+      : {
+          _equals: options?.equals ?? isEqual,
+          _config:
+            (options?.ownedWrite ? CONFIG_OWNED_WRITE : 0) |
+            (options?._noSnapshot ? CONFIG_NO_SNAPSHOT : 0),
+          _value: v,
+          _subs: null,
+          _subsTail: null,
+          _time: clock,
+          _firewall: firewall,
+          _nextChild: firewall?._x?._child || null,
+          _prevChild: null,
+          _pendingValue: NOT_PENDING,
+          // Signal-literal diet (§12e): NO _time/_fn/_statusFlags slots. Stores
+          // materialize one signal per touched leaf, so signal bytes are store
+          // bytes. _time is write-only on signals (every read site is computed-
+          // typed error-retry gating); _fn/_statusFlags read falsy-identically as
+          // missing properties on the shared paths (undefined masks to 0).
+          _transition: null,
+          _notifiedAt: -1,
+          _x: null
+        };
   if (__DEV__) (s as any)._internal = !!firewall;
   if (options?.unobserved) ext(s as any)._unobserved = options.unobserved;
-  if (firewall) linkFirewallChild(firewall, s as FirewallSignal<unknown>);
+  if (firewall) {
+    if (!STORES) featureExcluded("stores and projections");
+    else linkFirewallChild(firewall, s as FirewallSignal<unknown>);
+  }
   if (
+    SNAPSHOTS &&
     snapshotCaptureActive &&
     !(s._config & CONFIG_NO_SNAPSHOT) &&
     !((firewall?._statusFlags ?? 0) & STATUS_PENDING)
@@ -1240,6 +1291,7 @@ export function setSlotUnobserved(fn: (node: Signal<any>) => void): void {
  * unlinks in O(1) — the chain is walked per mark of the projection and
  * would otherwise grow by one node per leaf ever read (#3351). */
 function linkFirewallChild(firewall: Computed<unknown>, s: FirewallSignal<unknown>): void {
+  if (__TEST__) markFeature("STORES");
   const head = s._nextChild;
   if (head !== null) head._prevChild = s;
   ext(firewall)._child = s;
@@ -1272,6 +1324,8 @@ export function slotSignal<T>(
   acc: boolean,
   firewall: Computed<unknown> | null = null
 ): Signal<T> {
+  if (__TEST__) markFeature("STORES");
+  if (!STORES) featureExcluded("stores");
   // Prod and observe boilerplates — see computed(). The store relabels the
   // observe slot (`store.<key>`) when the attribution engine is installed.
   const s = __OBSERVE__
@@ -1322,7 +1376,7 @@ export function slotSignal<T>(
       };
   if (__DEV__) (s as any)._internal = !!firewall;
   if (firewall) linkFirewallChild(firewall, s as unknown as FirewallSignal<unknown>);
-  if (snapshotCaptureActive && !((firewall?._statusFlags ?? 0) & STATUS_PENDING)) {
+  if (SNAPSHOTS && snapshotCaptureActive && !((firewall?._statusFlags ?? 0) & STATUS_PENDING)) {
     ext(s as any)._snapshotValue = v === undefined ? NO_SNAPSHOT : v;
     (s as any)._config |= CONFIG_HAS_SNAPSHOT;
     snapshotSources!.add(s);
@@ -1331,6 +1385,8 @@ export function slotSignal<T>(
 }
 
 export function optimisticSignal<T>(v: T, options?: NodeOptions<T>): Signal<T> {
+  if (__TEST__) markFeature("OPTIMISTIC");
+  if (!OPTIMISTIC) featureExcluded("optimistic state");
   const s = signal(v, options);
   ext(s)._overrideValue = NOT_PENDING;
   s._config |= CONFIG_OPTIMISTIC;
@@ -1341,6 +1397,8 @@ export function optimisticComputed<T>(
   fn: (prev?: T) => T | PromiseLike<T> | AsyncIterable<T>,
   options?: NodeOptions<T>
 ): Computed<T> {
+  if (__TEST__) markFeature("OPTIMISTIC");
+  if (!OPTIMISTIC) featureExcluded("optimistic state");
   const c = computed(fn, options);
   ext(c)._overrideValue = NOT_PENDING;
   c._config |= CONFIG_OPTIMISTIC;
@@ -1532,12 +1590,12 @@ export function readNodeFast<T>(el: Signal<T>): T | typeof READ_SLOW {
     latestReadActive ||
     pendingCheckActive ||
     (el as Partial<Computed<T>>)._fn ||
-    (el as FirewallSignal<T>)._firewall ||
-    el._x?._overrideValue !== undefined ||
-    el._x?._snapshotValue !== undefined ||
+    (STORES && (el as FirewallSignal<T>)._firewall) ||
+    (OPTIMISTIC && el._x?._overrideValue !== undefined) ||
+    (SNAPSHOTS && el._x?._snapshotValue !== undefined) ||
     activeTransition !== null ||
-    currentOptimisticLane !== null ||
-    snapshotCaptureActive ||
+    (OPTIMISTIC && currentOptimisticLane !== null) ||
+    (SNAPSHOTS && snapshotCaptureActive) ||
     (__DEV__ && strictRead)
   )
     return READ_SLOW;
@@ -1571,18 +1629,18 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
   // Checked before isPending so that isPending(() => latest(x)) checks
   // the _pendingSignal of _latestValueComputed (async in flight) rather
   // than the original node (which stays "pending" while held in a transition).
-  if (__ASYNC__ && latestReadActive) return GlobalQueue._latestRead!(el) as T;
+  if (__ASYNC__ && VERDICTS && latestReadActive) return GlobalQueue._latestRead!(el) as T;
 
   let c = context;
   if ((c as Root)?._root) c = (c as Root)._parentComputed;
   const computed = el as Partial<Computed<unknown>>;
-  const firewall = (el as FirewallSignal<any>)._firewall;
-  const owner = firewall || el;
+  const firewall = (STORES ? (el as FirewallSignal<any>)._firewall : null) as Computed<any>;
+  const owner = (STORES ? firewall || el : el) as Computed<any>;
 
   // Handle isPending() mode: collect pending state while preserving normal read semantics.
   // Probe mode is suspended while preparing the node so nested reads during a
   // recompute don't collect into the probe.
-  if (__ASYNC__ && pendingCheckActive) {
+  if (__ASYNC__ && VERDICTS && pendingCheckActive) {
     GlobalQueue._pendingCheck!(el, c as Computed<any> | null, owner as any, firewall);
   } else if (typeof computed._fn === "function") {
     prepareComputed(el as Computed<unknown>, false);
@@ -1590,12 +1648,12 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
 
   if (
     !computed._fn &&
-    owner === el &&
-    el._x?._overrideValue === undefined &&
-    el._x?._snapshotValue === undefined &&
+    (!STORES || owner === el) &&
+    (!OPTIMISTIC || el._x?._overrideValue === undefined) &&
+    (!SNAPSHOTS || el._x?._snapshotValue === undefined) &&
     activeTransition === null &&
-    currentOptimisticLane === null &&
-    !snapshotCaptureActive &&
+    (!OPTIMISTIC || currentOptimisticLane === null) &&
+    (!SNAPSHOTS || !snapshotCaptureActive) &&
     (!__DEV__ || !strictRead)
   ) {
     if (c && tracking) link(el, c as Computed<any>);
@@ -1671,7 +1729,11 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
         stale &&
         !(owner._statusFlags & STATUS_UNINITIALIZED) &&
         !(owner._config & CONFIG_INPUTS_PUBLISHED) &&
-        !(owner._config & CONFIG_HAS_LANE && GlobalQueue._laneLive!(owner as Computed<any>)) &&
+        !(
+          OPTIMISTIC &&
+          owner._config & CONFIG_HAS_LANE &&
+          GlobalQueue._laneLive!(owner as Computed<any>)
+        ) &&
         heldFromStale(owner, c as Computed<any>)
       )
     ) {
@@ -1699,7 +1761,7 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
       // active override throws — plus uninitialized sources regardless of
       // lane (#3276); that check rides laneSuspends so floor bundles don't
       // pay for it.
-      if (currentOptimisticLane === null || GlobalQueue._laneSuspends!(owner)) {
+      if (!OPTIMISTIC || currentOptimisticLane === null || GlobalQueue._laneSuspends!(owner)) {
         if (!tracking && el !== c) link(el, c as Computed<any>);
         throw owner._x?._error;
       }
@@ -1722,7 +1784,12 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
     } else throw (owner as Computed<any>)._x?._error;
   }
 
-  if (snapshotCaptureActive && c && (c as Computed<any>)._config & CONFIG_IN_SNAPSHOT_SCOPE) {
+  if (
+    SNAPSHOTS &&
+    snapshotCaptureActive &&
+    c &&
+    (c as Computed<any>)._config & CONFIG_IN_SNAPSHOT_SCOPE
+  ) {
     const sv = el._x?._snapshotValue;
     if (sv !== undefined) {
       const snapshot = sv === NO_SNAPSHOT ? undefined : sv;
@@ -1739,7 +1806,12 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
       nodeName: (owner as any)?._name
     });
 
-  if (__ASYNC__ && el._x?._overrideValue !== undefined && el._x?._overrideValue !== NOT_PENDING) {
+  if (
+    __ASYNC__ &&
+    OPTIMISTIC &&
+    el._x?._overrideValue !== undefined &&
+    el._x?._overrideValue !== NOT_PENDING
+  ) {
     // A17: the override IS the value for every reader — except an authoritative
     // reader (until()'s predicate carries CONFIG_AUTHORITATIVE_READ): it must
     // observe independently-arriving truth, and serving it the caller's own
@@ -1772,6 +1844,7 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
   // engine — a non-null lane implies it is installed.)
   if (
     __ASYNC__ &&
+    OPTIMISTIC &&
     currentOptimisticLane !== null &&
     activeTransition !== null &&
     c !== null &&
@@ -1789,6 +1862,7 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
   const value =
     !c ||
     (__ASYNC__ &&
+      OPTIMISTIC &&
       currentOptimisticLane !== null &&
       GlobalQueue._laneReadsCommitted!(el, owner, c as Computed<any>)) ||
     el._pendingValue === NOT_PENDING ||
@@ -1803,6 +1877,7 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
     // Authoritative readers (until()'s predicate) and latest() see the
     // staged truth — the tunnel that keeps the hold deadlock-free.
     (__ASYNC__ &&
+      OPTIMISTIC &&
       el._config & CONFIG_HELD_TRUTH &&
       !latestReadActive &&
       !((c as Computed<any>)._config & CONFIG_AUTHORITATIVE_READ))
@@ -1810,7 +1885,7 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
       : (el._pendingValue as T);
   // Record that this isPending() probe observed the fresh pending value, so
   // the probe doesn't pair "pending" with the new value (#2831).
-  if (__ASYNC__ && pendingCheckActive) GlobalQueue._recordFresh!(el, value);
+  if (__ASYNC__ && VERDICTS && pendingCheckActive) GlobalQueue._recordFresh!(el, value);
   if (
     !c &&
     owner === el &&
@@ -1894,7 +1969,7 @@ export function setSignal<T>(el: Signal<T> | Computed<T>, v: T | ((prev: T) => T
   // _overrideValue slot (flagged by CONFIG_OPTIMISTIC — a masked read of the
   // always-present config instead of a missing-property probe), and every
   // module that installs one installs the engine first.
-  if (__ASYNC__ && el._config & CONFIG_OPTIMISTIC) {
+  if (__ASYNC__ && OPTIMISTIC && el._config & CONFIG_OPTIMISTIC) {
     if (!projectionWriteActive) return GlobalQueue._optimisticWrite!(el, v);
     // An authoritative store landing on an override-covered node: the store
     // twin of asyncWrite's override branch, decided by the engine (#3331).
@@ -1927,7 +2002,8 @@ export function setSignal<T>(el: Signal<T> | Computed<T>, v: T | ((prev: T) => T
   // only ever created, never removed, and creating one installs the hook and
   // sets CONFIG_HAS_COMPANIONS — one masked read replaces two optional-field
   // probes on every write).
-  el._config & CONFIG_HAS_COMPANIONS &&
+  VERDICTS &&
+    el._config & CONFIG_HAS_COMPANIONS &&
     GlobalQueue._syncCompanions !== null &&
     GlobalQueue._syncCompanions(el, v);
 
@@ -1939,7 +2015,12 @@ export function setSignal<T>(el: Signal<T> | Computed<T>, v: T | ((prev: T) => T
   // (epoch) — re-stages the value and stops. The walk is idempotent (subs
   // marked, heap entries flag-guarded, effects queued once); lane and reask
   // contexts change what a walk MEANS, so they always walk.
-  if (wasStaged && el._notifiedAt === notifyEpoch && currentOptimisticLane === null && !reaskArmed)
+  if (
+    wasStaged &&
+    el._notifiedAt === notifyEpoch &&
+    (!OPTIMISTIC || currentOptimisticLane === null) &&
+    !reaskArmed
+  )
     return v;
   insertSubs(el);
   schedule();

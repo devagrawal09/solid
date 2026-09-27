@@ -9,6 +9,7 @@ import {
   REACTIVE_RECOMPUTING_DEPS,
   REACTIVE_ZOMBIE
 } from "./constants.js";
+import { STORES } from "./features.js";
 import { dirtyQueue, zombieQueue } from "./scheduler.js";
 import type { Computed, FirewallSignal, Root } from "./types.js";
 
@@ -134,7 +135,7 @@ export function markNode(el: Computed<unknown>, newState = REACTIVE_DIRTY) {
   // Firewall children (projection machinery only): gate the cold-extension
   // deref on the config bit — markNode runs per sub edge per write, and an
   // unconditional _x chase here taxed every propagation (diamond -22%).
-  if (el._config & CONFIG_FW_CHILDREN) {
+  if (STORES && el._config & CONFIG_FW_CHILDREN) {
     for (
       let child: FirewallSignal<unknown> | null = el._x!._child;
       child !== null;
@@ -165,7 +166,9 @@ function adjustHeight(el: Computed<unknown>, heap: Heap) {
   let newHeight = el._height;
   for (let d = el._deps; d; d = d._nextDep) {
     const dep1 = d._dep;
-    const dep = (dep1 as FirewallSignal<unknown>)._firewall || dep1;
+    const dep = (
+      STORES ? (dep1 as FirewallSignal<unknown>)._firewall || dep1 : dep1
+    ) as Computed<any>;
     if ((dep as Computed<unknown>)._fn && dep._height >= newHeight) newHeight = dep._height + 1;
   }
   if (el._height !== newHeight) {

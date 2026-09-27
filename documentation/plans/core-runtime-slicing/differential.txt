@@ -1,0 +1,19 @@
+full −OPTIMISTIC (and VERDICTS): 1403 passed, 521 skipped (feature used), 0 regressions; 518/520 feature-using tests fail with the switch off
+full −VERDICTS: 1621 passed, 303 skipped (feature used), 0 regressions; 300/302 feature-using tests fail with the switch off
+full −STORES: 1483 passed, 441 skipped (feature used), 0 regressions; the unskipped run hung (a feature-using test never settled)
+full −SNAPSHOTS: 1903 passed, 21 skipped (feature used), 0 regressions; 20/20 feature-using tests fail with the switch off
+full −ITERABLE: 1875 passed, 49 skipped (feature used), 0 regressions; 42/48 feature-using tests fail with the switch off
+full −COMPILED_SEAMS: 1907 passed, 17 skipped (feature used), 0 regressions; 7/16 feature-using tests fail with the switch off
+full −all: 1108 passed, 816 skipped (feature used), 0 regressions; 785/815 feature-using tests fail with the switch off
+sync −all: 709 passed, 1215 skipped (feature used), 0 regressions; 480/506 feature-using tests fail with the switch off
+{
+  "tests": 1922,
+  "featureCounts": {
+    "COMPILED_SEAMS": 16,
+    "STORES": 439,
+    "OPTIMISTIC": 519,
+    "VERDICTS": 302,
+    "ITERABLE": 48,
+    "SNAPSHOTS": 20
+  }
+}

@@ -1,16 +1,21 @@
+// Block constructors that create primitives register the hydration-aware
+// ones lazily (client/blocks.ts) — never at module scope, which kept the
+// store in every app (core runtime slicing).
 export {
-  $,
-  $component,
+  $signal,
+  $store,
   $memo,
   $effect,
   $settled,
-  settledBlock,
+  effectBlock,
+  settledBlock
+} from "./client/blocks.js";
+export {
+  $,
+  $component,
   $event,
-  $signal,
-  $store,
   $cleanup,
   $flush,
-  effectBlock,
   isComponent,
   raise,
   attempt,
