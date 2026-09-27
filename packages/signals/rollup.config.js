@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import replace from "@rollup/plugin-replace";
 import typescript from "@rollup/plugin-typescript";
 import prettier from "rollup-plugin-prettier";
@@ -46,6 +48,36 @@ const flags = (dev, observe, asyncCapability = true, oracle = false) =>
     preventAssignment: true
   });
 
+// Link-time feature switches (src/core/features.ts; documentation/plans/
+// core-runtime-slicing.md). The per-module trees must NOT fold the switches:
+// the constants have to survive into dist so the app bundler folds them —
+// against the published defaults, or against the module the capability
+// linker substitutes for a graph it proved never uses a feature. So the
+// trees keep `core/features.js` external (every importer's specifier stays
+// a relative path to it) and emit it as a plain file with the tier's
+// defaults. The flat dev files inline it (dev is never sliced).
+const FEATURES_SRC = path.resolve("src/core/features.ts");
+const featuresModule = asyncCapability => ({
+  name: "signals:features-module",
+  async resolveId(source, importer, options) {
+    if (!importer || !/(^|\/)features(\.js|\.ts)?$/.test(source)) return null;
+    const resolved = await this.resolve(source, importer, { ...options, skipSelf: true });
+    if (resolved?.id !== FEATURES_SRC) return null;
+    // The trees mirror src/ (preserveModules) and rollup renders an absolute
+    // external relative to the importer's SOURCE location, so the external
+    // id is the src-mirrored path: `./features.js` from core/, and
+    // `./core/features.js` from the root modules.
+    return { id: FEATURES_SRC.replace(/\.ts$/, ".js"), external: true };
+  },
+  generateBundle() {
+    const source = readFileSync(FEATURES_SRC, "utf8").replace(
+      /\b__ASYNC__\b/g,
+      String(asyncCapability)
+    );
+    this.emitFile({ type: "asset", fileName: "core/features.js", source });
+  }
+});
+
 const ts = outDir =>
   typescript({
     declaration: false,
@@ -67,7 +99,7 @@ const engine = observe => (observe ? "src/attribution.ts" : "src/attribution.pro
 const tree = (dir, dev, observe, oracle = false) => ({
   input: { index: "src/index.ts", attribution: engine(observe) },
   output: { dir, format: "esm", preserveModules: true, preserveModulesRoot: "src" },
-  plugins: [flags(dev, observe, true, oracle), ts(dir)]
+  plugins: [flags(dev, observe, true, oracle), featuresModule(true), ts(dir)]
 });
 
 // `name` is the stem: dist/<name>.js (core), dist/<name>.attribution.js
@@ -95,7 +127,7 @@ const syncTree = dir => ({
   input: { "index.sync": "src/index.sync.ts" },
   output: { dir, format: "esm", preserveModules: true, preserveModulesRoot: "src" },
   treeshake: { tryCatchDeoptimization: false },
-  plugins: [flags(false, false, false), ts(dir)]
+  plugins: [flags(false, false, false), featuresModule(false), ts(dir)]
 });
 const syncDev = {
   input: { "sync.dev": "src/index.sync.ts" },

@@ -1,4 +1,5 @@
 import { markAsyncCapability } from "./dev.js";
+import { OPTIMISTIC, STORES, VERDICTS } from "./features.js";
 import {
   CONFIG_CHILD_COMPANIONS,
   CONFIG_AUTO_DISPOSE,
@@ -74,7 +75,9 @@ function clearPendingSources(el: Computed<any>): void {
 // Also guards branch-local recovery: another dependency may still need the source.
 function retryReaches(el: Computed<any>, source: any): boolean {
   for (let d = el._deps; d; d = d._nextDep) {
-    const dep = ((d._dep as FirewallSignal<unknown>)._firewall || d._dep) as Computed<any>;
+    const dep = (
+      STORES ? (d._dep as FirewallSignal<unknown>)._firewall || d._dep : d._dep
+    ) as Computed<any>;
     if (dep === source || dep._x?._pendingSources?.has(source)) return true;
   }
   return false;
@@ -119,7 +122,7 @@ export function forEachDependent(
   for (let s = el._subs; s !== null; s = s._nextSub) fn(s._sub, s);
   // `?? null`: affects() marks route plain signals (no `_child` slot) through here.
   for (
-    let child: FirewallSignal<unknown> | null = el._x?._child ?? null;
+    let child: FirewallSignal<unknown> | null = STORES ? (el._x?._child ?? null) : null;
     child !== null;
     child = child._nextChild
   ) {
@@ -405,7 +408,7 @@ export function handleAsync<T>(
     // discovered the flight (#3305) would then wait on the owner's action
     // instead of on the flight (#3334). Enter the waiter: the transaction
     // whose blocker this landing clears.
-    if (el._x?._optimisticLane) transition = waitingTransition(el) ?? transition;
+    if (OPTIMISTIC && el._x?._optimisticLane) transition = waitingTransition(el) ?? transition;
     if (
       transition &&
       el._statusFlags & STATUS_UNINITIALIZED &&
@@ -484,7 +487,7 @@ export function handleAsync<T>(
     trimStaleDeps(el);
     clearStatus(el);
     if (wasReask) el._x!._reask = true;
-    const lane = resolveLane(el as any);
+    const lane = OPTIMISTIC ? resolveLane(el as any) : undefined;
     if (lane) lane._pendingAsync.delete(el);
     // Attribution hook: lets the engine snapshot state before the landing
     // branches, so it can tell whether the plain path's setSignal committed a
@@ -498,7 +501,7 @@ export function handleAsync<T>(
         return;
       }
       if (wasUninitialized) clearStatus(el, true);
-    } else if (el._x?._overrideValue !== undefined) {
+    } else if (OPTIMISTIC && el._x?._overrideValue !== undefined) {
       // Optimistic node — resting OR covered by an active override — holds
       // through the shared pending-node path, exactly like a plain async memo,
       // so the commit clears STATUS_UNINITIALIZED (#2806) and elevation to
@@ -856,8 +859,11 @@ export function clearStatus(el: Computed<any>, clearUninitialized: boolean = fal
   if (el._x?._error) el._x._error = null;
   // Update pending signal for isPending() reactivity (companions only exist
   // once the verdict layer created them, which installs the hooks).
-  if (el._x?._pendingSignal || el._x?._latestValueComputed) GlobalQueue._updatePendingSignal!(el);
+  if (VERDICTS && (el._x?._pendingSignal || el._x?._latestValueComputed))
+    GlobalQueue._updatePendingSignal!(el);
   if (
+    VERDICTS &&
+    STORES &&
     el._x?._child &&
     el._config & CONFIG_CHILD_COMPANIONS &&
     GlobalQueue._updateChildCompanions !== null
@@ -890,7 +896,11 @@ export function notifyStatus(
       : undefined;
   const isSource = pendingSource === el;
   const isOptimisticBoundary =
-    __ASYNC__ && status === STATUS_PENDING && el._x?._overrideValue !== undefined && !isSource;
+    __ASYNC__ &&
+    OPTIMISTIC &&
+    status === STATUS_PENDING &&
+    el._x?._overrideValue !== undefined &&
+    !isSource;
   const startsBlocking = __ASYNC__ && isOptimisticBoundary && hasActiveOverride(el);
 
   if (!blockStatus) {
@@ -910,8 +920,10 @@ export function notifyStatus(
         status | (status !== STATUS_ERROR ? el._statusFlags & STATUS_UNINITIALIZED : 0);
       ext(el)._error = error;
     }
-    GlobalQueue._updatePendingSignal?.(el);
+    if (VERDICTS) GlobalQueue._updatePendingSignal?.(el);
     if (
+      VERDICTS &&
+      STORES &&
       el._x?._child &&
       el._config & CONFIG_CHILD_COMPANIONS &&
       GlobalQueue._updateChildCompanions !== null

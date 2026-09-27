@@ -7,6 +7,7 @@ import {
   STATUS_PENDING
 } from "./constants.js";
 import { slotUnobservedHook } from "./core.js";
+import { STORES } from "./features.js";
 import { deleteFromHeap, queueFor } from "./heap.js";
 import { disposeChildren } from "./owner.js";
 import { bumpNotifyEpoch, dirtyQueue, zombieQueue } from "./scheduler.js";
@@ -27,7 +28,7 @@ export function unlinkSubs(link: Link): Link | null {
     if (nextSub === null) {
       // Slot nodes (store leaves) dispatch to the ONE shared hook — no
       // per-node unobserved closure, no NodeExtension to hold it.
-      if (dep._config & CONFIG_SLOT_NODE) slotUnobservedHook(dep as Signal<any>);
+      if (STORES && dep._config & CONFIG_SLOT_NODE) slotUnobservedHook(dep as Signal<any>);
       else dep._x?._unobserved?.();
       // No more subscribers; only tear down if CONFIG_AUTO_DISPOSE is set.
       // A pending node is exempt: its in-flight async work (or the
