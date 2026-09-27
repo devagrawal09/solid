@@ -1,0 +1,429 @@
+{
+  "opt_in": {
+    "floor": {
+      "harness": 23090,
+      "harnessGz": 9306,
+      "min": 22659,
+      "gz": 9094
+    },
+    "floor+context": {
+      "harness": 23649,
+      "harnessGz": 9524,
+      "min": 23218,
+      "gz": 9304
+    },
+    "floor+store": {
+      "harness": 47227,
+      "harnessGz": 17139,
+      "min": 46780,
+      "gz": 16899
+    },
+    "floor+projection": {
+      "harness": 47041,
+      "harnessGz": 17071,
+      "min": 46594,
+      "gz": 16824
+    },
+    "floor+mapArray": {
+      "harness": 27237,
+      "harnessGz": 10949,
+      "min": 27110,
+      "gz": 10899
+    },
+    "floor+errorBoundary": {
+      "harness": 25693,
+      "harnessGz": 10265,
+      "min": 25262,
+      "gz": 10051
+    },
+    "floor+loadingBoundary": {
+      "harness": 25624,
+      "harnessGz": 10243,
+      "min": 25193,
+      "gz": 10035
+    },
+    "floor+reveal": {
+      "harness": 25423,
+      "harnessGz": 10212,
+      "min": 24992,
+      "gz": 10004
+    },
+    "floor+action": {
+      "harness": 23868,
+      "harnessGz": 9618,
+      "min": 23437,
+      "gz": 9398
+    },
+    "floor+optimistic": {
+      "harness": 26882,
+      "harnessGz": 10585,
+      "min": 26451,
+      "gz": 10363
+    },
+    "floor+optimisticStore": {
+      "harness": 56343,
+      "harnessGz": 20272,
+      "min": 55896,
+      "gz": 20045
+    },
+    "floor+isPending/latest": {
+      "harness": 30489,
+      "harnessGz": 11922,
+      "min": 30058,
+      "gz": 11707
+    },
+    "floor+refresh": {
+      "harness": 23887,
+      "harnessGz": 9616,
+      "min": 23456,
+      "gz": 9409
+    },
+    "floor+resolve/until": {
+      "harness": 24609,
+      "harnessGz": 9922,
+      "min": 24178,
+      "gz": 9698
+    },
+    "floor+affects": {
+      "harness": 25756,
+      "harnessGz": 10329,
+      "min": 25325,
+      "gz": 10107
+    },
+    "floor+statusFree": {
+      "harness": 25336,
+      "harnessGz": 10209,
+      "min": 23837,
+      "gz": 9492
+    },
+    "floor+$ driver": {
+      "harness": 29226,
+      "harnessGz": 11758,
+      "min": 28486,
+      "gz": 11395
+    },
+    "floor+block api": {
+      "harness": 59182,
+      "harnessGz": 21433,
+      "min": 58426,
+      "gz": 21076
+    },
+    "floor+externalSource": {
+      "harness": 23847,
+      "harnessGz": 9616,
+      "min": 23416,
+      "gz": 9389
+    },
+    "floor+snapshots": {
+      "harness": 23921,
+      "harnessGz": 9652,
+      "min": 23490,
+      "gz": 9433
+    },
+    "floor+ids": {
+      "harness": 23111,
+      "harnessGz": 9324,
+      "min": 22680,
+      "gz": 9107
+    }
+  },
+  "switches": {
+    "full:-": {
+      "harness": 23090,
+      "harnessGz": 9306,
+      "min": 22659,
+      "gz": 9094
+    },
+    "full:OPTIMISTIC": {
+      "harness": 21430,
+      "harnessGz": 8644,
+      "min": 21037,
+      "gz": 8450
+    },
+    "full:VERDICTS": {
+      "harness": 22938,
+      "harnessGz": 9264,
+      "min": 22515,
+      "gz": 9048
+    },
+    "full:STORES": {
+      "harness": 22552,
+      "harnessGz": 9139,
+      "min": 22141,
+      "gz": 8930
+    },
+    "full:SNAPSHOTS": {
+      "harness": 22993,
+      "harnessGz": 9264,
+      "min": 22574,
+      "gz": 9053
+    },
+    "full:ITERABLE": {
+      "harness": 22904,
+      "harnessGz": 9231,
+      "min": 22473,
+      "gz": 9017
+    },
+    "full:COMPILED_SEAMS": {
+      "harness": 22928,
+      "harnessGz": 9242,
+      "min": 22519,
+      "gz": 9037
+    },
+    "full:OPTIMISTIC+VERDICTS+STORES+SNAPSHOTS+ITERABLE+COMPILED_SEAMS": {
+      "harness": 20390,
+      "harnessGz": 8244,
+      "min": 20052,
+      "gz": 8071
+    },
+    "sync:-": {
+      "harness": 13412,
+      "harnessGz": 5660,
+      "min": 13138,
+      "gz": 5501
+    },
+    "sync:STORES": {
+      "harness": 13018,
+      "harnessGz": 5521,
+      "min": 12762,
+      "gz": 5376
+    },
+    "sync:SNAPSHOTS": {
+      "harness": 13315,
+      "harnessGz": 5624,
+      "min": 13053,
+      "gz": 5471
+    },
+    "sync:ITERABLE": {
+      "harness": 13226,
+      "harnessGz": 5574,
+      "min": 12952,
+      "gz": 5415
+    },
+    "sync:COMPILED_SEAMS": {
+      "harness": 13250,
+      "harnessGz": 5596,
+      "min": 12998,
+      "gz": 5451
+    },
+    "sync:OPTIMISTIC+VERDICTS+STORES+SNAPSHOTS+ITERABLE+COMPILED_SEAMS": {
+      "harness": 12573,
+      "harnessGz": 5318,
+      "min": 12351,
+      "gz": 5191
+    }
+  },
+  "apps": {
+    "sync app (no stores)": {
+      "full": {
+        "harness": 30527,
+        "harnessGz": 12133,
+        "min": 30400,
+        "gz": 12107
+      },
+      "slice": {
+        "harness": 20309,
+        "harnessGz": 8288,
+        "min": 20086,
+        "gz": 8146
+      },
+      "runtime": "sync",
+      "off": [
+        "STORES",
+        "SNAPSHOTS",
+        "ITERABLE",
+        "COMPILED_SEAMS"
+      ]
+    },
+    "sync app + stores": {
+      "full": {
+        "harness": 54660,
+        "harnessGz": 19979,
+        "min": 54517,
+        "gz": 19941
+      },
+      "slice": {
+        "harness": 44760,
+        "harnessGz": 16313,
+        "min": 44466,
+        "gz": 16142
+      },
+      "runtime": "sync",
+      "off": [
+        "SNAPSHOTS",
+        "ITERABLE",
+        "COMPILED_SEAMS"
+      ]
+    },
+    "async app (Loading, no optimistic)": {
+      "full": {
+        "harness": 31396,
+        "harnessGz": 12474,
+        "min": 31269,
+        "gz": 12445
+      },
+      "slice": {
+        "harness": 28806,
+        "harnessGz": 11468,
+        "min": 28679,
+        "gz": 11439
+      },
+      "runtime": "full",
+      "off": [
+        "OPTIMISTIC",
+        "VERDICTS",
+        "STORES",
+        "SNAPSHOTS",
+        "ITERABLE",
+        "COMPILED_SEAMS"
+      ]
+    },
+    "async app + isPending": {
+      "full": {
+        "harness": 38803,
+        "harnessGz": 15061,
+        "min": 38676,
+        "gz": 15010
+      },
+      "slice": {
+        "harness": 37862,
+        "harnessGz": 14746,
+        "min": 37735,
+        "gz": 14701
+      },
+      "runtime": "full",
+      "off": [
+        "STORES",
+        "SNAPSHOTS",
+        "ITERABLE",
+        "COMPILED_SEAMS"
+      ]
+    },
+    "async app + actions/optimistic stores": {
+      "full": {
+        "harness": 69603,
+        "harnessGz": 25240,
+        "min": 69460,
+        "gz": 25190
+      },
+      "slice": {
+        "harness": 69186,
+        "harnessGz": 25082,
+        "min": 69043,
+        "gz": 25043
+      },
+      "runtime": "full",
+      "off": [
+        "SNAPSHOTS",
+        "ITERABLE",
+        "COMPILED_SEAMS"
+      ]
+    }
+  },
+  "modules": {
+    "full floor": [
+      [
+        "core/scheduler.ts",
+        24168
+      ],
+      [
+        "core/core.ts",
+        21315
+      ],
+      [
+        "core/async.ts",
+        14035
+      ],
+      [
+        "core/owner.ts",
+        4268
+      ],
+      [
+        "core/heap.ts",
+        3570
+      ],
+      [
+        "core/graph.ts",
+        2838
+      ],
+      [
+        "core/effect.ts",
+        2694
+      ],
+      [
+        "core/lanes.ts",
+        2190
+      ],
+      [
+        "core/constants.ts",
+        1806
+      ],
+      [
+        "signals.ts",
+        781
+      ],
+      [
+        "core/error.ts",
+        623
+      ],
+      [
+        "core/invariants.ts",
+        317
+      ],
+      [
+        "generator.ts",
+        265
+      ],
+      [
+        "core/dev.ts",
+        19
+      ]
+    ],
+    "sync floor": [
+      [
+        "core/core.ts",
+        14731
+      ],
+      [
+        "core/scheduler.ts",
+        14623
+      ],
+      [
+        "core/owner.ts",
+        4028
+      ],
+      [
+        "core/heap.ts",
+        3570
+      ],
+      [
+        "core/graph.ts",
+        2838
+      ],
+      [
+        "core/effect.ts",
+        2424
+      ],
+      [
+        "core/async.ts",
+        1858
+      ],
+      [
+        "core/constants.ts",
+        1399
+      ],
+      [
+        "signals.ts",
+        781
+      ],
+      [
+        "core/error.ts",
+        315
+      ],
+      [
+        "generator.ts",
+        265
+      ]
+    ]
+  }
+}

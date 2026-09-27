@@ -27,12 +27,14 @@ mkdirSync(work, { recursive: true });
 const census = join(work, "census.jsonl");
 rmSync(census, { force: true });
 
-const vitest = (env, extra = []) => {
+const vitest = (env, extra = [], timeout = undefined) => {
   try {
     execFileSync("npx", ["vitest", "run", ...extra], {
       cwd: pkg,
       env: { ...process.env, ...env },
-      stdio: ["ignore", "ignore", "ignore"]
+      stdio: ["ignore", "ignore", "ignore"],
+      timeout,
+      killSignal: "SIGKILL"
     });
   } catch {
     // Failures are the data.
@@ -105,10 +107,14 @@ for (const config of CONFIGS) {
       SIGNALS_FEATURES_OFF: config.off.join(","),
       ...(config.sync ? { SIGNALS_ASYNC: "false" } : {})
     },
-    ["--reporter=json", `--outputFile=${fullJson}`]
+    ["--reporter=json", `--outputFile=${fullJson}`],
+    // A test whose feature is gone may never settle (a store read that now
+    // throws inside a promise chain): bound the run and report it as hung.
+    10 * 60_000
   );
   let failedUsers = 0,
     users = 0;
+  const hung = !existsSync(fullJson);
   if (existsSync(fullJson))
     for (const file of JSON.parse(readFileSync(fullJson, "utf8")).testResults)
       for (const test of file.assertionResults) {
@@ -123,12 +129,14 @@ for (const config of CONFIGS) {
     passed,
     skipped,
     regressions,
-    sensitivity: { featureUsers: users, failWithSwitchOff: failedUsers }
+    sensitivity: hung ? { hung: true } : { featureUsers: users, failWithSwitchOff: failedUsers }
   };
   results.push(row);
   console.log(
     `${config.name}: ${passed} passed, ${skipped} skipped (feature used), ${regressions.length} regressions; ` +
-      `${failedUsers}/${users} feature-using tests fail with the switch off`
+      (hung
+        ? "the unskipped run hung (a feature-using test never settled)"
+        : `${failedUsers}/${users} feature-using tests fail with the switch off`)
   );
   for (const r of regressions) console.log(`  REGRESSION ${r}`);
 }
