@@ -405,7 +405,9 @@ export function $component<P = {}, Y extends SetupOp = never, VY extends ViewOp 
       );
       if (typeof viewBody !== "function") {
         throw new TypeError(
-          "[COMPONENT_VIEW] A $component's setup must return its view: `return function* () { return <…/> }`"
+          __DEV__
+            ? "[COMPONENT_VIEW] A $component's setup must return its view: `return function* () { return <…/> }`"
+            : "[COMPONENT_VIEW]"
         );
       }
       return view(viewBody as any);

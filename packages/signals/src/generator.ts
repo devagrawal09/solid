@@ -527,6 +527,17 @@ const tokenTargets = new WeakMap<object, TokenTarget>();
 let tokensCreated = false;
 
 /**
+ * @internal What a store proxy's `get` trap calls while the strict guard is
+ * raised. Installed by the first `$` block (the guard is only ever raised by
+ * a block run), so a bundle that never builds a block — a plain store app —
+ * does not retain the token machinery and, through it, `perform`.
+ */
+export let makePathToken: (root: object, key: PathKey) => object = noBlockRuntime;
+function noBlockRuntime(): never {
+  throw new Error("[NO_BLOCK_RUNTIME] the strict guard is raised but no `$` block was built");
+}
+
+/**
  * Called by a store proxy's `get` trap while the strict guard is raised: the
  * read is deferred into a token that records the path; `yield*` performs it.
  */
@@ -561,7 +572,9 @@ function describePath(target: TokenTarget): string {
 
 function tokenMisuse(target: TokenTarget, how: string): Error {
   return new Error(
-    `[DIRECT_READ_IN_BLOCK] \`<root>${describePath(target)}\` was used ${how} inside a \`$\` block; read it with \`yield* <root>${describePath(target)}\``
+    __DEV__
+      ? `[DIRECT_READ_IN_BLOCK] \`<root>${describePath(target)}\` was used ${how} inside a \`$\` block; read it with \`yield* <root>${describePath(target)}\``
+      : "[DIRECT_READ_IN_BLOCK]"
   );
 }
 
@@ -609,7 +622,9 @@ function checkTokens(from: number): void {
     const target = liveTokens[i];
     if (!target.used) {
       throw new Error(
-        `[UNREAD_PATH] \`<root>${describePath(target)}\` was accessed inside a \`$\` block but never read with \`yield*\`; write \`yield* <root>${describePath(target)}\` (a bare access is a deferred token, not a value)`
+        __DEV__
+          ? `[UNREAD_PATH] \`<root>${describePath(target)}\` was accessed inside a \`$\` block but never read with \`yield*\`; write \`yield* <root>${describePath(target)}\` (a bare access is a deferred token, not a value)`
+          : "[UNREAD_PATH]"
       );
     }
   }
@@ -1426,12 +1441,17 @@ export function $(
     // reaching the runtime was not compiled: it must never run under the
     // generator driver or as a plain block, so fail loudly.
     throw new TypeError(
-      "[STRICT_NOT_COMPILED] `$` received a plain (arrow or async) callback at runtime. A non-generator callback is a strict compilation marker: @solidjs/compiler analyzes it for its host and erases the marker. Compile the module with the Solid compiler (`generators` on), or write a generator block (`$(function* () { … })`)"
+      __DEV__
+        ? "[STRICT_NOT_COMPILED] `$` received a plain (arrow or async) callback at runtime. A non-generator callback is a strict compilation marker: @solidjs/compiler analyzes it for its host and erases the marker. Compile the module with the Solid compiler (`generators` on), or write a generator block (`$(function* () { … })`)"
+        : "[STRICT_NOT_COMPILED]"
     );
   }
   if (!generatorHookInstalled) {
     generatorHookInstalled = true;
     installGeneratorHook(generatorBody);
+    // The strict guard is only ever raised by a block run, so the store's
+    // path tokens are only reachable once a block exists.
+    makePathToken = pathToken;
   }
   // BLOCK_SYNC: the compiler lowered the body to call form and proved its
   // result is a plain value (never a generator, thenable or async iterable),
@@ -1439,6 +1459,9 @@ export function $(
   // result's prototype chain on every run — are skipped. Dev builds keep
   // the probes as a verification of the claim.
   const sync = (flags & BLOCK_SYNC) !== 0;
+  // An uncompiled body (a `function*`): every call returns a fresh native
+  // generator object, so the result needs no shape probe — it is driven.
+  const driven = !sync && isGeneratorFunction(body);
   // Zero-arity on purpose: renderers and `flatten` unwrap a function child
   // only when `fn.length === 0` (an accessor), so a block returned from a
   // component must look like one. The input still arrives as the first
@@ -1458,6 +1481,8 @@ export function $(
       if (sync) {
         if (__DEV__) verifySyncBlockResult(result);
         value = result;
+      } else if (driven) {
+        value = drive(result as Generator<Op>, host);
       } else if (result !== null && typeof result === "object") {
         const shape = objectShape(result);
         if (shape === ASYNC_ITERATOR) throw asyncGeneratorError();
@@ -1623,7 +1648,9 @@ function performValue(target: unknown): unknown {
         const value = readGuarded(target.run);
         if (isThenableValue(value)) {
           throw new TypeError(
-            "[ASYNC_OP_OUTSIDE_DRIVER] An async `attempt` can only be performed by the generator driver. Keep `yield* attempt(...)` inline in the block so the compiler leaves it to the runtime"
+            __DEV__
+              ? "[ASYNC_OP_OUTSIDE_DRIVER] An async `attempt` can only be performed by the generator driver. Keep `yield* attempt(...)` inline in the block so the compiler leaves it to the runtime"
+              : "[ASYNC_OP_OUTSIDE_DRIVER]"
           );
         }
         return value;
@@ -1644,7 +1671,9 @@ function performValue(target: unknown): unknown {
         throw target.error;
       case "wait":
         throw new TypeError(
-          "[ASYNC_OP_OUTSIDE_DRIVER] A suspension can only be performed by the generator driver. Keep `yield* attempt(...)` inline in the block so the compiler leaves it to the runtime"
+          __DEV__
+            ? "[ASYNC_OP_OUTSIDE_DRIVER] A suspension can only be performed by the generator driver. Keep `yield* attempt(...)` inline in the block so the compiler leaves it to the runtime"
+            : "[ASYNC_OP_OUTSIDE_DRIVER]"
         );
     }
   }
@@ -1688,7 +1717,9 @@ function delegateSync(block: AnyBlock, input: unknown): unknown {
 
 function asyncBlockError(): TypeError {
   return new TypeError(
-    "[ASYNC_BLOCK_OUTSIDE_DRIVER] A block that waits can only be delegated to from a generator block (`yield* block`); it cannot be lowered to call form"
+    __DEV__
+      ? "[ASYNC_BLOCK_OUTSIDE_DRIVER] A block that waits can only be delegated to from a generator block (`yield* block`); it cannot be lowered to call form"
+      : "[ASYNC_BLOCK_OUTSIDE_DRIVER]"
   );
 }
 
@@ -1717,16 +1748,22 @@ function checkHost(host: Host, kind: Op[typeof OP]): void {
   if (ALLOWED[kind] & bit(host)) return;
   if (host === JSX) {
     throw new Error(
-      `[OP_NOT_ALLOWED_IN_JSX] A block rendered as JSX may only read signals; \`${kind}\` belongs in a reactive computation or an event block (host: ${HOST_NAMES[host]})`
+      __DEV__
+        ? `[OP_NOT_ALLOWED_IN_JSX] A block rendered as JSX may only read signals; \`${kind}\` belongs in a reactive computation or an event block (host: ${HOST_NAMES[host]})`
+        : "[OP_NOT_ALLOWED_IN_JSX] " + kind
     );
   }
   if (host === REACTIVE && kind === "write") {
     throw new Error(
-      "[WRITE_IN_REACTIVE_BLOCK] A reactive computation may not write; move the write into an event block or the effect phase (host: reactive)"
+      __DEV__
+        ? "[WRITE_IN_REACTIVE_BLOCK] A reactive computation may not write; move the write into an event block or the effect phase (host: reactive)"
+        : "[WRITE_IN_REACTIVE_BLOCK]"
     );
   }
   throw new Error(
-    `[OP_NOT_ALLOWED] \`${kind}\` is not allowed in a ${HOST_NAMES[host]} block. ${HOST_RULES[host]}`
+    __DEV__
+      ? `[OP_NOT_ALLOWED] \`${kind}\` is not allowed in a ${HOST_NAMES[host]} block. ${HOST_RULES[host]}`
+      : "[OP_NOT_ALLOWED] " + kind
   );
 }
 
@@ -1750,10 +1787,20 @@ interface RunState {
 
 function drive<R>(iterator: Generator<Op, R, any>, host: Host): R | Promise<R> {
   const state: RunState = { host, stale: false, waited: false };
-  // A superseding run (recompute) or disposal marks this run stale; its
-  // pending continuation then closes the generator instead of resuming.
-  if (getOwner()) cleanup(() => (state.stale = true));
   return step(iterator, iterator.next(), state);
+}
+
+/**
+ * The run's first suspension (always inside the synchronous `drive` call,
+ * under the run's owner): from now on a superseding run (recompute) or
+ * disposal marks this run stale, and its pending continuation closes the
+ * generator instead of resuming. Registered here rather than per run — a
+ * run that never suspends (every run of a sync body) needs no cleanup.
+ */
+function suspend(state: RunState): void {
+  if (state.waited) return;
+  state.waited = true;
+  if (getOwner()) cleanup(() => (state.stale = true));
 }
 
 function step<R>(
@@ -1768,7 +1815,9 @@ function step<R>(
     if (op[OP] === "call") throw invalidYield(op);
     if (!op.delegated) {
       throw new TypeError(
-        "[PLAIN_YIELD_IN_BLOCK] Operations must be yielded with `yield*` (e.g. `yield* attempt(() => p)`), not `yield`"
+        __DEV__
+          ? "[PLAIN_YIELD_IN_BLOCK] Operations must be yielded with `yield*` (e.g. `yield* attempt(() => p)`), not `yield`"
+          : "[PLAIN_YIELD_IN_BLOCK]"
       );
     }
     op.delegated = false;
@@ -1779,7 +1828,9 @@ function step<R>(
         // reads the current value), an error in a computation.
         if (state.waited && state.host === REACTIVE) {
           throw new Error(
-            "[READ_AFTER_WAIT] A signal was read after the block's first suspension (an async `yield* attempt(...)`). Reads after a suspension are not tracked; read every signal before the first suspension"
+            __DEV__
+              ? "[READ_AFTER_WAIT] A signal was read after the block's first suspension (an async `yield* attempt(...)`). Reads after a suspension are not tracked; read every signal before the first suspension"
+              : "[READ_AFTER_WAIT]"
           );
         }
         result = state.waited
@@ -1799,10 +1850,12 @@ function step<R>(
         if (isThenableValue(value)) {
           if (state.host === EFFECT) {
             throw new Error(
-              "[ASYNC_IN_EFFECT] An effect block cannot suspend; `attempt` returned a promise. Start async work from an event block, or read an async memo"
+              __DEV__
+                ? "[ASYNC_IN_EFFECT] An effect block cannot suspend; `attempt` returned a promise. Start async work from an event block, or read an async memo"
+                : "[ASYNC_IN_EFFECT]"
             );
           }
-          state.waited = true;
+          suspend(state);
           return Promise.resolve(value as PromiseLike<unknown>).then(
             v => resume(iterator, state, () => iterator.next(v)),
             error => resume(iterator, state, () => iterator.throw(error))
@@ -1834,7 +1887,7 @@ function step<R>(
         result = iterator.throw(op.error);
         continue;
       case "wait":
-        state.waited = true;
+        suspend(state);
         return Promise.resolve(op.promise).then(
           value => resume(iterator, state, () => iterator.next(value)),
           error => resume(iterator, state, () => iterator.throw(error))
@@ -1868,7 +1921,11 @@ function resume<R>(
     // the superseded promise reject — the owner already moved on and
     // ignores superseded flights.
     iterator.return(undefined as R);
-    throw new Error("[BLOCK_SUPERSEDED] This block run was superseded before its wait settled");
+    throw new Error(
+      __DEV__
+        ? "[BLOCK_SUPERSEDED] This block run was superseded before its wait settled"
+        : "[BLOCK_SUPERSEDED]"
+    );
   }
   const prevHost = currentHost;
   currentHost = state.host;
@@ -2015,21 +2072,27 @@ function verifySyncBlockResult(result: unknown): void {
 
 function asyncGeneratorError(): TypeError {
   return new TypeError(
-    "[ASYNC_GENERATOR] `$` does not accept async generators (`await` is not allowed in a block); suspend with `yield* attempt(() => promise)` instead"
+    __DEV__
+      ? "[ASYNC_GENERATOR] `$` does not accept async generators (`await` is not allowed in a block); suspend with `yield* attempt(() => promise)` instead"
+      : "[ASYNC_GENERATOR]"
   );
 }
 
 function invalidYield(value: unknown): TypeError {
   if (typeof value === "function") {
     return new TypeError(
-      "[PLAIN_YIELD_IN_BLOCK] Signals and blocks must be delegated to with `yield*`, not `yield`"
+      __DEV__
+        ? "[PLAIN_YIELD_IN_BLOCK] Signals and blocks must be delegated to with `yield*`, not `yield`"
+        : "[PLAIN_YIELD_IN_BLOCK]"
     );
   }
   if (value !== null && typeof value === "object" && Symbol.asyncIterator in value) {
     return asyncGeneratorError();
   }
   return new TypeError(
-    `[INVALID_YIELD] blocks may only yield operations (\`yield* signal\`, \`yield* store.path\`, \`yield* set(value)\`, \`yield* raise(...)\`, \`yield* attempt(...)\`, \`yield* Child(props)\`, \`yield* Ctx\`, \`yield* block\`); received ${describe(value)}`
+    __DEV__
+      ? `[INVALID_YIELD] blocks may only yield operations (\`yield* signal\`, \`yield* store.path\`, \`yield* set(value)\`, \`yield* raise(...)\`, \`yield* attempt(...)\`, \`yield* Child(props)\`, \`yield* Ctx\`, \`yield* block\`); received ${describe(value)}`
+      : "[INVALID_YIELD]"
   );
 }
 

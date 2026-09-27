@@ -8,12 +8,19 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { buildModules } from "./build.mjs";
+import { runtimePath } from "./measure.mjs";
 import { SCENARIOS } from "./scenarios.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const [scenario, variant, modeArg, opsArg] = process.argv.slice(2);
 const mode = modeArg ?? SCENARIOS.find(s => s.name === scenario).modes[0];
-const modules = buildModules({ scenarios: [scenario], only: [variant], tag: "profile" });
+// `BV2_RUNTIME=r6` profiles a saved runtime snapshot (see build-prod.mjs).
+const modules = buildModules({
+  scenarios: [scenario],
+  only: [variant],
+  tag: "profile",
+  runtime: runtimePath(process.env.BV2_RUNTIME)
+});
 const dir = mkdtempSync(join(tmpdir(), "bv2-prof-"));
 execFileSync(process.execPath, [
   "--cpu-prof",
