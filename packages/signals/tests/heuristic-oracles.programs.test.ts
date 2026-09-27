@@ -86,7 +86,7 @@ describe("heuristic-oracle bench programs are equivalent", () => {
     ).toEqual(ref);
   });
   it("action vs batch", async () => {
-    const run = async (asAction: boolean) => {
+    const run = async (asAction: boolean | "syncAction") => {
       out.sink = 0;
       out.runs = 0;
       const op = actions(asAction);
@@ -98,6 +98,8 @@ describe("heuristic-oracle bench programs are equivalent", () => {
       }
       return t;
     };
-    expect(await run(false)).toEqual(await run(true));
+    const ref = await run(true);
+    expect(await run(false)).toEqual(ref);
+    expect(await run("syncAction" as any)).toEqual(ref);
   });
 });

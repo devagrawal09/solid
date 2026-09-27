@@ -216,3 +216,60 @@ export function action<Args extends any[], Y, R>(
     });
   };
 }
+
+/**
+ * Compiled form of `action(function* (...) { ... })` when the compiler proved
+ * the body has no `yield` (a synchronous generator runs to completion on its
+ * first step): the body runs as a plain function inside the ambient batch,
+ * without opening a transaction. Everything else an action does for a
+ * one-slice body is kept — the owned-scope guard, the provenance stamp its
+ * writes carry, the flush-in-action guard, the attribution brackets — and the
+ * call still returns a promise (resolved with the return value, rejected with
+ * a throw).
+ *
+ * Equivalence with the transactional form for one-slice bodies is pinned by
+ * tests/sync-action.test.ts (plain and optimistic writes, writes to nodes an
+ * in-flight action holds, nested action calls).
+ *
+ * @internal Emitted by the compiler (`syncActions`); not for hand use.
+ */
+export function syncAction<Args extends any[], R>(
+  fn: (...args: Args) => R
+): (...args: Args) => Promise<R> {
+  return (...args: Args): Promise<R> => {
+    if (__TEST__) markAsyncCapability();
+    if (__DEV__) {
+      const owner = getOwner();
+      if (owner && !(owner._config & CONFIG_CHILDREN_FORBIDDEN)) {
+        emitDiagnostic({
+          code: "ACTION_CALLED_IN_OWNED_SCOPE",
+          kind: "write",
+          severity: "error",
+          message: ACTION_CALLED_IN_OWNED_SCOPE_MESSAGE,
+          ownerId: owner.id,
+          ownerName: (owner as any)._name
+        });
+        throw new Error(ACTION_CALLED_IN_OWNED_SCOPE_MESSAGE);
+      }
+    }
+    // Same provenance as the transactional form's first slice: writes carry
+    // this invocation's origin until the scheduled flush clears it.
+    setOrigin(++actionSeq);
+    const token = {} as any;
+    if (__OBSERVE__ && attrHooks !== null) attrHooks.actionStepStart(token, fn.name || undefined);
+    enterActionStep();
+    let result: R;
+    try {
+      result = fn(...args);
+    } catch (e) {
+      exitActionStep();
+      if (__OBSERVE__ && attrHooks !== null) attrHooks.actionStepEnd(token);
+      schedule();
+      return Promise.reject(e);
+    }
+    exitActionStep();
+    if (__OBSERVE__ && attrHooks !== null) attrHooks.actionStepEnd(token);
+    schedule();
+    return Promise.resolve(result);
+  };
+}

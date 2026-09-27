@@ -62,7 +62,7 @@ export type {
   NodeOptions
 } from "./types.js";
 export { effect, trackedEffect, type Effect, type TrackedEffect } from "./effect.js";
-export { action } from "./action.js";
+export { action, syncAction } from "./action.js";
 export {
   flush,
   Queue,

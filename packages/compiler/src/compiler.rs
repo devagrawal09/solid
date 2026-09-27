@@ -126,6 +126,10 @@ pub struct CompileOptions {
     /// prop contracts, and emit the module's store summary. Default `false`.
     /// Requires `generators: true`.
     pub store_handles: bool,
+    /// Experimental: proven-synchronous `action(function* …)` calls become
+    /// `syncAction(function …)` (see `sync_actions.rs`). DOM only. Default
+    /// `false`.
+    pub sync_actions: bool,
     /// Linker facts for `store_handles`: `(import source, exported
     /// component, verified Borrowed prop)` triples.
     pub store_link_facts: Vec<crate::store_handles::LinkFact>,
@@ -163,6 +167,7 @@ impl Default for CompileOptions {
             host_fusion: false,
             block_proofs: false,
             store_handles: false,
+            sync_actions: false,
             store_link_facts: Vec::new(),
         }
     }
@@ -329,6 +334,12 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
     } else {
         None
     };
+
+    // Experimental: proven-synchronous actions skip the transaction. Client
+    // output only — the server's `action` never runs bodies.
+    if options.sync_actions && matches!(options.generate, Generate::Dom) {
+        crate::sync_actions::transform_sync_actions(&allocator, &mut program);
+    }
 
     // Experimental: fuse `$()` blocks with their statically known host
     // (`createMemo($(fn))` → `createMemo(fn)` with direct accessor calls).

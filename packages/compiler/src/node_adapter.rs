@@ -361,6 +361,7 @@ fn core_options(options: TransformOptions) -> Result<CompileOptions> {
         host_fusion: options.host_fusion.unwrap_or(false),
         block_proofs: options.block_proofs.unwrap_or(false),
         store_handles: options.store_handles.unwrap_or(false),
+        sync_actions: options.sync_actions.unwrap_or(false),
         store_link_facts: options
             .store_link_facts
             .unwrap_or_default()

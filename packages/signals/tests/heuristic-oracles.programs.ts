@@ -17,6 +17,7 @@ import {
   readHandle1,
   readHandle3,
   readHandleChild,
+  syncAction,
   untrack
 } from "../src/index.js";
 
@@ -221,7 +222,11 @@ export function storeRows(kind: StoreKind) {
   };
 }
 
-export function actions(asAction: boolean) {
+export type ActionKind = "action" | "batch" | "syncAction";
+export function actions(kind: ActionKind | boolean) {
+  // `true`/`false` kept for older callers: action / hand-written batch.
+  if (kind === true) kind = "action";
+  if (kind === false) kind = "batch";
   const [a, setA] = createSignal(0);
   const [b, setB] = createSignal(0);
   createRoot(() => {
@@ -231,20 +236,26 @@ export function actions(asAction: boolean) {
     }
   });
   flush();
-  const act = action(function* (k: number) {
+  const body = (k: number) => {
     setA(k);
     setB(k);
-  });
+  };
+  // `syncAction(function …)` is what the compiler's `syncActions` pass emits
+  // for `action(function* …)` with no `yield`.
+  const act =
+    kind === "action"
+      ? action(function* (k: number) {
+          body(k);
+        })
+      : syncAction(body);
   let k = 0;
-  return asAction
+  return kind === "batch"
     ? () => {
-        act(++k);
+        body(++k);
         flush();
       }
     : () => {
-        const v = ++k;
-        setA(v);
-        setB(v);
+        act(++k);
         flush();
       };
 }

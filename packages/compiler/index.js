@@ -323,7 +323,8 @@ const nativeOptionKeys = new Set([
   "generators",
   "hostFusion",
   "blockProofs",
-  "storeHandles"
+  "storeHandles",
+  "syncActions"
 ]);
 
 function validateOptions(code, options) {

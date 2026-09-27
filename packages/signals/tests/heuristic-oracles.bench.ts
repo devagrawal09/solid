@@ -83,6 +83,7 @@ describe(`store rows ${N}: update10th`, () => {
 // ---------------------------------------------------------------------------
 // A1 synchronous action compiled to a plain batch.
 describe(`action: two writes, ${(2 * N) / 5} readers`, () => {
-  bench("baseline (action)", actions(true), OPTS);
-  bench("A1-batch", actions(false), OPTS);
+  bench("baseline (action)", actions("action"), OPTS);
+  bench("A1-batch (hand-written)", actions("batch"), OPTS);
+  bench("A1-syncAction (compiled)", actions("syncAction"), OPTS);
 });

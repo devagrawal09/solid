@@ -37,6 +37,7 @@ export {
   $REFRESH,
   $TRACK,
   action,
+  syncAction,
   affects,
   createOwner,
   createReaction,

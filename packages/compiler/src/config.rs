@@ -77,6 +77,10 @@ pub struct TransformOptions {
     /// Experimental: proxy-free store handles and the module store summary
     /// (Track B slice 2, stage 2). Default `false`.
     pub store_handles: Option<bool>,
+    /// Experimental: rewrite `action(function* …)` calls whose body has no
+    /// `yield` to `syncAction(function …)` (no transaction). DOM only.
+    /// Default `false`.
+    pub sync_actions: Option<bool>,
     /// Linker facts for `store_handles`, flattened by the JS wrapper to
     /// `source\0export\0prop` strings.
     pub store_link_facts: Option<Vec<String>>,

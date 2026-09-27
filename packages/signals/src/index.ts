@@ -5,6 +5,7 @@ export {
   NotReadyError,
   TimeoutError,
   action,
+  syncAction,
   createContext,
   createOwner,
   createRoot,
