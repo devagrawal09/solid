@@ -1,0 +1,27 @@
+## mount
+read open = true
+read open = true
+read open = true
+## initial
+html = <div><div class="toggle open"><a>[-]</a></div><ul class="comment-children" style="display: block;"><li>reply</li></ul></div>
+## click
+write open = false
+read open = false
+read open = false
+read open = false
+html = <div><div class="toggle"><a>[+] comments collapsed</a></div><ul class="comment-children" style="display: none;"><li>reply</li></ul></div>
+## click (DOM unchanged until the flush)
+write open = true
+html = <div><div class="toggle"><a>[+] comments collapsed</a></div><ul class="comment-children" style="display: none;"><li>reply</li></ul></div>
+read open = true
+read open = true
+read open = true
+html = <div><div class="toggle open"><a>[-]</a></div><ul class="comment-children" style="display: block;"><li>reply</li></ul></div>
+## two clicks in one batch
+write open = false
+write open = true
+read open = true
+read open = true
+read open = true
+html = <div><div class="toggle open"><a>[-]</a></div><ul class="comment-children" style="display: block;"><li>reply</li></ul></div>
+## teardown

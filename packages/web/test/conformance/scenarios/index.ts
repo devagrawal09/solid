@@ -5,6 +5,7 @@ import { eventScenarios } from "./events.js";
 import { pathScenarios } from "./paths.js";
 import { reactiveScenarios } from "./reactive.js";
 import { ssrScenarios } from "./ssr.js";
+import { tierScenarios } from "./tiers.js";
 
 export const scenarios: Scenario[] = [
   ...reactiveScenarios,
@@ -12,5 +13,6 @@ export const scenarios: Scenario[] = [
   ...eventScenarios,
   ...pathScenarios,
   ...ssrScenarios,
-  ...blocksScenarios
+  ...blocksScenarios,
+  ...tierScenarios
 ];

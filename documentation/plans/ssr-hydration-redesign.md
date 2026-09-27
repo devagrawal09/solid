@@ -380,6 +380,15 @@ Compat (non-strict) code stays on today's pipeline throughout. An unknown librar
 - **HTML dominates "ready" once script is gone.** The remaining wins are in HTML size (string templates, no markers, no data) and streaming, not JS.
 - **Id and manifest stability** across separately built server and client bundles. Version-stamp the manifest and refuse mismatches at link time.
 
+## Runtime tiers
+
+Follow-up study: [island-runtime-tiers.md](./island-runtime-tiers.md). The compiled islands above still load the full signals core (9.6 KB gz for Toggle). The follow-up has the linker give each connected group of islands the smallest runtime its block graph allows:
+- **tier 0**, no reactive runtime (cells as slots, holes as direct updates, the core's batching kept by a 0.3 KB gz helper) for islands whose cells only their own handlers write and whose holes read unconditionally — HN's Toggle;
+- **tier 1**, a 2.1 KB gz kernel with the core's API and scheduling for memos, branches, lists, effects and shared cells;
+- **tier 2**, the full core, for async, optimistic writes, stores and boundaries — todos-blocks.
+
+Every tier is proven trace-equivalent to the core (a differential suite over random graphs, conformance runs of real compiler output on the kernel, activation stand-ins, and this document's browser gate), and measured with this harness (`measure.mjs` variants `T0-*`, `T1-*`, `T2-*` and the `todos-local` app).
+
 ## Defects found
 
 | Defect | Status | Evidence |
@@ -422,7 +431,9 @@ Compat (non-strict) code stays on today's pipeline throughout. An unknown librar
    push kernel (dynamic reads, memos, shared state), the full core (async,
    transitions, optimistic, stores). Islands sharing state share one runtime;
    every tier is proven equivalent in the conformance harness. Prototype and
-   measurements: `island-runtime-tiers.md` (in progress).
+   measurements: [island-runtime-tiers.md](./island-runtime-tiers.md) and
+   [Runtime tiers](#runtime-tiers) — HN's Toggle island 9.6 → 0.6 KB gz (tier 0),
+   a list app 11.1 → 3.7 KB gz (tier-1 kernel, 2.1 KB gz).
 
 ## Open questions
 

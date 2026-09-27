@@ -1,0 +1,36 @@
+## mount
+read b = 10
+read a = 1
+read a = 1
+read b = 10
+## initial
+html = <p><span class="h1">10</span><span class="h2">1</span><span class="h3">11</span><button class="ab"></button><button class="ba"></button><button class="same"></button><button class="peek"></button></p>
+## write a then b
+write a = 2
+write b = 20
+read a = 2
+read a = 2
+read b = 20
+read b = 20
+html = <p><span class="h1">20</span><span class="h2">2</span><span class="h3">22</span><button class="ab"></button><button class="ba"></button><button class="same"></button><button class="peek"></button></p>
+## write b then a
+write b = 30
+write a = 3
+read b = 30
+read a = 3
+read b = 30
+read a = 3
+html = <p><span class="h1">30</span><span class="h2">3</span><span class="h3">33</span><button class="ab"></button><button class="ba"></button><button class="same"></button><button class="peek"></button></p>
+## equal write
+read a = 3
+write a = 3
+html = <p><span class="h1">30</span><span class="h2">3</span><span class="h3">33</span><button class="ab"></button><button class="ba"></button><button class="same"></button><button class="peek"></button></p>
+## read after write in a handler
+write a = 4
+read a = 3
+value a in handler = 3
+read a = 4
+read a = 4
+read b = 30
+html = <p><span class="h1">30</span><span class="h2">4</span><span class="h3">34</span><button class="ab"></button><button class="ba"></button><button class="same"></button><button class="peek"></button></p>
+## teardown

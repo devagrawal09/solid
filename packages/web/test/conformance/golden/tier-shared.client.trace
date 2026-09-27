@@ -1,0 +1,33 @@
+## mount
+run doubled
+read count = 1
+read count = 1
+## initial
+html = <div><p class="counter"><button class="inc"></button><button class="reset"></button></p><!----><p class="display"><span class="count">1</span><span class="doubled">2</span></p><!----></div>
+## inc (2)
+write count = 2
+run doubled
+read count = 2
+read count = 2
+html = <div><p class="counter"><button class="inc"></button><button class="reset"></button></p><!----><p class="display"><span class="count">2</span><span class="doubled">4</span></p><!----></div>
+## inc (3: branch opens)
+write count = 3
+run doubled
+read count = 3
+read count = 3
+run big
+html = <div><p class="counter"><button class="inc"></button><button class="reset"></button></p><!----><p class="display"><span class="count">3</span><span class="doubled">6</span><b>big</b></p><!----></div>
+## inc (4: branch stays)
+write count = 4
+run doubled
+read count = 4
+read count = 4
+html = <div><p class="counter"><button class="inc"></button><button class="reset"></button></p><!----><p class="display"><span class="count">4</span><span class="doubled">8</span><b>big</b></p><!----></div>
+## reset (branch closes, cleanup)
+write count = 0
+run doubled
+read count = 0
+read count = 0
+cleanup big
+html = <div><p class="counter"><button class="inc"></button><button class="reset"></button></p><!----><p class="display"><span class="count">0</span><span class="doubled">0</span></p><!----></div>
+## teardown

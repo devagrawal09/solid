@@ -1,0 +1,26 @@
+{
+  "kernel (all exports)": {
+    "min": 4642,
+    "gzip": 2150
+  },
+  "kernel: signal + render effect + root (Toggle)": {
+    "min": 4297,
+    "gzip": 2029
+  },
+  "core: the kernel's API (8 exports)": {
+    "min": 24489,
+    "gzip": 9766
+  },
+  "core: signal + render effect + root (Toggle)": {
+    "min": 24188,
+    "gzip": 9656
+  },
+  "core async-free (@solidjs/signals/sync): the kernel's API": {
+    "min": 15745,
+    "gzip": 6588
+  },
+  "core (all exports)": {
+    "min": 103258,
+    "gzip": 36703
+  }
+}

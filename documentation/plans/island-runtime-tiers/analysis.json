@@ -1,0 +1,946 @@
+{
+  "hn": {
+    "app": "hn",
+    "files": [
+      "scripts/ssr-redesign/apps/hn/story.tsx",
+      "examples/hackernews-spa/src/components/comment.tsx",
+      "examples/hackernews-spa/src/components/toggle.tsx"
+    ],
+    "cells": [
+      {
+        "cell": "story(createMemo)",
+        "at": "story.tsx:11",
+        "live": false,
+        "why": "never written"
+      },
+      {
+        "cell": "open(createSignal)",
+        "at": "toggle.tsx:4",
+        "live": true,
+        "why": "setter used"
+      }
+    ],
+    "components": [
+      {
+        "component": "StoryPage",
+        "kind": "plain",
+        "file": "scripts/ssr-redesign/apps/hn/story.tsx",
+        "verdict": "inert",
+        "liveViewReads": [],
+        "staticViewReads": [
+          "story(createMemo)"
+        ],
+        "events": [],
+        "writes": [],
+        "loadTimeEffects": [],
+        "renders": [
+          "Comment"
+        ],
+        "slot": false
+      },
+      {
+        "component": "Page",
+        "kind": "plain",
+        "file": "scripts/ssr-redesign/apps/hn/story.tsx",
+        "verdict": "inert",
+        "liveViewReads": [],
+        "staticViewReads": [],
+        "events": [],
+        "writes": [],
+        "loadTimeEffects": [],
+        "renders": [
+          "StoryPage"
+        ],
+        "slot": false
+      },
+      {
+        "component": "Comment",
+        "kind": "plain",
+        "file": "examples/hackernews-spa/src/components/comment.tsx",
+        "verdict": "inert",
+        "liveViewReads": [],
+        "staticViewReads": [
+          "story(createMemo)"
+        ],
+        "events": [],
+        "writes": [],
+        "loadTimeEffects": [],
+        "renders": [
+          "Toggle",
+          "Comment"
+        ],
+        "slot": false
+      },
+      {
+        "component": "Toggle",
+        "kind": "plain",
+        "file": "examples/hackernews-spa/src/components/toggle.tsx",
+        "verdict": "view-island",
+        "liveViewReads": [
+          "open(createSignal)"
+        ],
+        "staticViewReads": [],
+        "events": [
+          "onClick"
+        ],
+        "writes": [
+          "open(createSignal)"
+        ],
+        "loadTimeEffects": [],
+        "renders": [],
+        "slot": true,
+        "tier": {
+          "own": 0,
+          "group": 0,
+          "members": [
+            "Toggle"
+          ]
+        }
+      }
+    ],
+    "handlerMap": [
+      {
+        "island": "Toggle",
+        "events": [
+          "onClick"
+        ],
+        "writes": [
+          "open(createSignal)"
+        ],
+        "hydrateBeforeWrite": [
+          "Toggle"
+        ]
+      }
+    ],
+    "groups": [
+      {
+        "members": [
+          "Toggle"
+        ],
+        "tier": 0,
+        "why": [
+          "cells [open(createSignal)] written only by the island's own handlers; 3 live hole(s), all reading unconditionally; no memo, effect, cleanup, dynamic structure, async or sharing"
+        ],
+        "alsoTier1": []
+      }
+    ]
+  },
+  "todos": {
+    "app": "todos",
+    "files": [
+      "examples/todos-blocks/src/app.tsx",
+      "examples/todos-blocks/src/todos.ts",
+      "examples/todos-blocks/src/filter.ts"
+    ],
+    "cells": [
+      {
+        "cell": "filtered($memo)",
+        "at": "app.tsx:117",
+        "live": true,
+        "why": "reads a live cell"
+      },
+      {
+        "cell": "allCompleted($memo)",
+        "at": "app.tsx:127",
+        "live": true,
+        "why": "reads a live cell"
+      },
+      {
+        "cell": "remaining($memo)",
+        "at": "app.tsx:159",
+        "live": true,
+        "why": "reads a live cell"
+      },
+      {
+        "cell": "completed($memo)",
+        "at": "app.tsx:162",
+        "live": true,
+        "why": "reads a live cell"
+      },
+      {
+        "cell": "todos(createOptimisticStore, async)",
+        "at": "todos.ts:86",
+        "live": true,
+        "why": "setter used"
+      },
+      {
+        "cell": "filter(createSignal)",
+        "at": "filter.ts:26",
+        "live": true,
+        "why": "setter used"
+      }
+    ],
+    "components": [
+      {
+        "component": "Header",
+        "kind": "$component",
+        "file": "examples/todos-blocks/src/app.tsx",
+        "verdict": "event-island",
+        "liveViewReads": [],
+        "staticViewReads": [],
+        "events": [
+          "onKeyDown"
+        ],
+        "writes": [
+          "todos(createOptimisticStore, async)"
+        ],
+        "loadTimeEffects": [],
+        "renders": [],
+        "slot": false,
+        "tier": {
+          "own": 2,
+          "group": 2,
+          "members": [
+            "Header",
+            "TodoItem",
+            "MainSection",
+            "Footer",
+            "App"
+          ]
+        }
+      },
+      {
+        "component": "TodoItem",
+        "kind": "$component",
+        "file": "examples/todos-blocks/src/app.tsx",
+        "verdict": "view-island",
+        "liveViewReads": [
+          "todos(createOptimisticStore, async)",
+          "filtered($memo)"
+        ],
+        "staticViewReads": [],
+        "events": [
+          "onInput",
+          "onClick",
+          "onClick"
+        ],
+        "writes": [
+          "todos(createOptimisticStore, async)"
+        ],
+        "loadTimeEffects": [],
+        "renders": [],
+        "slot": false,
+        "tier": {
+          "own": 2,
+          "group": 2,
+          "members": [
+            "Header",
+            "TodoItem",
+            "MainSection",
+            "Footer",
+            "App"
+          ]
+        }
+      },
+      {
+        "component": "MainSection",
+        "kind": "$component",
+        "file": "examples/todos-blocks/src/app.tsx",
+        "verdict": "view-island",
+        "liveViewReads": [
+          "todos(createOptimisticStore, async)",
+          "allCompleted($memo)",
+          "filtered($memo)"
+        ],
+        "staticViewReads": [],
+        "events": [
+          "onInput"
+        ],
+        "writes": [
+          "todos(createOptimisticStore, async)"
+        ],
+        "loadTimeEffects": [],
+        "renders": [
+          "TodoItem"
+        ],
+        "slot": false,
+        "tier": {
+          "own": 2,
+          "group": 2,
+          "members": [
+            "Header",
+            "TodoItem",
+            "MainSection",
+            "Footer",
+            "App"
+          ]
+        }
+      },
+      {
+        "component": "Footer",
+        "kind": "$component",
+        "file": "examples/todos-blocks/src/app.tsx",
+        "verdict": "view-island",
+        "liveViewReads": [
+          "todos(createOptimisticStore, async)",
+          "remaining($memo)",
+          "filter(createSignal)",
+          "completed($memo)"
+        ],
+        "staticViewReads": [],
+        "events": [
+          "onClick"
+        ],
+        "writes": [
+          "todos(createOptimisticStore, async)"
+        ],
+        "loadTimeEffects": [],
+        "renders": [],
+        "slot": false,
+        "tier": {
+          "own": 2,
+          "group": 2,
+          "members": [
+            "Header",
+            "TodoItem",
+            "MainSection",
+            "Footer",
+            "App"
+          ]
+        }
+      },
+      {
+        "component": "App",
+        "kind": "plain",
+        "file": "examples/todos-blocks/src/app.tsx",
+        "verdict": "hot-island",
+        "liveViewReads": [
+          "todos(createOptimisticStore, async)",
+          "filtered($memo)",
+          "filter(createSignal)"
+        ],
+        "staticViewReads": [],
+        "events": [
+          "onClick"
+        ],
+        "writes": [],
+        "loadTimeEffects": [
+          "onSettled @filter.ts:27 (via createHashFilter())"
+        ],
+        "renders": [
+          "Header",
+          "MainSection",
+          "Footer"
+        ],
+        "slot": false,
+        "tier": {
+          "own": 2,
+          "group": 2,
+          "members": [
+            "Header",
+            "TodoItem",
+            "MainSection",
+            "Footer",
+            "App"
+          ]
+        }
+      }
+    ],
+    "handlerMap": [
+      {
+        "island": "Header",
+        "events": [
+          "onKeyDown"
+        ],
+        "writes": [
+          "todos(createOptimisticStore, async)"
+        ],
+        "hydrateBeforeWrite": [
+          "Header",
+          "TodoItem",
+          "MainSection",
+          "Footer",
+          "App"
+        ]
+      },
+      {
+        "island": "TodoItem",
+        "events": [
+          "onInput",
+          "onClick",
+          "onClick"
+        ],
+        "writes": [
+          "todos(createOptimisticStore, async)"
+        ],
+        "hydrateBeforeWrite": [
+          "TodoItem",
+          "MainSection",
+          "Footer",
+          "App"
+        ]
+      },
+      {
+        "island": "MainSection",
+        "events": [
+          "onInput"
+        ],
+        "writes": [
+          "todos(createOptimisticStore, async)"
+        ],
+        "hydrateBeforeWrite": [
+          "MainSection",
+          "TodoItem",
+          "Footer",
+          "App"
+        ]
+      },
+      {
+        "island": "Footer",
+        "events": [
+          "onClick"
+        ],
+        "writes": [
+          "todos(createOptimisticStore, async)"
+        ],
+        "hydrateBeforeWrite": [
+          "Footer",
+          "TodoItem",
+          "MainSection",
+          "App"
+        ]
+      },
+      {
+        "island": "App",
+        "events": [
+          "onClick"
+        ],
+        "writes": [],
+        "hydrateBeforeWrite": [
+          "App"
+        ]
+      }
+    ],
+    "groups": [
+      {
+        "members": [
+          "Header",
+          "TodoItem",
+          "MainSection",
+          "Footer",
+          "App"
+        ],
+        "tier": 2,
+        "why": [
+          "Header: async/optimistic cell todos(createOptimisticStore, async)",
+          "Header: calls action addTodo",
+          "Header: attempt() @app.tsx:58",
+          "TodoItem: async/optimistic cell todos(createOptimisticStore, async)",
+          "TodoItem: calls action toggleTodo",
+          "TodoItem: calls action removeTodo",
+          "TodoItem: attempt() @app.tsx:74",
+          "TodoItem: attempt() @app.tsx:78",
+          "TodoItem: attempt() @app.tsx:83",
+          "MainSection: async/optimistic cell todos(createOptimisticStore, async)",
+          "MainSection: calls action toggleAll",
+          "MainSection: attempt() @app.tsx:132",
+          "Footer: async/optimistic cell todos(createOptimisticStore, async)",
+          "Footer: calls action clearCompleted",
+          "Footer: attempt() @app.tsx:166",
+          "App: async/optimistic cell todos(createOptimisticStore, async)",
+          "App: <Errored>",
+          "App: <Loading>"
+        ],
+        "alsoTier1": [
+          "TodoItem: memo filtered",
+          "TodoItem: <Show when> over live input (dynamic structure)",
+          "MainSection: memo allCompleted",
+          "MainSection: memo filtered",
+          "MainSection: <Show when> over live input (dynamic structure)",
+          "MainSection: <For each> over live input (dynamic structure)",
+          "Footer: memo remaining",
+          "Footer: memo completed",
+          "Footer: <Show when> over live input (dynamic structure)",
+          "App: memo filtered",
+          "App: load-time effect onSettled @filter.ts:27 (via createHashFilter())",
+          "cells shared across islands: todos(createOptimisticStore, async), filtered($memo), filter(createSignal)"
+        ]
+      }
+    ]
+  },
+  "sync": {
+    "app": "sync",
+    "files": [
+      "examples/sync-blocks/src/app.tsx"
+    ],
+    "cells": [
+      {
+        "cell": "celsius($signal)",
+        "at": "app.tsx:15",
+        "live": true,
+        "why": "setter used"
+      },
+      {
+        "cell": "fahrenheit($memo)",
+        "at": "app.tsx:17",
+        "live": true,
+        "why": "reads a live cell"
+      },
+      {
+        "cell": "label($memo)",
+        "at": "app.tsx:20",
+        "live": true,
+        "why": "reads a live cell"
+      },
+      {
+        "cell": "state($store)",
+        "at": "app.tsx:39",
+        "live": true,
+        "why": "setter used"
+      },
+      {
+        "cell": "draft($signal)",
+        "at": "app.tsx:40",
+        "live": true,
+        "why": "setter used"
+      },
+      {
+        "cell": "filter($signal)",
+        "at": "app.tsx:41",
+        "live": true,
+        "why": "setter used"
+      },
+      {
+        "cell": "visible($memo)",
+        "at": "app.tsx:44",
+        "live": true,
+        "why": "reads a live cell"
+      },
+      {
+        "cell": "remaining($memo)",
+        "at": "app.tsx:50",
+        "live": true,
+        "why": "reads a live cell"
+      },
+      {
+        "cell": "summary($memo)",
+        "at": "app.tsx:53",
+        "live": true,
+        "why": "reads a live cell"
+      }
+    ],
+    "components": [
+      {
+        "component": "Converter",
+        "kind": "$component",
+        "file": "examples/sync-blocks/src/app.tsx",
+        "verdict": "view-island",
+        "liveViewReads": [
+          "label($memo)"
+        ],
+        "staticViewReads": [],
+        "events": [
+          "onClick"
+        ],
+        "writes": [
+          "celsius($signal)"
+        ],
+        "loadTimeEffects": [],
+        "renders": [],
+        "slot": false,
+        "tier": {
+          "own": 1,
+          "group": 1,
+          "members": [
+            "Converter"
+          ]
+        }
+      },
+      {
+        "component": "App",
+        "kind": "$component",
+        "file": "examples/sync-blocks/src/app.tsx",
+        "verdict": "view-island",
+        "liveViewReads": [
+          "draft($signal)",
+          "visible($memo)",
+          "remaining($memo)",
+          "summary($memo)"
+        ],
+        "staticViewReads": [],
+        "events": [
+          "onSubmit",
+          "onInput",
+          "onClick",
+          "onClick",
+          "onClick",
+          "onClick"
+        ],
+        "writes": [
+          "state($store)",
+          "draft($signal)",
+          "filter($signal)"
+        ],
+        "loadTimeEffects": [],
+        "renders": [
+          "Converter"
+        ],
+        "slot": false,
+        "tier": {
+          "own": 2,
+          "group": 2,
+          "members": [
+            "App"
+          ]
+        }
+      }
+    ],
+    "handlerMap": [
+      {
+        "island": "Converter",
+        "events": [
+          "onClick"
+        ],
+        "writes": [
+          "celsius($signal)"
+        ],
+        "hydrateBeforeWrite": [
+          "Converter"
+        ]
+      },
+      {
+        "island": "App",
+        "events": [
+          "onSubmit",
+          "onInput",
+          "onClick",
+          "onClick",
+          "onClick",
+          "onClick"
+        ],
+        "writes": [
+          "state($store)",
+          "draft($signal)",
+          "filter($signal)"
+        ],
+        "hydrateBeforeWrite": [
+          "App"
+        ]
+      }
+    ],
+    "groups": [
+      {
+        "members": [
+          "Converter"
+        ],
+        "tier": 1,
+        "why": [
+          "Converter: memo label",
+          "Converter: memo fahrenheit"
+        ],
+        "alsoTier1": [],
+        "note": "memo folding candidate: only memos keep this group off tier 0"
+      },
+      {
+        "members": [
+          "App"
+        ],
+        "tier": 2,
+        "why": [
+          "App: store state($store) (the kernel has no stores)"
+        ],
+        "alsoTier1": [
+          "App: memo visible",
+          "App: memo remaining",
+          "App: memo summary",
+          "App: <For each> over live input (dynamic structure)",
+          "App: <Show when> over live input (dynamic structure)"
+        ]
+      }
+    ]
+  },
+  "todos-local": {
+    "app": "todos-local",
+    "files": [
+      "scripts/ssr-redesign/apps/todos-local/app.tsx"
+    ],
+    "cells": [
+      {
+        "cell": "filter(createSignal)",
+        "at": "app.tsx:28",
+        "live": true,
+        "why": "setter used"
+      },
+      {
+        "cell": "todos(createSignal)",
+        "at": "app.tsx:38",
+        "live": true,
+        "why": "setter used"
+      },
+      {
+        "cell": "filtered(createMemo)",
+        "at": "app.tsx:88",
+        "live": true,
+        "why": "reads a live cell"
+      },
+      {
+        "cell": "allCompleted(createMemo)",
+        "at": "app.tsx:92",
+        "live": true,
+        "why": "reads a live cell"
+      },
+      {
+        "cell": "remaining(createMemo)",
+        "at": "app.tsx:108",
+        "live": true,
+        "why": "reads a live cell"
+      },
+      {
+        "cell": "completed(createMemo)",
+        "at": "app.tsx:109",
+        "live": true,
+        "why": "reads a live cell"
+      }
+    ],
+    "components": [
+      {
+        "component": "Header",
+        "kind": "plain",
+        "file": "scripts/ssr-redesign/apps/todos-local/app.tsx",
+        "verdict": "event-island",
+        "liveViewReads": [],
+        "staticViewReads": [],
+        "events": [
+          "onKeyDown"
+        ],
+        "writes": [
+          "todos(createSignal)"
+        ],
+        "loadTimeEffects": [],
+        "renders": [],
+        "slot": false,
+        "tier": {
+          "own": 0,
+          "group": 1,
+          "members": [
+            "Header",
+            "TodoItem",
+            "MainSection",
+            "Footer",
+            "App"
+          ]
+        }
+      },
+      {
+        "component": "TodoItem",
+        "kind": "plain",
+        "file": "scripts/ssr-redesign/apps/todos-local/app.tsx",
+        "verdict": "view-island",
+        "liveViewReads": [
+          "filtered(createMemo)"
+        ],
+        "staticViewReads": [],
+        "events": [
+          "onInput",
+          "onClick"
+        ],
+        "writes": [
+          "todos(createSignal)"
+        ],
+        "loadTimeEffects": [],
+        "renders": [],
+        "slot": false,
+        "tier": {
+          "own": 1,
+          "group": 1,
+          "members": [
+            "Header",
+            "TodoItem",
+            "MainSection",
+            "Footer",
+            "App"
+          ]
+        }
+      },
+      {
+        "component": "MainSection",
+        "kind": "plain",
+        "file": "scripts/ssr-redesign/apps/todos-local/app.tsx",
+        "verdict": "view-island",
+        "liveViewReads": [
+          "todos(createSignal)",
+          "allCompleted(createMemo)",
+          "filtered(createMemo)"
+        ],
+        "staticViewReads": [],
+        "events": [
+          "onInput"
+        ],
+        "writes": [
+          "todos(createSignal)"
+        ],
+        "loadTimeEffects": [],
+        "renders": [
+          "TodoItem"
+        ],
+        "slot": false,
+        "tier": {
+          "own": 1,
+          "group": 1,
+          "members": [
+            "Header",
+            "TodoItem",
+            "MainSection",
+            "Footer",
+            "App"
+          ]
+        }
+      },
+      {
+        "component": "Footer",
+        "kind": "plain",
+        "file": "scripts/ssr-redesign/apps/todos-local/app.tsx",
+        "verdict": "view-island",
+        "liveViewReads": [
+          "todos(createSignal)",
+          "remaining(createMemo)",
+          "filter(createSignal)",
+          "completed(createMemo)"
+        ],
+        "staticViewReads": [],
+        "events": [
+          "onClick"
+        ],
+        "writes": [
+          "todos(createSignal)"
+        ],
+        "loadTimeEffects": [],
+        "renders": [],
+        "slot": false,
+        "tier": {
+          "own": 1,
+          "group": 1,
+          "members": [
+            "Header",
+            "TodoItem",
+            "MainSection",
+            "Footer",
+            "App"
+          ]
+        }
+      },
+      {
+        "component": "App",
+        "kind": "plain",
+        "file": "scripts/ssr-redesign/apps/todos-local/app.tsx",
+        "verdict": "hot-island",
+        "liveViewReads": [
+          "todos(createSignal)",
+          "filter(createSignal)"
+        ],
+        "staticViewReads": [],
+        "events": [],
+        "writes": [],
+        "loadTimeEffects": [
+          "onSettled @app.tsx:29 (via createHashFilter())"
+        ],
+        "renders": [
+          "Header",
+          "MainSection",
+          "Footer"
+        ],
+        "slot": false,
+        "tier": {
+          "own": 1,
+          "group": 1,
+          "members": [
+            "Header",
+            "TodoItem",
+            "MainSection",
+            "Footer",
+            "App"
+          ]
+        }
+      }
+    ],
+    "handlerMap": [
+      {
+        "island": "Header",
+        "events": [
+          "onKeyDown"
+        ],
+        "writes": [
+          "todos(createSignal)"
+        ],
+        "hydrateBeforeWrite": [
+          "Header",
+          "TodoItem",
+          "MainSection",
+          "Footer",
+          "App"
+        ]
+      },
+      {
+        "island": "TodoItem",
+        "events": [
+          "onInput",
+          "onClick"
+        ],
+        "writes": [
+          "todos(createSignal)"
+        ],
+        "hydrateBeforeWrite": [
+          "TodoItem",
+          "MainSection",
+          "Footer",
+          "App"
+        ]
+      },
+      {
+        "island": "MainSection",
+        "events": [
+          "onInput"
+        ],
+        "writes": [
+          "todos(createSignal)"
+        ],
+        "hydrateBeforeWrite": [
+          "MainSection",
+          "TodoItem",
+          "Footer",
+          "App"
+        ]
+      },
+      {
+        "island": "Footer",
+        "events": [
+          "onClick"
+        ],
+        "writes": [
+          "todos(createSignal)"
+        ],
+        "hydrateBeforeWrite": [
+          "Footer",
+          "TodoItem",
+          "MainSection",
+          "App"
+        ]
+      }
+    ],
+    "groups": [
+      {
+        "members": [
+          "Header",
+          "TodoItem",
+          "MainSection",
+          "Footer",
+          "App"
+        ],
+        "tier": 1,
+        "why": [
+          "TodoItem: memo filtered",
+          "MainSection: memo allCompleted",
+          "MainSection: memo filtered",
+          "MainSection: <Show when> over live input (dynamic structure)",
+          "MainSection: <For each> over live input (dynamic structure)",
+          "Footer: memo remaining",
+          "Footer: memo completed",
+          "Footer: <Show when> over live input (dynamic structure)",
+          "App: load-time effect onSettled @app.tsx:29 (via createHashFilter())",
+          "cells shared across islands: todos(createSignal), filtered(createMemo), filter(createSignal)"
+        ],
+        "alsoTier1": []
+      }
+    ]
+  }
+}
