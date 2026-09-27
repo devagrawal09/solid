@@ -16,6 +16,8 @@ import {
   $store,
   attempt,
   createContext,
+  createEffect,
+  createMemo,
   createRenderEffect,
   createRoot,
   createSignal,
@@ -355,5 +357,41 @@ describe("$effect", () => {
     }
     spy.mockRestore();
     expect(String(errors[0] ?? "")).toMatch(/OP_NOT_ALLOWED.*flush.*effect/s);
+  });
+});
+
+describe("interop: plain APIs accept generator bodies", () => {
+  it("createMemo(function* …) is a memo block", () => {
+    const [a, setA] = createSignal(2);
+    let m!: () => number;
+    createRoot(() => {
+      m = createMemo(function* () {
+        return (yield* a) * 3;
+      });
+    });
+    expect(m()).toBe(6);
+    setA(3);
+    flush();
+    expect(m()).toBe(9);
+  });
+
+  it("createEffect(function* …) is an effect block", () => {
+    const [a, setA] = createSignal(1);
+    const [b, setB] = createSignal(0);
+    const log: string[] = [];
+    createRoot(() => {
+      createEffect(function* () {
+        const v = yield* a;
+        setB(v * 10);
+        log.push(`run ${v}`);
+        yield* $cleanup(() => log.push(`cleanup ${v}`));
+      });
+    });
+    flush();
+    setA(2);
+    flush();
+    expect(log).toEqual(["run 1", "cleanup 1", "run 2"]);
+    expect(b()).toBe(20);
+    void setB;
   });
 });

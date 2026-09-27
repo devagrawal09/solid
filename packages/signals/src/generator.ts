@@ -12,10 +12,11 @@ import {
   runInIdScope,
   runWithOwner,
   setBlockGuard,
+  trackedEffect,
   untrack,
   type Owner
 } from "./core/index.js";
-import type { SourceAccessor } from "./signals.js";
+import { installGeneratorHook, type SourceAccessor } from "./signals.js";
 
 /*
  * `$` blocks — typed reactive computations with host-restricted effects.
@@ -1226,6 +1227,30 @@ export function runBlockAs<B extends AnyBlock>(host: Host, block: B, input: unkn
   }
 }
 
+let generatorHookInstalled = false;
+const GENERATOR_FUNCTION_PROTO = Object.getPrototypeOf(function* () {});
+
+/** @internal A generator function (`function* …`), which plain APIs accept as a block body. */
+export function isGeneratorFunction(value: unknown): value is (...args: any[]) => Generator {
+  return typeof value === "function" && Object.getPrototypeOf(value) === GENERATOR_FUNCTION_PROTO;
+}
+
+/**
+ * @internal The hook behind `createMemo(function* …)` / `createEffect(function* …)`:
+ * a generator body becomes a memo block, or an effect block created as a
+ * tracked effect (reads, writes and `$cleanup` in one pass; writes deferred
+ * until flush), which returns true. Anything else returns undefined.
+ */
+function generatorBody(fn: unknown, asEffect?: boolean): unknown {
+  if (!isGeneratorFunction(fn)) return undefined;
+  const block = $(fn as any) as AnyBlock;
+  if (!asEffect) return block;
+  trackedEffect(() => {
+    runBlockAs(EFFECT, block, undefined);
+  });
+  return true;
+}
+
 /**
  * Render a block as a JSX child: reads only. Renderers call this at their
  * insertion sink (`insert`, `flatten`) so a block that waits, raises,
@@ -1360,6 +1385,10 @@ export function $(
     throw new TypeError(
       "[STRICT_NOT_COMPILED] `$` received a plain (arrow or async) callback at runtime. A non-generator callback is a strict compilation marker: @solidjs/compiler analyzes it for its host and erases the marker. Compile the module with the Solid compiler (`generators` on), or write a generator block (`$(function* () { … })`)"
     );
+  }
+  if (!generatorHookInstalled) {
+    generatorHookInstalled = true;
+    installGeneratorHook(generatorBody);
   }
   // BLOCK_SYNC: the compiler lowered the body to call form and proved its
   // result is a plain value (never a generator, thenable or async iterable),

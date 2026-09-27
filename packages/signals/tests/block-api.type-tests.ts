@@ -12,6 +12,8 @@ import {
   $store,
   attempt,
   createContext,
+  createEffect,
+  createMemo,
   createSignal,
   raise,
   type BlockComponent,
@@ -148,3 +150,17 @@ assert<Equal<typeof Wrapper, BlockComponent<{}, false, never>>>();
 // Calling a component returns its view.
 const v: View<true, NotFound> = Async({ id: "2" });
 void v;
+
+// --- interop: plain APIs accept generator bodies -----------------------------------------
+const plainMemo = createMemo(function* () {
+  return (yield* external) + 1;
+});
+assert<Equal<ReturnType<typeof plainMemo>, number>>();
+createEffect(function* () {
+  const n = yield* external;
+  yield* $cleanup(() => void n);
+});
+// @ts-expect-error an effect block may not suspend
+createEffect(function* () {
+  yield* attempt(() => fetchUser("x"));
+});

@@ -29,6 +29,7 @@ import {
   trackedEffect,
   untrack
 } from "./core/index.js";
+import type { EffectOp, MemoAccessor, MemoOp } from "./block-api.js";
 import {
   accessorIterator,
   type AnyBlock,
@@ -469,6 +470,38 @@ export function createSignal<T>(
  *
  * @description https://docs.solidjs.com/reference/basic-reactivity/create-memo
  */
+// Generator bodies (`createMemo(function* …)`, `createEffect(function* …)`)
+// run on the block driver, which installs this hook the first time a block is
+// built, so the core floor does not carry the driver (pay-for-use). The hook
+// returns the memo compute / creates the effect for a generator body, and
+// returns undefined for anything else.
+let generatorHook: ((fn: unknown, effect?: boolean) => any) | null = null;
+/** @internal */
+export function installGeneratorHook(hook: NonNullable<typeof generatorHook>): void {
+  generatorHook = hook;
+}
+function checkGeneratorHook(fn: unknown): void {
+  if (
+    __DEV__ &&
+    !generatorHook &&
+    typeof fn === "function" &&
+    Object.getPrototypeOf(fn) === Object.getPrototypeOf(function* () {})
+  )
+    throw new Error(
+      "[GENERATOR_BODY] A generator body needs the block driver: build a block (`$memo`, `$effect`, `$component`, `$event`) in this app, or compile it with the Solid compiler."
+    );
+}
+/** @internal `fn`, or the memo block a generator body becomes. */
+export function generatorMemo<F>(fn: F): F {
+  if (__DEV__) checkGeneratorHook(fn);
+  return (generatorHook && generatorHook(fn)) || fn;
+}
+/** @internal Create the effect a generator body becomes; false when `fn` is not one. */
+export function generatorEffect(fn: unknown): boolean {
+  if (__DEV__) checkGeneratorHook(fn);
+  return !!generatorHook && generatorHook(fn, true) === true;
+}
+
 // NoInfer keeps the previous-value parameter from influencing T inference, so
 // the memo/effect result type is still driven by the compute return type.
 // With a loadingValue the compute's `prev` is never undefined — commit #0 is
@@ -479,6 +512,11 @@ export function createMemo<B extends AnyBlock & ReactiveHostBlock>(
   compute: B,
   options?: MemoOptions<BlockValue<B>>
 ): BlockAccessor<B>;
+// A generator body is a memo block: reads, `raise`, `attempt` (sync or async).
+export function createMemo<Y extends MemoOp, R>(
+  compute: () => Generator<Y, R, any>,
+  options?: MemoOptions<R>
+): MemoAccessor<R, Y>;
 export function createMemo<T>(
   compute: ComputeFunction<NoInfer<T>, T>,
   options: MemoOptions<T> & { loadingValue: T }
@@ -491,7 +529,7 @@ export function createMemo<T>(
   compute: ComputeFunction<undefined | NoInfer<T>, T>,
   options?: MemoOptions<T>
 ): SourceAccessor<T> {
-  return accessor<T>(computed<T>(compute as any, options));
+  return accessor<T>(computed<T>(generatorMemo(compute) as any, options));
 }
 
 /**
@@ -562,11 +600,20 @@ export function createMemo<T>(
  *
  * @description https://docs.solidjs.com/reference/basic-reactivity/create-effect
  */
+// A generator body alone is an effect block: reads, writes, `$cleanup`,
+// `raise`, sync `attempt`.
+export function createEffect<Y extends EffectOp>(body: () => Generator<Y, void, any>): void;
 export function createEffect<T>(
   compute: ComputeFunction<undefined | NoInfer<T>, T>,
   effectFn: EffectFunction<NoInfer<T>, T> | EffectBundle<NoInfer<T>, T>,
   options?: EffectOptions
+): void;
+export function createEffect<T>(
+  compute: ComputeFunction<undefined | NoInfer<T>, T>,
+  effectFn?: EffectFunction<NoInfer<T>, T> | EffectBundle<NoInfer<T>, T>,
+  options?: EffectOptions
 ): void {
+  if (effectFn === undefined && generatorEffect(compute)) return;
   if (__DEV__ && effectFn === undefined) {
     const message =
       "[MISSING_EFFECT_FN] createEffect requires both a compute function and an effect function. " +

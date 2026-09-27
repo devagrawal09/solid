@@ -74,6 +74,14 @@ Calling it returns its view: `UserCard({ id: "42" })`.
 `render(App, root)`, `hydrate` and island roots accept settled components only: every
 pending and every failure must be handled by a `Loading` / `Errored` above it.
 
+Call forms create their arguments first, so a boundary must receive its children
+lazily to own them: the compiler turns `Loading({ fallback, children: X(p) })` into
+`createComponent(Loading, { fallback, get children() { return X(p) } })`.
+Uncompiled code writes the getter itself. Likewise a `yield*` inside a JSX
+expression (`<section>{yield* X(p)}</section>`) needs the compiler: the JSX
+transform wraps expressions in closures, so uncompiled views hoist the `yield*`
+into a `const` first.
+
 Props: `$component(function* (props: TypedProps<{ id: string }>) …)` or
 `$component<{ id: string }>()(function* (props) …)` (TypeScript cannot take `P`
 explicitly while inferring the rest, microsoft/TypeScript#26242).
@@ -110,7 +118,10 @@ block runs as a tracked effect (reads and body in one pass, writes deferred).
 - Plain components render `$component`s and vice versa; plain components' effects are
   unknown (allowed as tags).
 - Plain APIs accept generator functions directly: `createMemo(function* () {…})`,
-  `createEffect(function* () {…})`. `$event` works anywhere.
+  `createEffect(function* () {…})`. `$event` works anywhere. Uncompiled, the core
+  reaches the block driver through a hook the driver installs when the first block
+  is built, so apps that never build a block do not carry it (pay-for-use; a dev
+  error names the missing driver).
 - `$signal` / `$memo` / `$store` / `$effect` / `$cleanup` outside a component's setup
   are dev errors.
 

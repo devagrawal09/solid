@@ -1,4 +1,10 @@
-import { setBlockPrimitives } from "@solidjs/signals";
+import {
+  generatorMemo,
+  setBlockPrimitives,
+  type EffectOp,
+  type MemoAccessor,
+  type MemoOp
+} from "@solidjs/signals";
 // Mock @solidjs/signals for server-side rendering
 // Re-exports infrastructure from the real package, reimplements reactive primitives as pull-based.
 
@@ -971,6 +977,10 @@ export function createMemo<B extends AnyBlock & ReactiveHostBlock>(
   compute: B,
   options?: ServerMemoOptions<BlockValue<B>>
 ): BlockAccessor<B>;
+export function createMemo<Y extends MemoOp, R>(
+  compute: () => Generator<Y, R, any>,
+  options?: ServerMemoOptions<R>
+): MemoAccessor<R, Y>;
 export function createMemo<T>(
   compute: ComputeFunction<NoInfer<T>, T>,
   options: ServerMemoOptions<T> & { loadingValue: T }
@@ -983,6 +993,7 @@ export function createMemo<T>(
   compute: ComputeFunction<undefined | NoInfer<T>, T>,
   options?: ServerMemoOptions<T>
 ): SourceAccessor<T | undefined> {
+  compute = generatorMemo(compute);
   // Sync fast path — set by the compiler-emitted `_$memo()` / `_$effect()`
   // wrappers (see `@solidjs/web`'s `render.js`) and by internal control-flow
   // primitives (mapArray, repeat, Show, Switch, children, lazy). These
@@ -1918,11 +1929,20 @@ function serverEffect<T>(
   }
 }
 
+const GENERATOR_FUNCTION_PROTO = Object.getPrototypeOf(function* () {});
+export function createEffect<Y extends EffectOp>(body: () => Generator<Y, void, any>): void;
 export function createEffect<T>(
   compute: ComputeFunction<undefined | NoInfer<T>, T>,
   effect: EffectFunction<NoInfer<T>, T> | EffectBundle<NoInfer<T>, T>,
   options?: EffectOptions
+): void;
+export function createEffect<T>(
+  compute: ComputeFunction<undefined | NoInfer<T>, T>,
+  effect?: EffectFunction<NoInfer<T>, T> | EffectBundle<NoInfer<T>, T>,
+  options?: EffectOptions
 ): void {
+  // An effect block (reads, writes, cleanups) has no server-side effect half.
+  if (effect === undefined && Object.getPrototypeOf(compute) === GENERATOR_FUNCTION_PROTO) return;
   serverEffect(compute, undefined, options);
 }
 

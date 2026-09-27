@@ -82,7 +82,9 @@ export {
   until,
   onSettled,
   onCleanup,
-  syncOnly
+  syncOnly,
+  generatorMemo,
+  generatorEffect
 } from "./signals.js";
 export {
   $,

@@ -1,4 +1,10 @@
-import { setBlockPrimitives } from "@solidjs/signals";
+import {
+  generatorEffect,
+  generatorMemo,
+  setBlockPrimitives,
+  type MemoAccessor,
+  type MemoOp
+} from "@solidjs/signals";
 import {
   getOwner,
   NotReadyError,
@@ -1438,6 +1444,11 @@ export const createMemo: {
     compute: B,
     options?: HydrationMemoOptions<BlockValue<B>>
   ): BlockAccessor<B>;
+  // A generator body is a memo block: reads, `raise`, `attempt`.
+  <Y extends MemoOp, R>(
+    compute: () => Generator<Y, R, any>,
+    options?: HydrationMemoOptions<R>
+  ): MemoAccessor<R, Y>;
   // Commit #0 (loadingValue) removes the uninitialized window: the accessor
   // never reads undefined — even for `ssrSource: "client"`, where the loading
   // value serves until the post-hydration compute lands — and `prev` is
@@ -1452,8 +1463,8 @@ export const createMemo: {
     compute: ComputeFunction<undefined | NoInfer<T>, T>,
     options?: HydrationMemoOptions<T>
   ): SourceAccessor<T>;
-} = ((...args: any[]) => {
-  return (_createMemo || coreMemo)(...args);
+} = ((compute: any, ...rest: any[]) => {
+  return (_createMemo || coreMemo)(generatorMemo(compute), ...rest);
 }) as any;
 
 /**
@@ -1904,8 +1915,10 @@ export const createRenderEffect: typeof coreRenderEffect = ((...args: any[]) =>
  *
  * @description https://docs.solidjs.com/reference/basic-reactivity/create-effect
  */
-export const createEffect: typeof coreEffect = ((...args: any[]) =>
-  (_createEffect || coreEffect)(...args)) as typeof coreEffect;
+export const createEffect: typeof coreEffect = ((...args: any[]) => {
+  if (args[1] === undefined && generatorEffect(args[0])) return;
+  return (_createEffect || coreEffect)(...args);
+}) as typeof coreEffect;
 
 // === Loading component ===
 function createBoundaryTrigger(): () => void {
