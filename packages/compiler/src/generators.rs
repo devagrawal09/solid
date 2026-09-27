@@ -4,7 +4,7 @@
 //! reactive block from a generator body: inside it every reactive read is
 //! `yield* signal`, a typed throw is `yield* raise(error)`, a typed fallible
 //! call is `yield* attempt(fn, ...Errors)`, and an async suspension is
-//! `yield* wait(promise, ...Errors)`. The runtime drives the generator; this
+//! an async `yield* attempt(() => promise)`. The runtime drives the generator; this
 //! pass removes that driver from compiled output by lowering the body to
 //! call form, which `$` runs under the same strict scope:
 //!
@@ -36,7 +36,7 @@
 //! - a `throw` statement (`[THROW_IN_BLOCK]` — use `yield* raise(error)`);
 //! - a bare `yield` (`[PLAIN_YIELD_IN_BLOCK]` — operations use `yield*`);
 //! - `$(async function* …)` (`[ASYNC_GENERATOR_IN_BLOCK]` — use
-//!   `yield* wait(promise)`; `await` is not allowed);
+//!   `yield* attempt(() => promise)`; `await` is not allowed);
 //! - a `yield*` inside a JSX expression container in a block the pass cannot
 //!   lower (`[JSX_YIELD_IN_UNLOWERED_BLOCK]`): the JSX transform would hoist
 //!   it into an arrow function, where `yield` is a syntax error.
@@ -56,7 +56,7 @@
 //!   `readStore` imports (sync operations `perform` executes under the
 //!   current host — a lowered `readStore` is one selector invocation with no
 //!   generator involved). A `yield*` over
-//!   `wait(...)` or over any other call (a block factory, delegation to an
+//!   `attempt(...)` (which may suspend) or over any other call (a block factory, delegation to an
 //!   unknown generator) leaves the whole call to the runtime driver, which
 //!   is the only thing that can suspend.
 //!
@@ -217,8 +217,8 @@ struct PathYield {
 #[derive(Default)]
 pub(crate) struct RuntimeSymbols {
     pub(crate) adapter: Vec<SymbolId>,
-    /// Sync operations (`raise`, `attempt`, `write`, `call`, `readStore`):
-    /// performable in call form.
+    /// Operations (`raise`, `attempt`, `readStore`); `raise` and `readStore`
+    /// are performable in call form, `attempt` only where it cannot suspend.
     pub(crate) sync_ops: Vec<SymbolId>,
     /// Declaration span of the first runtime import (host for `_$perform`).
     pub(crate) import_span: Option<Span>,
@@ -229,7 +229,6 @@ pub(crate) struct RuntimeSymbols {
     pub(crate) two_arg_hosts: Vec<SymbolId>,
     pub(crate) create_signal: Vec<SymbolId>,
     pub(crate) create_memo: Vec<SymbolId>,
-    pub(crate) wait: Vec<SymbolId>,
     pub(crate) attempt: Vec<SymbolId>,
 }
 
@@ -255,13 +254,12 @@ pub(crate) fn collect_runtime_symbols(program: &Program<'_>) -> RuntimeSymbols {
             };
             match specifier.imported.name().as_str() {
                 "$" => symbols.adapter.push(symbol_id),
-                "raise" | "attempt" | "write" | "call" | "readStore" => {
+                "raise" | "attempt" | "readStore" => {
                     symbols.sync_ops.push(symbol_id);
                     if specifier.imported.name() == "attempt" {
                         symbols.attempt.push(symbol_id);
                     }
                 }
-                "wait" => symbols.wait.push(symbol_id),
                 "createMemo" => {
                     symbols.one_arg_hosts.push(symbol_id);
                     symbols.create_memo.push(symbol_id);
@@ -388,7 +386,7 @@ fn build_plan(
                 return Err(diagnostic(
                     self.source,
                     function.span,
-                    "[ASYNC_GENERATOR_IN_BLOCK] `$` does not accept async generators: `await` is not allowed in a block; suspend with `yield* wait(promise)`",
+                    "[ASYNC_GENERATOR_IN_BLOCK] `$` does not accept async generators: `await` is not allowed in a block; suspend with `yield* attempt(() => promise)`",
                 ));
             }
             if !function.generator {
@@ -417,7 +415,7 @@ fn build_plan(
                 return Err(diagnostic(
                     self.source,
                     span,
-                    "[JSX_YIELD_IN_UNLOWERED_BLOCK] a `yield*` inside JSX only compiles when the compiler lowers the block, but this block also waits (or yields an operand the compiler cannot lower). A block that returns JSX may only read signals; move the wait into a reactive computation the JSX reads",
+                    "[JSX_YIELD_IN_UNLOWERED_BLOCK] a `yield*` inside JSX only compiles when the compiler lowers the block, but this block also suspends (or yields an operand the compiler cannot lower). A block that returns JSX may only read signals; move the async work into a reactive computation the JSX reads",
                 ));
             }
             if yields.lowerable {
@@ -534,7 +532,7 @@ impl<'b> Visit<'b> for YieldCollector<'_> {
                 self.error = Some(diagnostic(
                     self.source,
                     it.span,
-                    "[PLAIN_YIELD_IN_BLOCK] a bare `yield` is not allowed in a `$` block; operations are yielded with `yield*` (`yield* signal`, `yield* wait(...)`, `yield* raise(...)`)",
+                    "[PLAIN_YIELD_IN_BLOCK] a bare `yield` is not allowed in a `$` block; operations are yielded with `yield*` (`yield* signal`, `yield* attempt(...)`, `yield* raise(...)`)",
                 ));
             }
             return;
@@ -558,7 +556,7 @@ impl<'b> Visit<'b> for YieldCollector<'_> {
 
 /// A v2 body's call operands run synchronously under `perform` (setter
 /// receipts, `$signal` / `$memo` creations, `$cleanup`, child views, helpers),
-/// except `wait` and an `attempt` in a kind where it may suspend.
+/// except an `attempt` in a kind where it may suspend.
 fn v2_operand_lowerable(
     expression: &Expression<'_>,
     kind: V2Kind,
@@ -569,7 +567,6 @@ fn v2_operand_lowerable(
         return false;
     };
     match resolve_callee(scoping, call) {
-        Some(symbol) if symbols.wait.contains(&symbol) => false,
         Some(symbol) if symbols.attempt.contains(&symbol) => !kind.attempt_may_suspend(),
         _ => true,
     }
@@ -577,9 +574,9 @@ fn v2_operand_lowerable(
 
 /// Operands `perform` can execute in call form: identifiers and
 /// non-optional member expressions (an accessor, block or sync op held in a
-/// binding), and direct `raise(...)` / `attempt(...)` / `write(...)` /
-/// `call(...)` / `readStore(...)` calls. Everything else — `wait(...)` and
-/// any unknown call — stays with the runtime driver.
+/// binding), and direct `raise(...)` / `readStore(...)` calls. Everything
+/// else — `attempt(...)` (which may suspend) and any unknown call — stays with
+/// the runtime driver.
 fn is_operand_lowerable(
     expression: &Expression<'_>,
     scoping: &Scoping,
@@ -589,9 +586,12 @@ fn is_operand_lowerable(
         Expression::Identifier(_) => true,
         Expression::StaticMemberExpression(member) => !member.optional,
         Expression::ComputedMemberExpression(member) => !member.optional,
-        Expression::CallExpression(call) => {
-            resolve_callee(scoping, call).is_some_and(|symbol| symbols.sync_ops.contains(&symbol))
-        }
+        // `attempt` may be async (`attempt(() => promise)` suspends): only the
+        // driver can run it, so it never lowers here (v2 effect bodies, which
+        // cannot suspend, lower it through `v2_operand_lowerable`).
+        Expression::CallExpression(call) => resolve_callee(scoping, call).is_some_and(|symbol| {
+            symbols.sync_ops.contains(&symbol) && !symbols.attempt.contains(&symbol)
+        }),
         _ => false,
     }
 }
@@ -1770,18 +1770,14 @@ createEffect($(function* () { return yield* double; }), v => log(v));
 
     #[test]
     fn lowers_member_operands_sync_ops_and_jsx_children() {
-        let out = ssr(r#"import { $, raise, attempt } from "@solidjs/signals";
+        let out = ssr(r#"import { $, raise } from "@solidjs/signals";
 export const view = $(function* () {
-  const n = yield* attempt(() => JSON.parse(props.raw), SyntaxError);
+  const n = JSON.parse(props.raw);
   if (n < 0) yield* raise(new RangeError("negative"));
   return <p>{yield* props.count}{yield* state["label"]}</p>;
 });
 "#)
         .unwrap();
-        assert!(
-            out.contains("_$perform(attempt(() => JSON.parse(props.raw), SyntaxError))"),
-            "{out}"
-        );
         assert!(
             out.contains(r#"_$perform(raise(new RangeError("negative")))"#),
             "{out}"
@@ -1872,20 +1868,16 @@ const d = $(function* () { return yield* s.a.b.c.d.e; });
     }
 
     #[test]
-    fn lowers_event_block_writes_and_delegation() {
-        let out = ssr(r#"import { $, write, call } from "solid-js";
+    fn lowers_event_blocks_that_write_directly() {
+        let out = ssr(r#"import { $ } from "solid-js";
 export const onClick = $(function* (event) {
   const c = yield* count;
-  yield* write(setCount, c + 1);
-  return yield* call(props.onClick, event);
+  setCount(c + event.detail);
 });
 "#)
         .unwrap();
-        assert!(out.contains("_$perform(write(setCount, c + 1))"), "{out}");
-        assert!(
-            out.contains("_$perform(call(props.onClick, event))"),
-            "{out}"
-        );
+        assert!(out.contains("const c = _$perform(count);"), "{out}");
+        assert!(out.contains("setCount(c + event.detail);"), "{out}");
         assert!(out.contains("$(function(event) {"), "{out}");
         assert!(!out.contains("yield"), "{out}");
     }
@@ -1914,19 +1906,19 @@ const aliased = $(function* () { const sel = state => state.count; return yield*
 
     #[test]
     fn leaves_waits_and_unknown_calls_to_the_runtime() {
-        let source = r#"import { $, wait } from "solid-js";
-const a = $(function* () { const id = yield* userId; return yield* wait(fetchUser(id)); });
+        let source = r#"import { $, attempt } from "solid-js";
+const a = $(function* () { const id = yield* userId; return yield* attempt(() => fetchUser(id)); });
 const b = $(function* () { return yield* helper(); });
 const c = $(function* () { return yield* count?.value; });
 "#;
         let out = ssr(source).unwrap();
-        assert!(out.contains("yield* wait(fetchUser(id))"), "{out}");
+        assert!(out.contains("yield* attempt(() => fetchUser(id))"), "{out}");
         assert!(out.contains("const id = yield* userId;"), "{out}");
         assert!(out.contains("yield* helper()"), "{out}");
         assert!(out.contains("yield* count?.value"), "{out}");
         assert!(!out.contains("_$perform"), "{out}");
         assert!(
-            out.contains(r#"import { $, wait } from "solid-js";"#),
+            out.contains(r#"import { $, attempt } from "solid-js";"#),
             "{out}"
         );
     }
@@ -1961,9 +1953,9 @@ const a = $(async function* () { return await fetchIt(); });
             "{async_error}"
         );
 
-        let jsx_error = ssr(r#"import { $, wait } from "solid-js";
+        let jsx_error = ssr(r#"import { $, attempt } from "solid-js";
 const view = $(function* () {
-  return <p>{(yield* wait(fetchUser(1))).name}</p>;
+  return <p>{(yield* attempt(() => fetchUser(1))).name}</p>;
 });
 "#)
         .unwrap_err();
@@ -1974,13 +1966,13 @@ const view = $(function* () {
         assert!(jsx_error.contains("(3:15)"), "{jsx_error}");
         // A lowered block may yield inside JSX; an unlowered block may yield
         // outside it.
-        let fine = ssr(r#"import { $, wait } from "solid-js";
+        let fine = ssr(r#"import { $, attempt } from "solid-js";
 const a = $(function* () { return <p>{yield* count}</p>; });
-const b = $(function* () { const u = yield* wait(fetchUser(1)); return <p>{u.name}</p>; });
+const b = $(function* () { const u = yield* attempt(() => fetchUser(1)); return <p>{u.name}</p>; });
 "#)
         .unwrap();
         assert!(fine.contains("_$perform(count)"), "{fine}");
-        assert!(fine.contains("yield* wait(fetchUser(1))"), "{fine}");
+        assert!(fine.contains("yield* attempt(() => fetchUser(1))"), "{fine}");
 
         // Nested functions own their throws.
         let nested = ssr(r#"import { $ } from "solid-js";
@@ -2276,12 +2268,12 @@ const isOne = createMemo($(function* () { return (yield* count) === 1; }));
         assert!(off.contains("=== 1;\n}));"), "{off}");
 
         let waits = proven(
-            r#"import { $, createMemo, createSignal, wait } from "solid-js";
+            r#"import { $, createMemo, createSignal, attempt } from "solid-js";
 const [count] = createSignal(1);
-const later = createMemo($(function* () { return yield* wait(load(yield* count)); }));
+const later = createMemo($(function* () { const c = yield* count; return yield* attempt(() => load(c)); }));
 "#,
         );
-        assert!(waits.contains("yield* wait("), "{waits}");
+        assert!(waits.contains("yield* attempt("), "{waits}");
         assert!(
             !waits.contains("statusFree") && !waits.contains("syncOnly"),
             "{waits}"
@@ -2524,23 +2516,18 @@ const proven = createMemo($(function* () { return yield* count; }));
 
     #[test]
     fn refuses_non_read_operations_and_unlowered_blocks() {
-        let out = fused(r#"import { $, createMemo, createSignal, attempt, raise, write, call, wait } from "solid-js";
+        let out = fused(r#"import { $, createMemo, createSignal, attempt, raise } from "solid-js";
 const [count, setCount] = createSignal(1);
-const a = createMemo($(function* () { return yield* attempt(() => JSON.parse(raw), SyntaxError); }));
 const b = createMemo($(function* () { if ((yield* count) < 0) yield* raise(new RangeError("negative")); return 1; }));
-const c = createMemo($(function* () { yield* write(setCount, 2); return 1; }));
-const d = createMemo($(function* () { return yield* call(other, 1); }));
 const e = createMemo($(function* () { return yield* store.items[i + 1]; }));
-const f = createMemo($(function* () { return yield* wait(fetch("/api")); }));
+const f = createMemo($(function* () { return yield* attempt(() => fetch("/api")); }));
 "#)
         .unwrap();
-        assert!(out.contains("_$perform(attempt("), "{out}");
         assert!(out.contains("_$perform(raise("), "{out}");
-        assert!(out.contains("_$perform(write("), "{out}");
-        assert!(out.contains("_$perform(call("), "{out}");
         assert!(out.contains("_$perform(store.items[i + 1])"), "{out}");
+        // An attempt may suspend: the block stays with the runtime driver.
         assert!(out.contains("$(function* () {"), "{out}");
-        assert!(out.contains("yield* wait(fetch"), "{out}");
+        assert!(out.contains("yield* attempt(() => fetch"), "{out}");
         assert!(!out.contains("createMemo(function"), "{out}");
     }
 

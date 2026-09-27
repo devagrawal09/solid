@@ -1,5 +1,6 @@
 import {
   $,
+  attempt,
   action,
   createMemo,
   createOptimisticStore,
@@ -15,9 +16,7 @@ import {
   perform,
   raise,
   readStore,
-  renderBlock,
-  wait,
-  write
+  renderBlock
 } from "../src/index.js";
 
 afterEach(() => flush());
@@ -284,28 +283,22 @@ describe("readStore in reactive blocks", () => {
 });
 
 describe("readStore across hosts", () => {
-  it("a JSX host accepts readStore and still refuses tasks, failures and writes", () => {
-    const [store, setStore] = createStore(state());
+  it("a JSX host accepts readStore and still refuses tasks", () => {
+    const [store] = createStore(state());
     const flight = Promise.resolve(1);
     const reads = $(function* () {
       return { tag: "ul", items: yield* readStore(store, s => s.items.map(item => item.name)) };
     });
     const waits = $(function* () {
-      const n = yield* wait(flight);
+      const n = yield* attempt(() => flight);
       return yield* readStore(store, s => s.items[n]);
     });
-    const writes = $(function* () {
-      yield* write(setStore, s => {
-        s.index = 1;
-      });
-      return yield* readStore(store, s => s.index);
-    });
+    // (Writes in a view are refused by the types and the compiler: a setter
+    // call is not an operation the runtime host sees.)
     createRoot(() => {
       expect(renderBlock(reads)).toEqual({ tag: "ul", items: ["one", "two"] });
-      expect(() => renderBlock(waits)).toThrow(/\[OP_NOT_ALLOWED_IN_JSX\] .*`wait`/);
-      expect(() => renderBlock(writes)).toThrow(/\[OP_NOT_ALLOWED_IN_JSX\] .*`write`/);
+      expect(() => renderBlock(waits)).toThrow(/\[OP_NOT_ALLOWED_IN_JSX\] .*`attempt`/);
     });
-    expect(store.index).toBe(0);
   });
 
   it("an event block writes a store with write(setStore, updater); reactive hosts refuse it", () => {
@@ -313,10 +306,10 @@ describe("readStore across hosts", () => {
     const [clicks, setClicks] = createSignal(0);
     const add = $(function* (event: { type: string; name: string }) {
       const count = yield* readStore(store, s => s.items.length);
-      yield* write(setStore, s => {
+      setStore(s => {
         s.items.push({ id: count + 1, name: `${event.name}#${count + 1}` });
       });
-      yield* write(setClicks, c => c + 1);
+      setClicks(c => c + 1);
     });
     const names = createRoot(() =>
       createMemo(
@@ -331,10 +324,9 @@ describe("readStore across hosts", () => {
     expect(names()).toBe("one,two,added#3");
     expect(clicks()).toBe(1);
 
-    // The same block under a reactive host: refused before any write lands.
-    // @ts-expect-error — a reactive host admits no Writes
+    // The same block under a reactive host: the core refuses the write.
     const asMemo = createRoot(() => createMemo(add));
-    expect(() => asMemo()).toThrow(/\[WRITE_IN_REACTIVE_BLOCK\]/);
+    expect(() => asMemo()).toThrow(/\[REACTIVE_WRITE_IN_OWNED_SCOPE\]/);
     expect(store.items.length).toBe(3);
   });
 });
@@ -485,7 +477,7 @@ describe("block-derived stores", () => {
       const proj = createProjection(
         $(function* (draft: { name: string }) {
           const n = yield* count;
-          draft.name = `${yield* wait(gate.promise)}#${n}`;
+          draft.name = `${yield* attempt(() => gate.promise)}#${n}`;
         }),
         { name: "" }
       );
@@ -566,16 +558,16 @@ describe("block-derived stores", () => {
     // The types refuse this block at every store host (block.type-tests.ts);
     // the cast reaches the runtime check.
     const writes = $(function* (draft: { value: number }) {
-      yield* write(setCount, 1);
+      setCount(1);
       draft.value = 1;
     }) as unknown as (draft: { value: number }) => void;
     createRoot(() => {
       const proj = createProjection(writes, { value: 0 });
-      expect(() => proj.value).toThrow(/\[WRITE_IN_REACTIVE_BLOCK\]/);
+      expect(() => proj.value).toThrow(/\[REACTIVE_WRITE_IN_OWNED_SCOPE\]/);
       const [derived] = createStore(writes, { value: 0 });
-      expect(() => derived.value).toThrow(/\[WRITE_IN_REACTIVE_BLOCK\]/);
+      expect(() => derived.value).toThrow(/\[REACTIVE_WRITE_IN_OWNED_SCOPE\]/);
       const [optimistic] = createOptimisticStore(writes, { value: 0 });
-      expect(() => optimistic.value).toThrow(/\[WRITE_IN_REACTIVE_BLOCK\]/);
+      expect(() => optimistic.value).toThrow(/\[REACTIVE_WRITE_IN_OWNED_SCOPE\]/);
     });
     expect(count()).toBe(0);
   });

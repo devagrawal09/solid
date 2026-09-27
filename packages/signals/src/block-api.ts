@@ -69,6 +69,21 @@ import { createStore, type Store, type StoreSetter } from "./store/index.js";
 
 /** Operations a component's setup may yield. */
 export type SetupOp = CreateOp<any, any> | CleanupOp | ContextOp<any, any>;
+/**
+ * A generator body a plain host accepts (`createMemo(function* …)`): a
+ * function returning a generator of `Allowed` operations — never a function
+ * returning `any`, which would otherwise match and hijack plain callbacks.
+ */
+export type GeneratorBody<F, Allowed> = F &
+  (F extends () => infer G
+    ? 0 extends 1 & G
+      ? never
+      : G extends Generator<Allowed, any, any>
+        ? unknown
+        : never
+    : never);
+export type GeneratorYield<F> = F extends () => Generator<infer Y, any, any> ? Y : never;
+export type GeneratorReturn<F> = F extends () => Generator<any, infer R, any> ? R : never;
 /** Operations a memo may yield. */
 export type MemoOp = ReadLike | AsyncOp<any, any> | RaiseLike | AttemptLike;
 /** Operations an effect may yield. */

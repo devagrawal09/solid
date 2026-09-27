@@ -309,7 +309,7 @@ export function App() {
         "## render",
         "run shown",
         'read label = "a"',
-        "uncaught render = TypeError([INVALID_YIELD] `$` blocks may only yield operations (`yield* signal`, `yield* wait(...)`, `yield* raise(...)`, `yield* attempt(...)`, `yield* write(...)`, `yield* call(...)`, `yield* block`); received a string)",
+        "uncaught render = TypeError([INVALID_YIELD] blocks may only yield operations (`yield* signal`, `yield* store.path`, `yield* set(value)`, `yield* raise(...)`, `yield* attempt(...)`, `yield* Child(props)`, `yield* Ctx`, `yield* block`); received a string)",
         "markup = ",
         "hydration-keys = []",
         "serialized = []"

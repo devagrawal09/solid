@@ -1,4 +1,4 @@
-import { $, createMemo, createSignal, readStore, write } from "solid-js";
+import { $, createMemo, createSignal, readStore } from "solid-js";
 
 const [count, setCount] = createSignal(1);
 
@@ -14,7 +14,7 @@ export const viaStrict = createMemo($(() => count() * 2));
 // An event block (generator) and a strict event handler side by side.
 export const eventBlock = $(function* (event: MouseEvent) {
   const c = yield* count;
-  yield* write(setCount, c + event.button);
+  setCount(c + event.button);
 });
 export function View(props: { store: { items: string[] } }) {
   return (

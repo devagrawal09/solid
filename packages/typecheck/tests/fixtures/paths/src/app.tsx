@@ -1,4 +1,4 @@
-import { $, createMemo, createSignal, createStore, readStore, write } from "solid-js";
+import { $, createMemo, createSignal, createStore, readStore } from "solid-js";
 import type { BlockReads, PropRead, StoreRead } from "solid-js";
 
 type Expect<T extends true> = T;
@@ -72,10 +72,10 @@ export const structural = createMemo(
   })
 );
 
-// Event blocks write with `write(setStore, …)`.
+// Event blocks write with a direct `setStore(…)` call.
 export const add = $(function* (_event: MouseEvent) {
   const count = yield* store.items.length;
-  yield* write(setStore, s => {
+  setStore(s => {
     s.items.push({ id: count + 1, name: `item${count + 1}` });
   });
 });

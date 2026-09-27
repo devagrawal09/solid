@@ -2,6 +2,9 @@ import {
   generatorEffect,
   generatorMemo,
   setBlockPrimitives,
+  type GeneratorBody,
+  type GeneratorReturn,
+  type GeneratorYield,
   type MemoAccessor,
   type MemoOp
 } from "@solidjs/signals";
@@ -1445,10 +1448,10 @@ export const createMemo: {
     options?: HydrationMemoOptions<BlockValue<B>>
   ): BlockAccessor<B>;
   // A generator body is a memo block: reads, `raise`, `attempt`.
-  <Y extends MemoOp, R>(
-    compute: () => Generator<Y, R, any>,
-    options?: HydrationMemoOptions<R>
-  ): MemoAccessor<R, Y>;
+  <F extends () => Generator<MemoOp, any, any>>(
+    compute: GeneratorBody<F, MemoOp>,
+    options?: HydrationMemoOptions<GeneratorReturn<F>>
+  ): MemoAccessor<GeneratorReturn<F>, GeneratorYield<F>>;
   // Commit #0 (loadingValue) removes the uninitialized window: the accessor
   // never reads undefined — even for `ssrSource: "client"`, where the loading
   // value serves until the post-hydration compute lands — and `prev` is

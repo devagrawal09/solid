@@ -39,7 +39,7 @@ export function App() {
 }
 `,
     generator: `
-import { $, createMemo, wait, Loading } from "solid-js";
+import { $, createMemo, Loading, attempt } from "solid-js";
 import { h } from "conformance";
 export let setId;
 export function App() {
@@ -49,7 +49,7 @@ export function App() {
     $(function* () {
       const i = yield* id;
       h.run("user(" + i + ")");
-      return yield* wait(h.task("user" + i));
+      return yield* attempt(() => h.task("user" + i));
     })
   );
   return (

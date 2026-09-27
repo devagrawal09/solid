@@ -138,7 +138,7 @@ describe("strict callback contract", () => {
     // Generator lowering unchanged: `$` stays, `yield*` becomes `perform`.
     expect(code).toContain("createMemo($(function() {");
     expect(code).toContain("return _$perform(count) * 2;");
-    expect(code).toContain("_$perform(write(setCount, c + event.button))");
+    expect(code).toContain("setCount(c + event.button)");
     expect(code).toContain('_$perform(readStore(props.store, (s) => s.items.join(",")))');
     // Strict markers erased.
     expect(code).toContain("createMemo(() => count() * 2)");

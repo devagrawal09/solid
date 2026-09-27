@@ -87,9 +87,9 @@ export const later = () => import("./later");
     expect(code.slice(compute.start, compute.start + 5)).toBe("() =>");
   });
 
-  test("a waiting block is async; a call-form or unproven block is not claimed", () => {
-    const code = `import { $, createMemo, wait } from "solid-js";
-const w = createMemo($(function* () { return yield* wait(load()); }));
+  test("a block that attempts may suspend (async); an unproven block is not claimed", () => {
+    const code = `import { $, createMemo, attempt } from "solid-js";
+const w = createMemo($(function* () { return yield* attempt(() => load()); }));
 const u = createMemo($(function* () { return helper(); }));
 `;
     const computes = summarizeCapabilities(code, { filename: "w.js" }).computes;

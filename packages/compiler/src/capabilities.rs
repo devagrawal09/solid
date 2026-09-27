@@ -13,7 +13,7 @@
 //!   `createProjection`) resolved by symbol to a runtime import, with the
 //!   local synchrony proof of its compute: a `$` block proven `BLOCK_SYNC`, a
 //!   plain function whose every returned value is proven plain, or an
-//!   identifier bound to such a block. `async` functions and blocks that wait
+//!   identifier bound to such a block. `async` functions and blocks that attempt (may suspend)
 //!   are `async`; everything else is `unproven` — the linker then asks the
 //!   typed summary (`solid-tsc --capabilities`) for a verdict at the same
 //!   position;
@@ -277,8 +277,8 @@ impl Summarizer<'_, '_> {
                         ("unproven", "call-form block result not proven plain")
                     };
                 }
-                if contains_wait(function) {
-                    return ("async", "block waits (`yield* wait`)");
+                if contains_attempt(function) {
+                    return ("async", "block attempts (`yield* attempt`), which may suspend");
                 }
                 let proof = self.prover.prove(block, function);
                 if proof.flags & BLOCK_SYNC != 0 {
@@ -391,7 +391,7 @@ impl<'a> Visit<'a> for Summarizer<'_, '_> {
             && let Some(Argument::FunctionExpression(function)) = call.arguments.first()
             && function.generator
             && !function.r#async
-            && !contains_wait(function)
+            && !contains_attempt(function)
             && self.prover.proof_of(call.span).is_none()
         {
             self.prover.prove(call, function);
@@ -547,9 +547,9 @@ impl<'a> Visit<'a> for Summarizer<'_, '_> {
 }
 
 /// Whether a generator block's body (nested functions excluded) delegates to
-/// `wait(...)` — the only suspension; such a block stays with the runtime
-/// driver and its host becomes asynchronous.
-fn contains_wait(function: &oxc_ast::ast::Function<'_>) -> bool {
+/// `attempt(...)` — which suspends when its function returns a promise; such
+/// a block stays with the runtime driver and its host may be asynchronous.
+fn contains_attempt(function: &oxc_ast::ast::Function<'_>) -> bool {
     struct Finder(bool);
     impl<'a> Visit<'a> for Finder {
         fn visit_function(&mut self, _it: &oxc_ast::ast::Function<'a>, _flags: ScopeFlags) {}
@@ -561,7 +561,7 @@ fn contains_wait(function: &oxc_ast::ast::Function<'_>) -> bool {
         fn visit_yield_expression(&mut self, it: &oxc_ast::ast::YieldExpression<'a>) {
             if it.delegate
                 && let Some(Expression::CallExpression(call)) = it.argument.as_ref()
-                && matches!(&call.callee, Expression::Identifier(id) if id.name == "wait")
+                && matches!(&call.callee, Expression::Identifier(id) if id.name == "attempt")
             {
                 self.0 = true;
             }

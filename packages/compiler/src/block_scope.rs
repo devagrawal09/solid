@@ -301,10 +301,10 @@ function C() {
 
     #[test]
     fn wraps_nested_and_unlowered_blocks() {
-        // The inner block waits, so the generator pass leaves it to the
+        // Nested blocks inside a block body: the generator pass leaves them to the
         // runtime driver; the scope wraps generator bodies too.
         let source = r#"
-import { $, createSignal, wait } from "solid-js";
+import { $, createSignal } from "solid-js";
 function C() {
   const [items] = createSignal([1]);
   return $(function* () {

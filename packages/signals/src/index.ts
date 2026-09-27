@@ -88,7 +88,6 @@ export {
 } from "./signals.js";
 export {
   $,
-  wait,
   raise,
   attempt,
   readStore,
@@ -108,8 +107,6 @@ export {
   markHandle,
   readProp,
   readValue,
-  write,
-  call,
   perform,
   blockFlags,
   BLOCK_SYNC,
@@ -140,6 +137,9 @@ export type {
   ViewOf,
   TypedProps,
   PropPath,
+  GeneratorBody,
+  GeneratorYield,
+  GeneratorReturn,
   TypedStore,
   StoreSource,
   PropsInput,

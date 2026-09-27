@@ -20,8 +20,7 @@ import {
   readPath,
   readProp,
   readStore,
-  renderBlock,
-  write
+  renderBlock
 } from "../src/index.js";
 
 afterEach(() => flush());
@@ -206,7 +205,7 @@ describe("store paths (runtime driver)", () => {
     });
     const add = $(function* (event: { name: string }) {
       const count = yield* store.items.length;
-      yield* write(setStore, s => {
+      setStore(s => {
         s.items.push({ id: count + 1, name: event.name });
       });
     });

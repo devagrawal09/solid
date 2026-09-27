@@ -176,7 +176,7 @@ export function App() {
 `;
 
 const asyncGenerator = `
-import { $, createMemo, wait, Loading, Errored } from "solid-js";
+import { $, createMemo, Loading, Errored, attempt } from "solid-js";
 import { h, NotFound } from "conformance";
 export let setId;
 export function App() {
@@ -188,7 +188,7 @@ export function App() {
       h.owner("user memo");
       h.run("user(" + i + ")");
       h.where("before wait(" + i + ")");
-      const v = yield* wait(h.task("load", i), NotFound);
+      const v = yield* attempt(() => h.task("load", i), NotFound);
       h.where("after wait(" + i + ")");
       return v;
     })

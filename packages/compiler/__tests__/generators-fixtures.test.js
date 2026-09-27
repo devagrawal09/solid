@@ -121,25 +121,25 @@ const a = $(function* () { const c = yield count; return c; });
         compile(`import { $ } from "solid-js";
 const a = $(async function* () { return await fetchIt(); });
 `)
-      ).toThrow(/\[ASYNC_GENERATOR_IN_BLOCK\].*yield\* wait\(promise\)/);
+      ).toThrow(/\[ASYNC_GENERATOR_IN_BLOCK\].*yield\* attempt\(\(\) => promise\)/);
     });
 
     it("rejects a yield* inside JSX when the block cannot be lowered", () => {
       expect(
-        compile(`import { $, wait } from "solid-js";
+        compile(`import { $, attempt } from "solid-js";
 const view = $(function* () {
-  return <p>{(yield* wait(fetchUser(1))).name}</p>;
+  return <p>{(yield* attempt(() => fetchUser(1))).name}</p>;
 });
 `)
       ).toThrow(/\[JSX_YIELD_IN_UNLOWERED_BLOCK\].*may only read signals.*\(3:15\)/);
-      // Outside the JSX the wait is fine: the block stays with the runtime driver.
+      // Outside the JSX the attempt is fine: the block stays with the runtime driver.
       const { code } = transform(
-        `import { $, wait } from "solid-js";
-const view = $(function* () { const u = yield* wait(fetchUser(1)); return <p>{u.name}</p>; });
+        `import { $, attempt } from "solid-js";
+const view = $(function* () { const u = yield* attempt(() => fetchUser(1)); return <p>{u.name}</p>; });
 `,
         { filename: "src/block.jsx" }
       );
-      expect(code).toContain("yield* wait(fetchUser(1))");
+      expect(code).toContain("yield* attempt(() => fetchUser(1))");
     });
 
     it("leaves throws in nested functions and in non-block generators alone", () => {

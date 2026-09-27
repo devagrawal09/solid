@@ -4,7 +4,7 @@ import { addEvent as _$addEvent } from "@solidjs/web";
 import { delegateEvents as _$delegateEvents } from "@solidjs/web";
 var _tmpl$ = /* @__PURE__ */ _$template(`<div><button>block</button><button>strict`);
 var _tmpl$2 = /* @__PURE__ */ _$template(`<p>`);
-import { $, createMemo, createSignal, readStore, write, perform as _$perform } from "solid-js";
+import { $, createMemo, createSignal, readStore, perform as _$perform } from "solid-js";
 const [count, setCount] = createSignal(1);
 // A generator block keeps the existing lowering (`$` stays, reads become
 // `perform`); the strict marker next to it is erased for its host.
@@ -15,7 +15,7 @@ export const viaStrict = createMemo(() => count() * 2);
 // An event block (generator) and a strict event handler side by side.
 export const eventBlock = $(function(event: MouseEvent) {
 	const c = _$perform(count);
-	_$perform(write(setCount, c + event.button));
+	setCount(c + event.button);
 });
 export function View(props: {
 	store: {

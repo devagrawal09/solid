@@ -1,7 +1,6 @@
 import {
   $,
   attempt,
-  call,
   createEffect,
   createErrorBoundary,
   createMemo,
@@ -19,8 +18,6 @@ import {
   renderBlock,
   resolve,
   untrack,
-  wait,
-  write,
   type EventBlock,
   type Owner
 } from "../src/index.js";
@@ -207,19 +204,6 @@ describe("operations", () => {
     );
     expect(() => bareOp()).toThrow(/\[PLAIN_YIELD_IN_BLOCK\].*yield\*/);
 
-    const bareCall = createMemo(
-      $(function* () {
-        yield call(
-          $(function* () {
-            return 1;
-          }),
-          undefined
-        );
-        return 0;
-      })
-    );
-    expect(() => bareCall()).toThrow(/\[PLAIN_YIELD_IN_BLOCK\].*call/);
-
     const number = createMemo(
       // @ts-expect-error — not an operation
       $(function* () {
@@ -230,7 +214,7 @@ describe("operations", () => {
     expect(() => number()).toThrow(/\[INVALID_YIELD\].*received a number/);
 
     const promise = createMemo(
-      // @ts-expect-error — a promise must go through wait()
+      // @ts-expect-error — a promise must go through attempt()
       $(function* () {
         yield Promise.resolve(1);
         return 0;
@@ -246,7 +230,7 @@ describe("operations", () => {
         return 1;
       })
     );
-    expect(() => viaAwait()).toThrow(/\[ASYNC_GENERATOR\].*yield\* wait/);
+    expect(() => viaAwait()).toThrow(/\[ASYNC_GENERATOR\].*yield\* attempt/);
   });
 
   it("raise is a typed throw: the error propagates and finally blocks run", () => {
@@ -295,7 +279,10 @@ describe("operations", () => {
       createMemo(
         $(function* () {
           const id = yield* userId;
-          const user = yield* wait((flights[id] = deferred<{ name: string }>()).promise, HttpError);
+          const user = yield* attempt(
+            () => (flights[id] = deferred<{ name: string }>()).promise,
+            HttpError
+          );
           return user.name;
         })
       )
@@ -317,7 +304,7 @@ describe("operations", () => {
     const name = createRoot(() =>
       createMemo(
         $(function* () {
-          return yield* wait(flight.promise, HttpError);
+          return yield* attempt(() => flight.promise, HttpError);
         })
       )
     );
@@ -332,7 +319,7 @@ describe("operations", () => {
     const late = createRoot(() =>
       createMemo(
         $(function* () {
-          const base = yield* wait(flight.promise);
+          const base = yield* attempt(() => flight.promise);
           return base + (yield* count);
         })
       )
@@ -351,7 +338,7 @@ describe("operations", () => {
         $(function* () {
           const id = yield* userId;
           try {
-            const value = yield* wait((flights[id] = deferred<string>()).promise);
+            const value = yield* attempt(() => (flights[id] = deferred<string>()).promise);
             log.push(`resumed:${id}`);
             return value;
           } finally {
@@ -429,12 +416,12 @@ describe("hosts", () => {
   it("a reactive host admits reads, tasks and failures but refuses writes", () => {
     const [count, setCount] = createSignal(1);
     const writer = $(function* () {
-      yield* write(setCount, 5);
+      setCount(5);
       return yield* count;
     });
-    // @ts-expect-error — a reactive host admits no Writes
+    // A direct setter call is not a typed Write; the core refuses it.
     const memo = createRoot(() => createMemo(writer));
-    expect(() => memo()).toThrow(/\[WRITE_IN_REACTIVE_BLOCK\]/);
+    expect(() => memo()).toThrow(/\[REACTIVE_WRITE_IN_OWNED_SCOPE\]/);
     expect(count()).toBe(1);
   });
 
@@ -445,7 +432,7 @@ describe("hosts", () => {
       return { tag: "p", text: `${yield* count}` };
     });
     const waits = $(function* () {
-      return yield* wait(flight.promise);
+      return yield* attempt(() => flight.promise);
     });
     const raises = $(function* () {
       if (yield* count) yield* raise(new NotFound());
@@ -456,15 +443,15 @@ describe("hosts", () => {
     });
     const [, setCount2] = createSignal(0);
     const writes = $(function* () {
-      yield* write(setCount2, 1);
+      setCount2(1);
       return 1;
     });
     createRoot(() => {
       expect(renderBlock(reads)).toEqual({ tag: "p", text: "1" });
-      expect(() => renderBlock(waits)).toThrow(/\[OP_NOT_ALLOWED_IN_JSX\] .*`wait`/);
+      expect(() => renderBlock(waits)).toThrow(/\[OP_NOT_ALLOWED_IN_JSX\] .*`attempt`/);
       expect(() => renderBlock(raises)).toThrow(/\[OP_NOT_ALLOWED_IN_JSX\] .*`raise`/);
       expect(() => renderBlock(attempts)).toThrow(/\[OP_NOT_ALLOWED_IN_JSX\] .*`attempt`/);
-      expect(() => renderBlock(writes)).toThrow(/\[OP_NOT_ALLOWED_IN_JSX\] .*`write`/);
+      expect(() => renderBlock(writes)).toThrow(/\[REACTIVE_WRITE_IN_OWNED_SCOPE\]/);
     });
   });
 
@@ -476,7 +463,7 @@ describe("hosts", () => {
         $(function* () {
           const id = yield* userId;
           if (id === 3) yield* raise(new NotFound());
-          const loaded = yield* wait((flights[id] = deferred<{ name: string }>()).promise);
+          const loaded = yield* attempt(() => (flights[id] = deferred<{ name: string }>()).promise);
           return loaded;
         })
       );
@@ -507,10 +494,10 @@ describe("hosts", () => {
     const flight = deferred<string>();
     const handler = $(function* (event: { type: string }) {
       const c = yield* count;
-      yield* write(setCount, c + 1);
-      yield* write(setStatus, `${event.type}:pending`);
-      const answer = yield* wait(flight.promise, HttpError);
-      yield* write(setStatus, `${event.type}:${answer}`);
+      setCount(c + 1);
+      setStatus(`${event.type}:pending`);
+      const answer = yield* attempt(() => flight.promise, HttpError);
+      setStatus(`${event.type}:${answer}`);
       return answer;
     });
     createRoot(() => {
@@ -538,7 +525,7 @@ describe("hosts", () => {
           // Created inside the boundary: the block captures this owner.
           handler = $(function* (_event: { type: string }) {
             if ((yield* mode) === "sync") yield* raise(new Forbidden("no"));
-            yield* wait(flight.promise, HttpError);
+            yield* attempt(() => flight.promise, HttpError);
           });
           return "content";
         },
@@ -566,7 +553,7 @@ describe("hosts", () => {
       createErrorBoundary(
         () => {
           handler = $(function* (_event: { type: string }) {
-            yield* wait(flight.promise, HttpError);
+            yield* attempt(() => flight.promise, HttpError);
           });
           return "content";
         },
@@ -579,22 +566,6 @@ describe("hosts", () => {
     await Promise.resolve();
     flush();
     expect(asyncView()).toBe("caught:HttpError");
-  });
-
-  it("a wrapping event block delegates to the parent with call() and composes", () => {
-    const [log, setLog] = createSignal<string[]>([]);
-    const parent = $(function* (event: { type: string }) {
-      yield* write(setLog, l => [...l, `parent:${event.type}`]);
-      return "parent-result";
-    });
-    const child = $(function* (event: { type: string }) {
-      yield* write(setLog, l => [...l, `child:${event.type}`]);
-      const result = yield* call(parent, event);
-      return `child(${result})`;
-    });
-    createRoot(() => dispatchBlock(child, { type: "click" }));
-    flush();
-    expect(log()).toEqual(["child:click", "parent:click"]);
   });
 });
 
@@ -657,25 +628,6 @@ describe("runtime driver vs lowered (call-form) blocks", () => {
     expect(loweredRuns).toBe(generatorRuns);
   });
 
-  it("lowered event blocks write and delegate under the same host rules", () => {
-    const [log, setLog] = createSignal<string[]>([]);
-    const parent = $(function* (event: { type: string }) {
-      yield* write(setLog, l => [...l, `parent:${event.type}`]);
-      return 1;
-    });
-    // `$(function (event) { perform(write(...)); perform(call(parent, event)) })`
-    const loweredChild = $(function (event: { type: string }) {
-      perform(write(setLog, l => [...l, `child:${event.type}`]));
-      return perform(call(parent, event)) + 1;
-    } as any);
-    createRoot(() => dispatchBlock(loweredChild, { type: "click" }));
-    flush();
-    expect(log()).toEqual(["child:click", "parent:click"]);
-    // The same lowered block refuses to write under a reactive host.
-    const memo = createRoot(() => createMemo(loweredChild as any));
-    expect(() => memo()).toThrow(/\[WRITE_IN_REACTIVE_BLOCK\]/);
-  });
-
   it("a lowered body is still strict, and async operations refuse call form", () => {
     const [count] = createSignal(1);
     // Lowered bodies are `function` expressions (what the compiler emits);
@@ -693,14 +645,14 @@ describe("runtime driver vs lowered (call-form) blocks", () => {
     const asyncOp = createRoot(() =>
       createMemo(
         $(function () {
-          return perform(wait(flight.promise));
+          return perform(attempt(() => flight.promise));
         } as any) as any
       )
     );
     expect(() => asyncOp()).toThrow(/\[ASYNC_OP_OUTSIDE_DRIVER\]/);
 
     const asyncBlock = $(function* () {
-      return yield* wait(flight.promise);
+      return yield* attempt(() => flight.promise);
     });
     const delegatedInCallForm = createRoot(() =>
       createMemo(
@@ -742,7 +694,7 @@ describe("block boundaries", () => {
     const view = createRoot(() => {
       const profile = $(function* () {
         const id = yield* userId;
-        const user = yield* wait((flights[id] = deferred<{ name: string }>()).promise);
+        const user = yield* attempt(() => (flights[id] = deferred<{ name: string }>()).promise);
         return { tag: "p", text: user.name };
       });
       return createMemo(loading(profile, () => ({ tag: "p", text: "loading…" })));

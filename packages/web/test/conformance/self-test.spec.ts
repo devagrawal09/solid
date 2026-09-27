@@ -63,9 +63,7 @@ describe("the comparator catches planted regressions", () => {
   });
 
   test("duplicate event write", async () => {
-    const mutant = mutate(eventReadsWrites, [
-      ["yield* write(sc, c + 1);", "yield* write(sc, c + 1);\n    yield* write(sc, c + 1);"]
-    ]);
+    const mutant = mutate(eventReadsWrites, [["sc(c + 1);", "sc(c + 1);\n    sc(c + 1);"]]);
     const verdict = await verdictFor(eventReadsWrites, mutant);
     expect(verdict.ok).toBe(false);
     expect(verdict.comparison!.divergence!.step).toBe("click");
@@ -86,8 +84,8 @@ describe("the comparator catches planted regressions", () => {
         "export function App() {\n  const [shown, setShown] = createSignal();"
       ],
       [
-        'const v = yield* wait(h.task("load", i), NotFound);',
-        'const v = yield* wait(h.task("load", i).then(r => (setShown(() => r), r)), NotFound);'
+        'const v = yield* attempt(() => h.task("load", i), NotFound);',
+        'const v = yield* attempt(() => h.task("load", i).then(r => (setShown(() => r), r)), NotFound);'
       ],
       ['<p class="user">{user()}</p>', '<p class="user">{(user(), shown())}</p>'],
       ["import { $, createMemo,", "import { $, createSignal, createMemo,"]

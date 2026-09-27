@@ -2,13 +2,12 @@
 // by `tsc -p tsconfig.test.json`): the SSR wrappers expose the same
 // overloads as the client, so a block projection keeps its metadata there too.
 import {
+  attempt,
   $,
   createOptimisticStore,
   createProjection,
   createStore,
   readStore,
-  wait,
-  write,
   type BlockAsync,
   type BlockErrors,
   type BlockStore,
@@ -17,6 +16,12 @@ import {
   type Store,
   type StoreSetter
 } from "../../src/server/index.js";
+/** A v2 setter (`$signal` / `$store`): `yield* set(value)` records the write. */
+declare function writes<S extends (...args: any[]) => any>(
+  set: S
+): (value: Parameters<S>[0]) => {
+  [Symbol.iterator](): Generator<import("@solidjs/signals").WriteOp<S>, ReturnType<S>, any>;
+};
 
 type Expect<T extends true> = T;
 type Equal<A, B> =
@@ -36,7 +41,7 @@ declare const [source]: [Store<{ id: number }>, StoreSetter<{ id: number }>];
 const summarize = $(function* (draft: Summary) {
   const id = yield* readStore(source, s => s.id);
   draft.total = id;
-  draft.label = yield* wait(fetchLabel(id), HttpError);
+  draft.label = yield* attempt(() => fetchLabel(id), HttpError);
 });
 const shaped = $(function* () {
   return { total: yield* readStore(source, s => s.id), label: "n" } as Summary;
@@ -70,7 +75,7 @@ type _reads = [
 ];
 
 const writingDerive = $(function* (draft: Summary) {
-  yield* write(setDerivedSummary, s => {
+  yield* writes(setDerivedSummary)(s => {
     s.total = 1;
   });
   draft.total = 1;

@@ -2,6 +2,9 @@ import {
   generatorMemo,
   setBlockPrimitives,
   type EffectOp,
+  type GeneratorBody,
+  type GeneratorReturn,
+  type GeneratorYield,
   type MemoAccessor,
   type MemoOp
 } from "@solidjs/signals";
@@ -51,7 +54,6 @@ export {
   $flush,
   effectBlock,
   isComponent,
-  wait,
   raise,
   attempt,
   readStore,
@@ -70,8 +72,6 @@ export {
   readBorrowed,
   readProp,
   readValue,
-  write,
-  call,
   perform,
   blockFlags,
   BLOCK_SYNC,
@@ -979,10 +979,10 @@ export function createMemo<B extends AnyBlock & ReactiveHostBlock>(
   compute: B,
   options?: ServerMemoOptions<BlockValue<B>>
 ): BlockAccessor<B>;
-export function createMemo<Y extends MemoOp, R>(
-  compute: () => Generator<Y, R, any>,
-  options?: ServerMemoOptions<R>
-): MemoAccessor<R, Y>;
+export function createMemo<F extends () => Generator<MemoOp, any, any>>(
+  compute: GeneratorBody<F, MemoOp>,
+  options?: ServerMemoOptions<GeneratorReturn<F>>
+): MemoAccessor<GeneratorReturn<F>, GeneratorYield<F>>;
 export function createMemo<T>(
   compute: ComputeFunction<NoInfer<T>, T>,
   options: ServerMemoOptions<T> & { loadingValue: T }
@@ -1932,7 +1932,9 @@ function serverEffect<T>(
 }
 
 const GENERATOR_FUNCTION_PROTO = Object.getPrototypeOf(function* () {});
-export function createEffect<Y extends EffectOp>(body: () => Generator<Y, void, any>): void;
+export function createEffect<F extends () => Generator<EffectOp, void, any>>(
+  body: GeneratorBody<F, EffectOp>
+): void;
 export function createEffect<T>(
   compute: ComputeFunction<undefined | NoInfer<T>, T>,
   effect: EffectFunction<NoInfer<T>, T> | EffectBundle<NoInfer<T>, T>,

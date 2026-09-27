@@ -1,4 +1,5 @@
 import {
+  attempt,
   $,
   createEffect,
   createRenderEffect,
@@ -12,8 +13,6 @@ import {
   readStore,
   createSignal,
   createOptimistic,
-  wait,
-  write,
   Signal,
   Setter,
   type BlockAsync,
@@ -24,6 +23,12 @@ import {
   type Store,
   type StoreSetter
 } from "../src/index.js";
+/** A v2 setter (`$signal` / `$store`): `yield* set(value)` records the write. */
+declare function writes<S extends (...args: any[]) => any>(
+  set: S
+): (value: Parameters<S>[0]) => {
+  [Symbol.iterator](): Generator<import("@solidjs/signals").WriteOp<S>, ReturnType<S>, any>;
+};
 
 class Animal {
   #animal = null;
@@ -398,7 +403,7 @@ const [summaryId] = createSignal(1);
 const summarize = $(function* (draft: Summary) {
   const id = yield* summaryId;
   draft.total = id;
-  draft.label = yield* wait(fetchLabel(id), HttpError);
+  draft.label = yield* attempt(() => fetchLabel(id), HttpError);
 });
 const shaped = $(function* () {
   return { total: yield* summaryId, label: "n" } as Summary;
@@ -437,7 +442,7 @@ type _reads = [
 
 // A block that writes is refused by every store host.
 const writingDerive = $(function* (draft: Summary) {
-  yield* write(setDerivedSummary, s => {
+  yield* writes(setDerivedSummary)(s => {
     s.total = 1;
   });
   draft.total = 1;

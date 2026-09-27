@@ -1,9 +1,14 @@
 # Generator Blocks v2
 
-Status: in progress (2026-09-27). Replaces the `$(function* …)` operation vocabulary
+Status: implemented (2026-09-27). Replaces the `$(function* …)` operation vocabulary
 (`wait`, `attempt(fn, ...Errors)`, `write`, `call`, `$`) of
 [typed-generator-compiler.md](./typed-generator-compiler.md). Strict (non-generator)
 `$(fn)` callbacks are out of scope and unchanged.
+
+`wait`, `write` and `call` are removed. `$` stays exported as the compile target
+(the compiler wraps v2 bodies in `$`) and as the internal block constructor; blocks are
+authored with `$component` / `$memo` / `$effect` / `$event` (or a generator passed to
+`createMemo` / `createEffect`).
 
 ## Goal
 
@@ -181,10 +186,15 @@ v2 forms into `$(function* …)` blocks, which that pass lowers to call form (`y
 
 ## Build plan
 
-1. Types and type tests (`packages/signals`, `solid-js`, `@solidjs/web` JSX types).
+1. Types and type tests (`packages/signals`, `solid-js`, `@solidjs/web` JSX types). Done.
 2. Runtime: the kinds, operations, receipts, props, context iteration, uncompiled
-   effect and event runners.
-3. Compiler: lower blocks to plain Solid (effect split, `X(props)` →
-   `createComponent` with lazy props, host rules as compile errors).
-4. Migrate `examples/todos-blocks`, conformance scenarios and tests; remove the old
-   operations.
+   effect and event runners. Done.
+3. Compiler: lower blocks to plain Solid (effect split, lazy props for component and
+   boundary calls, host rules as compile errors). Done (`blocks_v2.rs`).
+4. Migrate `examples/todos-blocks` and `examples/sync-blocks` to v2; remove `wait`,
+   `write` and `call` (tests, fixtures and conformance scenarios moved to `attempt`,
+   direct setter calls and v2 receipts). Done.
+
+Follow-ups: the effect split's dynamic-read optimization (hoist only the reads each
+branch takes), `PROPS_COMPILED` (skip the typed-props proxy when every prop read was
+lowered), and a Volar plugin so editors show the compile-time host rules inline.

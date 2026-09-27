@@ -1,5 +1,7 @@
 # `$()` Typed Reactive Blocks
 
+> **Superseded** by [generator-blocks-v2.md](./generator-blocks-v2.md): `wait`, `write` and `call` were removed (async is `yield* attempt(() => promise)`, writes are `yield* set(value)` receipts from `$signal` / `$store`, composition is `yield* Child(props)`), and blocks are authored with `$component` / `$memo` / `$effect` / `$event`. `$` remains the compile target and internal block constructor. This document is kept as the history of the first design.
+
 Compact proposal: [`Strict Reactive Blocks For Solid`](../compiled-signals-rfc.md). This document retains the full exploration history, implementation inventory, measurements, and rejected alternatives.
 
 ## Exploration Status

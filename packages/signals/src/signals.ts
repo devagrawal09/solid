@@ -29,7 +29,14 @@ import {
   trackedEffect,
   untrack
 } from "./core/index.js";
-import type { EffectOp, MemoAccessor, MemoOp } from "./block-api.js";
+import type {
+  EffectOp,
+  GeneratorBody,
+  GeneratorReturn,
+  GeneratorYield,
+  MemoAccessor,
+  MemoOp
+} from "./block-api.js";
 import {
   accessorIterator,
   type AnyBlock,
@@ -513,10 +520,10 @@ export function createMemo<B extends AnyBlock & ReactiveHostBlock>(
   options?: MemoOptions<BlockValue<B>>
 ): BlockAccessor<B>;
 // A generator body is a memo block: reads, `raise`, `attempt` (sync or async).
-export function createMemo<Y extends MemoOp, R>(
-  compute: () => Generator<Y, R, any>,
-  options?: MemoOptions<R>
-): MemoAccessor<R, Y>;
+export function createMemo<F extends () => Generator<MemoOp, any, any>>(
+  compute: GeneratorBody<F, MemoOp>,
+  options?: MemoOptions<GeneratorReturn<F>>
+): MemoAccessor<GeneratorReturn<F>, GeneratorYield<F>>;
 export function createMemo<T>(
   compute: ComputeFunction<NoInfer<T>, T>,
   options: MemoOptions<T> & { loadingValue: T }
@@ -602,7 +609,9 @@ export function createMemo<T>(
  */
 // A generator body alone is an effect block: reads, writes, `$cleanup`,
 // `raise`, sync `attempt`.
-export function createEffect<Y extends EffectOp>(body: () => Generator<Y, void, any>): void;
+export function createEffect<F extends () => Generator<EffectOp, void, any>>(
+  body: GeneratorBody<F, EffectOp>
+): void;
 export function createEffect<T>(
   compute: ComputeFunction<undefined | NoInfer<T>, T>,
   effectFn: EffectFunction<NoInfer<T>, T> | EffectBundle<NoInfer<T>, T>,

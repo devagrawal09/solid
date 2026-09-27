@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, test } from "vitest";
 import {
   $,
-  call,
+  attempt,
   createErrorBoundary,
   createMemo,
   createRoot,
@@ -17,8 +17,6 @@ import {
   raise,
   readStore,
   renderBlock,
-  wait,
-  write,
   type EventBlock
 } from "solid-js";
 import type { JSX } from "../src/index.js";
@@ -108,7 +106,7 @@ describe("JSX host", () => {
         $(function* () {
           const id = yield* userId;
           if (id === 3) yield* raise(new NotFound());
-          return yield* wait((flights[id] = deferred<{ name: string }>()).promise);
+          return yield* attempt(() => (flights[id] = deferred<{ name: string }>()).promise);
         })
       );
       // The JSX block only reads — no raw promise appears inside JSX — yet
@@ -136,22 +134,17 @@ describe("JSX host", () => {
     dispose();
   });
 
-  test("a block with a task, raise or write is refused at the insertion sink", () => {
+  test("a block with a task is refused at the insertion sink", () => {
     const flight = deferred<number>();
-    const [, setCount] = createSignal(0);
-    // (A `yield* wait` *inside* JSX is a compile error — the block cannot be
-    // lowered — so the wait sits outside the JSX here; the host still refuses it.)
+    // (A `yield* attempt` *inside* JSX is a compile error — the block cannot
+    // be lowered — so the attempt sits outside the JSX here; the host still
+    // refuses it. Writes in a view are refused by the types and the compiler.)
     const waits = $(function* () {
-      const n = yield* wait(flight.promise);
+      const n = yield* attempt(() => flight.promise);
       return <p>{n}</p>;
     });
-    const writes = $(function* () {
-      yield* write(setCount, 1);
-      return <p />;
-    });
     createRoot(() => {
-      expect(() => renderBlock(waits)).toThrow(/\[OP_NOT_ALLOWED_IN_JSX\] .*`wait`/);
-      expect(() => renderBlock(writes)).toThrow(/\[OP_NOT_ALLOWED_IN_JSX\] .*`write`/);
+      expect(() => renderBlock(waits)).toThrow(/\[OP_NOT_ALLOWED_IN_JSX\] .*`attempt`/);
     });
   });
 });
@@ -202,7 +195,7 @@ describe("stores", () => {
     const dispose = render(() => {
       const add = $(function* (_event: MouseEvent) {
         const count = yield* readStore(store, s => s.items.length);
-        yield* write(setStore, s => {
+        setStore(s => {
           s.items.push({ id: count + 1, name: `item${count + 1}` });
         });
       });
@@ -233,7 +226,7 @@ describe("event host", () => {
       const increment = $(function* (event: MouseEvent) {
         received = event;
         const c = yield* count;
-        yield* write(setCount, c + 1);
+        setCount(c + 1);
       });
       return (
         <button onClick={increment}>
@@ -268,7 +261,7 @@ describe("event host", () => {
     let authored: unknown;
     const dispose = render(() => {
       const handler = $(function* (event: MouseEvent) {
-        yield* write(setLog, l => [...l, `parent:${event.type}`]);
+        setLog(l => [...l, `parent:${event.type}`]);
       });
       authored = handler;
       return <Middle onClick={handler} />;
@@ -278,33 +271,6 @@ describe("event host", () => {
     container.querySelector("button")!.click();
     flush();
     expect(log()).toEqual(["parent:click"]);
-    dispose();
-  });
-
-  test("a wrapping child delegates to the parent's block with call() and composes effects", () => {
-    const [log, setLog] = createSignal<string[]>([]);
-    const container = mount();
-    function Child(props: { onClick: EventBlock<MouseEvent, string> }) {
-      // The child's block is itself typed: its Writes and the parent's
-      // accumulate (see the type tests); at runtime both run, in order.
-      const wrapped = $(function* (event: MouseEvent) {
-        yield* write(setLog, l => [...l, "child:before"]);
-        const result = yield* call(props.onClick, event);
-        yield* write(setLog, l => [...l, `child:after:${result}`]);
-      });
-      return <button onClick={wrapped}>child</button>;
-    }
-    const dispose = render(() => {
-      const parent = $(function* (event: MouseEvent) {
-        yield* write(setLog, l => [...l, `parent:${event.type}`]);
-        return "done";
-      });
-      return <Child onClick={parent} />;
-    }, container);
-    flush();
-    container.querySelector("button")!.click();
-    flush();
-    expect(log()).toEqual(["child:before", "parent:click", "child:after:done"]);
     dispose();
   });
 
@@ -342,9 +308,9 @@ describe("event host", () => {
           () => {
             // Created under the boundary: the block captures this owner.
             const save = $(function* (_event: MouseEvent) {
-              yield* write(setStatus, "saving");
-              const answer = yield* wait(flight.promise, Forbidden);
-              yield* write(setStatus, answer);
+              setStatus("saving");
+              const answer = yield* attempt(() => flight.promise, Forbidden);
+              setStatus(answer);
             });
             return <button onClick={save}>{status()}</button>;
           },
@@ -366,15 +332,15 @@ describe("event host", () => {
     const [count, setCount] = createSignal(0);
     const container = mount();
     const dispose = render(() => {
-      // Compiled by the native compiler to `perform(write(...))`.
+      // Compiled by the native compiler to call form (`perform(count)`).
       const lowered = $(function* (event: MouseEvent) {
         const c = yield* count;
-        yield* write(setCount, c + event.detail + 1);
+        setCount(c + event.detail + 1);
       });
       // The same block, written in the form the compiler emits.
       const handWritten = $(function (event: MouseEvent) {
         const c = perform(count);
-        perform(write(setCount, c + event.detail + 1));
+        setCount(c + event.detail + 1);
       } as any);
       return (
         <div>

@@ -31,7 +31,7 @@ void Primitive;
 void Parent;
 
 // Block-derived stores keep their metadata through the published declarations.
-import { $, createProjection, readStore, wait } from "solid-js";
+import { $, createProjection, readStore, attempt } from "solid-js";
 import type { BlockAsync, BlockErrors, BlockStore } from "solid-js";
 
 const total = createProjection(
@@ -42,7 +42,7 @@ const total = createProjection(
 );
 const remote = createProjection(
   $(function* () {
-    return { total: yield* wait(Promise.resolve(1), RangeError) };
+    return { total: yield* attempt(() => Promise.resolve(1), RangeError) };
   }),
   {}
 );

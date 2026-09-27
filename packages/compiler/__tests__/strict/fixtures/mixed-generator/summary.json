@@ -9,22 +9,22 @@
         "events": [],
         "sites": [
           {
-            "start": 395,
-            "end": 415,
+            "start": 388,
+            "end": 408,
             "line": 12,
             "column": 37
           }
         ]
       },
       "marker": {
-        "start": 395,
-        "end": 415,
+        "start": 388,
+        "end": 408,
         "line": 12,
         "column": 37
       },
       "callback": {
-        "start": 397,
-        "end": 414,
+        "start": 390,
+        "end": 407,
         "line": 12,
         "column": 39
       },
@@ -40,8 +40,8 @@
           "tracked": true,
           "afterAwait": false,
           "site": {
-            "start": 403,
-            "end": 410,
+            "start": 396,
+            "end": 403,
             "line": 12,
             "column": 45
           }
@@ -65,22 +65,22 @@
         ],
         "sites": [
           {
-            "start": 780,
-            "end": 800,
+            "start": 759,
+            "end": 779,
             "line": 23,
             "column": 24
           }
         ]
       },
       "marker": {
-        "start": 780,
-        "end": 800,
+        "start": 759,
+        "end": 779,
         "line": 23,
         "column": 24
       },
       "callback": {
-        "start": 782,
-        "end": 799,
+        "start": 761,
+        "end": 778,
         "line": 23,
         "column": 26
       },
@@ -94,8 +94,8 @@
           "certainty": "exact",
           "afterAwait": false,
           "site": {
-            "start": 788,
-            "end": 799,
+            "start": 767,
+            "end": 778,
             "line": 23,
             "column": 32
           }

@@ -35,7 +35,7 @@ export function App() {
 }
 `,
     generator: `
-import { $, write } from "solid-js";
+import { $ } from "solid-js";
 import { h } from "conformance";
 export let setCount;
 export function App() {
@@ -45,7 +45,7 @@ export function App() {
     h.run("inc");
     h.where("inc handler");
     const c = yield* count;
-    yield* write(sc, c + 1);
+    sc(c + 1);
   });
   return (
     <div>
@@ -140,15 +140,15 @@ export function App() {
 }
 `,
     generator: `
-import { $, wait, write, Errored } from "solid-js";
+import { $, Errored, attempt } from "solid-js";
 import { h, Forbidden } from "conformance";
 function Saver() {
   const [status, ss] = h.signal("status", "idle");
   const save = $(function* () {
     h.run("save");
-    yield* write(ss, "saving");
-    const answer = yield* wait(h.task("save"), Forbidden);
-    yield* write(ss, answer);
+    ss("saving");
+    const answer = yield* attempt(() => h.task("save"), Forbidden);
+    ss(answer);
   });
   return (
     <button class="save" onClick={save}>

@@ -29,12 +29,11 @@ import { installGeneratorHook, type SourceAccessor } from "./signals.js";
  *   yield* store.user.name        Reads      a store path (StoreRead<Root, ["user","name"]>)
  *   yield* props.count            Reads      a prop path  (PropRead<Props, ["count"]>)
  *   yield* readStore(store, sel)  Reads      one selector run over a store (root recorded)
- *   yield* wait(promise, ...Errs) Tasks      async suspension (declared errs → Failures)
+ *   yield* attempt(() => p, ...Errs) Tasks  async suspension (declared errs → Failures)
  *   yield* raise(error)           Failures   typed throw
  *   yield* attempt(fn, ...Errs)   Failures   typed fallible call
- *   yield* write(setter, value)   Writes     typed write
- *   yield* call(block, input)     (delegation: the callee's categories)
- *   yield* otherBlock             (delegation with no input)
+ *   yield* set(value)             Writes     a v2 setter's receipt (`$signal` / `$store`)
+ *   yield* otherBlock             (delegation: the callee's categories)
  *
  * One `$` builds one generic `Block<Value, Reads, Tasks, Failures, Writes,
  * Input>`; nothing about the block chooses a mode. The host restricts:
@@ -63,7 +62,7 @@ import { installGeneratorHook, type SourceAccessor } from "./signals.js";
  *   block are unknown (`attempt(fn)` records `unknown` failures).
  * - Runtime: dev builds refuse a direct read inside a block body
  *   (`[DIRECT_READ_IN_BLOCK]`); the driver refuses a bare `yield`, async
- *   generators, reads after the first `wait`, and host-inadmissible
+ *   generators, reads after the first suspension, and host-inadmissible
  *   operations (`[OP_NOT_ALLOWED_IN_JSX]`, `[WRITE_IN_REACTIVE_BLOCK]`).
  * - Compiler: `throw`, bare `yield` and `async function*` inside a `$` are
  *   compile errors; lowered output runs under the same runtime checks.
@@ -82,7 +81,8 @@ import { installGeneratorHook, type SourceAccessor } from "./signals.js";
  * `createOptimisticStore(block, seed)` — is a `BlockStore`: it keeps the
  * block's metadata, so reading it accumulates the block's Reads, async
  * status and error union exactly as reading `createMemo(block)` does.
- * Writes use `write(setStore, updater)`; store setters stay ordinary.
+ * Typed writes are `yield* set(updater)` with a `$store` setter; plain store
+ * setters stay ordinary calls.
  *
  * Direct property syntax (`yield* store.user.name`, `yield* props.count`):
  * - Runtime: inside a block body (strict guard raised) a store proxy answers a
@@ -217,7 +217,7 @@ interface PathRead<R, P extends readonly PathKey[], Kind extends string> {
 export interface StoreRead<R, P extends readonly PathKey[]> extends PathRead<R, P, "store"> {}
 /** `yield* props.count` (projected: `readProp(props, ["count"])`). */
 export interface PropRead<R, P extends readonly PathKey[]> extends PathRead<R, P, "prop"> {}
-/** `yield* wait(promise)` — suspends the block (a Task). */
+/** An async `yield* attempt(() => promise)` — suspends the block (a Task). */
 export interface AsyncOp<T, E = unknown> {
   readonly [OP]: "wait";
   readonly promise: PromiseLike<T>;
@@ -238,7 +238,7 @@ export interface AttemptOp<T, E = unknown> {
   delegated: boolean;
   [Symbol.iterator](): Generator<AttemptOp<T, E>, T, any>;
 }
-/** `yield* write(setter, value)` — a typed write (event hosts only). */
+/** A typed write: what a v2 setter's receipt yields (`yield* set(value)`). */
 export interface WriteOp<S extends AnySetter = AnySetter> {
   readonly [OP]: "write";
   readonly target: S;
@@ -246,11 +246,7 @@ export interface WriteOp<S extends AnySetter = AnySetter> {
   delegated: boolean;
   [Symbol.iterator](): Generator<WriteOp<S>, ReturnType<S>, any>;
 }
-/**
- * `yield* call(block, input)` — delegate to a block with an input. Never
- * reaches the driver as an op: its iterator yields the callee's own
- * operations, so the callee's categories accumulate in the caller.
- */
+/** @internal Block delegation with an input (type-level; no public constructor). */
 export interface CallOp<B extends AnyBlock> {
   readonly [OP]: "call";
   readonly block: B;
@@ -1159,20 +1155,6 @@ export function readValue<V>(value: V): ReadThrough<V> {
   return value as ReadThrough<V>;
 }
 
-/**
- * Suspend the block on a promise (a Task). Declared rejection classes type
- * the failure union (`wait(fetchUser(id), HttpError)`); with none declared
- * the failure type is `unknown`. Undeclared rejections still propagate at
- * runtime. Reads after the first `wait` are refused: they would be untracked.
- */
-export function wait<T, C extends ErrorClass<any>[] = []>(
-  promise: PromiseLike<T>,
-  ...errors: C
-): AsyncOp<T, C extends [] ? unknown : InstanceType<C[number]>> {
-  if (__TEST__) markAsyncCapability();
-  return { [OP]: "wait", promise, delegated: false, [Symbol.iterator]: opIterator } as any;
-}
-
 /** The typed replacement for `throw`: the error joins the failure union. */
 export function raise<E>(error: E): RaiseOp<E> {
   return { [OP]: "raise", error, delegated: false, [Symbol.iterator]: opIterator } as any;
@@ -1200,28 +1182,6 @@ export function attempt<T, C extends ErrorClass<any>[] = []>(
 ): AttemptOp<T, C extends [] ? never : InstanceType<C[number]>>;
 export function attempt(run: () => unknown, ..._errors: ErrorClass<any>[]): Op {
   return { [OP]: "attempt", run, delegated: false, [Symbol.iterator]: opIterator } as any;
-}
-
-/**
- * A typed write: records the setter in the block's Writes, so only an event
- * host admits the block. Ordinary setters are not context-sensitive — a raw
- * `setter(v)` call inside a block is simply untyped (and, inside a reactive
- * host, refused by Solid's own owned-scope write guard in dev).
- */
-export function write<S extends AnySetter>(target: S, value: Parameters<S>[0]): WriteOp<S> {
-  return { [OP]: "write", target, value, delegated: false, [Symbol.iterator]: opIterator } as any;
-}
-
-/** Delegate to a block with an input; its categories accumulate in the caller. */
-export function call<B extends AnyBlock>(block: B, input: BlockInput<B>): CallOp<B> {
-  return {
-    [OP]: "call",
-    block,
-    input,
-    *[Symbol.iterator]() {
-      return yield* blockGenerator(block, input);
-    }
-  } as any;
 }
 
 // --- hosts ---------------------------------------------------------------------------
@@ -1618,7 +1578,7 @@ export function perform(target: unknown): unknown {
         throw target.error;
       case "wait":
         throw new TypeError(
-          "[ASYNC_OP_OUTSIDE_DRIVER] `wait` can only be performed by the generator driver. Keep `yield* wait(...)` inline in the block so the compiler leaves it to the runtime"
+          "[ASYNC_OP_OUTSIDE_DRIVER] A suspension can only be performed by the generator driver. Keep `yield* attempt(...)` inline in the block so the compiler leaves it to the runtime"
         );
     }
   }
@@ -1742,7 +1702,7 @@ function step<R>(
     if (op[OP] === "call") throw invalidYield(op);
     if (!op.delegated) {
       throw new TypeError(
-        "[PLAIN_YIELD_IN_BLOCK] Operations must be yielded with `yield*` (e.g. `yield* wait(p)`), not `yield`"
+        "[PLAIN_YIELD_IN_BLOCK] Operations must be yielded with `yield*` (e.g. `yield* attempt(() => p)`), not `yield`"
       );
     }
     op.delegated = false;
@@ -1753,7 +1713,7 @@ function step<R>(
         // reads the current value), an error in a computation.
         if (state.waited && state.host === REACTIVE) {
           throw new Error(
-            "[READ_AFTER_WAIT] A signal was read after the block's first suspension (`yield* wait(...)` or an async `yield* attempt(...)`). Reads after a suspension are not tracked; read every signal before the first suspension"
+            "[READ_AFTER_WAIT] A signal was read after the block's first suspension (an async `yield* attempt(...)`). Reads after a suspension are not tracked; read every signal before the first suspension"
           );
         }
         result = state.waited
@@ -1935,7 +1895,7 @@ function verifySyncBlockResult(result: unknown): void {
 
 function asyncGeneratorError(): TypeError {
   return new TypeError(
-    "[ASYNC_GENERATOR] `$` does not accept async generators (`await` is not allowed in a block); suspend with `yield* wait(promise)` instead"
+    "[ASYNC_GENERATOR] `$` does not accept async generators (`await` is not allowed in a block); suspend with `yield* attempt(() => promise)` instead"
   );
 }
 
@@ -1948,11 +1908,8 @@ function invalidYield(value: unknown): TypeError {
   if (value !== null && typeof value === "object" && Symbol.asyncIterator in value) {
     return asyncGeneratorError();
   }
-  if (isOp(value) && value[OP] === "call") {
-    return new TypeError("[PLAIN_YIELD_IN_BLOCK] `call(...)` must be delegated to with `yield*`");
-  }
   return new TypeError(
-    `[INVALID_YIELD] \`$\` blocks may only yield operations (\`yield* signal\`, \`yield* wait(...)\`, \`yield* raise(...)\`, \`yield* attempt(...)\`, \`yield* write(...)\`, \`yield* call(...)\`, \`yield* block\`); received ${describe(value)}`
+    `[INVALID_YIELD] blocks may only yield operations (\`yield* signal\`, \`yield* store.path\`, \`yield* set(value)\`, \`yield* raise(...)\`, \`yield* attempt(...)\`, \`yield* Child(props)\`, \`yield* Ctx\`, \`yield* block\`); received ${describe(value)}`
   );
 }
 

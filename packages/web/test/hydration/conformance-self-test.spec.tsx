@@ -32,7 +32,7 @@ test("the comparator catches a hydration-ID mismatch", async () => {
   // line up with the server's.
   const mutant = mutate(eventReadsWrites, [
     ["  const [count, sc] = h.signal", "  createMemo(() => 0);\n  const [count, sc] = h.signal"],
-    ["import { $, write }", "import { $, write, createMemo }"]
+    ["import { $ }", "import { $, createMemo }"]
   ]);
   const observed = await observeHydrate(mutant, mode("hydrate/compiled"), runtime, artifact);
   const verdict = judge({ status: "equivalent" }, reference.trace, observed.trace);

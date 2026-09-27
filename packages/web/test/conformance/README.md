@@ -203,7 +203,6 @@ See [COVERAGE.md](./COVERAGE.md) for the per-scenario matrix. In summary:
   - transitions and optimistic writes
   - `For`/keyed lists
   - event concurrency adapters (`latest`, `queue`, `exhaust`)
-  - `call()` wrapper composition
   - projections and block-derived stores
   - Everything in `plannedModes`.
 

@@ -62,8 +62,7 @@ export const createRevealOrder: typeof Full.createRevealOrder = excluded("create
  * async capability: with no async in the graph there is nothing to report,
  * and renderers toggle it on every dev mount — so it is a no-op here. */
 export const enforceLoadingBoundary: typeof Full.enforceLoadingBoundary = () => {};
-// Block suspension (`yield* wait(...)`) and the block loading boundary.
-export const wait: typeof Full.wait = excluded("wait");
+// The block loading boundary.
 export const loading: typeof Full.loading = excluded("loading");
 
 /** The async capabilities this entry excludes (kept equal to the manifest). */
@@ -79,6 +78,5 @@ export const ASYNC_CAPABILITIES = [
   "createOptimisticStore",
   "createLoadingBoundary",
   "createRevealOrder",
-  "wait",
   "loading"
 ] as const;

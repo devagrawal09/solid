@@ -1,5 +1,7 @@
 # One-Function Effects in the Generator Frontend
 
+> **Note:** the `yield* write(...)` spelling below predates [generator-blocks-v2.md](./generator-blocks-v2.md), which removed `write` (writes are `yield* set(value)` receipts; effect blocks may write and their reads are hoisted into the compute half).
+
 Status: design note, 2026-09-26. Nothing here is implemented. Authored examples use the generator frontend `$(function* () {})`.
 
 ## Question

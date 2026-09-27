@@ -2,7 +2,6 @@
 import {
   $,
   attempt,
-  call,
   createEffect,
   createMemo,
   createOptimisticStore,
@@ -27,8 +26,8 @@ import {
   type StoreHandle,
   readProp,
   readStore,
-  wait,
-  write,
+  type AnySetter,
+  type WriteOp,
   type AsyncOp,
   type BlockAsync,
   type BlockErrors,
@@ -51,6 +50,14 @@ import {
   type StoreSetter,
   type StrictCallback
 } from "../src/index.js";
+
+/**
+ * A v2 setter (what `$signal` / `$store` return): `yield* set(value)` writes
+ * and records the setter in the block's Writes.
+ */
+declare function writes<S extends AnySetter>(
+  set: S
+): (value: Parameters<S>[0]) => { [Symbol.iterator](): Generator<WriteOp<S>, ReturnType<S>, any> };
 
 type Expect<T extends true> = T;
 type Equal<A, B> =
@@ -122,10 +129,10 @@ $(function* () {
   // @ts-expect-error — no such property
   return yield* readStore(store, s => s.missing);
 });
-// Store writes go through `write(setStore, updater)`: an event-only category.
+// Store writes (`yield* setStore(updater)` with a v2 setter): an event-only category.
 const storeWriter = $(function* (event: MouseEvent) {
   const count = yield* readStore(store, s => s.items.length);
-  yield* write(setStore, s => {
+  yield* writes(setStore)(s => {
     s.items.push({ id: count + event.detail, name: "new" });
   });
 });
@@ -139,7 +146,7 @@ createMemo(storeWriter);
 // @ts-expect-error — nor does a JSX host
 const _storeWriterJsx: JsxBlock<void> = storeWriter;
 // @ts-expect-error — the updater is typed against the store's state
-write(setStore, s => (s.nope = 1));
+writes(setStore)(s => (s.nope = 1));
 
 // --- Block-derived stores: createProjection / createStore / createOptimisticStore -----
 interface Summary {
@@ -160,7 +167,8 @@ const shaped = $(function* () {
 const shapedSummary = createProjection(shaped, { total: 0 });
 // Waiting and failing inside the derive.
 const remote = $(function* (draft: Summary) {
-  const user = yield* wait(fetchUser(yield* count), HttpError);
+  const id = yield* count;
+  const user = yield* attempt(() => fetchUser(id), HttpError);
   draft.label = user.name;
 });
 const remoteSummary = createProjection(remote, { total: 0, label: "" });
@@ -228,7 +236,7 @@ type _twoHops = [
 ];
 // Store hosts are reactive hosts: a block that writes is refused by all three.
 const writingDerive = $(function* (draft: Summary) {
-  yield* write(setCount, 1);
+  yield* writes(setCount)(1);
   draft.total = 1;
 });
 // @ts-expect-error — a projection admits no Writes
@@ -419,10 +427,10 @@ const undeclared = $(function* () {
 });
 type _undeclared = [Expect<Equal<BlockFailures<typeof undeclared>, never>>];
 
-// --- Tasks: wait ------------------------------------------------------------------
+// --- Tasks: async attempt ------------------------------------------------------------------
 const profile = $(function* () {
   const id = yield* count;
-  const user = yield* wait(fetchUser(id), HttpError);
+  const user = yield* attempt(() => fetchUser(id), HttpError);
   return { tag: "p", text: user.name } as typeof view;
 });
 type _profile = [
@@ -447,7 +455,7 @@ type _coloredPath = [
 // --- Writes -------------------------------------------------------------------------
 const writer = $(function* (event: MouseEvent) {
   const c = yield* count;
-  yield* write(setCount, c + event.detail);
+  yield* writes(setCount)(c + event.detail);
   return c;
 });
 type _writer = [
@@ -484,10 +492,15 @@ type _writableGreeting = [
 ];
 
 // --- Delegation accumulates the callee's categories ----------------------------------
-const composed = $(function* (event: MouseEvent) {
+const bump = $(function* () {
+  const c = yield* count;
+  yield* writes(setCount)(c + 1);
+  return c;
+});
+const composed = $(function* (_event: MouseEvent) {
   const page = yield* fallible;
   const name = yield* profile;
-  const c = yield* call(writer, event);
+  const c = yield* bump;
   return [page, name, c] as const;
 });
 type _composed = [
