@@ -1,0 +1,430 @@
+# SSR and Hydration, Redesigned Compiler-First
+
+Status: 2026-09-27. A design with measured prototypes. The only production changes are two bug fixes that the measurements needed (see [Defects found](#defects-found)). The harness is in `scripts/ssr-redesign/` and the raw data is in `documentation/plans/ssr-hydration-redesign/`.
+
+This builds on, and does not redo:
+- [resumability.md](./resumability.md): hydration vs pruned resumability, and the hydrate-before-write rule;
+- [compiler-heuristics-build.md](./compiler-heuristics-build.md): per-island hydration F, the handler → island map, and compiled resumability C;
+- [heuristic-oracles.md](./heuristic-oracles.md): H10 cold-scope bindings and the hydration overhead breakdown;
+- [generator-blocks-v2.md](./generator-blocks-v2.md): the typed block model this design leans on;
+- [track-d-hydration.md](./track-d-hydration.md): hydration-id parity for blocks.
+
+## Summary
+
+**Today, hydration re-runs the whole app to learn what the server already knew.** On the 1,406-comment HackerNews story page (the `hackernews-spa` components):
+- The page ships **405.6 KB gz of HTML, half of it (204.7 KB) the serialized story** that the same HTML already shows.
+- **Hydration does exactly a client render's reactive work:** 4,880 computations and 2,061 owners, against 4,879 and 2,061 for a render from scratch. On top of that come 2,712 key claims.
+- It costs **1.2× the time and 1.6× the heap** of that render.
+- The only interactive thing on the page is a collapse toggle on each comment with replies.
+
+**The design: compiled islands over the v2 block graph.** A linker joins each component's block facts: what its setup creates, what its view reads, what its `$event` handlers write, and whether it has load-time effects. From them it proves which rendered regions are:
+- **inert:** HTML only, with no code, keys, markers or data;
+- **event islands:** only the handlers ship;
+- **view islands:** activated with static addresses and only the live bindings;
+- **hot islands:** activated at load.
+
+Islands activate on the first event that can reach them (hydrate-before-write), or at load when hot. The server renders inert regions as plain strings.
+
+**Measured on the HN page** (P1-static against today, Chromium, 4× CPU):
+
+| | Today (A) | P1-static, eager | P1-static, lazy |
+| --- | ---: | ---: | ---: |
+| HTML gz | 405.6 KB | 189.7 KB (−53%) | 189.7 KB |
+| JS gz at load | 32.1 KB | 9.6 KB (−70%) | **0.3 KB** (+9.6 KB on first click) |
+| Script at load | 368 ms | 49 ms (−87%) | 8 ms |
+| Heap after load | 13.7 MB | 2.4 MB | 1.5 MB |
+| Ready (navigation → interactive) | 1,602 ms | 1,045 ms (−35%) | 959 ms (−40%) |
+| First toggle click | 7 ms | 6 ms | 30 ms (chunk load + activation) |
+| Server render | 27–31 ms | 0.5–0.9 ms as a string template | same |
+
+The real server-components twin (`examples/hackernews`), which gets the same effect by hand, ships **55.5 KB gz of JS and 260.5 KB gz of HTML** for this page.
+
+**When everything is live, it degrades to today's cost.** In todos-blocks, every component is live and a hashchange listener must run at load. The design then falls back to hydrating the live islands, with nothing to prune. On-interaction activation moves ~33 ms (1×) of load script to a ~60 ms first interaction, as the earlier E-lazy study found.
+
+**Four defects came out of the measurements:**
+- **Fixed:** the todos-blocks production build was broken. Every v2 app's view blocks mis-read stores in production.
+- **Fixed:** v2 `yield* Ctx` could not server-render.
+- **Not fixed:** the real `hackernews-spa` build leaves its toggles dead in 6 of 7 loads at 4× CPU.
+- **Not fixed:** the server-components twin failed one load in seven with "Uncaught Client Exception".
+
+## 1. Today's pipeline
+
+```
+SERVER                                             CLIENT
+compiler (ssr): string template arrays             compiler (dom, hydratable): the SAME component
+  + one thunk per hole                               code as a client render, with getNextElement /
+runtime: an owner per component; a hydration         getNextMarker claims instead of cloning
+  key (_hk) on every template root; <!--$-->       <script> _$HY bootstrap: captures click/input
+  <!--/--> around every dynamic hole               hydrate():
+serializer: every computation with an async or        gather: querySelectorAll('[_hk]') → Map
+  serialized value, by owner id → _$HY.r              run the WHOLE component tree again:
+streaming: shell, then <template> + $df swaps          every component body, memo, effect, For/Show
+  per Loading boundary                                 claim each template root by key
+                                                       serialized computations: re-run compute under
+                                                         subFetch (fetch + Promise mocked) to learn
+                                                         deps, discard the result, adopt the value
+                                                    boundaries resume as their data lands
+                                                    replay captured events
+```
+
+The client cost splits into four parts:
+- the framework runtime, which a client render also needs;
+- hydration-only runtime: key gathering, claiming, hydration-aware primitive wrappers, `subFetch`, snapshots, boundary resume;
+- app code for every component, including components whose output can never change;
+- the serialized data those components re-render from.
+
+### 1.1 Measured current state
+
+The harness is `scripts/ssr-redesign/measure.mjs`, with the real Rust compiler, the prod dists, esbuild minify, and Chromium 141. Byte and work numbers are identical across runs. Times are the median of 7 fresh loads per run, and the mean of two runs.
+
+**HN story page**: the `hackernews-spa` Story, Comment and Toggle components, with the captured 1,406-comment thread.
+
+| | A: hydrate (today) | CSR: client render of the same page |
+| --- | ---: | ---: |
+| HTML gz | 405.6 KB (1,423 KB raw) | 198.0 KB (the inline story JSON) |
+| of which serialized data | 204.7 KB gz | – |
+| of which `_hk` keys | 11.3 KB gz (2,712 keys) | – |
+| hole markers | 5,632 (1.4 KB gz) | – |
+| JS gz | 32.1 KB | 26.5 KB |
+| min KB: signals / solid / web / app | 61.3 / 12.2 / 12.2 / 2.7 | 60.7 / 1.1 / 7.8 / 2.4 |
+| owners / computations / compute runs | 2,061 / 4,880 / 13,775 | 2,061 / 4,879 / 13,774 |
+| template claims | 2,712 | – |
+| `_hk` gather | 5.5–6.1 ms | – |
+| hydrate() / render(), 1× · 4× | 107 · 346 ms | 89 · 323 ms |
+| script at load, 1× · 4× | 111 · 369 ms | 91 · 333 ms |
+| heap | 13.7 MB | 8.3 MB |
+| server render | 27–31 ms | – |
+
+What the table shows:
+- **Hydration-only code is 5.6 KB gz:** 11.1 KB min in `solid-js` (the hydration-aware wrappers) and 4.4 KB min in `@solidjs/web` (gather, claim, resume).
+- **Almost none of it is avoidable per app today:** the page has one serialized computation, and its "re-run" is the only trace run.
+- **The work is the render.** A page that is 98% static hydrates like a page that is 100% live.
+
+**The real twins** are their own vite production builds and servers (`measure-twins.mjs`), on the same story:
+
+| Twin | HTML gz (data, `_hk`) | JS gz | CPU | hydrated at | script | heap | dead toggles | failed loads |
+| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| hackernews-spa | 406.6 (204.8, 12.0) | 46.0 | 1× | 504 ms | 151 ms | 13.6 MB | 1/7 | 0/7 |
+| hackernews-spa | | | 4× | 1,679 ms | 736 ms | 13.6 MB | **6/7** | 0/7 |
+| hackernews (server components) | 260.5 (9.5, 6.2) | **55.5** | 1× | 533 ms | 33 ms | 7.0 MB | 0/7 | **1/7** |
+| hackernews (server components) | | | 4× | 1,429 ms | 129 ms | 3.7 MB | 0/7 | 0/7 |
+
+- **Server components remove the data and 78–82% of the script.** They ship more JS than the SPA twin: the router plus the frame runtime.
+- **Their HTML is still 37% larger than an inert page needs:** 260.5 against 189.7 KB gz, spent on frames, slot markers and keys.
+
+**todos-blocks** (100 todos, generator blocks v2) and **sync-blocks** (async-free, v2):
+
+| | todos A | todos CSR | sync A | sync CSR |
+| --- | ---: | ---: | ---: | ---: |
+| HTML gz (data, `_hk`) | 2.6 (1.2, 0.3) | – | 0.5 (0, 0) | – |
+| JS gz | 39.3 | 33.5 | 34.1 | 27.4 |
+| hydration-only JS gz | **5.8** | | **6.7** | |
+| owners / computations / claims | 105 / 325 / 105 | | 2 / 9 / 2 | |
+| trace re-runs (async compute re-run) | 1 | | 0 | |
+| hydrate() 1× · 4× | 32 · 141 ms | | 8 · 44 ms | |
+| first interaction 1× · 4× | 4.5 · 21.9 ms | | 1.2 · 5.0 ms | |
+
+- For small live apps, the fixed hydration runtime (5.8–6.7 KB gz) is 15–20% of the JS.
+- The signals core (61–77 KB min) dominates everything.
+
+## 2. What the v2 block graph gives the compiler
+
+Generator blocks v2 make every reactive fact syntactic, per component:
+
+| Fact | Where the compiler reads it | What SSR/hydration uses it for |
+| --- | --- | --- |
+| Creations | `yield* $signal / $store / $memo / $effect` in the setup only | what state an island owns; what must be rebuilt or serialized |
+| Reads | `yield*` in the view (reads only) and in memos | which holes are live; subscribers derived statically, not serialized |
+| Writes | `yield* set(…)` and setter calls, only in `$event` / `$effect` | the live closure: a cell no handler, action or effect writes is server-authoritative |
+| Async | `attempt(() => promise)` in memos and events; `Pending` in the types | every async read sits under a `Loading`; a streamed boundary's inputs are known |
+| Failures | `raise` / `Failures` in the types | which `Errored` boundary a failure lands in; what to serialize for it |
+| Load-time effects | `$effect`, `onSettled`, `onMount` (directly or through a factory) | which islands must activate at load |
+
+The setup/view split is what makes the difference:
+- A **setup runs once** and only creates.
+- A **view only reads.**
+- **Writes happen only in events and effects.**
+
+So "does this rendered region ever change on the client" is a join over three syntactic sets. Compat Solid needed H10's runtime trace for this, and was unsafe on an unseen writer.
+
+`scripts/ssr-redesign/analyze.mjs` is a prototype of that join over the three example apps, using the TypeScript AST and name-based resolution. It builds:
+- the cells;
+- the flows (props joined over call sites to a fixed point, context values over providers, `For` / `Show` parameters);
+- each component's live reads, events, writes and load-time effects;
+- the handler → island map.
+
+The output is in `ssr-hydration-redesign/analysis.json`.
+
+| App | Component | Class | Why |
+| --- | --- | --- | --- |
+| hn | Page, StoryPage, Comment | **inert** | `story` is an async memo that nothing writes or refetches (server-authoritative); every view read derives from it |
+| hn | Toggle | view island, self-contained | `open` is written by its own `onClick`; the children slot is inert pass-through |
+| todos | Header | **event island** | its view reads nothing live; `onKeyDown` writes `todos` |
+| todos | MainSection, TodoItem, Footer | view islands | read `todos` (optimistic store; written by actions, `refresh`ed) |
+| todos | App | **hot island** | `createHashFilter()` registers a `hashchange` listener in `onSettled` at load |
+| sync | Converter | view island, self-contained | its handler writes only `celsius` |
+| sync | App | view island | store and draft |
+
+Handler → hydrate-before-write sets:
+- **hn:** `Toggle.onClick` reaches only Toggle, so **each instance activates alone.**
+- **todos:** every handler writes `todos`, which every live view reads, so the first interaction must activate all of them.
+- **sync:** Converter and App are independent.
+
+## 3. The design: compiled islands over the block graph
+
+### 3.1 Classes and what each ships
+
+| Class | Proof | Server output | Client at load | Client later |
+| --- | --- | --- | --- | --- |
+| **inert** | no live read, no event, no ref, no load-time effect, in this region or in slots it owns | string template: no owner, no `_hk`, no hole markers, nothing serialized | nothing | nothing (a navigation that replaces it renders fresh, see 3.7) |
+| **event island** | events, no live view read, no load-time effect | HTML + one anchor; the handler's captures | nothing | on first event: the handler chunk runs; no view code, no view re-run |
+| **view island** | live view reads, no load-time effect | HTML + one anchor; its live closure (cells reached by its handlers, and captures) | nothing (or idle, by policy) | before the first write that reaches it (the handler map): rebuild cells, bind **live holes only**, attach handlers |
+| **hot island** | a load-time effect (listener, timer, measurement) | as view island | activate | – |
+
+- **Liveness is per hole, not per component.** Inside an island, a hole whose expression reads nothing live is neither bound nor serialized. This is H10's inert binding, now sound: in strict v2 code the writers are enumerable, so there is no unseen writer.
+- **Slots are pass-through.** Toggle's `{props.children}` is owned by the caller's class (inert here), so activating a Toggle never touches the reply list.
+
+### 3.2 Addresses instead of hydration keys
+
+- **One anchor per island instance:** `data-i=<island>` on its first element, or a `<!--i:…-->` comment when the root is a fragment.
+- **Every other node is a static path from the anchor.** The compiler already emits `firstChild` / `nextSibling` walks per template; the island module keeps them, with no `getNextElement` key lookup and no gather.
+- **Dynamic structure inside an island** (`For` / `Show` whose inputs are live) keeps `<!--$-->…<!--/-->` bounds, and only there.
+- **Inert regions have no markers.**
+- **Nested islands** in a slot are found through their own anchors: `closest()` on events, or a query for eager activation.
+
+| On the HN page | Today | Compiled islands |
+| --- | ---: | ---: |
+| address bytes | 2,712 `_hk` = 11.3 KB gz | 652 anchors = 7.2 KB raw, **0.2 KB gz** |
+| hole markers | 5,632 = 45 KB raw, 1.4 KB gz | 0 in inert regions |
+| gather at load | 5.5–6.1 ms | none |
+
+Address stability comes from one compiler pass producing both halves, and a versioned island manifest shared by the server and client builds. The linker refuses to link mismatched manifests.
+
+### 3.3 What is serialized, per block kind
+
+Only what a client-side reader or writer of an **island** needs.
+
+| Block / value | Serialized | Why |
+| --- | --- | --- |
+| `$signal(literal)` / `createSignal(literal)` | nothing | rebuilt from its constant (Toggle's `open`: 652 islands, 0 bytes) |
+| `$signal(expr)` from props or server data | its value, when live | the client cannot re-evaluate server inputs |
+| `$store(…)` | the store paths live handlers or live holes read; the whole store only for a dynamic key | the store-summary / path facts (`store_handles.rs`) name the paths |
+| sync `$memo` | nothing | recomputed on activation from its sources |
+| async `$memo` / projection (pending-typed) | its settled value, **adopted without re-running the compute** | its reads before the first `attempt` are typed; subscribe to them statically (P2). A memo nothing writes or refetches is server-authoritative: its readers are inert |
+| failure (`raise`, `Errored`) | the error value, only inside a live boundary | inert fallbacks are HTML |
+| `$effect` | nothing | its first run is the server-rendered state; hot islands re-run it |
+| `$event` | nothing at load; its captures when its island activates | see 3.4 |
+| context value read by an island | by reference into the island's scope | the provider's value, once per request, not per reader |
+
+### 3.4 `$event` handlers as lazy chunks
+
+- **Extraction.** Each `$event` body becomes a module-level function `(captures, event) => …`. Its captures are its free variables:
+  - cells (as setter/accessor handles resolved in the island's scope table);
+  - props paths (`props.todo.id`);
+  - context values.
+- **Chunks.** Chunks are clustered per island. A handler that writes cells other islands read shares a chunk with those islands' activation code, because the handler map says they activate before the write.
+- **Loader.** The loader is inline, ~0.3 KB gz (`islands-static/client-lazy.ts`). It is one delegated listener per event type. On an event it:
+  1. finds the anchor (`closest('[data-i]')`);
+  2. imports the chunk;
+  3. activates the hydrate-before-write set, in manifest order;
+  4. **replays the event.**
+
+  Later events queue in order while a chunk loads. That queue is the fix for Track C's dropped-first-event failure.
+- **Default actions.** A handler loaded after the event cannot `preventDefault()` it. When a `$event` body calls `e.preventDefault()` (a syntactic fact), the compiler marks the element (`data-pd`) so the loader prevents it synchronously and replays. Links and forms without such a handler keep their native behavior.
+- **Prefetch.** Chunks are prefetched on hover, focus or viewport (policy), so the P1-lazy first click (18 ms at 1×, 30 ms at 4× from memory) does not pay a network round trip.
+
+### 3.5 Async boundaries and streaming
+
+- **Pending types place every async read** under a known `Loading`, and failures under a known `Errored`. The server streams as today (shell, then boundary chunks), with two differences:
+  - A **boundary whose content is inert** streams HTML only: no `$df` resume bookkeeping, no serialized value, no client boundary object.
+  - A **boundary containing islands** streams each island's live closure with its chunk. Islands inside a pending boundary cannot activate until the chunk lands. The loader simply finds no anchor yet, and a queued event waits.
+- **Server-authoritative adoption (P2).** An async computation adopts its serialized value without the trace re-run (`subFetch`). Its reads before the first `attempt` are typed, so the compiler emits them as the node's static subscriptions. Today every serialized computation re-runs its compute on the client with `fetch` and `Promise` mocked. That wastes work, and it is unsound for libraries that do not go through `window.fetch` (the conformance goldens pin the restarted fetch).
+- **Async-free islands** (every read in their graph `Pending = false`) select the async-free core (Track A stage 2).
+
+### 3.6 SSR changes
+
+- **Inert regions compile to string concatenation.** The compiler already emits template arrays; for an inert region it can also drop:
+  - the owner per component;
+  - the hole thunks and their `escape` wrappers;
+  - `ssrHydrationKey`;
+  - the serializer's record for anything only inert views read.
+- **Islands keep today's SSR path,** with ids scoped to the island (its address namespace) and serialization limited to its live closure.
+- **Measured on the HN page** (`ssr-bench.mjs`, gated on identical HTML modulo markers):
+  - today's hydratable render takes **26.6–31.0 ms**;
+  - the same components in a NoHydration zone take **5.7–8.4 ms**;
+  - the compiled string template takes **0.54–0.87 ms**.
+
+### 3.7 Navigation and client-only renders
+
+An inert region is inert for the page state it was rendered with. When a navigation replaces its inputs (a new story id), there is nothing to hydrate: the region is replaced. Two supported paths:
+1. **Route chunks.** The region's components ship as a lazy route chunk, loaded on navigation or on hover prefetch. A client render (CSR) is 1.2× cheaper than hydration, so replacing beats hydrating.
+2. **Server components.** The server returns the region's HTML over frames (the `hackernews` twin's model). The compiler's inert proof is exactly the condition under which a component can be a server component automatically: it needs no `"use server"` annotation for markup.
+
+### 3.8 Runtime shape
+
+| Piece | Size | Notes |
+| --- | ---: | --- |
+| loader | 0.3 KB gz | delegated listeners, anchor lookup, chunk import, event queue and replay |
+| island runtime | the signals core only: 23.5 KB min / **9.6 KB gz** for Toggle | no `_$HY`, `sharedConfig`, registry, gather, claim, hydration-aware wrappers, `subFetch`, snapshots |
+| island chunks | per island | the setup cells, live bindings (static paths), handlers |
+| hydration runtime (today's) | kept for compat apps and for view islands that need full hydration (stateful lists) | compat code keeps working unchanged |
+
+## 4. Alternatives, compared
+
+| Strategy | Code at load | Data | Work at load | First event | Correctness condition | Measured |
+| --- | --- | --- | --- | --- | --- | --- |
+| **A.** Full hydration (today) | everything | every async value | the whole tree (= CSR) + claims | cheap | none | HN: 32.1 KB / 405.6 KB / 369 ms at 4× |
+| **E.** Runtime lazy hydration | loader | as A | none | hydrate **everything** (no map) | hydrate-before-write needs the whole tree | resumability.md: total unchanged, 131–321 ms first click at 4×; todos A-lazy: 181 ms first click at 4× |
+| **F.** Per-island hydration + handler map | islands | island values | islands | hydrate the map's islands | compiler map | resumability.md: equal to A in total, moved to the first click |
+| **P1-rt.** F driven by the block graph, on today's runtime | island components + hydration runtime | none here | 652 islands hydrated | cheap | inert proof + slot pass-through | HN: 29.3 KB / 199.6 KB / 227 ms at 4× |
+| **P1-static.** Compiled islands (this design) | loader (lazy) or island chunks (eager) | live closure only (none here) | none (lazy) or live bindings (eager) | chunk + activation | inert proof, handler map, static addresses | HN: 0.3 (+9.6) KB / 189.7 KB / 8 ms (lazy), 49 ms (eager) at 4× |
+| **C.** Pruned resumability (whole graph) | component-free client | live cells + instance table | none | wake subscribers | live-closure proof (over-approximate subscribers) | resumability.md: load + first click 3× less CPU than D/F; +5–8 KB gz when mostly live |
+| **SC.** Server components (by hand) | router, frames runtime, client components | slot args | client components | cheap | author partitions | HN twin: 55.5 KB / 260.5 KB / 129 ms at 4× |
+
+- **P1-static is C at component granularity, where it pays off.** Inert regions need no graph at all. A self-contained island (Toggle) is resumed from constants. Only stateful islands need C's serialized cells and subscriber derivation. The same proof covers both, because the live closure and the island set come from the same writes/reads join.
+- **Whole-graph resumability** still wins CPU when most of the page is live. But it pays bytes for every live binding, and the resumability study put its break-even at 0.4–2.6 Mbps. Keep it as the compilation for stateful view islands (Phase 5), not as the page model.
+- **Runtime-only laziness (E)** moves cost and cannot be sound without the map. The todos-blocks A-lazy numbers confirm it: 3 ms of load script instead of 148 ms at 4×, but a 181 ms first interaction. Script through the first interaction is 40 ms either way at 1×, and 131 vs 173 ms at 4×.
+
+## 5. Prototype results
+
+Two strategies were prototyped. Both run on the real compiler and runtime, and both pass the equivalence gate. The gate requires:
+- the page equals A's after load and after every step of a session, with keys, markers, anchors and island wrappers normalized away;
+- server nodes captured during parsing are the live nodes after load (node identity).
+
+### 5.1 P1: compiled islands on the HN story page
+
+Variants:
+- **P1-rt** partitions with today's runtime. The server renders the page in a `NoHydration` zone and wraps each Toggle in a `<solid-island>` that re-enters `Hydration`. The client runs one `hydrate()` per island, and hands the reply list back as the server's own nodes. This is a stand-in for compiler output.
+- **P1-eager** is compiled activation (`islands-static/toggle.island.ts`, a hand-written stand-in for the compiler's emission) run for every island at load. It has static paths, no keys and no hydration runtime. It rebuilds `open` from its constant and creates three render effects whose first run writes nothing, plus one handler.
+- **P1-lazy** is the same activation per instance, on its first event, through the loader, with replay.
+
+Bytes and work:
+
+| Variant | HTML gz | JS gz at load | lazy JS gz | owners | computations | claims | gate |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| A | 405.6 | 32.1 | – | 2,061 | 4,880 | 2,712 | reference |
+| P1-rt | 199.6 | 29.3 | – | 652 | – | 1,304 | pass, nodes kept |
+| P1-eager | 189.7 | 9.6 | – | 652 | – | – | pass, nodes kept |
+| P1-lazy | 189.7 | **0.3** | 9.6 | – (3 after a 4-click session) | – | – | pass, nodes kept |
+
+Time (ms):
+
+| Variant | ready 1× | ready 4× | activation 1× | activation 4× | script at load 1× | script at load 4× | heap | first click 1× | first click 4× |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| A | 423 | 1,602 | 107 | 346 | 111 | 369 | 13.7 MB | 1.6 | 7.1 |
+| CSR (reference) | 147 | 504 | 89 | 323 | 91 | 333 | 8.3 MB | 1.4 | 7.0 |
+| P1-rt | 316 | 1,260 | 55 | 213 | 58 | 227 | 5.2 MB | 1.5 | 7.2 |
+| P1-eager | 269 | 1,045 | 12 | 41 | 14 | 49 | 2.4 MB | 1.2 | 5.8 |
+| P1-lazy | 277 | 959 | 0 | 0 | 1.6 | 8.1 | 1.5 MB | 18.0 | 30.3 |
+
+Run-to-run spread on script at load is at most 13% at 1× and 22% at 4×.
+
+- **Most of the saving is the partition, not the runtime.** P1-rt, with today's runtime, already halves the HTML (no data) and the hydration time. But it keeps 29 KB of JS: a hydration runtime per island costs almost as much code as the whole app.
+- **Compiled activation removes the runtime.** It drops JS by 70% and activation by 88%.
+- **Laziness removes the rest from load,** for 18–30 ms on the first click, or less with prefetch.
+- **"Ready" is bounded by HTML parse.** Once script is near zero, halving the HTML is the remaining 35–40%.
+
+### 5.2 P2: server-authoritative adoption (`adopt`)
+
+An oracle patch (`lib.mjs`, `ORACLES.adopt`) skips the trace re-run for nodes the compiler would mark. The prototype marks the HN story memo and the todos projection, whose read sets before the first await are empty.
+
+| App | trace re-runs | script at load 1× (A → adopt) | 4× (A → adopt) |
+| --- | ---: | ---: | ---: |
+| hn | 1 → 0 | 111 → 112 ms | 369 → 327 ms (inside the 22% spread) |
+| todos | 1 → 0 | 33.6 → 33.2 ms | 148 → 141 ms |
+
+- **It is equivalent** (the gate passes, nodes kept).
+- **It is not a speed-up for these pages:** each page has one serialized computation, and its mocked re-run is cheap.
+- **Its value is correctness.** It removes a duplicate fetch that does not go through `window.fetch`, and duplicate side effects in computes. Keep it in Phase 1 for that reason and for pages with many serialized computations; do not claim time for it.
+
+### 5.3 On-interaction hydration of an all-live app (todos-blocks)
+
+A-lazy uses the existing bootstrap's event capture and `runHydrationEvents` replay (no compiler map, whole app):
+
+| | script at load 1× · 4× | first interaction 1× · 4× | script through the first interaction 1× · 4× |
+| --- | --- | --- | --- |
+| A | 33.6 · 148.2 ms | 4.5 · 21.9 ms | 39.6 · 173.1 ms |
+| A-lazy | 0.9 · 3.2 ms | 59.6 · 180.6 ms | 40.4 · 131.0 ms |
+
+The gate passes, including a replayed first click. With every view live, the design has nothing to prune. Laziness is a scheduling choice here: time-to-first-paint-interactive against first-interaction latency, and the default should be eager for such pages.
+
+## 6. Migration plan
+
+| Phase | Change | Gate to move on | Risk |
+| --- | --- | --- | --- |
+| 0 | **Fix the defects found here.** Done: the production block guard, and v2 context in SSR. Open: the `hackernews-spa` dead toggles under slow CPU, and the server-components twin's intermittent client exception | `probe-twin-toggle.mjs` 0/20 at 4×; the twins' failed loads 0/20 | low |
+| 1 | **Hydration runtime overhead** (H10's list: `claimInitial` child-list copies, GC) and **`adopt`** as an option the compiler emits for computations with proven read sets | conformance goldens updated deliberately for the async re-run; `measure.mjs` todos/hn | low |
+| 2 | **Liveness linker:** `islands.rs` summaries extended with the v2 block facts (setup creations, view reads, `$event` writes, load-time effects), joined across modules like `capabilities.rs`, emitting a versioned island manifest. First consumer: automatic `NoHydration` zones plus island roots on today's runtime (P1-rt), with a slot pass-through API in `hydrate()`. **Dev builds verify**: they hydrate everything and warn if an inert-classified region's DOM would change | P1-rt parity on the conformance scenarios and the three examples; the dev verifier silent | medium: an under-approximated writer is silent staleness (C-broken) |
+| 3 | **Compiled island activation:** static addresses, constant-state rebuild, live-hole-only bindings, `$event` extraction with captures, the loader with queue/replay and `data-pd`, and hydrate-before-write from the handler map. Opt-in per build (`islands: "compiled"`) | P1-static gate on hn/todos/sync + new scenarios (nested islands, islands inside pending boundaries, forms, focus) | medium |
+| 4 | **String-template SSR for inert regions:** ids and serialization only inside islands; inert boundary chunks stream as HTML only | byte-identical HTML modulo markers (`ssr-bench.mjs` gate) | low |
+| 5 | **Stateful islands:** serialize setup cells and live store paths; adopt async memos with static subscriptions; compile stateful view islands resumably (C generalized to component instances, with lazy family members and per-member wake keys) | resumability study's gate + todos with lists | high: lists and stores |
+| 6 | **Navigation:** inert regions as route chunks or automatic server components (frames), unifying the `hackernews` twin's model with the compiler's proof | the hackernews twins produce the same pages | medium |
+
+Compat (non-strict) code stays on today's pipeline throughout. An unknown library, escaping setter or unanalyzable context makes its region live (conservative).
+
+## 7. Risks
+
+- **Soundness depends on a closed world.** A writer the linker does not see leaves an inert region stale: devtools, a library without a summary, or `eval`. Mitigations:
+  - strict mode only;
+  - escapes are live;
+  - the dev verifier;
+  - a runtime escape hatch (`<Live>` / an `ssrSource`-like opt-out).
+- **Over-pruned closures fail silently** (C-broken in the resumability study). The proof must over-approximate subscribers and writers, and the gate must include "after every write" states, not only load.
+- **Event semantics** for lazily loaded handlers:
+  - `preventDefault` (needs `data-pd`);
+  - input typed before activation (controlled inputs must read the DOM value on activation);
+  - focus and selection;
+  - ordering across two islands' chunks (one queue per page, not per island).
+- **Chunk waterfalls:** many small islands with independent chunks. Cluster per route and per handler map; prefetch on hover/viewport.
+- **Hot islands are unavoidable** where apps register listeners at load (todos' `hashchange`). Expressing such subscriptions as event sources (`$event` on `window`) would let the compiler defer them.
+- **HTML dominates "ready" once script is gone.** The remaining wins are in HTML size (string templates, no markers, no data) and streaming, not JS.
+- **Id and manifest stability** across separately built server and client bundles. Version-stamp the manifest and refuse mismatches at link time.
+
+## Defects found
+
+| Defect | Status | Evidence |
+| --- | --- | --- |
+| **Production `$` blocks mis-read stores in nested computations.** `recompute` (and the status-free recompute) lowered the block strict guard only under `__DEV__`, while the driver raises it and store proxies answer it with path tokens in every tier. A `Show` / `For` / render effect created inside a v2 view therefore failed with `[UNREAD_PATH]` in production: the todos-blocks production build showed its error fallback, and its SSR page re-rendered the list instead of hydrating it | **Fixed** (`@solidjs/signals`, changeset `block-guard-prod-nested-computations`) | `tests/block-guard-nested-computation.test.ts` fails under `SIGNALS_TIER=prod` before the fix |
+| **v2 `yield* Ctx` could not server-render.** The context op read through the client core's `getContext`, which has no owner on the server (NoOwnerError; todos-blocks SSR rendered its `<Errored>` fallback) | **Fixed** (`@solidjs/signals`, `solid-js`; the server provider installs a reader under `Symbol.for("solid.contextRead")`) | `packages/web/test/server/block-api.spec.tsx` |
+| **`hackernews-spa` production build: toggles never become interactive** under CPU throttling, although `_$HY.done` is set and the server nodes are in place | open | `probe-twin-toggle.mjs`: 3–4/6 loads at 4×, 0/6 at 1× in one series, 1/7 at 1× in another |
+| **`hackernews` (server components): a load renders "Uncaught Client Exception"** instead of the thread | open | 1/7 loads at 1× in `measure-twins.mjs` |
+
+## Open questions
+
+1. **Where do island boundaries go when a component is partly live?** Today's unit is the component. Should the compiler split a component's view into an inert template plus live sub-islands, with a finer anchor per live hole group?
+2. **Prefetch policy defaults** for lazy islands: viewport vs hover vs idle, and a byte budget per route.
+3. **Can load-time effects be typed as event sources** (`$event` on `window` / `document` / timers), so the linker can defer them? This would turn todos' App from hot to lazy.
+4. **Should the island runtime be a smaller core than the signals core?** Toggle needs only signals and render effects. At 9.6 KB gz, that runtime is the entire remaining JS.
+5. **Store serialization granularity:** live paths vs whole store vs per-row. It interacts with Track B handle stores and projections.
+6. **How does the dev verifier report without making dev builds diverge from production** in timing-sensitive code (streaming, boundaries)?
+7. **Unifying with server components:** should an inert region become a server component automatically on navigation (frames), or should route chunks be the default and SC opt-in?
+
+## Reproduce
+
+```sh
+# builds: packages/signals, packages/solid (pnpm build), packages/compiler (pnpm build; rustc 1.95), packages/web
+node scripts/ssr-redesign/analyze.mjs                          # block-graph classification (--json out)
+node scripts/ssr-redesign/measure.mjs --check                  # gates only
+node scripts/ssr-redesign/measure.mjs --reps 7 --cpu 1,4 --out documentation/plans/ssr-hydration-redesign/results-1.json   # and -2
+(cd examples/hackernews-spa && pnpm build); (cd examples/hackernews && pnpm build)
+node scripts/ssr-redesign/measure-twins.mjs --reps 7 --cpu 1,4 --out documentation/plans/ssr-hydration-redesign/twins-1.json
+node scripts/ssr-redesign/ssr-bench.mjs --out documentation/plans/ssr-hydration-redesign/ssr-bench-1.json   # and -2
+node scripts/ssr-redesign/probe-twin-toggle.mjs hackernews-spa 4 6
+node scripts/ssr-redesign/report.mjs                           # the tables above
+```
+
+Harness notes:
+- **Counters and oracles** are exact-once textual patches of the prod dists, applied at bundle time (`lib.mjs`); a changed anchor fails loudly.
+- **The work counters are:**
+  - `computed()` constructions;
+  - `recompute()` runs;
+  - `signal()` and `createOwner()`;
+  - `getNextElement()` calls;
+  - `subFetch()` trace re-runs;
+  - key misses;
+  - the `_hk` gather time.
+- **The P1 client modules and the string template are hand-written stand-ins** for compiler output. The classification that licenses them is `analyze.mjs`'s, and the server markup and gate are the real runtime's.
+- **Limits:**
+  - one large static-dominated page (hn) and two small live apps (todos, sync);
+  - in-memory serving, so the network is not modeled (see resumability.md for bandwidth models);
+  - the P2 oracle marks nodes by a source rewrite, not a compiler pass.

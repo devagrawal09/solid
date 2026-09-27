@@ -1,0 +1,110 @@
+{
+  "chromium": "141.0.7390.37",
+  "reps": 7,
+  "twins": {
+    "hackernews-spa": {
+      "html": {
+        "bytes": 1485039,
+        "gzip": 416374,
+        "data": {
+          "bytes": 639939,
+          "gzip": 209680
+        },
+        "bootstrap": {
+          "bytes": 472,
+          "gzip": 312
+        },
+        "hk": {
+          "count": 2714,
+          "bytes": 92786,
+          "gzip": 12305
+        },
+        "markers": {
+          "count": 5635,
+          "bytes": 45081,
+          "gzip": 1282
+        }
+      },
+      "js": {
+        "gzip": 47117,
+        "files": [
+          {
+            "file": "/assets/virtual_solid-ssr-entry-client-BCI9hqLt.js",
+            "bytes": 134417,
+            "gzip": 47117
+          }
+        ]
+      },
+      "timing": {
+        "1": {
+          "hydratedAt": 504.10000000009313,
+          "scriptMs": 150.658,
+          "heapKB": 13630.65625,
+          "firstMs": 1.6999999997206032,
+          "deadLoads": 1,
+          "loadsWithoutThread": 0
+        },
+        "4": {
+          "hydratedAt": 1678.7999999998137,
+          "scriptMs": 736.4190000000001,
+          "heapKB": 13631.97265625,
+          "firstMs": 8.899999999906868,
+          "deadLoads": 6,
+          "loadsWithoutThread": 0
+        }
+      }
+    },
+    "hackernews": {
+      "html": {
+        "bytes": 1154888,
+        "gzip": 266770,
+        "data": {
+          "bytes": 85438,
+          "gzip": 9698
+        },
+        "bootstrap": {
+          "bytes": 472,
+          "gzip": 313
+        },
+        "hk": {
+          "count": 1305,
+          "bytes": 50644,
+          "gzip": 6390
+        },
+        "markers": {
+          "count": 5635,
+          "bytes": 45081,
+          "gzip": 1433
+        }
+      },
+      "js": {
+        "gzip": 56856,
+        "files": [
+          {
+            "file": "/assets/virtual_solid-ssr-entry-client-Dlhr_o8Z.js",
+            "bytes": 162497,
+            "gzip": 56856
+          }
+        ]
+      },
+      "timing": {
+        "1": {
+          "hydratedAt": 532.6000000000931,
+          "scriptMs": 32.857,
+          "heapKB": 6972.0625,
+          "firstMs": 1.2999999998137355,
+          "deadLoads": 0,
+          "loadsWithoutThread": 1
+        },
+        "4": {
+          "hydratedAt": 1429.3999999999069,
+          "scriptMs": 128.683,
+          "heapKB": 3698.0078125,
+          "firstMs": 5.100000000093132,
+          "deadLoads": 0,
+          "loadsWithoutThread": 0
+        }
+      }
+    }
+  }
+}

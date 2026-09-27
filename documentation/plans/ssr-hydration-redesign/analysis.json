@@ -1,0 +1,488 @@
+{
+  "hn": {
+    "app": "hn",
+    "files": [
+      "scripts/ssr-redesign/apps/hn/story.tsx",
+      "examples/hackernews-spa/src/components/comment.tsx",
+      "examples/hackernews-spa/src/components/toggle.tsx"
+    ],
+    "cells": [
+      {
+        "cell": "story(createMemo)",
+        "at": "story.tsx:11",
+        "live": false,
+        "why": "never written"
+      },
+      {
+        "cell": "open(createSignal)",
+        "at": "toggle.tsx:4",
+        "live": true,
+        "why": "setter used"
+      }
+    ],
+    "components": [
+      {
+        "component": "StoryPage",
+        "kind": "plain",
+        "file": "scripts/ssr-redesign/apps/hn/story.tsx",
+        "verdict": "inert",
+        "liveViewReads": [],
+        "staticViewReads": [
+          "story(createMemo)"
+        ],
+        "events": [],
+        "writes": [],
+        "loadTimeEffects": [],
+        "renders": [
+          "Comment"
+        ],
+        "slot": false
+      },
+      {
+        "component": "Page",
+        "kind": "plain",
+        "file": "scripts/ssr-redesign/apps/hn/story.tsx",
+        "verdict": "inert",
+        "liveViewReads": [],
+        "staticViewReads": [],
+        "events": [],
+        "writes": [],
+        "loadTimeEffects": [],
+        "renders": [
+          "StoryPage"
+        ],
+        "slot": false
+      },
+      {
+        "component": "Comment",
+        "kind": "plain",
+        "file": "examples/hackernews-spa/src/components/comment.tsx",
+        "verdict": "inert",
+        "liveViewReads": [],
+        "staticViewReads": [
+          "story(createMemo)"
+        ],
+        "events": [],
+        "writes": [],
+        "loadTimeEffects": [],
+        "renders": [
+          "Toggle",
+          "Comment"
+        ],
+        "slot": false
+      },
+      {
+        "component": "Toggle",
+        "kind": "plain",
+        "file": "examples/hackernews-spa/src/components/toggle.tsx",
+        "verdict": "view-island",
+        "liveViewReads": [
+          "open(createSignal)"
+        ],
+        "staticViewReads": [],
+        "events": [
+          "onClick"
+        ],
+        "writes": [
+          "open(createSignal)"
+        ],
+        "loadTimeEffects": [],
+        "renders": [],
+        "slot": true
+      }
+    ],
+    "handlerMap": [
+      {
+        "island": "Toggle",
+        "events": [
+          "onClick"
+        ],
+        "writes": [
+          "open(createSignal)"
+        ],
+        "hydrateBeforeWrite": [
+          "Toggle"
+        ]
+      }
+    ]
+  },
+  "todos": {
+    "app": "todos",
+    "files": [
+      "examples/todos-blocks/src/app.tsx",
+      "examples/todos-blocks/src/todos.ts",
+      "examples/todos-blocks/src/filter.ts"
+    ],
+    "cells": [
+      {
+        "cell": "filtered($memo)",
+        "at": "app.tsx:117",
+        "live": true,
+        "why": "reads a live cell"
+      },
+      {
+        "cell": "allCompleted($memo)",
+        "at": "app.tsx:127",
+        "live": true,
+        "why": "reads a live cell"
+      },
+      {
+        "cell": "remaining($memo)",
+        "at": "app.tsx:159",
+        "live": true,
+        "why": "reads a live cell"
+      },
+      {
+        "cell": "completed($memo)",
+        "at": "app.tsx:162",
+        "live": true,
+        "why": "reads a live cell"
+      },
+      {
+        "cell": "todos(createOptimisticStore, async)",
+        "at": "todos.ts:86",
+        "live": true,
+        "why": "setter used"
+      },
+      {
+        "cell": "filter(createSignal)",
+        "at": "filter.ts:26",
+        "live": true,
+        "why": "setter used"
+      }
+    ],
+    "components": [
+      {
+        "component": "Header",
+        "kind": "$component",
+        "file": "examples/todos-blocks/src/app.tsx",
+        "verdict": "event-island",
+        "liveViewReads": [],
+        "staticViewReads": [],
+        "events": [
+          "onKeyDown"
+        ],
+        "writes": [
+          "todos(createOptimisticStore, async)"
+        ],
+        "loadTimeEffects": [],
+        "renders": [],
+        "slot": false
+      },
+      {
+        "component": "TodoItem",
+        "kind": "$component",
+        "file": "examples/todos-blocks/src/app.tsx",
+        "verdict": "view-island",
+        "liveViewReads": [
+          "todos(createOptimisticStore, async)",
+          "filtered($memo)"
+        ],
+        "staticViewReads": [],
+        "events": [
+          "onInput",
+          "onClick",
+          "onClick"
+        ],
+        "writes": [
+          "todos(createOptimisticStore, async)"
+        ],
+        "loadTimeEffects": [],
+        "renders": [],
+        "slot": false
+      },
+      {
+        "component": "MainSection",
+        "kind": "$component",
+        "file": "examples/todos-blocks/src/app.tsx",
+        "verdict": "view-island",
+        "liveViewReads": [
+          "todos(createOptimisticStore, async)",
+          "allCompleted($memo)",
+          "filtered($memo)"
+        ],
+        "staticViewReads": [],
+        "events": [
+          "onInput"
+        ],
+        "writes": [
+          "todos(createOptimisticStore, async)"
+        ],
+        "loadTimeEffects": [],
+        "renders": [
+          "TodoItem"
+        ],
+        "slot": false
+      },
+      {
+        "component": "Footer",
+        "kind": "$component",
+        "file": "examples/todos-blocks/src/app.tsx",
+        "verdict": "view-island",
+        "liveViewReads": [
+          "todos(createOptimisticStore, async)",
+          "remaining($memo)",
+          "filter(createSignal)",
+          "completed($memo)"
+        ],
+        "staticViewReads": [],
+        "events": [
+          "onClick"
+        ],
+        "writes": [
+          "todos(createOptimisticStore, async)"
+        ],
+        "loadTimeEffects": [],
+        "renders": [],
+        "slot": false
+      },
+      {
+        "component": "App",
+        "kind": "plain",
+        "file": "examples/todos-blocks/src/app.tsx",
+        "verdict": "hot-island",
+        "liveViewReads": [
+          "todos(createOptimisticStore, async)",
+          "filtered($memo)",
+          "filter(createSignal)"
+        ],
+        "staticViewReads": [],
+        "events": [
+          "onClick"
+        ],
+        "writes": [],
+        "loadTimeEffects": [
+          "onSettled @filter.ts:27 (via createHashFilter())"
+        ],
+        "renders": [
+          "Header",
+          "MainSection",
+          "Footer"
+        ],
+        "slot": false
+      }
+    ],
+    "handlerMap": [
+      {
+        "island": "Header",
+        "events": [
+          "onKeyDown"
+        ],
+        "writes": [
+          "todos(createOptimisticStore, async)"
+        ],
+        "hydrateBeforeWrite": [
+          "Header",
+          "TodoItem",
+          "MainSection",
+          "Footer",
+          "App"
+        ]
+      },
+      {
+        "island": "TodoItem",
+        "events": [
+          "onInput",
+          "onClick",
+          "onClick"
+        ],
+        "writes": [
+          "todos(createOptimisticStore, async)"
+        ],
+        "hydrateBeforeWrite": [
+          "TodoItem",
+          "MainSection",
+          "Footer",
+          "App"
+        ]
+      },
+      {
+        "island": "MainSection",
+        "events": [
+          "onInput"
+        ],
+        "writes": [
+          "todos(createOptimisticStore, async)"
+        ],
+        "hydrateBeforeWrite": [
+          "MainSection",
+          "TodoItem",
+          "Footer",
+          "App"
+        ]
+      },
+      {
+        "island": "Footer",
+        "events": [
+          "onClick"
+        ],
+        "writes": [
+          "todos(createOptimisticStore, async)"
+        ],
+        "hydrateBeforeWrite": [
+          "Footer",
+          "TodoItem",
+          "MainSection",
+          "App"
+        ]
+      },
+      {
+        "island": "App",
+        "events": [
+          "onClick"
+        ],
+        "writes": [],
+        "hydrateBeforeWrite": [
+          "App"
+        ]
+      }
+    ]
+  },
+  "sync": {
+    "app": "sync",
+    "files": [
+      "examples/sync-blocks/src/app.tsx"
+    ],
+    "cells": [
+      {
+        "cell": "celsius($signal)",
+        "at": "app.tsx:15",
+        "live": true,
+        "why": "setter used"
+      },
+      {
+        "cell": "fahrenheit($memo)",
+        "at": "app.tsx:17",
+        "live": true,
+        "why": "reads a live cell"
+      },
+      {
+        "cell": "label($memo)",
+        "at": "app.tsx:20",
+        "live": true,
+        "why": "reads a live cell"
+      },
+      {
+        "cell": "state($store)",
+        "at": "app.tsx:39",
+        "live": true,
+        "why": "setter used"
+      },
+      {
+        "cell": "draft($signal)",
+        "at": "app.tsx:40",
+        "live": true,
+        "why": "setter used"
+      },
+      {
+        "cell": "filter($signal)",
+        "at": "app.tsx:41",
+        "live": true,
+        "why": "setter used"
+      },
+      {
+        "cell": "visible($memo)",
+        "at": "app.tsx:44",
+        "live": true,
+        "why": "reads a live cell"
+      },
+      {
+        "cell": "remaining($memo)",
+        "at": "app.tsx:50",
+        "live": true,
+        "why": "reads a live cell"
+      },
+      {
+        "cell": "summary($memo)",
+        "at": "app.tsx:53",
+        "live": true,
+        "why": "reads a live cell"
+      }
+    ],
+    "components": [
+      {
+        "component": "Converter",
+        "kind": "$component",
+        "file": "examples/sync-blocks/src/app.tsx",
+        "verdict": "view-island",
+        "liveViewReads": [
+          "label($memo)"
+        ],
+        "staticViewReads": [],
+        "events": [
+          "onClick"
+        ],
+        "writes": [
+          "celsius($signal)"
+        ],
+        "loadTimeEffects": [],
+        "renders": [],
+        "slot": false
+      },
+      {
+        "component": "App",
+        "kind": "$component",
+        "file": "examples/sync-blocks/src/app.tsx",
+        "verdict": "view-island",
+        "liveViewReads": [
+          "draft($signal)",
+          "visible($memo)",
+          "remaining($memo)",
+          "summary($memo)"
+        ],
+        "staticViewReads": [],
+        "events": [
+          "onSubmit",
+          "onInput",
+          "onClick",
+          "onClick",
+          "onClick",
+          "onClick"
+        ],
+        "writes": [
+          "state($store)",
+          "draft($signal)",
+          "filter($signal)"
+        ],
+        "loadTimeEffects": [],
+        "renders": [
+          "Converter"
+        ],
+        "slot": false
+      }
+    ],
+    "handlerMap": [
+      {
+        "island": "Converter",
+        "events": [
+          "onClick"
+        ],
+        "writes": [
+          "celsius($signal)"
+        ],
+        "hydrateBeforeWrite": [
+          "Converter"
+        ]
+      },
+      {
+        "island": "App",
+        "events": [
+          "onSubmit",
+          "onInput",
+          "onClick",
+          "onClick",
+          "onClick",
+          "onClick"
+        ],
+        "writes": [
+          "state($store)",
+          "draft($signal)",
+          "filter($signal)"
+        ],
+        "hydrateBeforeWrite": [
+          "App"
+        ]
+      }
+    ]
+  }
+}
