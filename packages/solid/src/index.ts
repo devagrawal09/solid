@@ -1,5 +1,14 @@
 export {
   $,
+  $component,
+  $memo,
+  $effect,
+  $event,
+  $signal,
+  $store,
+  $cleanup,
+  $flush,
+  isComponent,
   wait,
   raise,
   attempt,
@@ -378,3 +387,21 @@ type {
   StorePathRange,
 }
 */
+
+// Generator blocks v2 (documentation/plans/generator-blocks-v2.md).
+export type {
+  View,
+  SettledView,
+  ViewOf,
+  TypedProps,
+  TypedStore,
+  StoreSource,
+  PropsInput,
+  BlockComponent,
+  BlockSetter,
+  BlockStoreSetter,
+  WriteReceipt,
+  MemoAccessor,
+  EventHandler,
+  ContextIterable
+} from "@solidjs/signals";

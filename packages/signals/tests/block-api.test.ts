@@ -23,7 +23,8 @@ import {
   raise,
   renderBlock,
   resetErrorHalt,
-  setContext
+  setContext,
+  type TypedProps
 } from "../src/index.js";
 
 // An uncaught effect error halts reactivity globally; isolate the tests.
@@ -70,12 +71,12 @@ describe("$component", () => {
 
   it("props are reads: the view tracks them; forwarding passes the read", () => {
     const [id, setId] = createSignal("a");
-    const Child = $component(function* (props: { readonly tag: any }) {
+    const Child = $component(function* (props: TypedProps<{ tag: string }>) {
       return function* () {
         return `child:${yield* props.tag}`;
       };
     });
-    const Parent = $component(function* (props: { readonly id: any }) {
+    const Parent = $component(function* (props: TypedProps<{ id: string }>) {
       return function* () {
         const child = Child({ tag: props.id }) as any;
         return `${yield* props.id}|${renderBlock(child)}`;
@@ -233,10 +234,10 @@ describe("$memo", () => {
   it("writes are refused in a memo", () => {
     const C = $component(function* () {
       const [, set] = yield* $signal(0);
-      const m = yield* $memo(function* () {
+      const m: any = yield* $memo(function* () {
         yield* set(1);
         return 1;
-      } as any);
+      } as any) as any;
       return function* () {
         return yield* m;
       };

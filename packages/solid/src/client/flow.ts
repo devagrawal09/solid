@@ -12,6 +12,7 @@ import { createErrorBoundary, createLoadingBoundary, sharedConfig } from "./hydr
 import type { Accessor, RevealOrder } from "@solidjs/signals";
 export type { RevealOrder };
 import type { Element as SolidElement } from "../types.js";
+import type { View } from "@solidjs/signals";
 
 type NonZeroParams<T extends (...args: any[]) => any> = Parameters<T>["length"] extends 0
   ? never
@@ -412,10 +413,23 @@ export function Match<T>(props: AnyMatchProps<T>) {
  *
  * @description https://docs.solidjs.com/reference/components/error-boundary
  */
+/**
+ * Call form over a `$component` view (generator blocks v2): the result keeps
+ * the view's pending status and drops its failures, which the fallback
+ * receives typed.
+ */
+export function Errored<P extends boolean, F>(props: {
+  fallback: SolidElement | ((err: () => F, reset: () => void) => SolidElement);
+  children: View<P, F>;
+}): View<NoInfer<P>, never>;
 export function Errored(props: {
   fallback: SolidElement | ((err: ErrorAccessor, reset: () => void) => SolidElement);
   children: SolidElement;
-}): SolidElement {
+}): SolidElement;
+export function Errored(props: {
+  fallback: SolidElement | ((err: ErrorAccessor, reset: () => void) => SolidElement);
+  children: SolidElement | View<any, any>;
+}): any {
   return createErrorBoundary(
     () => props.children,
     (err: ErrorAccessor, reset) => {
@@ -463,11 +477,25 @@ export function Errored(props: {
  *
  * @description https://docs.solidjs.com/reference/components/suspense
  */
+/**
+ * Call form over a `$component` view (generator blocks v2): the result is not
+ * pending and keeps the view's failures.
+ */
+export function Loading<F>(props: {
+  fallback?: SolidElement;
+  on?: any;
+  children: View<boolean, F>;
+}): View<false, NoInfer<F>>;
 export function Loading(props: {
   fallback?: SolidElement;
   on?: any;
   children: SolidElement;
-}): SolidElement {
+}): SolidElement;
+export function Loading(props: {
+  fallback?: SolidElement;
+  on?: any;
+  children: SolidElement | View<any, any>;
+}): any {
   const onOpt = "on" in props ? { on: () => props.on } : undefined;
   return createLoadingBoundary(
     () => props.children,

@@ -106,14 +106,24 @@ export interface View<Pending extends boolean = boolean, Failures = unknown> {
     Failures,
     never
   >;
-  [Symbol.iterator](): Generator<ReadOp<View<Pending, Failures>>, View<Pending, Failures>, any>;
+  // `yield* view` moves the view's pending / failures into the enclosing
+  // view (they are now its effects), so the value it produces is settled.
+  [Symbol.iterator](): Generator<ReadOp<View<Pending, Failures>>, View<false, never>, any>;
 }
+/**
+ * Intersected into a renderer's "any object" element type so a view is only
+ * ever admitted as a view (settled), never as a generic rendered object.
+ */
+export type NonView = { readonly [VIEW_BRAND]?: never };
 /** A view with nothing left to handle. */
 export type SettledView = View<false, never>;
 
 /** Pending / failures of a view body's operations (own, plus inherited through reads). */
 type ViewBlock<VY> = Block<unknown, ReadsOf<VY>, TasksOf<VY>, FailuresOf<VY>, never>;
-export type ViewOf<VY> = View<BlockAsync<ViewBlock<VY>>, BlockErrors<ViewBlock<VY>>>;
+// An untyped (`any`) operation says nothing: the view may be pending and fail.
+export type ViewOf<VY> = 0 extends 1 & VY
+  ? View<boolean, unknown>
+  : View<BlockAsync<ViewBlock<VY>>, BlockErrors<ViewBlock<VY>>>;
 
 /**
  * Props as a component sees them: every prop is a read (`yield* props.id`).
@@ -131,6 +141,22 @@ export interface Component<P = {}, Pending extends boolean = boolean, Failures =
   readonly [COMPONENT_BRAND]: true;
 }
 
+/**
+ * A `$store` as blocks see it: every property is a read (`yield* store.a.b`),
+ * nested objects and arrays included. (At runtime a store proxy answers
+ * property access inside a block with a path token; `yield*` performs the
+ * tracked read.)
+ */
+export type TypedStore<T> = T extends readonly (infer U)[]
+  ? { readonly [n: number]: StoreSource<U>; readonly length: StoreSource<number> }
+  : T extends object
+    ? { readonly [K in keyof T]-?: StoreSource<T[K]> }
+    : never;
+/** One store path: readable with `yield*`, and walkable further when it holds an object. */
+export type StoreSource<V> = {
+  [Symbol.iterator](): Generator<ReadOp<SourceAccessor<V>>, V, any>;
+} & (V extends object ? TypedStore<V> : unknown);
+
 /** A `$signal` setter: writes when called; `yield*` on the receipt is the new value. */
 export type BlockSetter<T> = (value: T | ((prev: T) => T)) => WriteReceipt<T>;
 export interface WriteReceipt<T> {
@@ -147,6 +173,24 @@ export type MemoAccessor<R, Y> = SourceAccessor<R> & {
 export interface EventHandler<E = unknown, Y = unknown> {
   (event: E): void;
   readonly [META]: BlockMeta<ReadsOf<Y>, TasksOf<Y>, FailuresOf<Y>, WritesOf<Y>>;
+}
+
+// --- primitives --------------------------------------------------------------
+
+/**
+ * The primitives blocks create with. `solid-js` registers its own
+ * (hydration-aware on the client, the server implementations on the server)
+ * so a `$memo` in a `solid-js` app is a `solid-js` memo.
+ */
+const primitives = { createSignal, createMemo, createStore, createTrackedEffect } as {
+  createSignal: (value: any, options?: any) => any;
+  createMemo: (fn: any, options?: any) => any;
+  createStore: (value: any, options?: any) => any;
+  createTrackedEffect: (fn: () => void) => void;
+};
+/** @internal */
+export function setBlockPrimitives(p: Partial<typeof primitives>): void {
+  Object.assign(primitives, p);
 }
 
 // --- operations --------------------------------------------------------------
@@ -168,10 +212,7 @@ export function $signal<T>(
     [OP]: "create",
     kind: "signal",
     make: () => {
-      const [get, set] = createSignal(value as any, options as any) as [
-        SourceAccessor<T>,
-        Setter<T>
-      ];
+      const [get, set] = primitives.createSignal(value, options) as [SourceAccessor<T>, Setter<T>];
       return [get, blockSetter(set as any)];
     }
   }) as any;
@@ -180,12 +221,12 @@ export function $signal<T>(
 /** `yield* $store(value)` — create a store in a component's setup. */
 export function $store<T extends object>(
   value: T
-): CreateOp<[get: Store<T>, set: BlockStoreSetter<T>], "store"> {
+): CreateOp<[get: TypedStore<T>, set: BlockStoreSetter<T>], "store"> {
   return op({
     [OP]: "create",
     kind: "store",
     make: () => {
-      const [get, set] = createStore(value as any) as [Store<T>, StoreSetter<T>];
+      const [get, set] = primitives.createStore(value) as [Store<T>, StoreSetter<T>];
       return [get, blockSetter(set as any)];
     }
   }) as any;
@@ -199,7 +240,7 @@ export function $memo<Y extends MemoOp, R>(
   return op({
     [OP]: "create",
     kind: "memo",
-    make: () => createMemo($(body as any) as any, options as any)
+    make: () => primitives.createMemo($(body as any), options)
   }) as any;
 }
 
@@ -217,7 +258,7 @@ export function $effect<Y extends EffectOp>(
     kind: "effect",
     make: () => {
       const block = $(body as any);
-      createTrackedEffect(() => {
+      primitives.createTrackedEffect(() => {
         runBlockAs(EFFECT, block as any, undefined);
       });
     }

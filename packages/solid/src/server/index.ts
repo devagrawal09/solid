@@ -4,6 +4,15 @@ import { DEV as _DEV, OBSERVE as _OBSERVE, type Dev, type Observe } from "@solid
 export { loading, errored } from "./blocks.js";
 export {
   $,
+  $component,
+  $memo,
+  $effect,
+  $event,
+  $signal,
+  $store,
+  $cleanup,
+  $flush,
+  isComponent,
   wait,
   raise,
   attempt,
@@ -39,6 +48,7 @@ export {
   $REFRESH,
   $TRACK,
   action,
+  syncAction,
   affects,
   createEffect,
   createMemo,
@@ -223,3 +233,21 @@ const IS_DEV = "_SOLID_DEV_" as string | boolean;
 const IS_OBSERVE = "_SOLID_OBSERVE_" as string | boolean;
 export const OBSERVE: Observe | undefined = IS_OBSERVE ? _OBSERVE : undefined;
 export const DEV: Dev | undefined = IS_DEV ? _DEV : undefined;
+
+// Generator blocks v2 (documentation/plans/generator-blocks-v2.md).
+export type {
+  View,
+  SettledView,
+  ViewOf,
+  TypedProps,
+  TypedStore,
+  StoreSource,
+  PropsInput,
+  BlockComponent,
+  BlockSetter,
+  BlockStoreSetter,
+  WriteReceipt,
+  MemoAccessor,
+  EventHandler,
+  ContextIterable
+} from "@solidjs/signals";

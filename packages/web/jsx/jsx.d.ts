@@ -144,6 +144,10 @@ export namespace JSX {
   interface ElementClass {
     // empty, libs can define requirements downstream
   }
+  // A tag is valid when some call signature renders an element: overloaded
+  // components (Loading, Errored) qualify through their element overload, and a
+  // component whose view may suspend or fail does not.
+  type ElementType = string | ((props: any) => Element) | (new (props: any) => ElementClass);
   interface ElementAttributesProperty {
     // empty, libs can define requirements downstream
   }

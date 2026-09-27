@@ -48,7 +48,8 @@ export {
   setContext,
   type Context,
   iterateContext,
-  type ContextRecord
+  type ContextRecord,
+  type ContextIterable
 } from "./context.js";
 export { handleAsync } from "./async.js";
 export { isPending, latest } from "./verdict.js";

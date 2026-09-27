@@ -1,3 +1,4 @@
+import { setBlockPrimitives } from "@solidjs/signals";
 // Mock @solidjs/signals for server-side rendering
 // Re-exports infrastructure from the real package, reimplements reactive primitives as pull-based.
 
@@ -34,6 +35,15 @@ export { snapshot, omit, storePath, $PROXY, $TRACK } from "@solidjs/signals";
 // the server primitives in ./blocks.ts.
 export {
   $,
+  $component,
+  $memo,
+  $effect,
+  $event,
+  $signal,
+  $store,
+  $cleanup,
+  $flush,
+  isComponent,
   wait,
   raise,
   attempt,
@@ -3083,6 +3093,14 @@ export function action<T extends (...args: any[]) => any>(fn: T): T {
   return fn;
 }
 
+/**
+ * Server twin of the client's `syncAction` (the compiled form of a yield-free
+ * `action`): actions never run during SSR, so it is the identity.
+ */
+export function syncAction<T extends (...args: any[]) => any>(fn: T): T {
+  return fn;
+}
+
 export function onSettled(callback: () => void | (() => void)): void {
   // No-op on server, but allocate computation ID for hydration tree alignment
   // (on the client, onSettled calls createTrackedEffect which allocates an ID)
@@ -3122,3 +3140,6 @@ export function storeHasFamily(_proxy: any): boolean {
 export function storeHasOptimisticFamily(_proxy: any): boolean {
   return false;
 }
+
+// Generator blocks v2: `$signal` / `$memo` / `$store` / `$effect` use the server primitives.
+setBlockPrimitives({ createSignal, createMemo, createStore, createTrackedEffect });

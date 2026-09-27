@@ -46,6 +46,7 @@ export type {
   Owner,
   Context,
   ContextRecord,
+  ContextIterable,
   IQueue,
   ExternalSourceFactory,
   ExternalSource,
@@ -125,13 +126,17 @@ export {
   $store,
   $cleanup,
   $flush,
-  isComponent
+  isComponent,
+  setBlockPrimitives
 } from "./block-api.js";
 export type {
   View,
   SettledView,
+  NonView,
   ViewOf,
   TypedProps,
+  TypedStore,
+  StoreSource,
   PropsInput,
   Component as BlockComponent,
   BlockSetter,

@@ -1144,16 +1144,26 @@ export function raise<E>(error: E): RaiseOp<E> {
 }
 
 /**
- * Run `fn` as a typed fallible step: the declared classes join the failure
- * union (`attempt(() => JSON.parse(s), SyntaxError)`); with none declared the
- * failure type is `unknown` — the honest type for an arbitrary callback,
- * whose effects a block cannot see. Anything else `fn` throws still
- * propagates at runtime.
+ * Run `fn` as a typed step (a thin try/catch). A promise result suspends the
+ * block until it settles — the async form, for memo and event blocks — and
+ * resumes with its value, or with the rejection thrown at the `yield*`.
+ *
+ * Failures are *declared*: `attempt(fn, NotFound)` adds `NotFound` to the
+ * block's failures; `attempt(fn)` declares none. Anything `fn` throws still
+ * propagates at runtime (catch it with `try` / `catch`, and `yield*
+ * raise(...)` a typed failure from the `catch` when it should be handled by
+ * an `Errored`). The failure union is the set of declared failures, never a
+ * proof that nothing else can throw.
  */
+export function attempt<T, C extends ErrorClass<any>[] = []>(
+  run: () => PromiseLike<T>,
+  ...errors: C
+): AsyncOp<T, C extends [] ? never : InstanceType<C[number]>>;
 export function attempt<T, C extends ErrorClass<any>[] = []>(
   run: () => T,
   ...errors: C
-): AttemptOp<T, C extends [] ? unknown : InstanceType<C[number]>> {
+): AttemptOp<T, C extends [] ? never : InstanceType<C[number]>>;
+export function attempt(run: () => unknown, ..._errors: ErrorClass<any>[]): Op {
   return { [OP]: "attempt", run, delegated: false, [Symbol.iterator]: opIterator } as any;
 }
 

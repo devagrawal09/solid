@@ -8,7 +8,7 @@ import {
   flatten,
   iterateContext
 } from "@solidjs/signals";
-import type { Accessor, EffectOptions } from "@solidjs/signals";
+import type { Accessor, ContextIterable, EffectOptions } from "@solidjs/signals";
 import type { ArrayElement, Element as SolidElement } from "../types.js";
 import { FlowComponent, FlowProps } from "./component.js";
 
@@ -104,7 +104,10 @@ export interface Context<T> extends ContextProviderComponent<T> {
  *
  * @description https://docs.solidjs.com/reference/component-apis/create-context
  */
-export function createContext<T>(defaultValue?: T, options?: EffectOptions): Context<T> {
+export function createContext<T>(
+  defaultValue?: T,
+  options?: EffectOptions
+): Context<T> & ContextIterable<T> {
   const id = Symbol((options && options.name) || "");
   function provider(props: FlowProps<{ value: unknown }>) {
     return createRoot(() => {
@@ -116,7 +119,7 @@ export function createContext<T>(defaultValue?: T, options?: EffectOptions): Con
   provider.defaultValue = defaultValue;
   // `yield* Ctx` in a `$component` setup (generator blocks v2).
   (provider as any)[Symbol.iterator] = iterateContext;
-  return provider as unknown as Context<T>;
+  return provider as unknown as Context<T> & ContextIterable<T>;
 }
 
 /**

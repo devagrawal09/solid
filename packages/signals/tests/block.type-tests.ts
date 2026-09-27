@@ -413,11 +413,11 @@ type _fallible = [
   Expect<Equal<BlockAsync<typeof fallible>, false>>,
   Expect<Equal<BlockValue<typeof fallible>, typeof view>>
 ];
-// An undeclared attempt / wait is honest about what it knows: `unknown`.
+// An attempt declares its failures: with no error classes it adds none.
 const undeclared = $(function* () {
   return yield* attempt(() => JSON.parse("{}"));
 });
-type _undeclared = [Expect<Equal<BlockFailures<typeof undeclared>, unknown>>];
+type _undeclared = [Expect<Equal<BlockFailures<typeof undeclared>, never>>];
 
 // --- Tasks: wait ------------------------------------------------------------------
 const profile = $(function* () {
@@ -532,7 +532,7 @@ type _jsx = [
   Expect<Equal<Admits<typeof greeting>, true>>,
   Expect<Equal<Admits<typeof profile>, false>>,
   Expect<Equal<Admits<typeof fallible>, false>>,
-  Expect<Equal<Admits<typeof undeclared>, false>>,
+  Expect<Equal<Admits<typeof undeclared>, true>>,
   Expect<Equal<Admits<typeof writer>, false>>,
   Expect<Equal<Admits<typeof composed>, false>>
 ];
@@ -553,12 +553,12 @@ const _eventWrongInput: EventBlock<KeyboardEvent> = writer;
 // An ordinary handler is still an ordinary handler: no block typing is claimed.
 const plainHandler = (e: MouseEvent) => setCount(e.detail);
 type _plain = [Expect<Equal<BlockWrites<typeof plainHandler>, never>>];
-// Calling it from a block is an untyped step: `attempt` records `unknown`.
+// Calling it from a block through `attempt` declares no failures.
 const wrapsLegacy = $(function* (event: MouseEvent) {
   yield* attempt(() => plainHandler(event));
 });
 type _wrapsLegacy = [
-  Expect<Equal<BlockFailures<typeof wrapsLegacy>, unknown>>,
+  Expect<Equal<BlockFailures<typeof wrapsLegacy>, never>>,
   Expect<Equal<BlockWrites<typeof wrapsLegacy>, never>>
 ];
 

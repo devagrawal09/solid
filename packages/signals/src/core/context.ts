@@ -6,7 +6,9 @@ import type { ContextOp } from "../generator.js";
 export interface Context<T> {
   readonly id: symbol;
   readonly defaultValue: T | undefined;
-  /** `yield* Ctx` in a `$component`'s setup reads the context (generator blocks v2). */
+}
+/** `yield* Ctx` in a `$component`'s setup reads the context (generator blocks v2). */
+export interface ContextIterable<T> {
   [Symbol.iterator](): Generator<ContextOp<T, Context<T>>, T, any>;
 }
 
@@ -33,8 +35,15 @@ export type ContextRecord = Record<string | symbol, unknown>;
  * A default value can be provided here which will be used when a specific value is not provided
  * via a `setContext` call.
  */
-export function createContext<T>(defaultValue?: T, description?: string): Context<T> {
-  return { id: Symbol(description), defaultValue, [Symbol.iterator]: iterateContext } as Context<T>;
+export function createContext<T>(
+  defaultValue?: T,
+  description?: string
+): Context<T> & ContextIterable<T> {
+  return {
+    id: Symbol(description),
+    defaultValue,
+    [Symbol.iterator]: iterateContext
+  } as Context<T> & ContextIterable<T>;
 }
 
 /**

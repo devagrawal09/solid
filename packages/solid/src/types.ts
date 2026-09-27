@@ -1,4 +1,4 @@
-import type { JsxBlockShape } from "@solidjs/signals";
+import type { JsxBlockShape, NonView, SettledView } from "@solidjs/signals";
 
 /**
  * Renderer-owned object value returned from Solid component trees.
@@ -11,7 +11,7 @@ export type RenderedElement = object & {
   readonly call?: never;
   readonly apply?: never;
   readonly bind?: never;
-};
+} & NonView;
 
 /**
  * A `$` block admissible as JSX: its direct effects are reads only (no
@@ -27,6 +27,10 @@ export type Element =
   | RenderedElement
   | ArrayElement
   | JsxBlock
+  // A `$component`'s view with nothing left to handle (generator blocks v2):
+  // a view that can still be pending or fail is not an element until a
+  // `Loading` / `Errored` handles it.
+  | SettledView
   | (string & {})
   | number
   | boolean

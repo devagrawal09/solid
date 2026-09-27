@@ -8,6 +8,7 @@ import {
   serverComponentContextError
 } from "./signals.js";
 import type { Accessor, EffectOptions } from "./signals.js";
+import { iterateContext, type ContextIterable } from "@solidjs/signals";
 import type { ArrayElement, Element as SolidElement } from "../types.js";
 import type { FlowComponent, FlowProps } from "./component.js";
 
@@ -37,7 +38,10 @@ export interface Context<T> extends ContextProviderComponent<T> {
  * @param defaultValue optional default; only meaningful for primitive fallbacks
  * @param options allows to set a name in dev mode for debugging purposes
  */
-export function createContext<T>(defaultValue?: T, options?: EffectOptions): Context<T> {
+export function createContext<T>(
+  defaultValue?: T,
+  options?: EffectOptions
+): Context<T> & ContextIterable<T> {
   const id = Symbol((options && options.name) || "");
   function provider(props: FlowProps<{ value: unknown }>) {
     return createRoot(() => {
@@ -47,7 +51,9 @@ export function createContext<T>(defaultValue?: T, options?: EffectOptions): Con
   }
   provider.id = id;
   provider.defaultValue = defaultValue;
-  return provider as unknown as Context<T>;
+  // `yield* Ctx` in a `$component` setup (generator blocks v2).
+  (provider as any)[Symbol.iterator] = iterateContext;
+  return provider as unknown as Context<T> & ContextIterable<T>;
 }
 
 /**

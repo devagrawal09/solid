@@ -1,3 +1,4 @@
+import { setBlockPrimitives } from "@solidjs/signals";
 import {
   getOwner,
   NotReadyError,
@@ -2587,3 +2588,6 @@ export function NoHydration(props: { children: SolidElement }): SolidElement {
 export function Hydration(props: { id?: string; children: SolidElement }): SolidElement {
   return props.children as unknown as SolidElement;
 }
+
+// Generator blocks v2: `$signal` / `$memo` / `$store` create hydration-aware primitives.
+setBlockPrimitives({ createSignal, createMemo, createStore });
