@@ -672,7 +672,7 @@ fn draft_reads(nodes: &AstNodes<'_>, scoping: &Scoping, symbols: &[SymbolId], op
 }
 
 /// Source text of `span` with inner spans replaced (outermost wins).
-fn splice(source: &str, span: Span, mut inner: Vec<(Span, String)>) -> String {
+pub(crate) fn splice(source: &str, span: Span, mut inner: Vec<(Span, String)>) -> String {
     inner.sort_by_key(|(s, _)| (s.start, std::cmp::Reverse(s.end)));
     let mut out = String::new();
     let mut at = span.start as usize;

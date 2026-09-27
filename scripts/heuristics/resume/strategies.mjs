@@ -201,3 +201,29 @@ export const LINKED_DATA = `globalThis.__modT0 = performance.now();
 const el = typeof document !== "undefined" && document.getElementById("data");
 globalThis.__islandData = el ? JSON.parse(el.textContent) : { labels: [], footer: [] };
 `;
+
+// C-compiled: C with nothing hand-written — compileResumable(app-islands.jsx)
+// emits the resumable client (cells from the serialized live closure, the
+// handlers verbatim, one expression per live site, the waker); this entry
+// only adds the page's event host. State parse + cell creation run at
+// module evaluation and are timed into init (window.__modMs), like F-linked.
+export function compiledResumeEntry(clientFile, dataFile) {
+  return `import ${JSON.stringify(dataFile)};
+import { select, rename } from ${JSON.stringify(clientFile)};
+import { flush as __flush } from "solid-js";
+${HOST}
+window.__modMs = performance.now() - globalThis.__modT0;
+window.__init = () => {
+  __host((h, a) => {
+    h === "select" ? select(a) : rename();
+    __flush();
+  });
+};
+`;
+}
+
+export const COMPILED_RESUME_DATA = `globalThis.__modT0 = performance.now();
+const el = typeof document !== "undefined" && document.getElementById("q");
+// The blank-page eval probe has no payload: empty cells.
+globalThis.__q = el ? JSON.parse(el.textContent) : { i: [], c: new Proxy({}, { get: () => [] }) };
+`;

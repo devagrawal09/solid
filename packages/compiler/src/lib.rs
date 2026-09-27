@@ -39,6 +39,7 @@ mod store_handles;
 mod sync_actions;
 mod memo_fusion;
 mod store_scalars;
+mod resumable;
 mod islands;
 #[cfg(feature = "tsrx")]
 mod tsrx;
@@ -49,6 +50,7 @@ pub use block_projection::{
 };
 pub use capabilities::summarize_capabilities;
 pub use islands::summarize_islands;
+pub use resumable::compile_resumable;
 pub use compiler::{CompileOptions, CompileOutput, Generate, Renderer, Syntax, Wrapper, compile};
 pub use error::{CompileError, CompileErrorKind};
 pub use strict::{

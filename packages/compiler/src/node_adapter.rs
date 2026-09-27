@@ -105,6 +105,22 @@ pub fn summarize_capabilities(
         .map_err(|error| Error::from_reason(error.to_string()))
 }
 
+#[napi(object)]
+#[derive(Default)]
+pub struct CompileResumableOptions {
+    pub filename: Option<String>,
+    /// The island root components (module-level function names).
+    pub islands: Vec<String>,
+}
+
+/// Stage 5 (C): compile an island module into a resumable server module and
+/// a component-free client (JSON). See `resumable.rs`.
+#[napi]
+pub fn compile_resumable(code: String, options: CompileResumableOptions) -> Result<String> {
+    crate::resumable::compile_resumable(&code, options.filename.as_deref(), &options.islands)
+        .map_err(|error| Error::from_reason(error.to_string()))
+}
+
 /// Stage 3 (F): one module's island summary (JSON) for the handler → islands
 /// map of compiler-scoped lazy hydration. See `islands.rs`.
 #[napi]

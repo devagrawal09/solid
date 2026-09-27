@@ -55,7 +55,7 @@ for (const r of runs[0].results) {
     spreadInit: spread("initMs")
   });
 }
-const S = ["A", "D", "E-lazy", "F", "F-linked", "F-csr", "B", "C"];
+const S = ["A", "D", "E-lazy", "F", "F-linked", "F-csr", "B", "C", "C-compiled"];
 const MS = [...new Set(runs[0].results.map(r => r.m))];
 const n = runs[0].n;
 // Bindings: live = 2 per row (class, label) + detail + header count;
@@ -82,7 +82,7 @@ const PROFILES = [
   { name: "4G, 4x CPU", bw: 1_125_000, rtt: 85, t: 4 },
   { name: "cable, 1x CPU", bw: 6_250_000, rtt: 20, t: 1 }
 ];
-const lazy = new Set(["E-lazy", "F", "F-linked", "F-csr", "B", "C"]);
+const lazy = new Set(["E-lazy", "F", "F-linked", "F-csr", "B", "C", "C-compiled"]);
 for (const p of PROFILES) {
   console.log(`\n#### Model: ${p.name} (${(p.bw * 8 / 1e6).toFixed(1)} Mbps, RTT ${p.rtt} ms)\n`);
   console.log("| footer m | Strategy | ready (JS eager) | first click | ready (JS deferred) | first click (JS deferred) |");

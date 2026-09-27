@@ -14,7 +14,7 @@ Status: 2026-09-27. Builds the heuristics that earned a compiler proof in
 | 2 | H1 memo fusion (`memoFusion`) | **Done** |
 | 3 | Per-island hydration + compiler handler → island map (F) | **Done** |
 | 4 | S2 store scalar replacement (`storeScalars`) | **Done** (narrow coverage) |
-| 5 | C pruned resumability | Next |
+| 5 | C pruned resumability (`compileResumable`) | **Done** (one app shape) |
 
 ## Stage 1: sync actions
 
@@ -169,3 +169,31 @@ The option `storeScalars` (all outputs) is implemented in `packages/compiler/src
 The A/A control is within ±3%, except rows mount at −9% / −12% (GC-heavy). Adding `memoFusion` on top, where a replaced read makes `createMemo(() => row.selected ? … )` fusable, stays within noise of `storeScalars` alone.
 
 - **Coverage** (the real limit, as the oracle study predicted): on the 206-file corpus of round 3 (`r3/store-census.json`), the pass replaces **0 of 15** stores. Real stores are arrays (`createStore<LogEntry[]>([])`, todo lists) or nested objects, are exported, or pass their setter around. The census's looser "S2 full" count of 1 was an exported array store. The pass therefore fits flat UI state (counters, form fields, toggles, per-row flag objects). Array- and row-level replacement would need `<For>` / `mapArray` integration and is not built.
+
+## Stage 5: pruned resumability, compiled
+
+`compileResumable(code, { filename, islands })` (`packages/compiler/src/resumable.rs`) compiles an island module into both halves of a resumable page: the pruned closure that [resumability.md](./resumability.md) measured with a hand-written client (strategy C).
+
+- **Live cells:** module cells (`const [a, setA] = createSignal(v)`, and families `const X = <expr>.map(v => createSignal(v))`) written by an exported handler, directly or through module functions. A handler is an exported function that is not a component.
+- **Live sites:** a DOM binding (an attribute, or the sole child of an intrinsic element) in the islands' components, or in the components they render, whose expression reads a live cell.
+  - Component-local `createMemo` reads are inlined (memo fusion; block bodies become IIFEs).
+  - Component-local values (identifiers, `props.key`) are **captures**. They are evaluated on the server where the element renders and serialized per instance.
+  - Every other binding stays server-rendered text: no client code, no serialized value. Static cells are not serialized at all.
+- **Server module** (JSX, compiled with `generate: "ssr"`): the source plus a `data-q={_$q([[site, [captures]], …])}` attribute on each element owning live sites. `_$q` records instances and checks that captures are primitives. An exported `__qState()` returns the live closure: the values of the cells the client needs, plus the instance table.
+- **Client module** (plain JS; no components, no web runtime):
+  - the cells rebuilt from the serialized values;
+  - the handlers and the module functions they call, copied from the source;
+  - one expression per live site;
+  - a waker. The first write to a cell creates render effects for every instance of every site reading it, *before* the write. That is the hydrate-before-write rule at binding granularity. Each effect compares with the DOM, so its first run writes nothing and no mid-handler flush is needed.
+- **Refused**, with `reasons`, so the islands should hydrate instead:
+  - a live value flowing into a component prop or children;
+  - a live site that is not an attribute or a sole child;
+  - JSX event handlers;
+  - a handler or site reading module data the client cannot rebuild, or imports;
+  - escaping setters, or a family used as a value.
+- **Tests:**
+  - Rust: 2 tests. One covers the live closure, sites, captures (including two sites on one element), memo inlining, a client with no component code, and verbatim handlers. The other covers the 5 refusal kinds.
+  - Full suites: compiler Rust 115.
+- **End to end** (`scripts/heuristics/resume`, strategy **C-compiled** on `app-islands.jsx`):
+  - The compiler finds 3 live cells (`selected`, `renames`, `labels`) and 4 live sites: row class, row label, detail text and header count. It prunes the footer and the static row ids, exactly the closure the hand-written C serializes.
+  - It passes the equivalence and node-identity gate.

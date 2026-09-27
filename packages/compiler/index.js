@@ -83,6 +83,27 @@ function summarizeIslands(code, options) {
   return JSON.parse(native.summarizeIslands(code, nativeOptions));
 }
 
+/**
+ * Stage 5 (C, pruned resumability): compile an island module into a
+ * resumable server module (JSX, compile with `generate: "ssr"`) and a
+ * component-free client. Returns `{ resumable, reasons, liveCells,
+ * serializedCells, sites, server, client }`; when `resumable` is false,
+ * `reasons` says why and the islands should hydrate instead.
+ */
+function compileResumable(code, options) {
+  if (typeof code !== "string") {
+    throw new TypeError("@solidjs/compiler compileResumable() expects source code as a string");
+  }
+  if (!options || !Array.isArray(options.islands)) {
+    throw new TypeError(
+      "@solidjs/compiler compileResumable() expects options.islands (component names)"
+    );
+  }
+  return JSON.parse(
+    native.compileResumable(code, { filename: options.filename, islands: options.islands })
+  );
+}
+
 function projectTsrxForTypecheck(code, options) {
   if (typeof code !== "string") {
     throw new TypeError(
@@ -547,6 +568,7 @@ module.exports = {
   analyzeStrictBlocks,
   summarizeCapabilities,
   summarizeIslands,
+  compileResumable,
   transformDirectives,
   transformDirectivesAsync,
   transformLazy,

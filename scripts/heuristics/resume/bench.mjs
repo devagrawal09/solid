@@ -28,14 +28,14 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { brotliCompressSync, constants, gzipSync } from "node:zlib";
 import { parseArgs, ROOT, RUNTIMES, snapshotRuntimes } from "../common.mjs";
-import { hydrationEntry, LINKED_DATA, linkedEntry, resumeEntry } from "./strategies.mjs";
+import { COMPILED_RESUME_DATA, compiledResumeEntry, hydrationEntry, LINKED_DATA, linkedEntry, resumeEntry } from "./strategies.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const args = parseArgs(process.argv.slice(2));
 const N = Number(args.n ?? 1000);
 const MS = String(args.m ?? "0,1000,5000").split(",").map(Number);
 const REPS = Number(args.reps ?? 7);
-const STRATEGIES = ["A", "D", "E-lazy", "E-naive", "F", "F-linked", "F-csr", "B", "C", "C-broken"];
+const STRATEGIES = ["A", "D", "E-lazy", "E-naive", "F", "F-linked", "F-csr", "B", "C", "C-compiled", "C-broken"];
 // Cost bounds: timed, not gated (they re-create DOM by design).
 const BOUNDS = new Set(["F-csr"]);
 const UNSAFE = new Set(["E-naive", "C-broken"]);
@@ -143,6 +143,53 @@ const LINKED_MAP = {
 };
 console.log(`F-linked map (island linker): ${JSON.stringify(LINKED_MAP)}`);
 
+// C-compiled: compileResumable(app-islands.jsx) → a resumable server module
+// (data-q markers + __qState, compiled for SSR here) and a component-free
+// client (bundled below).
+const { compileResumable } = await import(pathToFileURL(join(ROOT, "packages/compiler/index.js")).href);
+const compiled = compileResumable(islandsSrc, {
+  filename: "app-islands.jsx",
+  islands: ["Table", "Detail", "Header", "Footer"]
+});
+if (!compiled.resumable) throw new Error(`C-compiled: not resumable: ${compiled.reasons.join("; ")}`);
+console.log(
+  `C-compiled: live cells ${compiled.liveCells.join(", ")}; serialized ${compiled.serializedCells.join(", ")}; ${compiled.sites} live sites`
+);
+writeFileSync(
+  join(dir, "ssr-resumable-entry.mjs"),
+  `${transform(compiled.server, { filename: "app-islands.resumable.jsx", generate: "ssr" }).code}
+import { renderToString, createComponent } from "@solidjs/web";
+const R = { table: Table, detail: Detail, header: Header, footer: Footer };
+export function render() {
+  const html = {};
+  for (const k of ["table", "detail", "header", "footer"]) html[k] = renderToString(() => createComponent(R[k], {}));
+  return { html, state: __qState() };
+}
+`
+);
+await build({
+  entryPoints: [join(dir, "ssr-resumable-entry.mjs")],
+  bundle: true,
+  platform: "node",
+  format: "esm",
+  outfile: join(dir, "ssr-resumable.bundle.mjs"),
+  logLevel: "error",
+  alias: {
+    "solid-js": join(ROOT, "packages/solid/dist/server.js"),
+    "@solidjs/web": join(ROOT, "packages/web/dist/server.js"),
+    "@solidjs/signals": RUNTIMES.prod
+  }
+});
+let resumableImport = 0;
+const compiledPages = new Map();
+async function renderCompiled(rendered) {
+  globalThis.__islandData = rendered.data;
+  const { render } = await import(pathToFileURL(join(dir, "ssr-resumable.bundle.mjs")).href + `?${++resumableImport}`);
+  const out = render();
+  compiledPages.set(rendered, out);
+  return out;
+}
+
 const json = v => JSON.stringify(v).replace(/</g, "\\u003c");
 const ISLANDS = ["table", "detail", "header", "footer"];
 
@@ -191,7 +238,11 @@ function resumable({ data, html }, all) {
 function pageFor(strategy, rendered) {
   let html = rendered.html;
   let payload;
-  if (strategy === "B" || strategy === "C" || strategy === "C-broken")
+  if (strategy === "C-compiled") {
+    const out = compiledPages.get(rendered);
+    html = out.html;
+    payload = `<script type="application/json" id="q">${json(out.state)}</script>`;
+  } else if (strategy === "B" || strategy === "C" || strategy === "C-broken")
     ({ html, payload } = resumable(rendered, strategy === "B" ? true : strategy === "C" ? false : "broken"));
   else {
     const hydratesFooter = !(strategy === "D" || strategy.startsWith("F"));
@@ -207,7 +258,11 @@ const clientApp = compile("dom");
 const bundles = {};
 for (const s of STRATEGIES) {
   const entry = join(dir, `${s}.entry.mjs`);
-  if (s === "F-linked") {
+  if (s === "C-compiled") {
+    writeFileSync(join(dir, "resumable-client.mjs"), compiled.client);
+    writeFileSync(join(dir, "resumable-data.mjs"), COMPILED_RESUME_DATA);
+    writeFileSync(entry, compiledResumeEntry("./resumable-client.mjs", "./resumable-data.mjs"));
+  } else if (s === "F-linked") {
     writeFileSync(join(dir, "islands-app.mjs"), compileIslands("dom"));
     writeFileSync(join(dir, "islands-data.mjs"), LINKED_DATA);
     writeFileSync(entry, linkedEntry("./islands-app.mjs", "./islands-data.mjs", LINKED_MAP));
@@ -264,7 +319,7 @@ function snapshot() {
   const norm = s =>
     s
       .replace(/ _hk="?[^ >"]*"?/g, "")
-      .replace(/ data-q="\d+"/g, "")
+      .replace(/ data-q="[\d ]+"/g, "")
       .replace(/ class=""/g, "");
   return ["table", "detail", "header", "footer"].map(k => norm(document.getElementById("r-" + k).innerHTML)).join("\n");
 }
@@ -324,6 +379,7 @@ async function timeOnce(file, throttle) {
 // 1. Gate.
 const gateRendered = ssr(50, 20);
 await assertIslandsMarkup(gateRendered);
+await renderCompiled(gateRendered);
 const ref = await trace(writePage("gate-A", "A", gateRendered).file);
 let gateFailed = false;
 const gate = {};
@@ -375,6 +431,7 @@ const results = [];
 for (const m of MS) {
   const rendered = ssr(N, m);
   await assertIslandsMarkup(rendered);
+  await renderCompiled(rendered);
   const pages = {};
   const ONLY = args.only ? args.only.split(",") : null;
   for (const s of STRATEGIES) if (!UNSAFE.has(s) && (!ONLY || ONLY.includes(s))) pages[s] = writePage(`m${m}-${s}`, s, rendered);
