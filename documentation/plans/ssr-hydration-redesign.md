@@ -380,6 +380,15 @@ Compat (non-strict) code stays on today's pipeline throughout. An unknown librar
 - **HTML dominates "ready" once script is gone.** The remaining wins are in HTML size (string templates, no markers, no data) and streaming, not JS.
 - **Id and manifest stability** across separately built server and client bundles. Version-stamp the manifest and refuse mismatches at link time.
 
+## Runtime tiers
+
+Follow-up study: [island-runtime-tiers.md](./island-runtime-tiers.md). The compiled islands above still load the full signals core (9.6 KB gz for Toggle). The follow-up has the linker give each connected group of islands the smallest runtime its block graph allows:
+- **tier 0**, no reactive runtime (cells as slots, holes as direct updates, the core's batching kept by a 0.3 KB gz helper) for islands whose cells only their own handlers write and whose holes read unconditionally — HN's Toggle;
+- **tier 1**, a 2.1 KB gz kernel with the core's API and scheduling for memos, branches, lists, effects and shared cells;
+- **tier 2**, the full core, for async, optimistic writes, stores and boundaries — todos-blocks.
+
+Every tier is proven trace-equivalent to the core (a differential suite over random graphs, conformance runs of real compiler output on the kernel, activation stand-ins, and this document's browser gate), and measured with this harness (`measure.mjs` variants `T0-*`, `T1-*`, `T2-*` and the `todos-local` app).
+
 ## Defects found
 
 | Defect | Status | Evidence |
@@ -394,7 +403,7 @@ Compat (non-strict) code stays on today's pipeline throughout. An unknown librar
 1. **Where do island boundaries go when a component is partly live?** Today's unit is the component. Should the compiler split a component's view into an inert template plus live sub-islands, with a finer anchor per live hole group?
 2. **Prefetch policy defaults** for lazy islands: viewport vs hover vs idle, and a byte budget per route.
 3. **Can load-time effects be typed as event sources** (`$event` on `window` / `document` / timers), so the linker can defer them? This would turn todos' App from hot to lazy.
-4. **Should the island runtime be a smaller core than the signals core?** Toggle needs only signals and render effects. At 9.6 KB gz, that runtime is the entire remaining JS.
+4. **Should the island runtime be a smaller core than the signals core?** Toggle needs only signals and render effects. At 9.6 KB gz, that runtime is the entire remaining JS. *Measured in [island-runtime-tiers.md](./island-runtime-tiers.md): see [Runtime tiers](#runtime-tiers).*
 5. **Store serialization granularity:** live paths vs whole store vs per-row. It interacts with Track B handle stores and projections.
 6. **How does the dev verifier report without making dev builds diverge from production** in timing-sensitive code (streaming, boundaries)?
 7. **Unifying with server components:** should an inert region become a server component automatically on navigation (frames), or should route chunks be the default and SC opt-in?

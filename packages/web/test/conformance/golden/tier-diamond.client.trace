@@ -1,0 +1,52 @@
+## mount
+run sum
+read a = 1
+read b = 1
+run prod
+read a = 1
+read b = 1
+value render pair = [2,1]
+value render = 3
+value user = 2
+## write a and b in one batch
+write a = 2
+write b = 3
+run sum
+read a = 2
+read b = 3
+run prod
+read a = 2
+read b = 3
+value render pair = [5,6]
+cleanup render 3
+value render = 11
+cleanup user 2
+value user = 5
+## write a (sum and prod change)
+write a = 3
+run sum
+read a = 3
+read b = 3
+run prod
+read a = 3
+read b = 3
+value render pair = [6,9]
+cleanup render 11
+value render = 15
+cleanup user 5
+value user = 6
+## write a away and back in one batch
+write a = 4
+write a = 3
+run sum
+read a = 3
+read b = 3
+run prod
+read a = 3
+read b = 3
+## equal writes (no-op)
+write a = 3
+write b = 3
+## teardown
+cleanup render 15
+cleanup user 6

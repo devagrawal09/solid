@@ -157,7 +157,7 @@ function tildePlugin(tildeRoot) {
  * Bundle a client entry. Returns { code, bytes, gzip, groups } where groups
  * split the minified output by origin (signals / solid / web / app / other).
  */
-export async function bundleClient(entry, { hydratable = true, count = false, oracles = [], rewrites, swaps, tildeRoot, options, minify = true, splitting = false, dev = false } = {}) {
+export async function bundleClient(entry, { hydratable = true, count = false, oracles = [], rewrites, swaps, tildeRoot, options, minify = true, splitting = false, dev = false, aliases = {} } = {}) {
   const res = await build({
     entryPoints: [entry],
     bundle: true,
@@ -172,9 +172,11 @@ export async function bundleClient(entry, { hydratable = true, count = false, or
     chunkNames: "chunk-[hash]",
     logLevel: "error",
     define: { "process.env.NODE_ENV": '"production"' },
+    // `aliases` re-binds a module for one variant: the island tiers bind the
+    // same activation code to the tier-1 kernel instead of the core.
     alias: dev
-      ? { "solid-js": DIST.solid.replace("solid.js", "solid.dev.js"), "@solidjs/web": DIST.web.replace("web.js", "web.dev.js"), "@solidjs/signals": DIST.signals.replace("prod/index.js", "dev.js") }
-      : { "solid-js": DIST.solid, "@solidjs/web": DIST.web, "@solidjs/signals": DIST.signals },
+      ? { "solid-js": DIST.solid.replace("solid.js", "solid.dev.js"), "@solidjs/web": DIST.web.replace("web.js", "web.dev.js"), "@solidjs/signals": DIST.signals.replace("prod/index.js", "dev.js"), ...aliases }
+      : { "solid-js": DIST.solid, "@solidjs/web": DIST.web, "@solidjs/signals": DIST.signals, ...aliases },
     plugins: [tildePlugin(tildeRoot), patchPlugin({ count, oracles }), compilerPlugin({ generate: "dom", hydratable, rewrites, options, swaps })]
   });
   // Output files by published name; `initial` = the entry and its static

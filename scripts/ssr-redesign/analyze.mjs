@@ -26,12 +26,18 @@
 //                 first write that reaches it (hydrate-before-write), or lazily
 //   hot-island    load-time effects: must activate at load
 // and derives the handler → islands map (the hydrate-before-write sets).
+// It then assigns each connected island group (islands that touch a common
+// cell) a runtime tier, with the facts that forced it
+// (documentation/plans/island-runtime-tiers.md; see assignTiers()):
+//   tier 0        no reactive runtime (own cells, unconditional holes)
+//   tier 1        the kernel (memos, dynamic reads/structure, effects, sharing)
+//   tier 2        the full core (async, optimistic, stores, actions, boundaries)
 //
 // Scope: name-based resolution within an app (no shadowing analysis), the
 // syntactic forms these examples use. Unknown calls that receive a live
 // value are assumed to escape it (conservative: live stays live).
 //
-//   node scripts/ssr-redesign/analyze.mjs [--app hn|todos|sync] [--json out.json]
+//   node scripts/ssr-redesign/analyze.mjs [--app hn|todos|sync|todos-local] [--json out.json]
 import { readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join, relative } from "node:path";
@@ -47,7 +53,8 @@ export const APP_SOURCES = {
     "examples/hackernews-spa/src/components/toggle.tsx"
   ],
   todos: ["examples/todos-blocks/src/app.tsx", "examples/todos-blocks/src/todos.ts", "examples/todos-blocks/src/filter.ts"],
-  sync: ["examples/sync-blocks/src/app.tsx"]
+  sync: ["examples/sync-blocks/src/app.tsx"],
+  "todos-local": ["scripts/ssr-redesign/apps/todos-local/app.tsx"]
 };
 
 const CREATE = new Set(["createSignal", "createStore", "createOptimistic", "createOptimisticStore", "createProjection", "$signal", "$store"]);
@@ -351,10 +358,14 @@ export function analyze(appName, files = APP_SOURCES[appName]) {
     return out;
   };
   // actions returned by factories: `const actions = { addTodo: action(function* …) }`
+  // (also plain function members: `{ addTodo: title => setTodos(…) }`)
   const actionWrites = new Map();
+  const actionNames = new Set();
   for (const { sf } of sources)
     walk(sf, n => {
-      if (ts.isPropertyAssignment(n) && ts.isCallExpression(unwrap(n.initializer)) && calleeName(unwrap(n.initializer)) === "action") {
+      const isAction = ts.isPropertyAssignment(n) && ts.isCallExpression(unwrap(n.initializer)) && calleeName(unwrap(n.initializer)) === "action";
+      if (isAction) actionNames.add(n.name.getText());
+      if (isAction || (ts.isPropertyAssignment(n) && isFn(unwrap(n.initializer)))) {
         const s = new Set();
         walk(n.initializer, m => (ts.isIdentifier(m) && setterOf.has(m.text) ? s.add(setterOf.get(m.text)) : undefined));
         walk(n.initializer, m => {
@@ -419,7 +430,10 @@ export function analyze(appName, files = APP_SOURCES[appName]) {
       writes: [...writes].map(shortCell),
       loadTimeEffects: effects,
       renders: [...children],
-      slot
+      slot,
+      _c: c,
+      _reads: liveReads,
+      _writes: [...writes]
     });
   }
   function findLocal(scopeNode, name) {
@@ -448,7 +462,133 @@ export function analyze(appName, files = APP_SOURCES[appName]) {
     }
 
   const cellsOut = [...cells.values()].map(c => ({ cell: shortCell(c.id), at: c.loc, live: !!c.live, why: c.written ? "setter used" : c.refetched ? "refresh()" : c.live ? "reads a live cell" : c.async ? "server-authoritative (async, never written or refetched)" : "never written" }));
-  return { app: appName, files, cells: cellsOut, components: report, handlerMap };
+  const tiers = assignTiers();
+  for (const r of report) {
+    delete r._c;
+    delete r._reads;
+    delete r._writes;
+  }
+  return { app: appName, files, cells: cellsOut, components: report, handlerMap, groups: tiers };
+
+  // --- 6. runtime tiers (documentation/plans/island-runtime-tiers.md) ----------------
+  // Each island's client code gets the smallest runtime its graph allows:
+  //   tier 0  no reactive runtime: every live cell it touches is written only
+  //           by its own handlers, every view hole reads cells unconditionally,
+  //           no memo, effect, cleanup, dynamic structure, async or sharing;
+  //   tier 1  the kernel (signal / memo / effect / cleanup / root): memos,
+  //           conditional (dynamic) reads, Show / For over live inputs,
+  //           load-time effects, cleanups, cells shared with other islands;
+  //   tier 2  the full core: async or optimistic cells, stores, projections,
+  //           actions / attempt / refresh / transitions, Loading / Errored.
+  // Islands that share a cell form a connected group (they share one runtime
+  // instance); the linker gives the group the highest tier of its members.
+  function assignTiers() {
+    const STRUCTURE = new Set(["Show", "For", "Index", "Repeat", "Switch", "Match", "Dynamic"]);
+    const ASYNC_KIND = new Set(["createOptimistic", "createOptimisticStore", "createProjection"]);
+    const STORE_KIND = new Set(["createStore", "$store"]);
+    const TIER2_CALLS = new Set(["attempt", "action", "refresh", "startTransition", "createAsync"]);
+    const TIER2_TAGS = new Set(["Loading", "Errored", "Suspense", "ErrorBoundary"]);
+    // base cells behind a cell (a memo stands for the cells it reads)
+    const baseOf = (id, seen = new Set()) => {
+      if (seen.has(id)) return seen;
+      seen.add(id);
+      for (const d of cells.get(id)?.deps || []) if (live(d)) baseOf(d, seen);
+      return seen;
+    };
+    const isRead = n => ts.isIdentifier(n) && !isNamePosition(n);
+    const facts = new Map();
+    for (const r of report) {
+      if (r.verdict === "inert") continue;
+      const c = r._c;
+      const scope = { props: c.props, component: c.name };
+      const touched = new Set();
+      for (const id of [...r._reads, ...r._writes]) for (const b of baseOf(id)) touched.add(b);
+      const t2 = [],
+        t1 = [];
+      for (const id of touched) {
+        const cell = cells.get(id);
+        if (!cell) continue;
+        if (cell.async || ASYNC_KIND.has(cell.kind)) t2.push(`async/optimistic cell ${shortCell(id)}`);
+        else if (STORE_KIND.has(cell.kind)) t2.push(`store ${shortCell(id)} (the kernel has no stores)`);
+        else if (cell.memo) t1.push(`memo ${cell.getter}`);
+      }
+      walk(c.node, n => {
+        if (ts.isCallExpression(n) && TIER2_CALLS.has(calleeName(n))) t2.push(`${calleeName(n)}() @${loc(n)}`);
+        if (ts.isCallExpression(n) && calleeName(n) === "onCleanup") t1.push(`onCleanup @${loc(n)}`);
+        if (ts.isIdentifier(n) && actionNames.has(n.text) && !isNamePosition(n)) t2.push(`calls action ${n.text}`);
+        if ((ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) && TIER2_TAGS.has(n.tagName.getText())) t2.push(`<${n.tagName.getText()}>`);
+      });
+      for (const e of r.loadTimeEffects) t1.push(`load-time effect ${e}`);
+      // Holes: dynamic structure and conditional reads in the view.
+      let holes = 0;
+      walk(c.view || c.node, n => {
+        if (ts.isJsxAttribute(n) && /^on[A-Z:]/.test(n.name.getText())) return false;
+        if ((ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n)) && STRUCTURE.has(n.tagName.getText())) {
+          for (const a of n.attributes.properties)
+            if (ts.isJsxAttribute(a) && a.initializer && ts.isJsxExpression(a.initializer) && [...flowOf(a.initializer.expression, scope)].some(live))
+              t1.push(`<${n.tagName.getText()} ${a.name.getText()}> over live input (dynamic structure)`);
+        }
+        if (ts.isJsxExpression(n) && n.expression && !(ts.isJsxAttribute(n.parent) && STRUCTURE.has(n.parent.parent.parent.tagName?.getText?.()))) {
+          const liveHere = [...flowOf(n.expression, scope)].filter(live);
+          if (!liveHere.length) return;
+          holes++;
+          walk(n.expression, m => {
+            if (m !== n.expression && ts.isJsxExpression(m)) return false; // its own hole
+            if (!isRead(m)) return;
+            const flows = [...flowOf(m, scope)].filter(live);
+            if (!flows.length) return;
+            const why = conditionalContext(m, n.expression);
+            if (why) t1.push(`conditional read of ${m.text} (${why}) @${loc(m)}`);
+          });
+        }
+      });
+      facts.set(r.component, { r, touched, t2: [...new Set(t2)], t1: [...new Set(t1)], holes });
+    }
+    // connected groups: components that touch a common base cell
+    const parent = new Map([...facts.keys()].map(k => [k, k]));
+    const find = k => (parent.get(k) === k ? k : find(parent.get(k)));
+    const byCell = new Map();
+    for (const [name, f] of facts)
+      for (const id of f.touched) {
+        if (byCell.has(id)) parent.set(find(name), find(byCell.get(id)));
+        else byCell.set(id, name);
+      }
+    const groups = new Map();
+    for (const name of facts.keys()) {
+      const root = find(name);
+      if (!groups.has(root)) groups.set(root, []);
+      groups.get(root).push(name);
+    }
+    const out = [];
+    for (const members of groups.values()) {
+      const fs = members.map(m => facts.get(m));
+      const shared = [...new Set(fs.flatMap(f => [...f.touched]))].filter(id => fs.filter(f => f.touched.has(id)).length > 1);
+      const own = f => (f.t2.length ? 2 : f.t1.length ? 1 : 0);
+      const reasons = { 2: fs.flatMap(f => f.t2.map(x => `${f.r.component}: ${x}`)), 1: fs.flatMap(f => f.t1.map(x => `${f.r.component}: ${x}`)) };
+      if (members.length > 1) reasons[1].push(`cells shared across islands: ${shared.map(shortCell).join(", ")}`);
+      const tier = reasons[2].length ? 2 : reasons[1].length ? 1 : 0;
+      const t0why = `cells [${[...new Set(fs.flatMap(f => [...f.touched]))].map(shortCell).join(", ")}] written only by the island's own handlers; ${fs.reduce((n, f) => n + f.holes, 0)} live hole(s), all reading unconditionally; no memo, effect, cleanup, dynamic structure, async or sharing`;
+      for (const f of fs) f.r.tier = { own: own(f), group: tier, members };
+      // Only memos keep this group off tier 0: a compiler that folds a memo
+      // with unconditional reads into a derived slot (recomputed before the
+      // holes, with its equality cut-off) could emit it at tier 0.
+      const note = tier === 1 && reasons[1].every(x => / memo /.test(` ${x.split(": ")[1]} `)) ? "memo folding candidate: only memos keep this group off tier 0" : undefined;
+      out.push({ members, tier, why: tier === 0 ? [t0why] : reasons[tier], alsoTier1: tier === 2 ? reasons[1] : [], ...(note ? { note } : {}) });
+    }
+    return out;
+  }
+  /** Why a read under `root` runs only on some evaluations, or null. */
+  function conditionalContext(node, root) {
+    for (let n = node; n && n !== root; n = n.parent) {
+      const p = n.parent;
+      if (!p) break;
+      if (ts.isConditionalExpression(p) && n !== p.condition) return "ternary branch";
+      if (ts.isBinaryExpression(p) && n === p.right && [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken].includes(p.operatorToken.kind)) return "short-circuit operand";
+      if (isFn(p) && p !== root) return "inside a callback";
+      if (ts.isIfStatement(p) && n !== p.expression) return "if branch";
+    }
+    return null;
+  }
 }
 
 // --- CLI -----------------------------------------------------------------------
@@ -471,6 +611,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       );
     console.log("handler -> hydrate-before-write:");
     for (const h of r.handlerMap) console.log(`  ${h.island} (${h.events.join(", ")}) -> ${h.hydrateBeforeWrite.join(", ")}`);
+    console.log("runtime tiers (per connected island group):");
+    for (const g of r.groups) {
+      console.log(`  tier ${g.tier}  [${g.members.join(", ")}]`);
+      for (const w of g.why) console.log(`           - ${w}`);
+      if (g.alsoTier1.length) console.log(`           (tier-1 needs too: ${g.alsoTier1.length})`);
+      if (g.note) console.log(`           note: ${g.note}`);
+    }
   }
   if (args.includes("--json")) writeFileSync(args[args.indexOf("--json") + 1], JSON.stringify(out, null, 2) + "\n");
 }

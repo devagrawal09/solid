@@ -150,6 +150,32 @@ handwritten oracle, so the matrix measures feature equivalence directly:
 (`CONFORMANCE_DUMP=json` prints the candidate trace as JSON, for declaring a
 `differs` expectation).
 
+## Island runtime tiers (`tiers.spec.ts`)
+
+[island-runtime-tiers.md](../../../../documentation/plans/island-runtime-tiers.md)
+gives each compiled island the smallest runtime its graph allows: tier 0 (no
+reactive runtime), tier 1 (the kernel, `packages/signals/src/kernel`) or tier 2
+(the full core). `tiers.spec.ts` proves each tier equivalent to the client
+oracle, in two ways:
+
+- **Real compiler output bound to the kernel.** A DOM-free scenario whose
+  reference source imports only the kernel's API is compiled as usual and
+  evaluated with `solid-js` bound to the kernel. Its whole trace must equal
+  the oracle's. Other scenarios are listed as skipped, with the reason.
+- **Activation stand-ins** (`tiers/activations.ts`). Activation is the one
+  thing the compiler does not emit yet, so these are hand-written — the only
+  hand-written code the harness runs, and kept out of the mode registry for
+  that reason. The oracle's `initial` HTML becomes the server markup; the
+  scenario's tier-0 code (no runtime) and tier-1 code (on the kernel, and the
+  same code on the full core as the tier-2 control) activate it, and the
+  steps are driven. Everything from the first step on must equal the oracle.
+  Tier-0 activation must also record nothing at mount.
+
+Self-tests plant two plausible tier-0 scheduling bugs (holes in creation order;
+no batching) and check that each diverges while the real helper does not. The
+tier scenarios themselves (`scenarios/tiers.ts`) are ordinary scenarios and
+run in every applicable mode.
+
 ## Adding a mode (the adapter contract)
 
 A mode is a `ModeAdapter` in `harness/modes.ts`:

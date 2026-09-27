@@ -77,7 +77,7 @@ for (const name of appNames) {
     const ssrMs = median(wall),
       ssrCpuMs = median(cpu);
     const head = srv.hydrationScript ? srv.hydrationScript() : "";
-    const opts = { swaps: v.clientSwaps, tildeRoot: app.tildeRoot, rewrites: v.rewrites, oracles: v.oracles || [], splitting: !!v.splitting, hydratable: v.hydratable ?? true };
+    const opts = { swaps: v.clientSwaps, tildeRoot: app.tildeRoot, rewrites: v.rewrites, oracles: v.oracles || [], splitting: !!v.splitting, hydratable: v.hydratable ?? true, aliases: v.aliases };
     const client = await bundleClient(join(HERE, v.client), opts);
     const counted = await bundleClient(join(HERE, v.client), { ...opts, count: true });
     // The identity probe is a classic script: it runs while the page parses,

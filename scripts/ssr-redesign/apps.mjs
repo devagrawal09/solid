@@ -18,6 +18,8 @@ async function waitUntil(pred) {
 }
 
 const TOGGLE_SWAP = "examples/hackernews-spa/src/components/toggle.tsx";
+// The tier-1 island kernel (documentation/plans/island-runtime-tiers.md).
+const KERNEL = join(ROOT, "packages/signals/src/kernel/index.ts");
 
 export const APPS = {
   hn: {
@@ -88,6 +90,33 @@ export const APPS = {
         server: "apps/hn/islands-static/server.tsx",
         serverSwaps: { [TOGGLE_SWAP]: "scripts/ssr-redesign/apps/hn/islands-static/toggle.server.tsx" },
         client: "apps/hn/islands-static/client-lazy.ts",
+        splitting: true
+      },
+      // Island runtime tiers (documentation/plans/island-runtime-tiers.md).
+      // P1-eager / P1-lazy above are tier 2 (the full core). Tier 1 is the
+      // same activation code bound to the kernel; tier 0 needs no runtime.
+      "T1-eager": {
+        server: "apps/hn/islands-static/server.tsx",
+        serverSwaps: { [TOGGLE_SWAP]: "scripts/ssr-redesign/apps/hn/islands-static/toggle.server.tsx" },
+        client: "apps/hn/islands-static/client-eager.ts",
+        aliases: { "@solidjs/signals": KERNEL }
+      },
+      "T1-lazy": {
+        server: "apps/hn/islands-static/server.tsx",
+        serverSwaps: { [TOGGLE_SWAP]: "scripts/ssr-redesign/apps/hn/islands-static/toggle.server.tsx" },
+        client: "apps/hn/islands-static/client-lazy.ts",
+        splitting: true,
+        aliases: { "@solidjs/signals": KERNEL }
+      },
+      "T0-eager": {
+        server: "apps/hn/islands-static/server.tsx",
+        serverSwaps: { [TOGGLE_SWAP]: "scripts/ssr-redesign/apps/hn/islands-static/toggle.server.tsx" },
+        client: "apps/hn/islands-static/client-eager-t0.ts"
+      },
+      "T0-lazy": {
+        server: "apps/hn/islands-static/server.tsx",
+        serverSwaps: { [TOGGLE_SWAP]: "scripts/ssr-redesign/apps/hn/islands-static/toggle.server.tsx" },
+        client: "apps/hn/islands-static/client-lazy-t0.ts",
         splitting: true
       }
     }
@@ -160,6 +189,57 @@ export const APPS = {
       CSR: { server: "apps/todos/server.tsx", client: "apps/todos/csr.tsx", hydratable: false, bytesOnly: true },
       // Runtime-only on-interaction hydration of the whole app.
       "A-lazy": { server: "apps/todos/server.tsx", client: "apps/todos/client-lazy.ts", splitting: true }
+    }
+  },
+  "todos-local": {
+    // The todos-blocks UI over a synchronous local store (apps/todos-local),
+    // for the island runtime tiers: the same 100 todos and session.
+    render: srv => srv.render(TODOS_SEED),
+    init: `localStorage.setItem("TODOS", ${JSON.stringify(JSON.stringify(TODOS_SEED))}); Math.random = () => 0.5;`,
+    session: [
+      () => document.querySelectorAll("input.toggle")[1].click(),
+      () => document.querySelectorAll("button.destroy")[2].click(),
+      () => document.querySelector("input.toggle-all").click(),
+      () => {
+        location.hash = "#/active";
+      },
+      () => {
+        const input = document.querySelector("input.new-todo");
+        input.value = "a new one";
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      },
+      () => document.querySelectorAll("input.toggle")[0].click(),
+      () => {
+        location.hash = "#/";
+      },
+      () => document.querySelector("button.clear-completed").click()
+    ],
+    stepWait: 50,
+    markIdentity: () => {
+      globalThis.__id = [document.querySelectorAll("li.todo")[5], document.querySelector("header")];
+    },
+    checkIdentity: () => globalThis.__id.map(n => (n && n.isConnected ? 1 : 0)).join(""),
+    firstInteraction: new Function(
+      `return (async () => { ${waitUntil.toString()}
+        const input = document.querySelectorAll("input.toggle")[4]; const li = input.closest("li");
+        const t = performance.now(); input.click();
+        await waitUntil(() => { const l = document.querySelectorAll("li.todo")[4]; return l && l.classList.contains("completed"); });
+        return performance.now() - t; })()`
+    ),
+    variants: {
+      // Today: hydrate the whole app.
+      A: { server: "apps/todos-local/server.tsx", client: "apps/todos-local/client.tsx" },
+      CSR: { server: "apps/todos-local/server.tsx", client: "apps/todos-local/csr.tsx", hydratable: false, bytesOnly: true },
+      // Compiled activation of the one island group (islands.ts), at load:
+      // tier 2 binds it to the full core, tier 1 to the kernel.
+      "T2-eager": { server: "apps/todos-local/server-islands.tsx", client: "apps/todos-local/client-eager.ts" },
+      "T1-eager": { server: "apps/todos-local/server-islands.tsx", client: "apps/todos-local/client-eager.ts", aliases: { "@solidjs/signals": KERNEL } },
+      // The same, on the first interaction (the loader replays it).
+      "T2-lazy": { server: "apps/todos-local/server-islands.tsx", client: "apps/todos-local/client-lazy.ts", splitting: true },
+      "T1-lazy": { server: "apps/todos-local/server-islands.tsx", client: "apps/todos-local/client-lazy.ts", splitting: true, aliases: { "@solidjs/signals": KERNEL } },
+      // Outside the tier-0 rule (a keyed list, branches, memos): direct
+      // updates written by hand, as the floor a list-aware tier 0 could reach.
+      "T0*-eager": { server: "apps/todos-local/server-islands.tsx", client: "apps/todos-local/client-eager-t0.ts" }
     }
   }
 };
