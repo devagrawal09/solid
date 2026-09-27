@@ -16,7 +16,7 @@ import { createLoadingBoundary } from "./hydration.js";
 import { sharedConfig } from "./shared.js";
 import type { Accessor, RevealOrder } from "./signals.js";
 import type { Element as SolidElement } from "../types.js";
-import type { View } from "@solidjs/signals";
+import { inBlock, lazyView, type View } from "@solidjs/signals";
 export type { RevealOrder };
 
 type NonZeroParams<T extends (...args: any[]) => any> = Parameters<T>["length"] extends 0
@@ -287,6 +287,8 @@ export function Errored(props: {
   fallback: SolidElement | ((err: () => any, reset: () => void) => SolidElement);
   children: SolidElement | View<any, any>;
 }): any {
+  // Called inside a running block (uncompiled view): defer to where it renders.
+  if (inBlock()) return lazyView(() => Errored(props as any));
   return createErrorBoundary(
     () => props.children,
     (err, reset) => {
@@ -319,6 +321,8 @@ export function Loading(props: {
   on?: any;
   children: SolidElement | View<any, any>;
 }): any {
+  // Called inside a running block (uncompiled view): defer to where it renders.
+  if (inBlock()) return lazyView(() => Loading(props as any));
   return createLoadingBoundary(
     () => props.children,
     () => props.fallback

@@ -23,6 +23,8 @@ import {
   EFFECT,
   OP,
   VIEW,
+  inBlock,
+  lazyView,
   registerTypedProps,
   collectCleanups,
   isBlock,
@@ -393,7 +395,10 @@ export function $component<P = {}, Y extends SetupOp = never, VY extends ViewOp 
   flags: number = 0
 ): Component<P, ViewOf<VY>[typeof PENDING], ViewOf<VY>[typeof FAILS]> {
   const setup = toBlock(body);
-  const component = function (props: any) {
+  const component = function (props: any): unknown {
+    // Called inside a running view (uncompiled `Loading({ children: X(p) })`):
+    // defer to where it renders, as the compiler's prop getters do.
+    if (inBlock()) return lazyView(() => component(props));
     return untrack(() => {
       const viewBody = runBlockAs(
         COMPONENT,

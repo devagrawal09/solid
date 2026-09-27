@@ -1532,6 +1532,8 @@ export function perform<S extends AnySetter>(target: WriteOp<S>): ReturnType<S>;
 export function perform(target: RaiseOp<any> | AsyncOp<any, any>): never;
 export function perform(target: unknown): unknown {
   if (typeof target === "function") {
+    // A child view (a view block or a deferred call) is a value.
+    if ((target as any)[VIEW]) return target;
     if ((target as any)[BLOCK]) {
       // A child view is a value (`yield* Child(p)` evaluates to its view).
       if ((target as any)[VIEW]) return target;
@@ -1828,6 +1830,31 @@ function resume<R>(
  */
 export function outsideBlock<T>(run: () => T): T {
   return readGuarded(run);
+}
+
+/**
+ * @internal Whether a block body is running now (its strict read guard is
+ * up). A component or boundary called here is deferred (`lazyView`).
+ */
+export function inBlock(): boolean {
+  return blockGuard;
+}
+
+/**
+ * @internal A component or boundary call made inside a running block body
+ * (`Loading({ children: Child(p) })` in an uncompiled view): a view thunk
+ * the renderer or the enclosing boundary resolves where it renders it —
+ * under that owner, outside the block's guard, once per evaluation, exactly
+ * like the prop getters the compiler emits for the same call.
+ * `yield* thunk` evaluates to the thunk (a view).
+ */
+export function lazyView<T>(make: () => T): () => T {
+  const thunk = () => readGuarded(() => untrack(make));
+  (thunk as any)[VIEW] = true;
+  (thunk as any)[Symbol.iterator] = function* () {
+    return thunk;
+  };
+  return thunk;
 }
 
 function readGuarded<T>(run: () => T): T {

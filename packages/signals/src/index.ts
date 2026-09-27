@@ -113,6 +113,8 @@ export {
   BLOCK_NOTHROW,
   isBlock,
   outsideBlock,
+  inBlock,
+  lazyView,
   renderBlock,
   dispatchBlock,
   blockScope
