@@ -105,6 +105,18 @@ pub fn summarize_capabilities(
         .map_err(|error| Error::from_reason(error.to_string()))
 }
 
+/// Stage 3 (F): one module's island summary (JSON) for the handler → islands
+/// map of compiler-scoped lazy hydration. See `islands.rs`.
+#[napi]
+pub fn summarize_islands(
+    code: String,
+    options: Option<ProjectBlocksForTypecheckOptions>,
+) -> Result<String> {
+    let options = options.unwrap_or_default();
+    crate::islands::summarize_islands(&code, options.filename.as_deref())
+        .map_err(|error| Error::from_reason(error.to_string()))
+}
+
 #[cfg(feature = "tsrx")]
 #[napi(object)]
 pub struct TsrxTypecheckEmbeddedRegion {

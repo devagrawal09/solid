@@ -1,0 +1,296 @@
+{
+  "n": 1000,
+  "reps": 7,
+  "session": [
+    [
+      "select",
+      3
+    ],
+    [
+      "rename"
+    ],
+    [
+      "select",
+      7
+    ],
+    [
+      "rename"
+    ],
+    [
+      "rename"
+    ],
+    [
+      "select",
+      42
+    ],
+    [
+      "rename"
+    ]
+  ],
+  "chromium": "141.0.7390.37",
+  "gate": {
+    "A": "equal",
+    "D": "equal",
+    "E-lazy": "equal",
+    "E-naive": "differs at step 1",
+    "F": "equal",
+    "F-linked": "equal",
+    "B": "equal",
+    "C": "equal",
+    "C-broken": "differs at step 1"
+  },
+  "results": [
+    {
+      "m": 0,
+      "throttle": 1,
+      "strategy": "F",
+      "evalMs": 3.8999999999068677,
+      "initMs": 0.09999999962747097,
+      "firstMs": 38.60000000009313,
+      "restMs": 5.800000000279397,
+      "html": {
+        "raw": 129828,
+        "gzip": 14657,
+        "brotli": 10223
+      },
+      "js": {
+        "raw": 84589,
+        "gzip": 30733,
+        "brotli": 27758
+      },
+      "loadMs": 3.9999999995343387,
+      "sessionMs": 48.39999999990687
+    },
+    {
+      "m": 0,
+      "throttle": 1,
+      "strategy": "F-linked",
+      "evalMs": 4,
+      "initMs": 2.3999999994412065,
+      "firstMs": 37,
+      "restMs": 5.7999999998137355,
+      "html": {
+        "raw": 129828,
+        "gzip": 14657,
+        "brotli": 10223
+      },
+      "js": {
+        "raw": 83918,
+        "gzip": 30442,
+        "brotli": 27482
+      },
+      "loadMs": 6.3999999994412065,
+      "sessionMs": 49.19999999925494
+    },
+    {
+      "m": 0,
+      "throttle": 4,
+      "strategy": "F",
+      "evalMs": 19.200000000186265,
+      "initMs": 0.10000000009313226,
+      "firstMs": 146.20000000018626,
+      "restMs": 24.700000000186265,
+      "html": {
+        "raw": 129828,
+        "gzip": 14657,
+        "brotli": 10223
+      },
+      "js": {
+        "raw": 84589,
+        "gzip": 30733,
+        "brotli": 27758
+      },
+      "loadMs": 19.300000000279397,
+      "sessionMs": 190.20000000065193
+    },
+    {
+      "m": 0,
+      "throttle": 4,
+      "strategy": "F-linked",
+      "evalMs": 18.700000000186265,
+      "initMs": 8.899999999906868,
+      "firstMs": 139.1999999997206,
+      "restMs": 26.99999999953434,
+      "html": {
+        "raw": 129828,
+        "gzip": 14657,
+        "brotli": 10223
+      },
+      "js": {
+        "raw": 83918,
+        "gzip": 30442,
+        "brotli": 27482
+      },
+      "loadMs": 27.600000000093132,
+      "sessionMs": 193.79999999934807
+    },
+    {
+      "m": 1000,
+      "throttle": 1,
+      "strategy": "F",
+      "evalMs": 3.8999999999068677,
+      "initMs": 0,
+      "firstMs": 38.60000000009313,
+      "restMs": 5.599999999627471,
+      "html": {
+        "raw": 201637,
+        "gzip": 25534,
+        "brotli": 18149
+      },
+      "js": {
+        "raw": 84589,
+        "gzip": 30733,
+        "brotli": 27758
+      },
+      "loadMs": 3.8999999999068677,
+      "sessionMs": 48.09999999962747
+    },
+    {
+      "m": 1000,
+      "throttle": 1,
+      "strategy": "F-linked",
+      "evalMs": 4,
+      "initMs": 2,
+      "firstMs": 37.39999999990687,
+      "restMs": 5.800000000745058,
+      "html": {
+        "raw": 201637,
+        "gzip": 25534,
+        "brotli": 18149
+      },
+      "js": {
+        "raw": 83918,
+        "gzip": 30442,
+        "brotli": 27482
+      },
+      "loadMs": 6,
+      "sessionMs": 49.200000000651926
+    },
+    {
+      "m": 1000,
+      "throttle": 4,
+      "strategy": "F",
+      "evalMs": 19.200000000186265,
+      "initMs": 0.10000000009313226,
+      "firstMs": 149.70000000018626,
+      "restMs": 26.600000000093132,
+      "html": {
+        "raw": 201637,
+        "gzip": 25534,
+        "brotli": 18149
+      },
+      "js": {
+        "raw": 84589,
+        "gzip": 30733,
+        "brotli": 27758
+      },
+      "loadMs": 19.300000000279397,
+      "sessionMs": 195.6000000005588
+    },
+    {
+      "m": 1000,
+      "throttle": 4,
+      "strategy": "F-linked",
+      "evalMs": 18.700000000186265,
+      "initMs": 9.199999999720603,
+      "firstMs": 147.39999999990687,
+      "restMs": 25.600000000093132,
+      "html": {
+        "raw": 201637,
+        "gzip": 25534,
+        "brotli": 18149
+      },
+      "js": {
+        "raw": 83918,
+        "gzip": 30442,
+        "brotli": 27482
+      },
+      "loadMs": 27.899999999906868,
+      "sessionMs": 200.89999999990687
+    },
+    {
+      "m": 5000,
+      "throttle": 1,
+      "strategy": "F",
+      "evalMs": 3.8999999999068677,
+      "initMs": 0.10000000009313226,
+      "firstMs": 36.39999999990687,
+      "restMs": 5.5,
+      "html": {
+        "raw": 501622,
+        "gzip": 64898,
+        "brotli": 46719
+      },
+      "js": {
+        "raw": 84589,
+        "gzip": 30733,
+        "brotli": 27758
+      },
+      "loadMs": 4,
+      "sessionMs": 45.89999999990687
+    },
+    {
+      "m": 5000,
+      "throttle": 1,
+      "strategy": "F-linked",
+      "evalMs": 4,
+      "initMs": 2.1000000000931323,
+      "firstMs": 34.60000000009313,
+      "restMs": 5.399999999906868,
+      "html": {
+        "raw": 501622,
+        "gzip": 64898,
+        "brotli": 46719
+      },
+      "js": {
+        "raw": 83918,
+        "gzip": 30442,
+        "brotli": 27482
+      },
+      "loadMs": 6.100000000093132,
+      "sessionMs": 46.10000000009313
+    },
+    {
+      "m": 5000,
+      "throttle": 4,
+      "strategy": "F",
+      "evalMs": 19.200000000186265,
+      "initMs": 0.10000000009313226,
+      "firstMs": 163.09999999962747,
+      "restMs": 25.100000000093132,
+      "html": {
+        "raw": 501622,
+        "gzip": 64898,
+        "brotli": 46719
+      },
+      "js": {
+        "raw": 84589,
+        "gzip": 30733,
+        "brotli": 27758
+      },
+      "loadMs": 19.300000000279397,
+      "sessionMs": 207.5
+    },
+    {
+      "m": 5000,
+      "throttle": 4,
+      "strategy": "F-linked",
+      "evalMs": 18.700000000186265,
+      "initMs": 10.200000000651926,
+      "firstMs": 125.8000000002794,
+      "restMs": 27.100000000558794,
+      "html": {
+        "raw": 501622,
+        "gzip": 64898,
+        "brotli": 46719
+      },
+      "js": {
+        "raw": 83918,
+        "gzip": 30442,
+        "brotli": 27482
+      },
+      "loadMs": 28.90000000083819,
+      "sessionMs": 181.80000000167638
+    }
+  ]
+}

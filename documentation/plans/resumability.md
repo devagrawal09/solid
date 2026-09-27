@@ -60,6 +60,8 @@ When the first hydration pass drains, Solid 2:
 
 So F, or any progressive or lazy hydration, silently re-creates the late island's DOM. The measurements use an oracle that reopens hydration for a late island; this app keeps nothing in the registry. Real support needs a per-island hydration lifetime, where the registry and snapshots are kept until each island hydrates.
 
+**Fixed (stage 3, [compiler-heuristics-build.md](./compiler-heuristics-build.md)).** `hydrate()` after completion now reopens hydration for a root that still holds unclaimed server markup for its `renderId`, instead of client-rendering it. Reopening restores the `hydrating` state, which clears the done flag and turns snapshot capture back on; `_$HY.r` is never cleared. Roots hydrated before, and roots without server markup, keep the render fallback. Strategy **F-linked** runs F with this runtime, no oracle, and a handler → islands map derived by the compiler; see [Stage 3](#stage-3-f-with-the-compiler-map-and-the-shipped-runtime).
+
 ## Results
 
 Chromium 141; each load in a fresh browser context (no code cache); the medians of 7 loads, mean of two runs.
@@ -224,6 +226,27 @@ C ships more bytes than hydration strategies and spends less CPU. Break-even: ex
 | 5000 | 4x | D | -5.2 KB | 107 ms | C wins at any bandwidth |
 | 5000 | 4x | F-csr | 0.6 KB | 58 ms | 0.09 Mbps |
 
+## Stage 3: F with the compiler map and the shipped runtime
+
+F-linked runs `app-islands.jsx`. It is the same four islands, components and DOM as `app.jsx`, but its state lives at module scope; `bench.mjs` asserts that its server markup equals `app.jsx`'s. From that source:
+- `summarizeIslands` and `linkIslands` derive `select → table, detail` and `rename → table, detail, header`, the same as the hand map; the footer is never needed.
+- Late islands hydrate through the shipped `hydrate()`, with no oracle.
+- It passes the gate: equal to A after load and after every step, and the server nodes stay on screen.
+- Its state is created at module evaluation (the data parse and 1,000 label signals). That work is timed on the page and counted in load; F pays it on the first click instead.
+
+Same run (F and F-linked timed together, mean of two runs; data in `results-{1,2}-flinked.json`). Cells show F / F-linked in ms:
+
+| footer m | CPU | load | first click | rest | total |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 0 | 1x | 3.9 / 6.1 | 37.7 / 36.2 | 5.6 / 5.4 | 47.2 / 47.8 (+1.3%) |
+| 1000 | 1x | 3.9 / 5.9 | 40.1 / 35.7 | 5.6 / 5.6 | 49.6 / 47.2 (−4.9%) |
+| 5000 | 1x | 3.9 / 6.0 | 37.4 / 35.4 | 5.5 / 5.3 | 46.8 / 46.7 (−0.2%) |
+| 0 | 4x | 18.8 / 29.2 | 143.0 / 135.8 | 24.2 / 26.0 | 186.0 / 191.1 (+2.8%) |
+| 1000 | 4x | 18.9 / 29.0 | 149.9 / 142.5 | 25.1 / 24.8 | 193.9 / 196.3 (+1.2%) |
+| 5000 | 4x | 18.8 / 29.2 | 151.9 / 132.4 | 25.1 / 26.8 | 195.9 / 188.4 (−3.8%) |
+
+The total is the same within ±5%. The oracle's numbers for F therefore stand for the real runtime with a compiler-derived map.
+
 ## Verdict
 
 1. **Runtime-only lazy hydration only moves the cost.** E-lazy's total CPU equals A's (171 vs 175 ms at 4× and m = 0; 361 vs 352 ms at m = 5,000). It pays at the first click instead of at load, with 131–321 ms first-click latency on 4× CPU. That confirms the correctness argument: without a map, the first write must hydrate everything.
@@ -250,7 +273,7 @@ C ships more bytes than hydration strategies and spends less CPU. Break-even: ex
 - B and C are hand-written stand-ins for a resumable compiler. Their JS excludes component code, and real handlers can pull in more.
 - The serialization format is plain JSON and could be denser.
 - The network model has no TCP slow start or streaming; it computes `RTT + bytes / bandwidth`.
-- F relies on the staggered-hydration oracle above.
+- F relies on the staggered-hydration oracle above. F-linked (stage 3) does not: it matches F within ±5% (see below).
 - No async data or Suspense boundaries.
 
 ## Reproduce

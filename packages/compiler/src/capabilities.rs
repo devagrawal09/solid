@@ -577,8 +577,8 @@ fn contains_wait(function: &oxc_ast::ast::Function<'_>) -> bool {
 
 /// A minimal JSON writer (the crate carries no serde).
 #[derive(Default)]
-struct JsonWriter {
-    out: String,
+pub(crate) struct JsonWriter {
+    pub(crate) out: String,
     /// Per open container: whether the next element is its first.
     first: Vec<bool>,
     /// A key was just written: the next value takes no separator.
@@ -586,7 +586,7 @@ struct JsonWriter {
 }
 
 impl JsonWriter {
-    fn separator(&mut self) {
+    pub(crate) fn separator(&mut self) {
         if self.after_key {
             self.after_key = false;
             return;
@@ -599,57 +599,57 @@ impl JsonWriter {
         }
     }
 
-    fn begin_object(&mut self) {
+    pub(crate) fn begin_object(&mut self) {
         self.separator();
         self.out.push('{');
         self.first.push(true);
     }
 
-    fn end_object(&mut self) {
+    pub(crate) fn end_object(&mut self) {
         self.first.pop();
         self.out.push('}');
     }
 
-    fn begin_array(&mut self) {
+    pub(crate) fn begin_array(&mut self) {
         self.separator();
         self.out.push('[');
         self.first.push(true);
     }
 
-    fn end_array(&mut self) {
+    pub(crate) fn end_array(&mut self) {
         self.first.pop();
         self.out.push(']');
     }
 
-    fn key(&mut self, key: &str) {
+    pub(crate) fn key(&mut self, key: &str) {
         self.separator();
         self.push_string(key);
         self.out.push(':');
         self.after_key = true;
     }
 
-    fn string(&mut self, value: &str) {
+    pub(crate) fn string(&mut self, value: &str) {
         self.separator();
         self.push_string(value);
     }
 
-    fn number(&mut self, value: u64) {
+    pub(crate) fn number(&mut self, value: u64) {
         self.separator();
         self.out.push_str(&value.to_string());
     }
 
-    fn boolean(&mut self, value: bool) {
+    pub(crate) fn boolean(&mut self, value: bool) {
         self.separator();
         self.out.push_str(if value { "true" } else { "false" });
     }
 
-    fn null(&mut self) {
+    pub(crate) fn null(&mut self) {
         self.separator();
         self.out.push_str("null");
     }
 
     /// An already-serialized value.
-    fn raw(&mut self, json: &str) {
+    pub(crate) fn raw(&mut self, json: &str) {
         self.separator();
         self.out.push_str(json);
     }

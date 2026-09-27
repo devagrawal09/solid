@@ -38,6 +38,7 @@ mod strict;
 mod store_handles;
 mod sync_actions;
 mod memo_fusion;
+mod islands;
 #[cfg(feature = "tsrx")]
 mod tsrx;
 mod universal;
@@ -46,6 +47,7 @@ pub use block_projection::{
     BlockProjectionEdit, BlockTypecheckProjection, project_blocks_for_typecheck,
 };
 pub use capabilities::summarize_capabilities;
+pub use islands::summarize_islands;
 pub use compiler::{CompileOptions, CompileOutput, Generate, Renderer, Syntax, Wrapper, compile};
 pub use error::{CompileError, CompileErrorKind};
 pub use strict::{

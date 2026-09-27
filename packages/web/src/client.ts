@@ -1792,7 +1792,18 @@ export function hydrate(
 export function hydrate(code, element, options = {}) {
   enableHydration();
   installHydrationRuntime();
-  if (globalThis._$HY.done) return render(code, element, [...element.childNodes], options);
+  if (globalThis._$HY.done) {
+    // Hydration already completed once. A root that still holds unclaimed
+    // server markup for its renderId is a late island (lazy / progressive
+    // hydration): reopen hydration for it — the hydrating setter resets the
+    // done state and snapshot capture, and `_$HY.r` is never cleared — rather
+    // than re-create its DOM. Anything else (a root hydrated before, client
+    // markup, HMR re-mounts) keeps the client-render fallback.
+    if (hydratedRoots.has(element) || !hasServerMarkup(element, options.renderId || ""))
+      return render(code, element, [...element.childNodes], options);
+    globalThis._$HY.done = false;
+  }
+  hydratedRoots.add(element);
   // #3081: the server splices useHead's charset/base prelude immediately
   // after the <head> open tag — a byte-placement constraint (charset within
   // the first 1024 bytes, base before URL-bearing tags) the parser has
@@ -2559,6 +2570,16 @@ function cleanChildren(parent, current, marker, replacement) {
     }
   } else if (replacement) parent.insertBefore(replacement, marker);
   if (replacement && marker) replacement[$$SLOT] = marker;
+}
+
+// Roots a hydrate() call has claimed (see the late-island path in hydrate).
+const hydratedRoots = new WeakSet<Node>();
+
+function hasServerMarkup(element, root) {
+  const nodes = element.querySelectorAll(`*[_hk]`);
+  for (let i = 0; i < nodes.length; i++)
+    if (nodes[i].getAttribute("_hk").startsWith(root)) return true;
+  return false;
 }
 
 function gatherHydratable(element, root) {

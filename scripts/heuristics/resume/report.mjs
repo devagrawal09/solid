@@ -23,13 +23,18 @@ import { join } from "node:path";
 import { ROOT } from "../common.mjs";
 
 const DIR = join(ROOT, "documentation/plans/resumability");
-// results-{i}.json, with any results-{i}-*.json re-runs of single strategies
-// (--only) replacing that strategy's rows.
+// results-{i}.json, with any results-{i}-<strategy>.json re-run (--only)
+// replacing or adding that one strategy's rows (the suffix is the strategy
+// name, lower case, without dashes: fcsr → F-csr, flinked → F-linked; the
+// other strategies a re-run timed alongside for comparison are not merged).
 const load = f => JSON.parse(readFileSync(join(DIR, f), "utf8"));
+const flat = s => s.toLowerCase().replace(/-/g, "");
 const runs = [1, 2].map(i => {
   const base = load(`results-${i}.json`);
   for (const f of readdirSync(DIR).filter(f => f.startsWith(`results-${i}-`) && f.endsWith(".json"))) {
+    const suffix = f.slice(`results-${i}-`.length, -".json".length);
     const extra = load(f);
+    extra.results = extra.results.filter(r => flat(r.strategy) === suffix);
     const redone = new Set(extra.results.map(r => r.strategy));
     base.results = base.results.filter(r => !redone.has(r.strategy)).concat(extra.results);
   }
@@ -50,7 +55,7 @@ for (const r of runs[0].results) {
     spreadInit: spread("initMs")
   });
 }
-const S = ["A", "D", "E-lazy", "F", "F-csr", "B", "C"];
+const S = ["A", "D", "E-lazy", "F", "F-linked", "F-csr", "B", "C"];
 const MS = [...new Set(runs[0].results.map(r => r.m))];
 const n = runs[0].n;
 // Bindings: live = 2 per row (class, label) + detail + header count;
@@ -77,7 +82,7 @@ const PROFILES = [
   { name: "4G, 4x CPU", bw: 1_125_000, rtt: 85, t: 4 },
   { name: "cable, 1x CPU", bw: 6_250_000, rtt: 20, t: 1 }
 ];
-const lazy = new Set(["E-lazy", "F", "F-csr", "B", "C"]);
+const lazy = new Set(["E-lazy", "F", "F-linked", "F-csr", "B", "C"]);
 for (const p of PROFILES) {
   console.log(`\n#### Model: ${p.name} (${(p.bw * 8 / 1e6).toFixed(1)} Mbps, RTT ${p.rtt} ms)\n`);
   console.log("| footer m | Strategy | ready (JS eager) | first click | ready (JS deferred) | first click (JS deferred) |");

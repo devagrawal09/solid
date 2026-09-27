@@ -13,7 +13,9 @@
 //
 // 1. Gate (n = 50, m = 20): load, then a scripted session; after load and
 //    after every step the islands' normalized HTML must equal strategy A's.
-//    E-naive must FAIL (hydrate-before-write violated).
+//    E-naive must FAIL (hydrate-before-write violated). F-linked (stage 3)
+//    runs the analyzable twin app-islands.jsx with the linker's map and the
+//    shipped late-island hydration; its server markup is asserted equal.
 // 2. Timing (Chromium, fresh page per rep): bundle eval, init, first
 //    interaction, rest of the session — at CPU throttle 1x and 4x.
 // 3. Bytes: page HTML and JS bundle, raw / gzip / brotli.
@@ -26,14 +28,14 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { brotliCompressSync, constants, gzipSync } from "node:zlib";
 import { parseArgs, ROOT, RUNTIMES, snapshotRuntimes } from "../common.mjs";
-import { hydrationEntry, resumeEntry } from "./strategies.mjs";
+import { hydrationEntry, LINKED_DATA, linkedEntry, resumeEntry } from "./strategies.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const args = parseArgs(process.argv.slice(2));
 const N = Number(args.n ?? 1000);
 const MS = String(args.m ?? "0,1000,5000").split(",").map(Number);
 const REPS = Number(args.reps ?? 7);
-const STRATEGIES = ["A", "D", "E-lazy", "E-naive", "F", "F-csr", "B", "C", "C-broken"];
+const STRATEGIES = ["A", "D", "E-lazy", "E-naive", "F", "F-linked", "F-csr", "B", "C", "C-broken"];
 // Cost bounds: timed, not gated (they re-create DOM by design).
 const BOUNDS = new Set(["F-csr"]);
 const UNSAFE = new Set(["E-naive", "C-broken"]);
@@ -85,6 +87,61 @@ await build({
   }
 });
 const { ssr } = await import(pathToFileURL(join(dir, "ssr.bundle.mjs")).href + `?${Date.now()}`);
+
+// F-linked: the analyzable twin (app-islands.jsx). Its server markup must equal
+// app.jsx's (same components → same hydration keys); its map comes from the
+// island linker.
+const islandsSrc = readFileSync(join(here, "app-islands.jsx"), "utf8");
+const compileIslands = generate => transform(islandsSrc, { filename: "app-islands.jsx", generate, hydratable: true }).code;
+writeFileSync(
+  join(dir, "ssr-islands-entry.mjs"),
+  `${compileIslands("ssr")}
+import { renderToString, createComponent } from "@solidjs/web";
+const R = { table: Table, detail: Detail, header: Header, footer: Footer };
+export function render() {
+  const html = {};
+  for (const k of ["table", "detail", "header", "footer"])
+    html[k] = renderToString(() => createComponent(R[k], {}), { renderId: k });
+  return html;
+}
+`
+);
+await build({
+  entryPoints: [join(dir, "ssr-islands-entry.mjs")],
+  bundle: true,
+  platform: "node",
+  format: "esm",
+  outfile: join(dir, "ssr-islands.bundle.mjs"),
+  logLevel: "error",
+  alias: {
+    "solid-js": join(ROOT, "packages/solid/dist/server.js"),
+    "@solidjs/web": join(ROOT, "packages/web/dist/server.js"),
+    "@solidjs/signals": RUNTIMES.prod
+  }
+});
+let islandsImport = 0;
+async function assertIslandsMarkup(rendered) {
+  // A fresh module instance per data set (the twin reads its data at import).
+  globalThis.__islandData = rendered.data;
+  const { render } = await import(pathToFileURL(join(dir, "ssr-islands.bundle.mjs")).href + `?${++islandsImport}`);
+  const html = render();
+  for (const k of ["table", "detail", "header", "footer"])
+    if (html[k] !== rendered.html[k]) throw new Error(`F-linked: app-islands.jsx server markup differs from app.jsx for ${k}`);
+}
+const { summarizeIslands } = await import(pathToFileURL(join(ROOT, "packages/compiler/index.js")).href);
+const { linkIslands } = await import(pathToFileURL(join(ROOT, "packages/compiler/islands.js")).href);
+const linked = linkIslands({
+  modules: { "app-islands.jsx": summarizeIslands(islandsSrc, { filename: "app-islands.jsx" }) },
+  resolve: () => null,
+  islands: Object.fromEntries(
+    ["Table", "Detail", "Header", "Footer"].map(e => [e.toLowerCase(), { module: "app-islands.jsx", export: e }])
+  )
+});
+const LINKED_MAP = {
+  select: linked.exports["app-islands.jsx#select"].islands,
+  rename: linked.exports["app-islands.jsx#rename"].islands
+};
+console.log(`F-linked map (island linker): ${JSON.stringify(LINKED_MAP)}`);
 
 const json = v => JSON.stringify(v).replace(/</g, "\\u003c");
 const ISLANDS = ["table", "detail", "header", "footer"];
@@ -150,7 +207,11 @@ const clientApp = compile("dom");
 const bundles = {};
 for (const s of STRATEGIES) {
   const entry = join(dir, `${s}.entry.mjs`);
-  writeFileSync(entry, s === "B" || s.startsWith("C") ? resumeEntry() : hydrationEntry(clientApp, s));
+  if (s === "F-linked") {
+    writeFileSync(join(dir, "islands-app.mjs"), compileIslands("dom"));
+    writeFileSync(join(dir, "islands-data.mjs"), LINKED_DATA);
+    writeFileSync(entry, linkedEntry("./islands-app.mjs", "./islands-data.mjs", LINKED_MAP));
+  } else writeFileSync(entry, s === "B" || s.startsWith("C") ? resumeEntry() : hydrationEntry(clientApp, s));
   const outfile = join(dir, `${s}.bundle.js`);
   await build({
     entryPoints: [entry],
@@ -251,7 +312,8 @@ async function timeOnce(file, throttle) {
   await page.goto(pathToFileURL(file).href);
   const load = await page.evaluate(() => ({
     evalMs: performance.measure("e", "js0", "js1").duration,
-    initMs: window.__initMs
+    // F-linked creates its state at module evaluation (window.__modMs).
+    initMs: window.__initMs + (window.__modMs ?? 0)
   }));
   const steps = [];
   for (const s of SESSION) steps.push(await page.evaluate(step, s));
@@ -261,6 +323,7 @@ async function timeOnce(file, throttle) {
 
 // 1. Gate.
 const gateRendered = ssr(50, 20);
+await assertIslandsMarkup(gateRendered);
 const ref = await trace(writePage("gate-A", "A", gateRendered).file);
 let gateFailed = false;
 const gate = {};
@@ -311,6 +374,7 @@ for (const throttle of [1, 4])
 const results = [];
 for (const m of MS) {
   const rendered = ssr(N, m);
+  await assertIslandsMarkup(rendered);
   const pages = {};
   const ONLY = args.only ? args.only.split(",") : null;
   for (const s of STRATEGIES) if (!UNSAFE.has(s) && (!ONLY || ONLY.includes(s))) pages[s] = writePage(`m${m}-${s}`, s, rendered);

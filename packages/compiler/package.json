@@ -21,6 +21,10 @@
     "./capabilities": {
       "types": "./capabilities.d.ts",
       "default": "./capabilities.js"
+    },
+    "./islands": {
+      "types": "./islands.d.ts",
+      "default": "./islands.js"
     }
   },
   "files": [
@@ -28,7 +32,9 @@
     "types.d.ts",
     "README.md",
     "capabilities.js",
-    "capabilities.d.ts"
+    "capabilities.d.ts",
+    "islands.js",
+    "islands.d.ts"
   ],
   "scripts": {
     "build": "napi build --release --strip --manifest-path ./Cargo.toml",

@@ -160,3 +160,44 @@ function run(h, arg) {
 window.__init = () => __host(run);
 `;
 }
+
+// F-linked: F with nothing hand-written — the analyzable twin app
+// (app-islands.jsx, module-scope state), the handler → islands map derived
+// by the compiler (summarizeIslands + linkIslands, in bench.mjs), and the
+// shipped late-island hydration (no `_$HY.done` oracle).
+export function linkedEntry(appFile, dataFile, map) {
+  return `import ${JSON.stringify(dataFile)};
+import { select, rename, Table, Detail, Header, Footer } from ${JSON.stringify(appFile)};
+import { hydrate as __hydrate, createComponent as __cc } from "@solidjs/web";
+import { flush as __flush } from "solid-js";
+${HOST}
+const __REGIONS = { table: Table, detail: Detail, header: Header, footer: Footer };
+// Derived by the island linker from app-islands.jsx.
+const __MAP = ${JSON.stringify(map)};
+const __live = new Set();
+function __hy(name) {
+  if (__live.has(name)) return;
+  __live.add(name);
+  __hydrate(() => __cc(__REGIONS[name], {}), document.getElementById("r-" + name), { renderId: name });
+}
+globalThis._$HY = { events: [], completed: new WeakSet(), r: {}, fe() {} };
+// Module evaluation (data parse + state creation), counted into init by bench.mjs.
+window.__modMs = performance.now() - globalThis.__modT0;
+window.__init = () => {
+  __host((h, a) => {
+    for (const n of __MAP[h]) __hy(n);
+    __flush();
+    h === "select" ? select(a) : rename();
+    __flush();
+  });
+};
+`;
+}
+
+// The data module F-linked's app reads at import (the page's JSON blob).
+// It also opens the module-evaluation clock: the app creates its state at
+// import, on the real page (the blank-page eval probe cannot see that work).
+export const LINKED_DATA = `globalThis.__modT0 = performance.now();
+const el = typeof document !== "undefined" && document.getElementById("data");
+globalThis.__islandData = el ? JSON.parse(el.textContent) : { labels: [], footer: [] };
+`;

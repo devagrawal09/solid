@@ -70,6 +70,19 @@ function summarizeCapabilities(code, options) {
   return JSON.parse(native.summarizeCapabilities(code, nativeOptions));
 }
 
+/**
+ * Stage 3 (F): one module's island summary — cells, per-function reads /
+ * writes / calls, JSX handlers — for the island linker
+ * (`@solidjs/compiler/islands`).
+ */
+function summarizeIslands(code, options) {
+  if (typeof code !== "string") {
+    throw new TypeError("@solidjs/compiler summarizeIslands() expects source code as a string");
+  }
+  const nativeOptions = validateTypecheckProjectionOptions(options);
+  return JSON.parse(native.summarizeIslands(code, nativeOptions));
+}
+
 function projectTsrxForTypecheck(code, options) {
   if (typeof code !== "string") {
     throw new TypeError(
@@ -532,6 +545,7 @@ module.exports = {
   projectBlocksForTypecheck,
   analyzeStrictBlocks,
   summarizeCapabilities,
+  summarizeIslands,
   transformDirectives,
   transformDirectivesAsync,
   transformLazy,
