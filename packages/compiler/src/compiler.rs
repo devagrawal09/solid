@@ -323,12 +323,14 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
         )
         .map_err(CompileError::transform)?
         .map(|analysis| analysis.to_json());
-        let proofs = options
-            .block_proofs
-            .then(|| crate::generators::ProofConfig {
-                typed: source_type.is_typescript(),
-                jsx_plain: matches!(options.generate, Generate::Dom | Generate::Ssr),
-            });
+        // Block proofs on: every lowered block is proven and proven hosts
+        // are annotated. Off (the default): generator-blocks-v2 bodies still
+        // get their `BLOCK_SYNC` proof (see `ProofConfig::v2_only`).
+        let proofs = Some(crate::generators::ProofConfig {
+            typed: source_type.is_typescript(),
+            jsx_plain: matches!(options.generate, Generate::Dom | Generate::Ssr),
+            v2_only: !options.block_proofs,
+        });
         // Generator blocks v2: rewrite `$component` / `$memo` / `$effect` /
         // `$event` bodies (and generator `createMemo` / `createEffect`) into
         // `$` blocks the generator pass lowers.
@@ -364,8 +366,19 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
     // Experimental: fuse `$()` blocks with their statically known host
     // (`createMemo($(fn))` → `createMemo(fn)` with direct accessor calls).
     if options.host_fusion && options.generators {
-        crate::generators::fuse_host_blocks(&allocator, &mut program, source)
-            .map_err(CompileError::transform)?;
+        crate::generators::fuse_host_blocks(
+            &allocator,
+            &mut program,
+            source,
+            matches!(options.generate, Generate::Dom),
+        )
+        .map_err(CompileError::transform)?;
+    }
+
+    // Generator blocks v2: a component whose props are only read through
+    // lowered path reads skips the typed-props proxy (`PROPS_COMPILED`).
+    if options.generators {
+        crate::blocks_v2::mark_compiled_props(&allocator, &mut program);
     }
 
     // Experimental: single-reader memos inlined into their reader, on every

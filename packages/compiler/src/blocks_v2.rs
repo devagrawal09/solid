@@ -1082,6 +1082,204 @@ impl<'a> VisitMut<'a> for ReadReplacer<'a> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// PROPS_COMPILED: skip the typed-props proxy when every prop read was lowered
+// ---------------------------------------------------------------------------
+//
+// `$component(body)` hands the setup a typed-props proxy (`props.x` is a prop
+// read; forwarding it forwards the read) and registers it so the lowered path
+// readers can unwrap it. After lowering, a component whose props binding is
+// ONLY ever the root of a lowered path read — `_$readPathK(props, …)`, which
+// walks the raw props exactly as it walks the unwrapped proxy — never
+// observes the proxy, so `$component(body, PROPS_COMPILED)` passes the raw
+// props: no Proxy, no WeakMap registration per instance, and no proxy
+// unwrap on every path read in the app. Any other use of the binding
+// (forwarding `props.x`, spreading, a read the pass left to the runtime
+// driver, a destructured parameter) keeps the proxy.
+
+/// `$component(body, flags)`: the component's props reads are all lowered.
+const PROPS_COMPILED: f64 = 1.0;
+const PATH_READER_NAMES: &[&str] = &[
+    "readPath1",
+    "readPath2",
+    "readPath3",
+    "readPath4",
+    "readPathN",
+];
+
+/// Flag every `$component(_$$(function (props) { … }))` whose lowered body
+/// uses `props` only as the root of lowered path reads. Runs after the
+/// generator pass (and host fusion), before JSX lowering.
+pub(crate) fn mark_compiled_props<'a>(allocator: &'a Allocator, program: &mut Program<'a>) {
+    let mut components = Vec::new();
+    let mut adapters = Vec::new();
+    let mut readers = Vec::new();
+    let mut any = false;
+    for statement in &program.body {
+        let Statement::ImportDeclaration(import) = statement else {
+            continue;
+        };
+        if !RUNTIME_SOURCES.contains(&import.source.value.as_str())
+            || import.import_kind == ImportOrExportKind::Type
+        {
+            continue;
+        }
+        for specifier in import.specifiers.iter().flatten() {
+            if let ImportDeclarationSpecifier::ImportSpecifier(specifier) = specifier
+                && specifier.import_kind != ImportOrExportKind::Type
+            {
+                let name = specifier.imported.name();
+                if name == "$component" {
+                    any = true;
+                }
+            }
+        }
+    }
+    if !any {
+        return;
+    }
+    let spans = {
+        let semantic = SemanticBuilder::new()
+            .with_build_nodes(true)
+            .build(program)
+            .semantic;
+        let scoping = semantic.scoping();
+        let nodes = semantic.nodes();
+        for statement in &program.body {
+            let Statement::ImportDeclaration(import) = statement else {
+                continue;
+            };
+            if !RUNTIME_SOURCES.contains(&import.source.value.as_str())
+                || import.import_kind == ImportOrExportKind::Type
+            {
+                continue;
+            }
+            for specifier in import.specifiers.iter().flatten() {
+                let ImportDeclarationSpecifier::ImportSpecifier(specifier) = specifier else {
+                    continue;
+                };
+                let Some(symbol) = specifier.local.symbol_id.get() else {
+                    continue;
+                };
+                let name = specifier.imported.name();
+                let name = name.as_str();
+                if name == "$component" {
+                    components.push(symbol);
+                } else if name == "$" {
+                    adapters.push(symbol);
+                } else if PATH_READER_NAMES.contains(&name) {
+                    readers.push(symbol);
+                }
+            }
+        }
+        struct Finder<'s> {
+            scoping: &'s Scoping,
+            nodes: &'s oxc_semantic::AstNodes<'s>,
+            components: &'s [SymbolId],
+            adapters: &'s [SymbolId],
+            readers: &'s [SymbolId],
+            spans: Vec<Span>,
+        }
+        impl Finder<'_> {
+            fn callee(&self, call: &CallExpression<'_>) -> Option<SymbolId> {
+                let Expression::Identifier(callee) = &call.callee else {
+                    return None;
+                };
+                resolve(self.scoping, callee)
+            }
+            /// Every value reference of `props` is argument 0 of a path reader.
+            fn only_path_roots(&self, props: SymbolId) -> bool {
+                self.scoping
+                    .get_resolved_references(props)
+                    .all(|reference| {
+                        let node = reference.node_id();
+                        let span = self.nodes.get_node(node).kind().span();
+                        let parent = self.nodes.parent_id(node);
+                        if parent == node {
+                            return false;
+                        }
+                        match self.nodes.get_node(parent).kind() {
+                            oxc_ast::AstKind::CallExpression(call) => {
+                                call.arguments.first().is_some_and(|a| a.span() == span)
+                                    && self
+                                        .callee(call)
+                                        .is_some_and(|symbol| self.readers.contains(&symbol))
+                            }
+                            _ => false,
+                        }
+                    })
+            }
+        }
+        impl<'b> Visit<'b> for Finder<'_> {
+            fn visit_call_expression(&mut self, call: &CallExpression<'b>) {
+                if call.arguments.len() == 1
+                    && self
+                        .callee(call)
+                        .is_some_and(|symbol| self.components.contains(&symbol))
+                    && let Some(Argument::CallExpression(block)) = call.arguments.first()
+                    && self
+                        .callee(block)
+                        .is_some_and(|symbol| self.adapters.contains(&symbol))
+                    && let Some(Argument::FunctionExpression(setup)) = block.arguments.first()
+                    // Lowered: a setup the runtime driver still runs reads
+                    // props through the proxy.
+                    && !setup.generator
+                {
+                    let params = &setup.params;
+                    let eligible = params.rest.is_none()
+                        && match params.items.first() {
+                            None => true,
+                            Some(param) => match &param.pattern {
+                                BindingPattern::BindingIdentifier(id) => id
+                                    .symbol_id
+                                    .get()
+                                    .is_some_and(|symbol| self.only_path_roots(symbol)),
+                                _ => false,
+                            },
+                        };
+                    if eligible {
+                        self.spans.push(call.span);
+                    }
+                }
+                walk::walk_call_expression(self, call);
+            }
+        }
+        let mut finder = Finder {
+            scoping,
+            nodes,
+            components: &components,
+            adapters: &adapters,
+            readers: &readers,
+            spans: Vec::new(),
+        };
+        finder.visit_program(program);
+        finder.spans
+    };
+    if spans.is_empty() {
+        return;
+    }
+    struct Flagger<'a> {
+        allocator: &'a Allocator,
+        spans: Vec<Span>,
+    }
+    impl<'a> VisitMut<'a> for Flagger<'a> {
+        fn visit_call_expression(&mut self, call: &mut CallExpression<'a>) {
+            walk_mut::walk_call_expression(self, call);
+            if self.spans.contains(&call.span) {
+                let ast = AstBuilder::new(self.allocator);
+                let flag = ast.expression_numeric_literal(
+                    Span::new(0, 0),
+                    PROPS_COMPILED,
+                    None,
+                    oxc_syntax::number::NumberBase::Decimal,
+                );
+                call.arguments.push(expression_to_argument(flag));
+            }
+        }
+    }
+    Flagger { allocator, spans }.visit_program(program);
+}
+
 fn add_imports<'a>(
     allocator: &'a Allocator,
     program: &mut Program<'a>,
@@ -1363,5 +1561,98 @@ export const C = $component(function* () {
             flush_in_settled.contains("[OP_NOT_ALLOWED] `flush`"),
             "{flush_in_settled}"
         );
+    }
+
+    fn dom(source: &str) -> Result<String, String> {
+        compile_as(source, Generate::Dom)
+    }
+
+    #[test]
+    fn lowered_v2_bodies_carry_the_sync_proof_by_default() {
+        let out = dom(r#"import { $component, $signal, $memo } from "solid-js";
+export const Counter = $component(function* () {
+  const [count] = yield* $signal(0);
+  const doubled = yield* $memo(function* () { return (yield* count) * 2; });
+  return function* () { return <p>{yield* doubled}</p>; };
+});
+"#)
+        .unwrap();
+        // The memo and the view (JSX) are proven BLOCK_SYNC: `$(fn, 1)`.
+        assert!(
+            out.contains(
+                "return _$perform(count) * 2;
+	}, 1)"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "return _$el$;
+	}, 1);"
+            ) || out.contains(
+                "}, 1);
+}"
+            ),
+            "{out}"
+        );
+        // Only the flag: no host options without `blockProofs`.
+        assert!(
+            !out.contains("syncOnly") && !out.contains("statusFree"),
+            "{out}"
+        );
+
+        // A plain (non-v2) `$` block keeps the unannotated form by default.
+        let plain = dom(r#"import { $, createMemo, createSignal } from "solid-js";
+const [count] = createSignal(1);
+const doubled = createMemo($(function* () { return (yield* count) * 2; }));
+"#)
+        .unwrap();
+        assert!(
+            plain.contains(
+                "* 2;
+}));"
+            ),
+            "{plain}"
+        );
+    }
+
+    #[test]
+    fn props_compiled_when_every_prop_read_is_lowered() {
+        let out = dom(r#"import { $component } from "solid-js";
+export const Row = $component(function* (props) {
+  return function* () { return <li>{yield* props.item.label}{yield* props.id}</li>; };
+});
+export const Empty = $component(function* () {
+  return function* () { return <hr />; };
+});
+"#)
+        .unwrap();
+        assert_eq!(out.matches("}), 1);").count(), 2, "{out}");
+
+        // Forwarding `props.id` forwards the read: the proxy stays.
+        let forwarded = dom(r#"import { $component } from "solid-js";
+const Child = $component(function* (props) {
+  return function* () { return <i>{yield* props.id}</i>; };
+});
+export const Parent = $component(function* (props) {
+  return function* () { return <div>{Child({ id: props.id })}</div>; };
+});
+"#)
+        .unwrap();
+        assert_eq!(forwarded.matches("}), 1);").count(), 1, "{forwarded}");
+        assert!(
+            forwarded.contains("const Child = $component(_$$(function(props)"),
+            "{forwarded}"
+        );
+
+        // A setup left to the runtime driver reads props through the proxy.
+        let driven = dom(r#"import { $component, $memo, attempt } from "solid-js";
+export const Async = $component(function* (props) {
+  const m = yield* $memo(function* () { const id = yield* props.id; return yield* attempt(() => load(id)); });
+  return function* () { return <i>{yield* m}</i>; };
+});
+"#)
+        .unwrap();
+        assert!(!driven.contains("}), 1);"), "{driven}");
     }
 }

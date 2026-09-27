@@ -510,8 +510,13 @@ interface TokenTarget {
   parent: TokenTarget | null;
   used: boolean;
 }
-/** Tokens created during the current synchronous block run (unread = error). */
-let liveTokens: TokenTarget[] | null = null;
+/**
+ * Tokens created during the running block runs (unread = error), innermost
+ * run last: a run records where its tokens start (`tokenBase`, -1 outside
+ * any run), checks from there and truncates back — no per-run allocation.
+ */
+const liveTokens: TokenTarget[] = [];
+let tokenBase = -1;
 /**
  * Every token proxy → its target. Answers "is this a token" without touching
  * the value: probing a store proxy for the brand was a full `get` trap (plus
@@ -521,6 +526,17 @@ let liveTokens: TokenTarget[] | null = null;
  */
 const tokenTargets = new WeakMap<object, TokenTarget>();
 let tokensCreated = false;
+
+/**
+ * @internal What a store proxy's `get` trap calls while the strict guard is
+ * raised. Installed by the first `$` block (the guard is only ever raised by
+ * a block run), so a bundle that never builds a block — a plain store app —
+ * does not retain the token machinery and, through it, `perform`.
+ */
+export let makePathToken: (root: object, key: PathKey) => object = noBlockRuntime;
+function noBlockRuntime(): never {
+  throw new Error("[NO_BLOCK_RUNTIME] the strict guard is raised but no `$` block was built");
+}
 
 /**
  * Called by a store proxy's `get` trap while the strict guard is raised: the
@@ -533,7 +549,7 @@ export function pathToken(root: object, key: PathKey, parent: TokenTarget | null
     parent,
     used: false
   };
-  if (liveTokens !== null) liveTokens.push(target);
+  if (tokenBase !== -1) liveTokens.push(target);
   const token = new Proxy(target, tokenTraps);
   tokenTargets.set(token, target);
   tokensCreated = true;
@@ -557,7 +573,9 @@ function describePath(target: TokenTarget): string {
 
 function tokenMisuse(target: TokenTarget, how: string): Error {
   return new Error(
-    `[DIRECT_READ_IN_BLOCK] \`<root>${describePath(target)}\` was used ${how} inside a \`$\` block; read it with \`yield* <root>${describePath(target)}\``
+    __DEV__
+      ? `[DIRECT_READ_IN_BLOCK] \`<root>${describePath(target)}\` was used ${how} inside a \`$\` block; read it with \`yield* <root>${describePath(target)}\``
+      : "[DIRECT_READ_IN_BLOCK]"
   );
 }
 
@@ -599,13 +617,15 @@ const tokenTraps: ProxyHandler<TokenTarget> = {
 };
 
 /** Every token created by the run must have been read with `yield*`. */
-function checkTokens(tokens: TokenTarget[]): void {
+function checkTokens(from: number): void {
   // Latest first: the deepest unread path names the whole access.
-  for (let i = tokens.length - 1; i >= 0; i--) {
-    const target = tokens[i];
+  for (let i = liveTokens.length - 1; i >= from; i--) {
+    const target = liveTokens[i];
     if (!target.used) {
       throw new Error(
-        `[UNREAD_PATH] \`<root>${describePath(target)}\` was accessed inside a \`$\` block but never read with \`yield*\`; write \`yield* <root>${describePath(target)}\` (a bare access is a deferred token, not a value)`
+        __DEV__
+          ? `[UNREAD_PATH] \`<root>${describePath(target)}\` was accessed inside a \`$\` block but never read with \`yield*\`; write \`yield* <root>${describePath(target)}\` (a bare access is a deferred token, not a value)`
+          : "[UNREAD_PATH]"
       );
     }
   }
@@ -1227,21 +1247,36 @@ export function runBlockAs<B extends AnyBlock>(host: Host, block: B, input: unkn
  * effect run), or — for the effect half of a split effect, which has no owner
  * of its own — the list the half returns as its cleanup.
  */
-let cleanupSink: (() => void)[] | null = null;
+// `undefined`: not collecting (register on the owner); `null`: an effect
+// half is collecting and has none yet; else the collected list. Lazy, so a
+// half that registers nothing allocates nothing.
+let cleanupSink: (() => void)[] | null | undefined = undefined;
 function registerCleanup(fn: () => void): void {
-  if (cleanupSink) cleanupSink.push(fn);
-  else cleanup(fn);
+  if (cleanupSink === undefined) cleanup(fn);
+  else if (cleanupSink === null) cleanupSink = [fn];
+  else cleanupSink.push(fn);
 }
-/** @internal Run `fn`, collecting the `$cleanup`s it registers. */
-export function collectCleanups(fn: () => void): (() => void)[] {
+/**
+ * @internal Run the effect half of a split effect block: the body under the
+ * effect host with the compute values as its input. Its `$cleanup`s become
+ * the returned cleanup (the function itself when there is one).
+ */
+export function runEffectHalf(block: AnyBlock, values: unknown): (() => void) | undefined {
   const prev = cleanupSink;
-  const sink: (() => void)[] = (cleanupSink = []);
+  cleanupSink = null;
+  let sink: (() => void)[] | null | undefined;
   try {
-    fn();
+    runBlockAs(EFFECT, block, values);
   } finally {
+    sink = cleanupSink as (() => void)[] | null | undefined;
     cleanupSink = prev;
   }
-  return sink;
+  if (!sink) return undefined;
+  if (sink.length === 1) return sink[0];
+  const fns = sink;
+  return () => {
+    for (const fn of fns) fn();
+  };
 }
 
 let generatorHookInstalled = false;
@@ -1276,16 +1311,7 @@ function generatorBody(fn: unknown, asEffect?: boolean | "settled"): unknown {
  * under the effect host and hands back its `$cleanup`s as the cleanup.
  */
 export function settledCallback(block: AnyBlock): () => void | (() => void) {
-  return () => {
-    const cleanups = collectCleanups(() => {
-      runBlockAs(EFFECT, block, undefined);
-    });
-    return cleanups.length
-      ? () => {
-          for (const fn of cleanups) fn();
-        }
-      : undefined;
-  };
+  return () => runEffectHalf(block, undefined);
 }
 
 /**
@@ -1319,8 +1345,12 @@ export function dispatchBlock<B extends AnyBlock>(
   try {
     // Event-time code runs with no owner context, exactly like an ordinary
     // handler (an owner context would make every write an owned-scope
-    // violation); the captured owner is for error routing.
-    result = runWithOwner(null, () => runBlockAs(EVENT, block, event));
+    // violation); the captured owner is for error routing. (Called from a
+    // handler, the owner is almost always already null: skip the bracket.)
+    result =
+      getOwner() === null
+        ? runBlockAs(EVENT, block, event)
+        : runWithOwner(null, () => runBlockAs(EVENT, block, event));
   } catch (error) {
     if (!reportBlockError(owner, error)) throw error;
     return;
@@ -1422,12 +1452,17 @@ export function $(
     // reaching the runtime was not compiled: it must never run under the
     // generator driver or as a plain block, so fail loudly.
     throw new TypeError(
-      "[STRICT_NOT_COMPILED] `$` received a plain (arrow or async) callback at runtime. A non-generator callback is a strict compilation marker: @solidjs/compiler analyzes it for its host and erases the marker. Compile the module with the Solid compiler (`generators` on), or write a generator block (`$(function* () { … })`)"
+      __DEV__
+        ? "[STRICT_NOT_COMPILED] `$` received a plain (arrow or async) callback at runtime. A non-generator callback is a strict compilation marker: @solidjs/compiler analyzes it for its host and erases the marker. Compile the module with the Solid compiler (`generators` on), or write a generator block (`$(function* () { … })`)"
+        : "[STRICT_NOT_COMPILED]"
     );
   }
   if (!generatorHookInstalled) {
     generatorHookInstalled = true;
     installGeneratorHook(generatorBody);
+    // The strict guard is only ever raised by a block run, so the store's
+    // path tokens are only reachable once a block exists.
+    makePathToken = pathToken;
   }
   // BLOCK_SYNC: the compiler lowered the body to call form and proved its
   // result is a plain value (never a generator, thenable or async iterable),
@@ -1435,32 +1470,42 @@ export function $(
   // result's prototype chain on every run — are skipped. Dev builds keep
   // the probes as a verification of the claim.
   const sync = (flags & BLOCK_SYNC) !== 0;
+  // An uncompiled body (a `function*`): every call returns a fresh native
+  // generator object, so the result needs no shape probe — it is driven.
+  const driven = !sync && isGeneratorFunction(body);
   // Zero-arity on purpose: renderers and `flatten` unwrap a function child
   // only when `fn.length === 0` (an accessor), so a block returned from a
   // component must look like one. The input still arrives as the first
   // argument (`prev`, or the event).
-  const block = function (...args: unknown[]) {
+  const block = function () {
     const host = pendingHost === -1 ? REACTIVE : pendingHost;
     pendingHost = -1;
     const prevHost = currentHost;
     currentHost = host;
     const prevGuard = setBlockGuard(true);
-    const prevTokens = liveTokens;
-    const tokens: TokenTarget[] = (liveTokens = []);
+    const prevBase = tokenBase;
+    const base = (tokenBase = liveTokens.length);
     try {
-      const result = body(args[0]);
+      // `arguments[0]`, not a rest parameter: no array per run.
+      const result = body(arguments[0]);
       let value: unknown;
       if (sync) {
         if (__DEV__) verifySyncBlockResult(result);
         value = result;
+      } else if (driven) {
+        value = drive(result as Generator<Op>, host);
+      } else if (result !== null && typeof result === "object") {
+        const shape = objectShape(result);
+        if (shape === ASYNC_ITERATOR) throw asyncGeneratorError();
+        value = shape === SYNC_ITERATOR ? drive(result as Generator<Op>, host) : result;
       } else {
-        if (isAsyncIterator(result)) throw asyncGeneratorError();
-        value = isSyncIterator(result) ? drive(result, host) : result;
+        value = result;
       }
-      checkTokens(tokens);
+      if (liveTokens.length !== base) checkTokens(base);
       return value;
     } finally {
-      liveTokens = prevTokens;
+      if (liveTokens.length !== base) liveTokens.length = base;
+      tokenBase = prevBase;
       setBlockGuard(prevGuard);
       currentHost = prevHost;
     }
@@ -1469,10 +1514,13 @@ export function $(
   (block as any)[BODY] = body;
   (block as any)[FLAGS] = flags;
   (block as any)[OWNER] = getOwner();
-  (block as any)[Symbol.iterator] = function* () {
-    return yield* blockGenerator(block, undefined);
-  };
+  (block as any)[Symbol.iterator] = blockIterator;
   return block;
+}
+
+/** `yield* block`: delegation (shared by every block; `this` is the block). */
+function* blockIterator(this: AnyBlock): Generator<Op, unknown, any> {
+  return yield* blockGenerator(this, undefined);
 }
 
 /**
@@ -1535,6 +1583,19 @@ function* blockGenerator(block: AnyBlock, input: unknown): Generator<Op, unknown
 }
 
 /**
+ * @internal What a v2 setter (`$signal` / `$store`) returns: `yield* receipt`
+ * evaluates to the written value. One shared prototype iterator — the
+ * receipt is created on every write, so it must not carry a closure — and
+ * `perform` reads `value` directly (compiled `yield* set(v)`).
+ */
+export class Receipt<T = unknown> {
+  constructor(readonly value: T) {}
+  *[Symbol.iterator](): Generator<never, T, unknown> {
+    return this.value;
+  }
+}
+
+/**
  * Execute one yielded operation in call form under the current host. This
  * is what the compiler emits for `yield* x` inside a lowered block; the
  * runtime driver executes the same operations the same way, so the two
@@ -1555,24 +1616,40 @@ export function perform<S extends AnySetter>(target: WriteOp<S>): ReturnType<S>;
 export function perform(target: RaiseOp<any> | AsyncOp<any, any>): never;
 export function perform(target: unknown): unknown {
   if (typeof target === "function") {
-    // A child view (a view block or a deferred call) is a value.
-    if ((target as any)[VIEW]) return target;
-    if ((target as any)[BLOCK]) {
-      // A child view is a value (`yield* Child(p)` evaluates to its view).
-      if ((target as any)[VIEW]) return target;
-      return delegateSync(target as AnyBlock, undefined);
+    // Fast path: a signal / memo accessor (every accessor carries the shared
+    // `accessorIterator`; blocks, views and context providers never do).
+    // With the guard already down (a JSX hole, a fused compute) the read is
+    // the call itself.
+    if ((target as any)[Symbol.iterator] === accessorIterator) {
+      return blockGuard ? readGuarded(target as () => unknown) : (target as () => unknown)();
     }
+    // A child view (a view block or a deferred call, `yield* Child(p)`) is a value.
+    if ((target as any)[VIEW]) return target;
+    if ((target as any)[BLOCK]) return delegateSync(target as AnyBlock, undefined);
     // A context provider (`yield* Ctx`) is stepped; an accessor is read.
     if (ownIterator(target)) return stepSync(target as any);
     return readGuarded(target as () => unknown);
   }
+  return performValue(target);
+}
+
+/**
+ * `perform` of a non-function operand. Kept out of `perform` itself: the
+ * closures below capture the operand, and a function whose parameter a
+ * closure captures allocates that closure context on EVERY call — the
+ * accessor fast path above must not pay for it.
+ */
+function performValue(target: unknown): unknown {
   // A lowered bare identifier that holds a path token (`const u = store.user;
-  // yield* u`): perform the path read.
+  // yield* u`): perform the path read. (Before any other probe: a token is a
+  // proxy whose traps refuse everything but `yield*`.)
   const token = tokenOf(target);
   if (token) {
     consume(token);
     return readGuarded(() => readThrough(walk(token.root, token.path)));
   }
+  // A v2 setter's receipt (`yield* set(v)`): the written value.
+  if (target instanceof Receipt) return target.value;
   if (isOp(target)) {
     checkHost(currentHost, target[OP]);
     switch (target[OP]) {
@@ -1582,7 +1659,9 @@ export function perform(target: unknown): unknown {
         const value = readGuarded(target.run);
         if (isThenableValue(value)) {
           throw new TypeError(
-            "[ASYNC_OP_OUTSIDE_DRIVER] An async `attempt` can only be performed by the generator driver. Keep `yield* attempt(...)` inline in the block so the compiler leaves it to the runtime"
+            __DEV__
+              ? "[ASYNC_OP_OUTSIDE_DRIVER] An async `attempt` can only be performed by the generator driver. Keep `yield* attempt(...)` inline in the block so the compiler leaves it to the runtime"
+              : "[ASYNC_OP_OUTSIDE_DRIVER]"
           );
         }
         return value;
@@ -1603,7 +1682,9 @@ export function perform(target: unknown): unknown {
         throw target.error;
       case "wait":
         throw new TypeError(
-          "[ASYNC_OP_OUTSIDE_DRIVER] A suspension can only be performed by the generator driver. Keep `yield* attempt(...)` inline in the block so the compiler leaves it to the runtime"
+          __DEV__
+            ? "[ASYNC_OP_OUTSIDE_DRIVER] A suspension can only be performed by the generator driver. Keep `yield* attempt(...)` inline in the block so the compiler leaves it to the runtime"
+            : "[ASYNC_OP_OUTSIDE_DRIVER]"
         );
     }
   }
@@ -1647,7 +1728,9 @@ function delegateSync(block: AnyBlock, input: unknown): unknown {
 
 function asyncBlockError(): TypeError {
   return new TypeError(
-    "[ASYNC_BLOCK_OUTSIDE_DRIVER] A block that waits can only be delegated to from a generator block (`yield* block`); it cannot be lowered to call form"
+    __DEV__
+      ? "[ASYNC_BLOCK_OUTSIDE_DRIVER] A block that waits can only be delegated to from a generator block (`yield* block`); it cannot be lowered to call form"
+      : "[ASYNC_BLOCK_OUTSIDE_DRIVER]"
   );
 }
 
@@ -1676,16 +1759,22 @@ function checkHost(host: Host, kind: Op[typeof OP]): void {
   if (ALLOWED[kind] & bit(host)) return;
   if (host === JSX) {
     throw new Error(
-      `[OP_NOT_ALLOWED_IN_JSX] A block rendered as JSX may only read signals; \`${kind}\` belongs in a reactive computation or an event block (host: ${HOST_NAMES[host]})`
+      __DEV__
+        ? `[OP_NOT_ALLOWED_IN_JSX] A block rendered as JSX may only read signals; \`${kind}\` belongs in a reactive computation or an event block (host: ${HOST_NAMES[host]})`
+        : "[OP_NOT_ALLOWED_IN_JSX] " + kind
     );
   }
   if (host === REACTIVE && kind === "write") {
     throw new Error(
-      "[WRITE_IN_REACTIVE_BLOCK] A reactive computation may not write; move the write into an event block or the effect phase (host: reactive)"
+      __DEV__
+        ? "[WRITE_IN_REACTIVE_BLOCK] A reactive computation may not write; move the write into an event block or the effect phase (host: reactive)"
+        : "[WRITE_IN_REACTIVE_BLOCK]"
     );
   }
   throw new Error(
-    `[OP_NOT_ALLOWED] \`${kind}\` is not allowed in a ${HOST_NAMES[host]} block. ${HOST_RULES[host]}`
+    __DEV__
+      ? `[OP_NOT_ALLOWED] \`${kind}\` is not allowed in a ${HOST_NAMES[host]} block. ${HOST_RULES[host]}`
+      : "[OP_NOT_ALLOWED] " + kind
   );
 }
 
@@ -1709,10 +1798,20 @@ interface RunState {
 
 function drive<R>(iterator: Generator<Op, R, any>, host: Host): R | Promise<R> {
   const state: RunState = { host, stale: false, waited: false };
-  // A superseding run (recompute) or disposal marks this run stale; its
-  // pending continuation then closes the generator instead of resuming.
-  if (getOwner()) cleanup(() => (state.stale = true));
   return step(iterator, iterator.next(), state);
+}
+
+/**
+ * The run's first suspension (always inside the synchronous `drive` call,
+ * under the run's owner): from now on a superseding run (recompute) or
+ * disposal marks this run stale, and its pending continuation closes the
+ * generator instead of resuming. Registered here rather than per run — a
+ * run that never suspends (every run of a sync body) needs no cleanup.
+ */
+function suspend(state: RunState): void {
+  if (state.waited) return;
+  state.waited = true;
+  if (getOwner()) cleanup(() => (state.stale = true));
 }
 
 function step<R>(
@@ -1727,7 +1826,9 @@ function step<R>(
     if (op[OP] === "call") throw invalidYield(op);
     if (!op.delegated) {
       throw new TypeError(
-        "[PLAIN_YIELD_IN_BLOCK] Operations must be yielded with `yield*` (e.g. `yield* attempt(() => p)`), not `yield`"
+        __DEV__
+          ? "[PLAIN_YIELD_IN_BLOCK] Operations must be yielded with `yield*` (e.g. `yield* attempt(() => p)`), not `yield`"
+          : "[PLAIN_YIELD_IN_BLOCK]"
       );
     }
     op.delegated = false;
@@ -1738,7 +1839,9 @@ function step<R>(
         // reads the current value), an error in a computation.
         if (state.waited && state.host === REACTIVE) {
           throw new Error(
-            "[READ_AFTER_WAIT] A signal was read after the block's first suspension (an async `yield* attempt(...)`). Reads after a suspension are not tracked; read every signal before the first suspension"
+            __DEV__
+              ? "[READ_AFTER_WAIT] A signal was read after the block's first suspension (an async `yield* attempt(...)`). Reads after a suspension are not tracked; read every signal before the first suspension"
+              : "[READ_AFTER_WAIT]"
           );
         }
         result = state.waited
@@ -1758,10 +1861,12 @@ function step<R>(
         if (isThenableValue(value)) {
           if (state.host === EFFECT) {
             throw new Error(
-              "[ASYNC_IN_EFFECT] An effect block cannot suspend; `attempt` returned a promise. Start async work from an event block, or read an async memo"
+              __DEV__
+                ? "[ASYNC_IN_EFFECT] An effect block cannot suspend; `attempt` returned a promise. Start async work from an event block, or read an async memo"
+                : "[ASYNC_IN_EFFECT]"
             );
           }
-          state.waited = true;
+          suspend(state);
           return Promise.resolve(value as PromiseLike<unknown>).then(
             v => resume(iterator, state, () => iterator.next(v)),
             error => resume(iterator, state, () => iterator.throw(error))
@@ -1793,7 +1898,7 @@ function step<R>(
         result = iterator.throw(op.error);
         continue;
       case "wait":
-        state.waited = true;
+        suspend(state);
         return Promise.resolve(op.promise).then(
           value => resume(iterator, state, () => iterator.next(value)),
           error => resume(iterator, state, () => iterator.throw(error))
@@ -1827,19 +1932,24 @@ function resume<R>(
     // the superseded promise reject — the owner already moved on and
     // ignores superseded flights.
     iterator.return(undefined as R);
-    throw new Error("[BLOCK_SUPERSEDED] This block run was superseded before its wait settled");
+    throw new Error(
+      __DEV__
+        ? "[BLOCK_SUPERSEDED] This block run was superseded before its wait settled"
+        : "[BLOCK_SUPERSEDED]"
+    );
   }
   const prevHost = currentHost;
   currentHost = state.host;
   const prevGuard = setBlockGuard(true);
-  const prevTokens = liveTokens;
-  const tokens: TokenTarget[] = (liveTokens = []);
+  const prevBase = tokenBase;
+  const base = (tokenBase = liveTokens.length);
   try {
     const value = step(iterator, advance(), state);
-    checkTokens(tokens);
+    if (liveTokens.length !== base) checkTokens(base);
     return value;
   } finally {
-    liveTokens = prevTokens;
+    if (liveTokens.length !== base) liveTokens.length = base;
+    tokenBase = prevBase;
     setBlockGuard(prevGuard);
     currentHost = prevHost;
   }
@@ -1895,10 +2005,17 @@ export function lazyView<T>(make: () => T): () => T {
       return value;
     });
   (thunk as any)[VIEW] = true;
-  (thunk as any)[Symbol.iterator] = function* () {
-    return thunk;
-  };
+  (thunk as any)[Symbol.iterator] = viewIterator;
   return thunk;
+}
+
+/**
+ * @internal `yield*` on a view (a view block or a deferred call) evaluates to
+ * the view itself. Shared: `this` is the view.
+ */
+// eslint-disable-next-line require-yield
+export function* viewIterator(this: unknown): Generator<never, unknown, unknown> {
+  return this;
 }
 
 function readGuarded<T>(run: () => T): T {
@@ -1921,6 +2038,27 @@ function isOp(value: unknown): value is Op {
 // not a dependency of the block.
 function probe<T>(run: () => T): T {
   return readGuarded(() => untrack(run));
+}
+
+const PLAIN = 0;
+const SYNC_ITERATOR = 1;
+const ASYNC_ITERATOR = 2;
+/**
+ * An object block result's shape, in one probe (untracked, guard lowered): an async
+ * iterator, a sync iterator (a generator body to drive), or a plain value.
+ * The same tests in the same order as `isAsyncIterator` then `isSyncIterator`.
+ */
+function objectShape(value: object): number {
+  // Callers test `typeof value === "object"` first: this function allocates
+  // the probe's closure context, which must never happen for a plain result.
+  return probe(() =>
+    Symbol.asyncIterator in value
+      ? ASYNC_ITERATOR
+      : typeof (value as Partial<Generator>).next === "function" &&
+          typeof (value as any)[Symbol.iterator] === "function"
+        ? SYNC_ITERATOR
+        : PLAIN
+  );
 }
 
 function isSyncIterator(value: unknown): value is Generator<Op, unknown, any> {
@@ -1966,21 +2104,27 @@ function verifySyncBlockResult(result: unknown): void {
 
 function asyncGeneratorError(): TypeError {
   return new TypeError(
-    "[ASYNC_GENERATOR] `$` does not accept async generators (`await` is not allowed in a block); suspend with `yield* attempt(() => promise)` instead"
+    __DEV__
+      ? "[ASYNC_GENERATOR] `$` does not accept async generators (`await` is not allowed in a block); suspend with `yield* attempt(() => promise)` instead"
+      : "[ASYNC_GENERATOR]"
   );
 }
 
 function invalidYield(value: unknown): TypeError {
   if (typeof value === "function") {
     return new TypeError(
-      "[PLAIN_YIELD_IN_BLOCK] Signals and blocks must be delegated to with `yield*`, not `yield`"
+      __DEV__
+        ? "[PLAIN_YIELD_IN_BLOCK] Signals and blocks must be delegated to with `yield*`, not `yield`"
+        : "[PLAIN_YIELD_IN_BLOCK]"
     );
   }
   if (value !== null && typeof value === "object" && Symbol.asyncIterator in value) {
     return asyncGeneratorError();
   }
   return new TypeError(
-    `[INVALID_YIELD] blocks may only yield operations (\`yield* signal\`, \`yield* store.path\`, \`yield* set(value)\`, \`yield* raise(...)\`, \`yield* attempt(...)\`, \`yield* Child(props)\`, \`yield* Ctx\`, \`yield* block\`); received ${describe(value)}`
+    __DEV__
+      ? `[INVALID_YIELD] blocks may only yield operations (\`yield* signal\`, \`yield* store.path\`, \`yield* set(value)\`, \`yield* raise(...)\`, \`yield* attempt(...)\`, \`yield* Child(props)\`, \`yield* Ctx\`, \`yield* block\`); received ${describe(value)}`
+      : "[INVALID_YIELD]"
   );
 }
 

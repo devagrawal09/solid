@@ -27,11 +27,13 @@ import {
   inBlock,
   lazyView,
   registerTypedProps,
-  collectCleanups,
+  runEffectHalf,
   isBlock,
   dispatchBlock,
   readProp,
   runBlockAs,
+  Receipt,
+  viewIterator,
   type AsyncOp,
   type BlockAsync,
   type BlockErrors,
@@ -217,21 +219,18 @@ export interface EventHandler<E = unknown, Y = unknown> {
  * (hydration-aware on the client, the server implementations on the server)
  * so a `$memo` in a `solid-js` app is a `solid-js` memo.
  */
-const primitives = {
-  createSignal,
-  createMemo,
-  createStore,
-  createTrackedEffect,
-  createEffect,
-  onSettled
-} as {
-  createSignal: (value: any, options?: any) => any;
-  createMemo: (fn: any, options?: any) => any;
-  createStore: (value: any, options?: any) => any;
-  createTrackedEffect: (fn: () => void) => void;
-  createEffect: (compute: any, effect: any) => void;
-  onSettled: (callback: () => void | (() => void)) => void;
-};
+// Empty until a renderer registers its own; each constructor falls back to
+// this package's primitive at its use site, so a primitive is only retained
+// by a bundle that uses the constructor needing it (`createStore` only with
+// `$store`).
+const primitives: {
+  createSignal?: (value: any, options?: any) => any;
+  createMemo?: (fn: any, options?: any) => any;
+  createStore?: (value: any, options?: any) => any;
+  createTrackedEffect?: (fn: () => void) => void;
+  createEffect?: (compute: any, effect: any) => void;
+  onSettled?: (callback: () => void | (() => void)) => void;
+} = {};
 
 /** A generator body, or the block the compiler already built from it. */
 function toBlock(body: unknown): any {
@@ -244,12 +243,30 @@ export function setBlockPrimitives(p: Partial<typeof primitives>): void {
 
 // --- operations --------------------------------------------------------------
 
-function* opIterator(this: any): Generator<any, any, any> {
-  this.delegated = true;
-  return yield this;
-}
-function op<T extends object>(fields: T): T {
-  return Object.assign(fields, { delegated: false, [Symbol.iterator]: opIterator });
+/**
+ * A v2 operation (`$signal`, `$store`, `$memo`, `$effect`, `$cleanup`,
+ * `$flush`, `yield* Ctx`). One class, one shape: the iterator lives on the
+ * prototype, so creating an operation is one allocation (no per-op
+ * symbol-keyed property copy). `perform` and the driver recognize it by its
+ * `[OP]` tag and read the field that tag names (`make` / `fn` / `read`).
+ */
+class Operation {
+  readonly [OP]: string;
+  delegated = false;
+  constructor(
+    tag: string,
+    readonly kind?: string,
+    readonly make?: () => unknown,
+    readonly fn?: () => void,
+    readonly context?: Context<any>,
+    readonly read?: () => unknown
+  ) {
+    this[OP] = tag;
+  }
+  *[Symbol.iterator](): Generator<any, any, any> {
+    this.delegated = true;
+    return yield this;
+  }
 }
 
 /** `yield* $signal(value)` — create a signal in a component's setup. */
@@ -257,13 +274,12 @@ export function $signal<T>(
   value: T,
   options?: SignalOptions<T>
 ): CreateOp<[get: SourceAccessor<T>, set: BlockSetter<T>], "signal"> {
-  return op({
-    [OP]: "create",
-    kind: "signal",
-    make: () => {
-      const [get, set] = primitives.createSignal(value, options) as [SourceAccessor<T>, Setter<T>];
-      return [get, blockSetter(set as any)];
-    }
+  return new Operation("create", "signal", () => {
+    const [get, set] = (primitives.createSignal || createSignal)(value, options) as [
+      SourceAccessor<T>,
+      Setter<T>
+    ];
+    return [get, blockSetter(set as any)];
   }) as any;
 }
 
@@ -271,13 +287,9 @@ export function $signal<T>(
 export function $store<T extends object>(
   value: T
 ): CreateOp<[get: TypedStore<T>, set: BlockStoreSetter<T>], "store"> {
-  return op({
-    [OP]: "create",
-    kind: "store",
-    make: () => {
-      const [get, set] = primitives.createStore(value) as [Store<T>, StoreSetter<T>];
-      return [get, blockSetter(set as any)];
-    }
+  return new Operation("create", "store", () => {
+    const [get, set] = (primitives.createStore || createStore)(value) as [Store<T>, StoreSetter<T>];
+    return [get, blockSetter(set as any)];
   }) as any;
 }
 
@@ -286,11 +298,9 @@ export function $memo<Y extends MemoOp, R>(
   body: () => Generator<Y, R, any>,
   options?: MemoOptions<R>
 ): CreateOp<MemoAccessor<R, Y>, "memo"> {
-  return op({
-    [OP]: "create",
-    kind: "memo",
-    make: () => primitives.createMemo(toBlock(body), options)
-  }) as any;
+  return new Operation("create", "memo", () =>
+    (primitives.createMemo || createMemo)(toBlock(body), options)
+  ) as any;
 }
 
 /**
@@ -303,11 +313,7 @@ export function $effect<Y extends EffectOp>(
   body: () => Generator<Y, void, any>,
   compute?: unknown
 ): CreateOp<void, "effect"> {
-  return op({
-    [OP]: "create",
-    kind: "effect",
-    make: () => effectBlock(body, compute)
-  }) as any;
+  return new Operation("create", "effect", () => effectBlock(body, compute)) as any;
 }
 
 /**
@@ -320,21 +326,14 @@ export function $effect<Y extends EffectOp>(
 export function effectBlock(body: unknown, compute?: unknown): void {
   const block = toBlock(body);
   if (!compute) {
-    primitives.createTrackedEffect(() => {
+    (primitives.createTrackedEffect || createTrackedEffect)(() => {
       runBlockAs(EFFECT, block, undefined);
     });
     return;
   }
-  primitives.createEffect(compute, (values: unknown) => {
-    const cleanups = collectCleanups(() => {
-      runBlockAs(EFFECT, block, values);
-    });
-    return cleanups.length
-      ? () => {
-          for (const fn of cleanups) fn();
-        }
-      : undefined;
-  });
+  (primitives.createEffect || createEffect)(compute, (values: unknown) =>
+    runEffectHalf(block, values)
+  );
 }
 
 /**
@@ -348,41 +347,27 @@ export function effectBlock(body: unknown, compute?: unknown): void {
 export function $settled<Y extends EffectOp>(
   body: () => Generator<Y, void, any>
 ): CreateOp<void, "settled"> {
-  return op({
-    [OP]: "create",
-    kind: "settled",
-    make: () => settledBlock(body)
-  }) as any;
+  return new Operation("create", "settled", () => settledBlock(body)) as any;
 }
 
 /** @internal Create a run-once effect block (compiled `onSettled(function* …)`). */
 export function settledBlock(body: unknown): void {
-  primitives.onSettled(settledCallback(toBlock(body)));
+  (primitives.onSettled || onSettled)(settledCallback(toBlock(body)));
 }
 
 /** `yield* $cleanup(fn)` — run `fn` when the component (or the effect run) is disposed. */
 export function $cleanup(fn: () => void): CleanupOp {
-  return op({ [OP]: "cleanup", fn }) as any;
+  return new Operation("cleanup", undefined, undefined, fn) as any;
 }
 
 /** `yield* $flush()` — drain pending writes now (event blocks only). */
 export function $flush(): FlushOp {
-  return op({ [OP]: "flush" }) as any;
+  return new Operation("flush") as any;
 }
 
 /** A setter whose calls return a receipt: `yield* set(v)` is the new value. */
 function blockSetter(set: (value: any) => any): (value: any) => WriteReceipt<any> {
-  return (value: any) => {
-    const next = set(value);
-    return receipt(next);
-  };
-}
-function receipt<T>(value: T): WriteReceipt<T> {
-  return {
-    *[Symbol.iterator]() {
-      return value;
-    }
-  } as any;
+  return (value: any) => new Receipt(set(value)) as any;
 }
 
 // --- context ------------------------------------------------------------------
@@ -396,7 +381,14 @@ function receipt<T>(value: T): WriteReceipt<T> {
 const CONTEXT_READ = Symbol.for("solid.contextRead");
 function contextOp(context: Context<any>): ContextOp<any, any> {
   const reader = (context as any)[CONTEXT_READ] as (() => any) | undefined;
-  return op({ [OP]: "context", context, read: reader || (() => getContext(context)) }) as any;
+  return new Operation(
+    "context",
+    undefined,
+    undefined,
+    undefined,
+    context,
+    reader || (() => getContext(context))
+  ) as any;
 }
 setContextIterator(function* (context) {
   return yield* contextOp(context);
@@ -448,7 +440,9 @@ export function $component<P = {}, Y extends SetupOp = never, VY extends ViewOp 
       );
       if (typeof viewBody !== "function") {
         throw new TypeError(
-          "[COMPONENT_VIEW] A $component's setup must return its view: `return function* () { return <…/> }`"
+          __DEV__
+            ? "[COMPONENT_VIEW] A $component's setup must return its view: `return function* () { return <…/> }`"
+            : "[COMPONENT_VIEW]"
         );
       }
       return view(viewBody as any);
@@ -471,9 +465,7 @@ export function isComponent(value: unknown): boolean {
 function view(body: () => Generator<any, unknown, any>): unknown {
   const block = toBlock(body);
   block[VIEW_MARK] = true;
-  block[Symbol.iterator] = function* () {
-    return block;
-  };
+  block[Symbol.iterator] = viewIterator;
   return block;
 }
 

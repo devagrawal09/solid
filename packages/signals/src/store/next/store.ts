@@ -66,7 +66,7 @@ import {
 } from "../../core/scheduler.js";
 import type { Signal } from "../../core/types.js";
 import { blockGuard, pendingCheckActive, strictRead } from "../../core/core.js";
-import { markHandle, pathToken, setStoreHooks, type StoreHandle } from "../../generator.js";
+import { makePathToken, markHandle, setStoreHooks, type StoreHandle } from "../../generator.js";
 import {
   DEV,
   registerGraph,
@@ -1969,7 +1969,7 @@ function getKey(target: StoreNextTarget, key: PropertyKey, receiver: any): any {
     // syntax"). Never taken by the driver's own reads, nor by a draft (a
     // projection derive mutates its draft as plain data).
     if (blockGuard && typeof key === "string" && !inDraft(target))
-      return pathToken(h ? proxyOf(target) : receiver, key);
+      return makePathToken(h ? proxyOf(target) : receiver, key);
     // One typeof gates every brand-symbol compare off the hot string path
     // (four symbol comparisons per property read otherwise).
     if (typeof key !== "string") {

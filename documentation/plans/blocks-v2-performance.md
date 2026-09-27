@@ -1,0 +1,409 @@
+# Generator blocks v2 — runtime and bundle cost
+
+Status: measured and optimized (2026-09-27). Companion to
+[generator-blocks-v2.md](./generator-blocks-v2.md). Harness: `scripts/blocks-v2/`.
+
+## Summary
+
+Before this work a compiled v2 app paid **1.2–9×** the instructions of the same
+program written as plain Solid on the measured paths (event dispatch 9.2×,
+effects 2.8×, component creation 2.5×), and **every `solid-js` client bundle
+carried the block runtime and the store module** whether or not it used blocks
+(a counter app: 81.4 kB min / 25.5 kB gzip).
+
+After:
+
+- **Bundles.** A `solid-js` + `@solidjs/web` app that builds no block is back to
+  the pay-for-use floor: the counter is **41.9 kB / 14.1 kB gzip (−49% / −44%)**,
+  a plain store app **75.7 kB / 23.6 kB (−8% / −8%)**. A small compiled v2 app is
+  **89.7 kB / 27.7 kB (−1.7% / −2.7%)** despite carrying more runtime than
+  before (the path-token machinery is now attributed to blocks, not to stores).
+- **Compiled v2 vs plain Solid** (instructions per op, n=100 / n=300, default
+  lowering): memo 1.09× / 1.00×, component creation 1.67× / 1.54× (was
+  2.4×), whole-view re-run 1.14× / 1.08×, JSX holes 1.05×, event dispatch
+  1.24× (was 9.2× / 6.8×), effect 1.52× / 1.58× (was 2.8×), path reads 0.99×,
+  async memo 1.12× / 1.06×. With `hostFusion`: creation 1.47× / 1.41×, effect
+  1.36× / 1.41×, holes 1.03×.
+- **Uncompiled v2** (the runtime generator driver): up to ~8× plain Solid
+  (creation 7–8×, effects 7–8×, path reads 3×), down from up to 12×; event
+  dispatch 12.2× → 1.9×, whole-view re-run 3.2× → 1.8×, memo 1.9× → 1.3×.
+
+Much of what is left in component creation is structural: a v2 component's
+view is rendered by its own insert effect, as a plain component that returns
+`() => <…/>` is (measured: that alone costs 1.27× plain Solid).
+
+## Methodology
+
+**Programs.** `scripts/blocks-v2/scenarios.mjs` defines eight programs, each
+written three ways — handwritten Solid; v2 source; v2 as it must be written
+without the compiler's generator pass (a `yield*` cannot sit in a JSX hole, so
+the view reads into a `const` first, or passes a bare accessor where that keeps
+the hole's granularity) — and compiled four ways:
+
+| variant | source | compiler |
+| --- | --- | --- |
+| handwritten | plain Solid | JSX only |
+| compiled | v2 | default lowering (`generators` on) |
+| fused | v2 | default lowering + `hostFusion` |
+| uncompiled | v2, driver form | `generators: false` (JSX only); the runtime driver runs every body |
+| lazyView (create only) | plain Solid, components return `() => <…/>` | JSX only |
+
+| scenario | one op |
+| --- | --- |
+| memo | write a signal read by n `$memo`s (n recomputes + n hole updates) |
+| create | mount + unmount n components (a signal, a memo, an `$event`, a view with 2 holes) |
+| view | write a signal read at the top of n views (n whole-view re-runs) |
+| holes | write a signal read by 3 JSX holes in each of n views |
+| event | dispatch a click to n `$event`s (read + write their own signal), flush |
+| effect | write a signal read by n `$effect`s (+ a prop; `$cleanup` each run) |
+| paths | toggle a field of n store rows read as `props.item.done` / `.label` |
+| async | write the signal n async memos read, flush, let them settle, flush |
+
+The programs are compiled by the real native compiler (`generate: "dom"`) and
+run against `scripts/blocks-v2/fake-web.mjs`, a jsdom-free stand-in for the
+parts of `@solidjs/web` the compiled output calls (`insert` renders a `$` block
+child through `renderBlock` in a render effect, event handlers that are blocks
+are dispatched with `dispatchBlock`, as in `@solidjs/web`), so the measurement
+is the reactive and block machinery, not a DOM. `check.mjs` renders every
+variant and compares trees and sinks after mount and after three updates; all
+variants agree on every scenario, against the dev and the prod runtime.
+
+**Instruction counts** (`icount.mjs`, `compare.mjs`) follow Track A: each cell
+runs twice under `valgrind --tool=cachegrind --cache-sim=no`, `node
+--predictable --single-threaded`, with the same warmup and `ops` vs `2·ops`
+operations; `(twice − once) / ops` is instructions per op with startup, module
+load and warmup cancelled. Deterministic: re-running a cell reproduces it to
+within a few hundred instructions.
+
+The warmup matters more than it looks. With `--single-threaded`, optimizing
+compiles run on the main thread and are counted; with the first warmup (60
+updates, 20 ops) the measured window still contained tier-up work, and cells
+were inflated up to 2× (the compiled `view` cell measured 710k at 20 ops and
+351k at 80). Final settings: 300 update warmups / 60 mount warmups, 50 ops
+(30 at n=300). At those settings a cell moves by ≤3% between 50 and 150 ops.
+
+**Noise band.** JIT inlining and GC placement still differ between code
+shapes: two variants whose costs are within ~4% can swap order between n=100
+and n=300 (the fused vs compiled `memo` cell does: +3% at n=100, −7% at n=300).
+Differences under ~5% are reported but not relied on; every headline number
+is reproduced at both sizes.
+
+**Wall clock** (`bench.mjs`): fresh process per cell and rep, shuffled order,
+forced GC between batches, median of per-process medians. The machine is shared
+(other builds running), so wall time is a sanity check of the instruction
+counts, not a measurement of its own; the spread column says how noisy.
+
+**Bundles** (`size.mjs`): the #2883 treeshake harness — vite library build of
+each fixture with production defines, `@solidjs/signals` resolved to its source
+(per-module retention visible), `solid-js` / `@solidjs/web` to their built
+browser prod entries, then esbuild minify with `_`-property mangling and gzip
+-9. JSX fixtures are compiled by the native compiler first.
+
+**Reproduce.** Build `packages/signals` (prod tree: `node
+scripts/blocks-v2/build-prod.mjs [--snapshot name]`), `packages/compiler`, and
+for bundles `packages/solid` / `packages/web`; then
+
+```sh
+node scripts/blocks-v2/check.mjs                  # every variant renders the same
+node scripts/blocks-v2/icount.mjs                 # Ir/op, one runtime, ratios to handwritten
+node scripts/blocks-v2/compare.mjs --runtimes before+before-compiler,current
+node scripts/blocks-v2/bench.mjs --scenarios event,effect   # wall clock
+node scripts/blocks-v2/size.mjs                   # bundle fixtures
+node scripts/blocks-v2/profile.mjs create compiled          # self-time profile of a cell
+```
+
+(`compare.mjs` / `bench.mjs` runtime names are snapshots under
+`node_modules/.cache/blocks-v2/runtimes/`; `name+compiler` pairs one with a
+saved compiler binary `runtimes/<compiler>.node`, so "before" rows use the old
+compiler too.)
+
+## Baseline (before)
+
+Instructions per op, n=100 (×: vs handwritten).
+
+| scenario | handwritten | compiled | fused | uncompiled |
+| --- | ---: | ---: | ---: | ---: |
+| memo | 564k | 670k (1.19×) | 670k (1.19×) | 1050k (1.86×) |
+| create | 1056k | 2689k (2.55×) | 2689k (2.55×) | 12851k (12.17×) |
+| view | 254k | 393k (1.55×) | 393k (1.55×) | 800k (3.15×) |
+| holes | 578k | 672k (1.16×) | 672k (1.16×) | 596k (1.03×) |
+| event | 276k | 2548k (9.23×) | 2548k (9.23×) | 3368k (12.20×) |
+| effect | 268k | 739k (2.76×) | 739k (2.76×) | 2332k (8.70×) |
+| paths | 1613k | 1606k (1.00×) | 1606k (1.00×) | 5213k (3.23×) |
+| async | 7334k | 8411k (1.15×) | 8411k (1.15×) | 8398k (1.15×) |
+
+`hostFusion` did nothing for v2 (`fused` = `compiled`): the fusion pass only
+recognized `createMemo($(fn))`-style hosts.
+
+Bundles (min / gzip, bytes):
+
+| fixture | min | gzip |
+| --- | ---: | ---: |
+| `@solidjs/signals` core floor (5 primitives) | 23,090 | 9,306 |
+| signals + one lowered `$` memo | 29,650 | 11,850 |
+| `solid-js` + web counter, no blocks | 81,369 | 25,462 |
+| `solid-js` + web app with a store, plain Solid | 82,137 | 25,768 |
+| same app, v2 compiled | 91,209 | 28,453 |
+| same app, v2 compiled + `hostFusion` | 91,209 | 28,453 |
+| same app, v2 uncompiled | 89,818 | 28,062 |
+
+What the bundles dragged in:
+
+- **Every `solid-js` client bundle** carried the block runtime and the store:
+  `solid-js`'s client runtime called `setBlockPrimitives({ createSignal,
+  createMemo, createStore, createEffect })` at module load. A top-level call can
+  never be shaken; it retained `block-api.ts`'s primitives table, and through it
+  `createStore` — the whole store module — whose `get` trap references the
+  path-token machinery, which references `perform` and the whole operation
+  dispatch. The counter app, which uses neither stores nor blocks, paid 39.5 kB.
+- **Every store app** retained ~10 kB (unminified) of `generator.ts`: the store
+  trap's `pathToken` → token traps → `pathRead` → `readThrough` → `perform` →
+  host checks, diagnostics, stepping.
+- **Compiled v2 output** imports `$` and `perform`, so it carries the runtime
+  driver (`drive` / `step` / `settle` / `resume`: 2.85 kB min / 0.9 kB gzip,
+  measured by stubbing it out) even when every body was lowered, the
+  typed-props Proxy, and every diagnostic string (`[INVALID_YIELD]`, the
+  per-host rule texts, …: 3.0 kB min / 1.2 kB gzip).
+- The core floor (the treeshake test's fixture) did not grow: its 265 bytes of
+  `generator.ts` are the accessor iterator from the v1 blocks.
+
+## Optimizations
+
+Each row is measured against the state just before it (n=100 unless noted).
+Runtime snapshots `r1`…`r6` are kept by `build-prod.mjs --snapshot` so any two
+can be compared with `compare.mjs --runtimes a,b`.
+
+### 1. `solid-js`: register block primitives on first use (bundle)
+
+`$signal` / `$memo` / `$store` / `$effect` / `effectBlock` are now `solid-js`
+wrappers that register the one hydration-aware primitive they need the first
+time they are called; `@solidjs/signals`' constructors reference their default
+primitive only at the use site (`primitives.createStore || createStore`).
+
+| fixture | before | after |
+| --- | ---: | ---: |
+| counter, no blocks | 81,369 / 25,462 | 41,874 / 14,145 (−49% / −44%) |
+
+### 2. Runtime: per-operation allocations (`@solidjs/signals`)
+
+| change | evidence |
+| --- | --- |
+| Setter receipts: one class with a prototype iterator. The receipt was an object literal with a `*[Symbol.iterator]` method — a new generator *function* (with its own `prototype` object) per write — then stepped as a generator by `perform`. `perform` now returns `receipt.value`. | profile: `receipt` + `stepSync` were 52% of the event scenario; event −87% |
+| v2 operations (`$signal`, `$memo`, `$cleanup`, …) are one class sharing the iterator. `op()` was `Object.assign(fields, { delegated, [Symbol.iterator] })`. | profile: `op` 7% of creation |
+| `perform`'s non-function branch moved to `performValue`. Its closures (`() => target.target(target.value)`, …) capture the parameter, so V8 allocated a closure context on **every** `perform` call — accessor reads included. | adding an accessor fast path to the old `perform` made `holes` **+48%** (672k → 998k); with the split, the fast path is a win (removing it again: holes +7%, event +7%, memo +4%) |
+| A block run tracks path tokens on a shared stack (`tokenBase`), not a fresh array per run. | — |
+| One result-shape probe per run, only for object results (was two probes, each a closure + guard + untrack bracket); the probe lives in `objectShape` for the same closure-context reason. | a first version with the closure inside the per-run function made `memo` **+33%** (614k → 818k); split: −8% vs baseline |
+| `arguments[0]` instead of a rest parameter in the block wrapper. | no difference in optimized code (818,163 vs 817,985); kept (no array in the lower tiers) |
+| Blocks, views and deferred views share one iterator function each (was a generator function allocated per block / per view). | — |
+| A split effect's `$cleanup`s are collected lazily with no closure; a single cleanup is returned as is. | — |
+| `dispatchBlock` skips `runWithOwner` (a closure) when there is no current owner (the common case: a DOM handler). | — |
+
+Together (old compiler, r3 vs baseline): event −87%, effect −39%, create −20%,
+view −13%, holes −10%, memo −8%; uncompiled event −82%, effect −11%, view −10%.
+
+### 3. Compiler: `BLOCK_SYNC` for v2 bodies by default
+
+The v2 pass synthesizes every `_$$(…)` it wraps, and after lowering most of them
+provably return plain values (a view returns JSX, a memo arithmetic, an effect
+compute an array literal). The Track A prover now runs on v2 bodies by default
+(`ProofConfig::v2_only`) and only the SYNC flag is emitted, `$(fn, 1)`: `$`
+skips the result-shape probe on every run (verified in dev,
+`[BLOCK_SYNC_VIOLATED]`). NOTHROW and host options still need `blockProofs`.
+
+view −16% (343k → 289k), effect −10% (452k → 409k, together with 4).
+
+### 4. Compiler: `PROPS_COMPILED`
+
+After lowering, a `$component(_$$(function (props) {…}))` whose `props` is only
+ever argument 0 of a lowered path reader (`_$readPathK(props, …)`) is emitted as
+`$component(body, 1)`, and the setup receives the raw props: no Proxy and no
+`WeakMap` registration per instance, and — once no typed-props proxy exists in
+the app — no proxy unwrap on every path read. Forwarding `props.x`,
+destructuring the parameter, or a body left to the driver keeps the proxy.
+
+create −13% (2148k → 1877k; the WeakMap registration alone was 10% of the
+creation profile).
+
+### 5. Compiler: host fusion for v2 bodies (`hostFusion`)
+
+`const [a] = _$perform($signal(…))` and `const m = _$perform($memo(…))` now prove
+accessors (`$store` a store) for the fusion pass, and three v2 positions fuse:
+
+- `_$perform($memo(_$$(fn)))` in a lowered setup → `_$createMemo(fn)`, with
+  `createMemo` imported from the module `$memo` came from (the primitive `$memo`
+  creates with — `solid-js`'s hydration-aware one in a `solid-js` app);
+- a split `$effect`'s compute block → a plain function (`effectBlock` hands it
+  to `createEffect` as is);
+- DOM output: `{_$perform(acc)}` as a child of an intrinsic element → `acc()`
+  (the child becomes an `insert` effect, where the strict guard is already
+  down). Attributes (an `on*` handler is evaluated in the block), component
+  props (a getter may be read inside a running block) and reads in the view
+  body keep `perform`; SSR output (holes evaluated inline) is untouched.
+
+vs compiled: create −11%, effect −10%, holes −2%, event −2%; memo +3% at n=100
+and −7% at n=300 (noise band).
+
+### 6. Pay-for-use path tokens (bundle)
+
+The store's `get` trap calls `makePathToken`, which the first `$` block installs
+(the strict guard is only ever raised by a block run, so tokens are unreachable
+before one exists). A store app that builds no block drops the tokens and,
+through them, `perform` and the dispatch.
+
+| fixture | before | after |
+| --- | ---: | ---: |
+| store app, plain Solid | 81,828 / 25,649 | 75,704 / 23,623 (−7.5% / −7.9%) |
+
+### 7. Production error codes (bundle)
+
+Block runtime errors keep their message under `__DEV__` and are a bare
+`[CODE]` (`[OP_NOT_ALLOWED] <kind>` for host refusals) in production; the
+per-host rule texts, host names and `describe` fold away.
+
+| fixture | before | after |
+| --- | ---: | ---: |
+| v2 app, compiled | 92,594 / 28,875 | 89,591 / 27,661 (−3.2% / −4.2%) |
+
+### 8. Driver: no probe for `function*` bodies, lazy stale marking
+
+A `function*` body returns a fresh native generator on every call, so it is
+driven without the shape probe (known at `$` time). `drive` registered a
+stale-marking cleanup on every run of every driven block; it is only needed
+once the run suspends, so it is registered at the first suspension (always
+inside the synchronous `drive` call, under the run's owner).
+
+Uncompiled (r4 → r6): view −37%, memo −20%, event −14%, create −14%, effect −7%,
+paths −5%.
+
+## After
+
+Instructions per op; before = baseline runtime + baseline compiler.
+
+n=100:
+
+| scenario | handwritten | compiled | fused | uncompiled |
+| --- | ---: | ---: | ---: | ---: |
+| memo | 564k | 614k (1.09×, was 1.19×) | 632k (1.12×) | 781k (1.38×, was 1.86×) |
+| create | 1056k | 1879k (1.78×, was 2.55×) | 1667k (1.58×) | 11302k (10.70×, was 12.17×) |
+| view | 254k | 289k (1.14×, was 1.55×) | 289k (1.14×) | 456k (1.80×, was 3.15×) |
+| holes | 578k | 608k (1.05×, was 1.16×) | 596k (1.03×) | 596k (1.03×) |
+| event | 276k | 341k (1.24×, was 9.23×) | 333k (1.21×) | 532k (1.93×, was 12.20×) |
+| effect | 269k | 409k (1.52×, was 2.76×) | 367k (1.36×) | 1917k (7.13×, was 8.70×) |
+| paths | 1613k | 1594k (0.99×) | 1594k (0.99×) | 4880k (3.03×, was 3.23×) |
+| async | 7308k | 8214k (1.12×, was 1.15×) | 8205k (1.12×) | 8219k (1.12×) |
+
+create, structural share (150 ops): `lazyView` (plain components rendered
+through a function child, as a v2 view is) costs 1312k — 1.27× plain Solid. Of
+the compiled v2 gap (688k per 100 components), 282k is that and 406k block
+machinery (fused: 198k).
+
+n=300 (30 ops; the memo row's handwritten cell itself moved +8% between the
+two runs — this is the noise band, not a change):
+
+| scenario | handwritten | compiled | fused | uncompiled |
+| --- | ---: | ---: | ---: | ---: |
+| memo | 1823k | 1832k (1.00×, was 1.17×) | 1709k (0.94×) | 2335k (1.28×, was 1.85×) |
+| create | 3337k | 5153k (1.54×, was 2.43×) | 4716k (1.41×) | 23104k (6.92×, was 9.03×) |
+| view | 747k | 807k (1.08×, was 1.49×) | 807k (1.08×) | 1315k (1.76×, was 3.00×) |
+| holes | 1763k | 1852k (1.05×, was 1.16×) | 1816k (1.03×) | 1816k (1.03×, was 1.03×) |
+| event | 789k | 981k (1.24×, was 6.76×) | 958k (1.21×) | 1554k (1.97×, was 8.83×) |
+| effect | 730k | 1155k (1.58×, was 2.89×) | 1028k (1.41×) | 5727k (7.85×, was 9.56×) |
+| paths | 4859k | 4776k (0.98×, was 0.99×) | 4776k (0.98×) | 14620k (3.01×, was 3.21×) |
+| async | 45261k | 48057k (1.06×, was 1.07×) | 48015k (1.06×) | 48057k (1.06×, was 1.07×) |
+
+Creation allocates the most, so its cell is the most sensitive to where a GC
+lands in the measured window; at n=100 with 150 ops (instead of 50) it reads:
+handwritten 1030k, lazyView 1312k (1.27×), compiled 1718k (1.67×, was 2.39×),
+fused 1510k (1.47×), uncompiled 8350k (8.1×, was 9.8×). The ratios move by a
+few points; the ordering and the size of the win do not.
+
+Wall clock, µs per op (n=100, 5 reps × 15 samples, median; ± is half the
+max/min spread of the per-process medians). The machine was shared, so some
+cells are noisy; the direction and rough size of every change match the
+instruction counts. Wall-time ratios to plain Solid are larger than the
+instruction ratios (e.g. compiled event 1.8× vs 1.24×): allocation and GC cost
+more per instruction than the reactive core's loops.
+
+| cell | before | after |
+| --- | ---: | ---: |
+| memo handwritten | 45.4 (±3%) | 44.8 (±51%) |
+| memo compiled | 61.0 (±60%) | 52.1 (±6%) |
+| memo fused | 56.8 (±4%) | 46.1 (±5%) |
+| memo uncompiled | 172.5 (±9%) | 107.8 (±5%) |
+| create handwritten | 128.0 (±53%) | 121.9 (±13%) |
+| create compiled | 433.9 (±24%) | 260.0 (±14%) |
+| create fused | 425.3 (±25%) | 249.8 (±44%) |
+| create uncompiled | 1159.4 (±27%) | 953.2 (±27%) |
+| view handwritten | 22.1 (±1%) | 22.2 (±5%) |
+| view compiled | 42.3 (±36%) | 26.7 (±2%) |
+| view fused | 42.9 (±8%) | 26.2 (±5%) |
+| view uncompiled | 139.5 (±15%) | 89.9 (±8%) |
+| event handwritten | 21.3 (±4%) | 21.8 (±3%) |
+| event compiled | 188.2 (±6%) | 40.1 (±19%) |
+| event fused | 193.6 (±26%) | 39.8 (±32%) |
+| event uncompiled | 307.1 (±5%) | 73.0 (±79%) |
+| effect handwritten | 21.8 (±45%) | 21.4 (±3%) |
+| effect compiled | 97.6 (±7%) | 50.2 (±13%) |
+| effect fused | 91.5 (±5%) | 44.2 (±21%) |
+| effect uncompiled | 454.1 (±10%) | 422.6 (±6%) |
+
+Bundles (min / gzip):
+
+| fixture | before | after |
+| --- | ---: | ---: |
+| `@solidjs/signals` core floor | 23,090 / 9,306 | 23,090 / 9,306 |
+| signals + one lowered `$` memo | 29,650 / 11,850 | 27,812 / 11,022 (−6% / −7%) |
+| counter, no blocks | 81,369 / 25,462 | 41,874 / 14,145 (−49% / −44%) |
+| store app, plain Solid | 82,137 / 25,768 | 75,704 / 23,623 (−8% / −8%) |
+| same app, v2 compiled | 91,209 / 28,453 | 89,685 / 27,692 (−2% / −3%) |
+| same app, v2 compiled + `hostFusion` | 91,209 / 28,453 | 89,246 / 27,597 (−2% / −3%) |
+| same app, v2 uncompiled | 89,818 / 28,062 | 88,190 / 27,291 (−2% / −3%) |
+
+The marginal cost of blocks in the small app is now 14.0 kB min / 4.1 kB gzip
+over the same app in plain Solid (it was 9.1 / 2.7 before, but 6.1 / 2.0 of the
+plain app's bytes were block machinery it did not use). Of `generator.ts`'s
+retained code (unminified), the driver is ~3.5 kB, the path tokens ~2.4 kB,
+`perform` and its dispatch ~3.4 kB.
+
+## Evaluated and not done
+
+| idea | measurement | why not |
+| --- | --- | --- |
+| Driver-free compiled output (a call-form-only `$`) | stubbing the driver out of the compiled app: −2.85 kB min / −0.9 kB gzip; no runtime effect | `$component` / `$memo` / `$event` / views must accept uncompiled bodies, so they reference `$` and, through it, the driver. Dropping it needs compiled-only constructors (a second entry or `…Compiled` exports, mirrored by `solid-js`'s wrappers) that the compiler targets when every body in the module was lowered and proven SYNC. Recommended below; not worth the API surface in this pass. |
+| An accessor fast path in the old `perform` | holes +48%, memo/view regressions | Root cause: the closure-context allocation described in 2; done after the split instead. |
+| Rest parameter → `arguments[0]` alone | ±0.02% | Kept for the unoptimized tiers, but not a win by itself. |
+| Eager ("static") views | the structural share above: 282k per 100 components | A view with no top-level read could run once, untracked, when its component is called; but a view must stay a value `yield* Child(p)` can carry, and the renderer, not the component, owns where it runs. Needs a renderer-level contract. |
+| Cheaper uncompiled prop chains | uncompiled `paths` 3.0×, `create` 10.7× | Each `props.x` access in an uncompiled body builds a Proxy chain and an operation object. A shared-prototype-Proxy design (own fields on a plain object, deeper keys through a prototype trap) would cut it; uncompiled is the interop path, so left as a recommendation. |
+| Skip the typed-props WeakMap registration for uncompiled setups; one shared Proxy handler for typed props and prop chains | uncompiled create: +20% at n=100/50 ops, +0.2% at n=300, −1.3% at n=100/150 ops; paths −0.9% | Fewer allocations, but no win the harness can show above its GC noise for this cell: reverted. |
+| Fusing the effect half | fused effect 1.36× | The half's `$cleanup`s must become its returned cleanup and its writes plain calls; the split machinery exists (`blocks_v2.rs`), the fused form does not. |
+
+## Recommendations
+
+1. Keep `hostFusion`-style v2 fusion on the path to default: it is a proof-driven
+   erasure (no heuristic) and closes most of the creation and effect gap.
+2. Add compiled-only constructors (`$component` / `$memo` / `$event` / view for
+   prebuilt, SYNC-proven blocks) so fully compiled modules do not retain the
+   driver (−0.9 kB gzip), then consider a slimmer `perform` for the operand
+   kinds the compiler can name (reads, receipts, creations).
+3. Lower setup creations (`_$perform($signal(v))`, `$store`, `$cleanup`) to
+   direct runtime calls: the compile-time host rules already cover what
+   `perform`'s host check verifies at runtime.
+4. Treat the view's own render effect as the cost floor of a v2 component
+   (1.27× plain Solid at creation) and document it; everything else is
+   within ~1.0–1.4× with fusion.
+5. Keep `scripts/blocks-v2` in the loop for block runtime changes: the closure
+   context regressions above were invisible to the test suite and to casual
+   timing, and obvious in instruction counts.
+
+## Open problems
+
+- Uncompiled v2 is still 3–11× plain Solid on creation, effects and path reads
+  (typed-props proxy chains, generator delegation per `yield*`).
+- A `$memo` imported from `@solidjs/signals` in a `solid-js` app, compiled with
+  `hostFusion`, fuses to `@solidjs/signals`' `createMemo`; uncompiled it would
+  use the primitive `solid-js` registered (hydration-aware) if any `solid-js`
+  block constructor ran first. Import block constructors from `solid-js` in
+  `solid-js` apps.
+- `examples/sync-blocks`'s async-free assertion needs its typed summary
+  (`pnpm test` runs `pnpm summary` first; a bare `vitest run` fails that one
+  test, before and after this work).

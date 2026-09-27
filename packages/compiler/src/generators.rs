@@ -195,6 +195,13 @@ pub(crate) struct ProofConfig {
     pub(crate) typed: bool,
     /// Intrinsic JSX elements evaluate to plain nodes (DOM and SSR output).
     pub(crate) jsx_plain: bool,
+    /// Default mode (block proofs off): only generator-blocks-v2 bodies are
+    /// proven, only `BLOCK_SYNC` is emitted, and no host is annotated. A v2
+    /// body is always synthesized by the compiler (`blocks_v2.rs`) and, once
+    /// lowered, the result-shape probes `$` runs on every invocation of an
+    /// unflagged block are pure overhead whenever the SYNC proof holds (a
+    /// view returning JSX, a memo returning arithmetic, an effect half).
+    pub(crate) v2_only: bool,
 }
 
 /// The options a proven host call receives.
@@ -292,6 +299,10 @@ fn build_plan(
     if symbols.adapter.is_empty() {
         return Ok(Plan::default());
     }
+    let v2_only = proofs.is_some_and(|config| config.v2_only);
+    // The default (v2-only) prover is only worth building when the module
+    // has v2 bodies.
+    let proofs = proofs.filter(|config| !config.v2_only || !v2.kinds.is_empty());
     let prover = proofs.map(|config| {
         Prover::new(
             scoping,
@@ -314,6 +325,7 @@ fn build_plan(
         error: Option<String>,
         prover: Option<Prover<'s>>,
         v2: &'s V2Bodies,
+        v2_only: bool,
     }
 
     impl<'b> Visit<'b> for Collector<'_> {
@@ -326,7 +338,7 @@ fn build_plan(
             }
             walk::walk_call_expression(self, call);
             // Post-order: the block argument was proven by the walk above.
-            if self.prover.is_some() {
+            if self.prover.is_some() && !self.v2_only {
                 self.annotate_host(call);
             }
         }
@@ -419,10 +431,18 @@ fn build_plan(
                 ));
             }
             if yields.lowerable {
-                if let Some(prover) = self.prover.as_mut() {
+                let is_v2 = self.v2.kind_of(call.span).is_some();
+                if let Some(prover) = self.prover.as_mut()
+                    && (!self.v2_only || is_v2)
+                {
                     let proof = prover.prove(call, function);
-                    if proof.flags != 0 {
-                        self.plan.block_flags.push((call.span, proof.flags));
+                    let flags = if self.v2_only {
+                        proof.flags & BLOCK_SYNC
+                    } else {
+                        proof.flags
+                    };
+                    if flags != 0 {
+                        self.plan.block_flags.push((call.span, flags));
                     }
                 }
                 self.plan.calls.push(call.span);
@@ -444,6 +464,7 @@ fn build_plan(
         error: None,
         prover,
         v2,
+        v2_only,
     };
     collector.visit_program(program);
     if let Some(error) = collector.error {
@@ -1022,6 +1043,8 @@ const FUSION_HOSTS: &[&str] = &[
 ];
 /// The local name of the fused path read (`readValue`).
 const READ_VALUE_LOCAL: &str = "_$readValue";
+/// The local name of a fused v2 memo creation (`createMemo`).
+const CREATE_MEMO_LOCAL: &str = "_$createMemo";
 /// Bound on bottom-up passes over nested hosts. Real nesting is shallow; the
 /// cap only bounds a pathological input.
 const MAX_FUSION_PASSES: usize = 8;
@@ -1034,24 +1057,29 @@ pub(crate) fn fuse_host_blocks<'a>(
     allocator: &'a Allocator,
     program: &mut Program<'a>,
     _source: &'a str,
+    dom: bool,
 ) -> Result<(), String> {
     if !imports_adapter(program) {
         return Ok(());
     }
     let mut fused = false;
     let mut needs_read_value = false;
+    let mut memo_import: Option<Span> = None;
     for _ in 0..MAX_FUSION_PASSES {
-        let plan = build_fusion_plan(program);
-        if plan.blocks.is_empty() {
+        let plan = build_fusion_plan(program, dom);
+        if plan.is_empty() {
             break;
         }
         fused = true;
         needs_read_value |= !plan.path_reads.is_empty();
+        if !plan.memo_creations.is_empty() {
+            memo_import = memo_import.or(plan.memo_import);
+        }
         let mut rewriter = FusionRewriter { allocator, plan };
         rewriter.visit_program(program);
     }
     if fused {
-        finish_fusion_imports(allocator, program, needs_read_value);
+        finish_fusion_imports(allocator, program, needs_read_value, memo_import);
     }
     Ok(())
 }
@@ -1079,6 +1107,17 @@ struct FusionSymbols {
     store_tuples: Vec<SymbolId>,
     /// Factories whose value is a store proxy: `createProjection`.
     store_values: Vec<SymbolId>,
+    /// Generator blocks v2 creations, bound as `const … = _$perform(op(…))`
+    /// in a lowered setup: `$signal` (tuple, element 0 an accessor), `$memo`
+    /// (an accessor), `$store` (tuple, element 0 a store proxy).
+    v2_accessor_tuples: Vec<SymbolId>,
+    v2_accessor_values: Vec<SymbolId>,
+    v2_store_tuples: Vec<SymbolId>,
+    /// `$effect(half, compute)`: the compute is a reactive host position.
+    v2_effect: Vec<SymbolId>,
+    /// The import declaration of `$memo` (a fused memo creation imports
+    /// `createMemo` from the same module: the primitive `$memo` creates with).
+    v2_memo_import: Option<Span>,
 }
 
 fn collect_fusion_symbols(program: &Program<'_>) -> FusionSymbols {
@@ -1116,6 +1155,13 @@ fn collect_fusion_symbols(program: &Program<'_>) -> FusionSymbols {
                 "createMemo" => symbols.accessor_values.push(symbol),
                 "createStore" | "createOptimisticStore" => symbols.store_tuples.push(symbol),
                 "createProjection" => symbols.store_values.push(symbol),
+                "$signal" => symbols.v2_accessor_tuples.push(symbol),
+                "$memo" => {
+                    symbols.v2_accessor_values.push(symbol);
+                    symbols.v2_memo_import.get_or_insert(import.span);
+                }
+                "$store" => symbols.v2_store_tuples.push(symbol),
+                "$effect" => symbols.v2_effect.push(symbol),
                 _ => {}
             }
         }
@@ -1197,6 +1243,23 @@ impl FusionContext<'_> {
             return Origin::Other;
         };
         let symbols = &self.symbols;
+        // A v2 creation in a lowered setup: `_$perform($signal(…))`.
+        if symbols.perform.contains(&factory) {
+            let (1, Some(Argument::CallExpression(op))) =
+                (init.arguments.len(), init.arguments.first())
+            else {
+                return Origin::Other;
+            };
+            let Some(op) = resolve_callee(self.scoping, op) else {
+                return Origin::Other;
+            };
+            return match tuple {
+                true if symbols.v2_accessor_tuples.contains(&op) => Origin::Accessor,
+                true if symbols.v2_store_tuples.contains(&op) => Origin::Store,
+                false if symbols.v2_accessor_values.contains(&op) => Origin::Accessor,
+                _ => Origin::Other,
+            };
+        }
         if tuple {
             if symbols.accessor_tuples.contains(&factory) {
                 Origin::Accessor
@@ -1226,15 +1289,28 @@ struct FusionPlan {
     path_reads: Vec<Span>,
     /// `_$perform(_$readStore(store, selector))` → `selector(store)`.
     store_reads: Vec<Span>,
+    /// v2: `_$perform($memo(_$$(fn), …rest))` → `_$createMemo(fn, …rest)`.
+    memo_creations: Vec<Span>,
+    /// The import declaration that receives `createMemo as _$createMemo`.
+    memo_import: Option<Span>,
 }
 
-fn build_fusion_plan(program: &Program<'_>) -> FusionPlan {
+impl FusionPlan {
+    fn is_empty(&self) -> bool {
+        self.blocks.is_empty() && self.accessor_calls.is_empty() && self.memo_creations.is_empty()
+    }
+}
+
+fn build_fusion_plan(program: &Program<'_>, dom: bool) -> FusionPlan {
     let semantic = SemanticBuilder::new()
         .with_build_nodes(true)
         .build(program)
         .semantic;
     let symbols = collect_fusion_symbols(program);
-    if symbols.adapter.is_empty() || symbols.hosts.is_empty() {
+    let v2 = !symbols.v2_effect.is_empty()
+        || !symbols.v2_accessor_values.is_empty()
+        || !symbols.v2_accessor_tuples.is_empty();
+    if symbols.adapter.is_empty() || (symbols.hosts.is_empty() && !v2) {
         return FusionPlan::default();
     }
     let context = FusionContext {
@@ -1246,25 +1322,147 @@ fn build_fusion_plan(program: &Program<'_>) -> FusionPlan {
     struct Collector<'s> {
         context: &'s FusionContext<'s>,
         plan: FusionPlan,
+        dom: bool,
     }
 
     impl<'b> Visit<'b> for Collector<'_> {
         fn visit_call_expression(&mut self, call: &CallExpression<'b>) {
             if let Some(block) = self.host_block(call) {
-                let mut check = BodyCheck::new(self.context, block);
-                check.run();
-                if check.ok {
-                    self.plan.blocks.push(block.span);
-                    self.plan.accessor_calls.extend(check.accessor_calls);
-                    self.plan.path_reads.extend(check.path_reads);
-                    self.plan.store_reads.extend(check.store_reads);
+                self.try_fuse(block);
+            } else if let Some(block) = self.v2_effect_compute(call) {
+                // `$effect(half, _$$(compute))`: the compute is handed to
+                // `createEffect` as is (`effectBlock`), a reactive host.
+                self.try_fuse(block);
+            } else if let Some(block) = self.v2_memo_creation(call) {
+                // `_$perform($memo(_$$(fn)))` in a lowered setup is
+                // `createMemo(block)` under the component's owner.
+                if self.try_fuse(block) {
+                    self.plan.memo_creations.push(call.span);
+                    self.plan.memo_import = self.context.symbols.v2_memo_import;
                 }
             }
             walk::walk_call_expression(self, call);
         }
+
+        fn visit_jsx_element(&mut self, element: &oxc_ast::ast::JSXElement<'b>) {
+            // DOM output: a `{_$perform(acc)}` child of an intrinsic element
+            // becomes an `insert` effect, where the strict guard is already
+            // down — `perform(acc)` there is exactly `acc()`. (Attributes and
+            // component props are not: an event handler or a prop getter can
+            // be evaluated inside the running block.)
+            if self.dom
+                && matches!(&element.opening_element.name,
+                    oxc_ast::ast::JSXElementName::Identifier(name)
+                        if name.name.chars().next().is_some_and(|c| c.is_ascii_lowercase()))
+            {
+                for child in &element.children {
+                    if let oxc_ast::ast::JSXChild::ExpressionContainer(container) = child
+                        && let oxc_ast::ast::JSXExpression::CallExpression(call) =
+                            &container.expression
+                        && self.is_accessor_perform(call)
+                    {
+                        self.plan.accessor_calls.push(call.span);
+                    }
+                }
+            }
+            walk::walk_jsx_element(self, element);
+        }
     }
 
     impl<'s> Collector<'s> {
+        /// Plan the erasure of one `$` block; true when it is erasable.
+        fn try_fuse(&mut self, block: &CallExpression<'_>) -> bool {
+            let mut check = BodyCheck::new(self.context, block);
+            check.run();
+            if check.ok {
+                self.plan.blocks.push(block.span);
+                self.plan.accessor_calls.extend(check.accessor_calls);
+                self.plan.path_reads.extend(check.path_reads);
+                self.plan.store_reads.extend(check.store_reads);
+            }
+            check.ok
+        }
+
+        /// `_$perform(acc)` with `acc` a proven accessor binding.
+        fn is_accessor_perform(&self, call: &CallExpression<'_>) -> bool {
+            let context = self.context;
+            call.arguments.len() == 1
+                && resolve_callee(context.scoping, call)
+                    .is_some_and(|symbol| context.symbols.perform.contains(&symbol))
+                && matches!(&call.arguments[0], Argument::Identifier(accessor)
+                    if context
+                        .reference_symbol(accessor)
+                        .is_some_and(|symbol| context.binding_origin(symbol) == Origin::Accessor))
+        }
+
+        /// A lowered `$` block argument: `$(fn)` / `$(fn, flags)` with `fn`
+        /// a call-form `function` (or arrow).
+        fn lowered_block<'b>(
+            &self,
+            argument: Option<&'b Argument<'b>>,
+        ) -> Option<&'b CallExpression<'b>> {
+            let Some(Argument::CallExpression(block)) = argument else {
+                return None;
+            };
+            let context = self.context;
+            let adapter = resolve_callee(context.scoping, block)?;
+            let flags_ok = match block.arguments.len() {
+                1 => true,
+                2 => matches!(block.arguments[1], Argument::NumericLiteral(_)),
+                _ => false,
+            };
+            if !context.symbols.adapter.contains(&adapter) || !flags_ok {
+                return None;
+            }
+            match &block.arguments[0] {
+                Argument::FunctionExpression(function) => {
+                    (!function.generator && !function.r#async && function.body.is_some())
+                        .then_some(block)
+                }
+                Argument::ArrowFunctionExpression(arrow) => (!arrow.r#async).then_some(block),
+                _ => None,
+            }
+        }
+
+        /// `$effect(half, _$$(compute))`: the compute block.
+        fn v2_effect_compute<'b>(
+            &self,
+            call: &'b CallExpression<'b>,
+        ) -> Option<&'b CallExpression<'b>> {
+            let callee = resolve_callee(self.context.scoping, call)?;
+            if !self.context.symbols.v2_effect.contains(&callee) || call.arguments.len() != 2 {
+                return None;
+            }
+            self.lowered_block(call.arguments.get(1))
+        }
+
+        /// `_$perform($memo(_$$(fn)[, options]))`: the memo's block.
+        fn v2_memo_creation<'b>(
+            &self,
+            call: &'b CallExpression<'b>,
+        ) -> Option<&'b CallExpression<'b>> {
+            let context = self.context;
+            let callee = resolve_callee(context.scoping, call)?;
+            if !context.symbols.perform.contains(&callee) || call.arguments.len() != 1 {
+                return None;
+            }
+            let Some(Argument::CallExpression(op)) = call.arguments.first() else {
+                return None;
+            };
+            let memo = resolve_callee(context.scoping, op)?;
+            if !context.symbols.v2_accessor_values.contains(&memo)
+                || context.symbols.v2_memo_import.is_none()
+                || op.arguments.is_empty()
+                || op.arguments.len() > 2
+                || op
+                    .arguments
+                    .iter()
+                    .any(|a| matches!(a, Argument::SpreadElement(_)))
+            {
+                return None;
+            }
+            self.lowered_block(op.arguments.first())
+        }
         /// `HOST($(fn), …)` with `fn` in call form: the `$` call.
         fn host_block<'b>(&self, call: &'b CallExpression<'b>) -> Option<&'b CallExpression<'b>> {
             let context = self.context;
@@ -1300,6 +1498,7 @@ fn build_fusion_plan(program: &Program<'_>) -> FusionPlan {
     let mut collector = Collector {
         context: &context,
         plan: FusionPlan::default(),
+        dom,
     };
     collector.visit_program(program);
     collector.plan
@@ -1532,6 +1731,30 @@ impl<'a> VisitMut<'a> for FusionRewriter<'a> {
         if let Expression::CallExpression(call) = expression {
             let span = call.span;
             let plan = &self.plan;
+            if plan.memo_creations.contains(&span) {
+                // `_$perform($memo(BLOCK, …rest))` → `_$createMemo(BLOCK, …rest)`;
+                // BLOCK (planned in `blocks`) is erased by the walk below.
+                let ast = AstBuilder::new(self.allocator);
+                let placeholder = ast.expression_null_literal(Span::new(0, 0));
+                let Expression::CallExpression(call) = std::mem::replace(expression, placeholder)
+                else {
+                    unreachable!("matched above");
+                };
+                let call = call.unbox();
+                let Some(Argument::CallExpression(op)) = call.arguments.into_iter().next() else {
+                    unreachable!("planned: a $memo call");
+                };
+                let op = op.unbox();
+                *expression = ast.expression_call(
+                    span,
+                    ast.expression_identifier(Span::new(0, 0), ast.ident(CREATE_MEMO_LOCAL)),
+                    None,
+                    op.arguments,
+                    false,
+                );
+                walk_mut::walk_expression(self, expression);
+                return;
+            }
             let planned = plan.blocks.contains(&span)
                 || plan.accessor_calls.contains(&span)
                 || plan.path_reads.contains(&span)
@@ -1654,6 +1877,7 @@ fn finish_fusion_imports<'a>(
     allocator: &'a Allocator,
     program: &mut Program<'a>,
     needs_read_value: bool,
+    memo_import: Option<Span>,
 ) {
     const GENERATED: &[&str] = &[
         PERFORM_LOCAL,
@@ -1712,6 +1936,19 @@ fn finish_fusion_imports<'a>(
                         if unused.iter().any(|name| name == specifier.local.name.as_str())
                 )
             });
+        }
+        if memo_import == Some(import.span) {
+            let span = Span::new(0, 0);
+            let specifier = ast.import_declaration_specifier_import_specifier(
+                span,
+                ast.module_export_name_identifier_name(span, ast.ident("createMemo")),
+                ast.binding_identifier(span, ast.ident(CREATE_MEMO_LOCAL)),
+                ImportOrExportKind::Value,
+            );
+            match import.specifiers.as_mut() {
+                Some(specifiers) => specifiers.push(specifier),
+                None => import.specifiers = Some(ast.vec1(specifier)),
+            }
         }
         if !added {
             let span = Span::new(0, 0);
@@ -2582,5 +2819,93 @@ const m = createMemo($(function* () { return yield* count; }));
         .unwrap();
         assert!(off.contains("createMemo($(function() {"), "{off}");
         assert!(off.contains("_$perform(count)"), "{off}");
+    }
+
+    // --- host fusion of generator blocks v2 ------------------------------------
+
+    #[test]
+    fn v2_fusion_erases_memos_effect_computes_and_hole_reads() {
+        let out = fused_dom(
+            r#"import { $component, $signal, $memo, $effect } from "solid-js";
+export const Card = $component(function* (props) {
+  const [n, setN] = yield* $signal(0);
+  const doubled = yield* $memo(function* () { return (yield* n) * 2; });
+  yield* $effect(function* () { log(yield* doubled); });
+  return function* () { return <p>{yield* doubled}{yield* n}</p>; };
+});
+"#,
+        )
+        .unwrap();
+        // `$memo` in a lowered setup: `createMemo` from the same module.
+        assert!(
+            out.contains(
+                "const doubled = _$createMemo(function() {
+		return n() * 2;"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains("createMemo as _$createMemo } from \"solid-js\""),
+            "{out}"
+        );
+        // The split effect's compute is a plain function.
+        assert!(
+            out.contains(
+                "}, 1), function() {
+		return [doubled()];"
+            ),
+            "{out}"
+        );
+        // Hole reads of proven accessors are direct.
+        assert!(
+            !out.contains("_$perform(doubled)") && !out.contains("_$perform(n)"),
+            "{out}"
+        );
+        // The view stays a block (a view is rendered as one).
+        assert!(out.contains("return _$$(function() {"), "{out}");
+    }
+
+    #[test]
+    fn v2_fusion_keeps_performs_that_may_run_in_the_block() {
+        let out = fused_dom(
+            r#"import { $component, $signal, $memo } from "solid-js";
+const Child = $component(function* (props) {
+  return function* () { return <i>{yield* props.v}</i>; };
+});
+export const Parent = $component(function* () {
+  const [n] = yield* $signal(0);
+  const later = yield* $memo(function* () { return helper(yield* n); });
+  return function* () {
+    const top = yield* n;
+    return <div title={yield* n}><Child v={yield* n} />{top}{yield* later}</div>;
+  };
+});
+"#,
+        )
+        .unwrap();
+        // A read in the view body itself, an attribute and a component prop
+        // may run with the block's guard raised: `perform` stays.
+        assert!(out.contains("const top = _$perform(n);"), "{out}");
+        assert!(out.matches("_$perform(n)").count() >= 3, "{out}");
+        // The memo body calls a helper: still erasable (only performs matter).
+        assert!(
+            out.contains(
+                "_$createMemo(function() {
+		return helper(n());"
+            ),
+            "{out}"
+        );
+
+        // SSR output evaluates holes inline: no hole erasure.
+        let ssr_out = fused(
+            r#"import { $component, $signal } from "solid-js";
+export const Hole = $component(function* () {
+  const [n] = yield* $signal(0);
+  return function* () { return <p>{yield* n}</p>; };
+});
+"#,
+        )
+        .unwrap();
+        assert!(ssr_out.contains("_$perform(n)"), "{ssr_out}");
     }
 }

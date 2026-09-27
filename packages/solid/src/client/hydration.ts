@@ -2605,16 +2605,19 @@ export function Hydration(props: { id?: string; children: SolidElement }): Solid
   return props.children as unknown as SolidElement;
 }
 
-// Generator blocks v2: `$signal` / `$memo` / `$store` create hydration-aware
-// primitives. Registered on first use of a block constructor (client/blocks.ts),
-// never at module scope: this file ships inside the flat solid-js bundle, where
-// a top-level call can't be shaken, and registering names `createStore` — which
-// kept the whole store (~24 kB min) in every app, store or not (core runtime
-// slicing, documentation/plans/core-runtime-slicing.md).
-let blockPrimitivesRegistered = false;
-/** @internal Register the hydration-aware block primitives (idempotent). */
-export function ensureBlockPrimitives(): void {
-  if (blockPrimitivesRegistered) return;
-  blockPrimitivesRegistered = true;
-  setBlockPrimitives({ createSignal, createMemo, createStore, createEffect });
+// Generator blocks v2: `$signal` / `$memo` / `$store` / `$effect` create
+// hydration-aware primitives. Each block constructor (client/blocks.ts)
+// registers only the primitive it needs, on first use — never at module
+// scope: this file ships inside the flat solid-js bundle, where a top-level
+// call can't be shaken, and registering `createStore` kept the whole store
+// (~24 kB min) in every app (core runtime slicing; blocks v2 performance).
+let blockPrimitives = 0;
+/** @internal Register one hydration-aware block primitive (idempotent per bit). */
+export function useBlockPrimitive(
+  bit: number,
+  primitive: Parameters<typeof setBlockPrimitives>[0]
+): void {
+  if (blockPrimitives & bit) return;
+  blockPrimitives |= bit;
+  setBlockPrimitives(primitive);
 }
