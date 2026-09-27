@@ -1274,6 +1274,8 @@ function generatorBody(fn: unknown, asEffect?: boolean): unknown {
  * admission into `JSX.Element`.
  */
 export function renderBlock<B extends AnyBlock>(block: B): BlockValue<B> {
+  // A deferred component call (`lazyView`) resolves to its view first.
+  if (!(block as any)[BLOCK] && (block as any)[VIEW]) return renderBlock((block as any)());
   return runBlockAs(JSX, block, undefined) as BlockValue<B>;
 }
 
