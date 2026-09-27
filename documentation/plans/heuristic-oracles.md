@@ -48,7 +48,7 @@ For each heuristic: what the compiler's fact buys, the best **runtime-only** alt
 | C2 cross-component fusion | DOM replace −19% | – | all | As H1, across a component boundary |
 | H9 status pass-through | refetch −13%; with H1, mount −43% and refetch −44% | all memos transparent: **44 tests fail**; single-slot pending source reverted upstream (#2893) | **all** (short of a pull-based status redesign) | Intermediate status is observable (`isPending`, untracked reads) |
 | H13 exception-free suspension | bound ≤ 8% of async mount (≈1.3k instructions per throw) | – | all | A plain function compute can only be unwound by throwing |
-| **S2 store scalar replacement** | **mount −76%, update −67%, select −29%** | cheaper target registration: ≈6% of store mount | ≈70 points | Cannot prove the store never escapes; coverage 2 of 15 stores |
+| **S2 store scalar replacement** | **mount −76%, update −67%, select −29%**; JFB store app: swap −59%, remove −62%, run1k −40% | cheaper target registration: ≈6% of store mount; proxy-free handles (`storeHandles`, handle-aware `<For>`): noise to mixed on JFB | ≈70 points | Cannot prove the store never escapes; coverage 2 of 15 stores |
 | S4 static store field | mount −20%, update −7% | – | all | Any setter anywhere can write the path later (test) |
 | A1 sync action as batch | −15% per call | R5 lazy transaction: **9 tests fail** | all | Learns the body was synchronous only after running it |
 | H10 cold-scope hydration: bindings over signals no client write reaches are not created | DOM hydration **−27%** (labels), −44% (all but selection), **−57%** with H4 | Defer bindings until first write (moves the work to the first click); defer until idle (no total saving) | all of the total-work saving | Learns a binding's sources only by running it once, which is exactly the work skipped. Unsafe on an unseen write (test in `hydrate/bench.mjs --check`) |
@@ -438,6 +438,31 @@ What this changes:
 - **Their application-level size depends on how the app is written.** Written idiomatically, the JFB app and TodoMVC (stack B) contain few of the patterns H1 and R1b remove. Fusion pays where authors write derived memos: stack B's dashboard, local chains, the census's 29% of memos. It does not pay in list benchmarks already hand-optimized with projections.
 - **H7 is the one DOM heuristic confirmed on Tier 2**, and only where text reaches the DOM through generic JSX child inserts.
 - **JFB on this 4-core shared VM resolves about ±15% per cell.** Smaller effects need JFB on dedicated hardware with more iterations; the repo's Tier-2 practice is 10+ repetition medians on the same machine. Until then, treat the DOM-lane deltas of 15% or less in rounds 1–3 as unconfirmed on Tier 2.
+
+### Proxy-free stores at app level (JFB store app)
+
+The S1/S2 question was re-run on a Solid 2 port of JFB's `keyed/solid-store`. Setup: JFB's own runner, 40 iterations (50 for select), two runs in reversed order, and an A/A floor of about ±7%. Details are in `heuristic-oracles/jfb-store/`. The equivalence gate also checks keyed row identity; an earlier session that passed on HTML alone was invalid and is archived in `rowblocks/`.
+
+| Variant | vs the proxy store app |
+| --- | --- |
+| Strict-style source (`$` blocks, lowered path reads, no handles) | create10k +10% (real); create-after, remove and clear +6% to +15% (consistent, inside the band) |
+| **`storeHandles` compiler output** | Noise on all 9 benchmarks versus strict. Only the root store became a handle: the rows array and every row stay proxies (the projection read and `<For>` escape) |
+| Handle-aware `<For>` (hand edit: rows are store targets with no proxy) | run1k −12% to −23%, swap −12% to −15%, remove −15% to −16%; **create10k +15% (real)**, replace and clear +8% to +15% |
+| **S2: per-row signals** (the `keyed/solid` shape) | **run1k −40%, update −31%, swap −59%, remove −62%, create10k −17%, create-after −31%** (all real) |
+
+- **Proxy-free stores as they exist don't help a list app.** A handle-aware `<For>` trades wins on some operations for losses on others: it rebuilds the child-handle array on every change.
+- **The store's cost is in writes and notification**, not read traps: path-setter drafts, per-key store nodes, and the array's `$TRACK` re-running `mapArray`. This matches the round-3 Tier-1 result (handles: update −1% to +14%; S2: −60%).
+- **Store-free compilation (S2) is the lever that survives at app level.** Its limit is coverage (2 of 15 stores qualify file-locally), not the size of the win.
+
+**Two strict-mode runtime bugs found on the way** (repros in `scripts/heuristics/jfb/repro-*.jsx`):
+1. **A `<For>`/`mapArray` over a store created inside a `$` block throws in production builds only.**
+   - `recompute` saves and lowers `blockGuard` only under `__DEV__` (`core.ts` ~331–339 and 461); the store `get` trap checks it in every build (`store.ts` ~1966).
+   - So the list's first run reads the array as path tokens (`[UNREAD_PATH]` / `[DIRECT_READ_IN_BLOCK]`).
+   - Reproduced at signal level against `dist/prod` (throws) and `dist/dev` (works).
+   - `packages/web/test/store-handles/app.tsx` has this shape, but the suites run dev bundles.
+2. **`$`-block rows under `<For>` lose keyed identity** (prod and dev).
+   - A row callback returning a block makes `insert` re-run and re-create every row on each list change.
+   - JFB cost: swap +631%, remove-one +760%.
 
 ## What Each Heuristic Needs From the Compiler
 
