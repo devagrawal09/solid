@@ -12,6 +12,7 @@ export {
   $store,
   $cleanup,
   $flush,
+  effectBlock,
   isComponent,
   wait,
   raise,

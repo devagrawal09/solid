@@ -22,6 +22,9 @@ import {
   COMPONENT,
   EFFECT,
   OP,
+  VIEW,
+  collectCleanups,
+  isBlock,
   dispatchBlock,
   readProp,
   runBlockAs,
@@ -47,6 +50,7 @@ import {
 import { getOwner, untrack } from "./core/index.js";
 import { getContext, setContextIterator, type Context } from "./core/context.js";
 import {
+  createEffect,
   createMemo,
   createSignal,
   createTrackedEffect,
@@ -182,12 +186,18 @@ export interface EventHandler<E = unknown, Y = unknown> {
  * (hydration-aware on the client, the server implementations on the server)
  * so a `$memo` in a `solid-js` app is a `solid-js` memo.
  */
-const primitives = { createSignal, createMemo, createStore, createTrackedEffect } as {
+const primitives = { createSignal, createMemo, createStore, createTrackedEffect, createEffect } as {
   createSignal: (value: any, options?: any) => any;
   createMemo: (fn: any, options?: any) => any;
   createStore: (value: any, options?: any) => any;
   createTrackedEffect: (fn: () => void) => void;
+  createEffect: (compute: any, effect: any) => void;
 };
+
+/** A generator body, or the block the compiler already built from it. */
+function toBlock(body: unknown): any {
+  return isBlock(body) ? body : $(body as any);
+}
 /** @internal */
 export function setBlockPrimitives(p: Partial<typeof primitives>): void {
   Object.assign(primitives, p);
@@ -240,7 +250,7 @@ export function $memo<Y extends MemoOp, R>(
   return op({
     [OP]: "create",
     kind: "memo",
-    make: () => primitives.createMemo($(body as any), options)
+    make: () => primitives.createMemo(toBlock(body), options)
   }) as any;
 }
 
@@ -251,18 +261,41 @@ export function $memo<Y extends MemoOp, R>(
  * runs as one tracked pass.
  */
 export function $effect<Y extends EffectOp>(
-  body: () => Generator<Y, void, any>
+  body: () => Generator<Y, void, any>,
+  compute?: unknown
 ): CreateOp<void, "effect"> {
   return op({
     [OP]: "create",
     kind: "effect",
-    make: () => {
-      const block = $(body as any);
-      primitives.createTrackedEffect(() => {
-        runBlockAs(EFFECT, block as any, undefined);
-      });
-    }
+    make: () => effectBlock(body, compute)
   }) as any;
+}
+
+/**
+ * @internal Create an effect block. With `compute` (compiled: the block of the
+ * effect's hoisted reads) it is a split effect: `compute` tracks the reads and
+ * the body runs as the effect half with the values as its input, its
+ * `$cleanup`s returned as the half's cleanup. Without, the body runs as one
+ * tracked pass.
+ */
+export function effectBlock(body: unknown, compute?: unknown): void {
+  const block = toBlock(body);
+  if (!compute) {
+    primitives.createTrackedEffect(() => {
+      runBlockAs(EFFECT, block, undefined);
+    });
+    return;
+  }
+  primitives.createEffect(compute, (values: unknown) => {
+    const cleanups = collectCleanups(() => {
+      runBlockAs(EFFECT, block, values);
+    });
+    return cleanups.length
+      ? () => {
+          for (const fn of cleanups) fn();
+        }
+      : undefined;
+  });
 }
 
 /** `yield* $cleanup(fn)` — run `fn` when the component (or the effect run) is disposed. */
@@ -309,7 +342,7 @@ setContextIterator(function* (context) {
 export function $event<E = unknown, Y extends EventOp = never>(
   body: (event: E) => Generator<Y, unknown, any>
 ): EventHandler<E, Y> {
-  const block = $(body as any) as any;
+  const block = toBlock(body);
   const owner = getOwner();
   const handler = (event: E) => dispatchBlock(block, event, owner);
   return handler as any;
@@ -332,7 +365,7 @@ export function $component<P = {}, Y extends SetupOp = never, VY extends ViewOp 
   body: (props: TypedProps<P>) => Generator<Y, () => Generator<VY, unknown, any>, any>,
   flags: number = 0
 ): Component<P, ViewOf<VY>[typeof PENDING], ViewOf<VY>[typeof FAILS]> {
-  const setup = $(body as any) as any;
+  const setup = toBlock(body);
   const component = function (props: any) {
     return untrack(() => {
       const viewBody = runBlockAs(
@@ -355,7 +388,7 @@ export function $component<P = {}, Y extends SetupOp = never, VY extends ViewOp 
 /** @internal Runtime brand of `$component` functions. */
 export const COMPONENT_MARK = Symbol("component");
 /** @internal Runtime brand of views. */
-export const VIEW_MARK = Symbol("view");
+export const VIEW_MARK = VIEW;
 
 export function isComponent(value: unknown): boolean {
   return typeof value === "function" && (value as any)[COMPONENT_MARK] === true;
@@ -363,7 +396,7 @@ export function isComponent(value: unknown): boolean {
 
 /** A view: a JSX-host block. `yield*` on it evaluates to the view itself. */
 function view(body: () => Generator<any, unknown, any>): unknown {
-  const block = $(body as any) as any;
+  const block = toBlock(body);
   block[VIEW_MARK] = true;
   block[Symbol.iterator] = function* () {
     return block;

@@ -128,6 +128,7 @@ export {
   $store,
   $cleanup,
   $flush,
+  effectBlock,
   isComponent,
   setBlockPrimitives
 } from "./block-api.js";

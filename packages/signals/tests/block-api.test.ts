@@ -395,3 +395,38 @@ describe("interop: plain APIs accept generator bodies", () => {
     void setB;
   });
 });
+
+describe("call form (compiled bodies)", () => {
+  it("perform steps receipts and context, and returns child views unrendered", async () => {
+    const { perform } = await import("../src/index.js");
+    const Theme = createContext("light");
+    let handler!: (e: unknown) => void;
+    const seen: unknown[] = [];
+    const Child = $component(function () {
+      return function () {
+        return "child";
+      };
+    } as any);
+    // Hand-lowered bodies, as the compiler emits them.
+    const C = $component(function () {
+      const theme = perform(Theme as any);
+      const [count, setCount] = perform($signal(1) as any) as any;
+      handler = $event(function () {
+        seen.push(perform(setCount((c: number) => c + 1)));
+      } as any);
+      return function () {
+        const child = perform(Child({}) as any) as any;
+        return `${theme}:${perform(count)}:${renderBlock(child)}`;
+      };
+    } as any);
+    let out: unknown[] = [];
+    createRoot(() => {
+      setContext(Theme, "dark");
+      out = mount(C as any, {}).out;
+    });
+    handler(undefined);
+    flush();
+    expect(seen).toEqual([2]);
+    expect(out).toEqual(["dark:1:child", "dark:2:child"]);
+  });
+});

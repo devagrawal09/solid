@@ -2,11 +2,14 @@
  * @jsxImportSource @solidjs/web
  * @vitest-environment jsdom
  */
-// Generator blocks v2 in the DOM renderer (uncompiled blocks: the compiler
-// leaves `$component` bodies as generators until blocks v2 lowering lands).
+// Generator blocks v2 in the DOM renderer, compiled: bodies are lowered to
+// call form, `yield*` works inside JSX, effects are split, and component /
+// boundary call forms get lazy props.
 import { afterEach, describe, expect, test } from "vitest";
 import {
+  $cleanup,
   $component,
+  $effect,
   $event,
   $memo,
   $signal,
@@ -112,33 +115,22 @@ describe("$component in the DOM", () => {
         return v;
       });
       return function* () {
-        const n = yield* name;
-        return <b>{n}</b>;
+        return <b>{yield* name}</b>;
       };
     });
     const Parent = $component(function* () {
       return function* () {
-        // Hoisted: the JSX transform wraps expressions in closures, so a
-        // `yield*` inside JSX needs blocks v2 compiler lowering.
-        const child = yield* Child({});
-        return <section>{child}</section>;
+        return <section>{yield* Child({})}</section>;
       };
     });
     const root = mount();
     const dispose = render(
-      // Uncompiled, a boundary's children must be lazy (a getter) so they are
-      // created inside the boundary; the compiler emits the getters.
+      // The compiler makes boundary children lazy, so they are created inside
+      // the boundary.
       () =>
         Errored({
           fallback: err => <p>error:{err().kind}</p>,
-          get children() {
-            return Loading({
-              fallback: <p>loading</p>,
-              get children() {
-                return Parent({});
-              }
-            });
-          }
+          children: Loading({ fallback: <p>loading</p>, children: Parent({}) })
         }),
       root
     );
@@ -147,5 +139,34 @@ describe("$component in the DOM", () => {
     await landed();
     expect(root.textContent).toBe("error:not-found");
     dispose();
+  });
+
+  test("a split $effect reads, writes and cleans up", () => {
+    const log: string[] = [];
+    let bump!: () => void;
+    const C = $component(function* () {
+      const [a, setA] = yield* $signal(1);
+      const [b, setB] = yield* $signal(0);
+      bump = () => void setA(v => v + 1);
+      yield* $effect(function* () {
+        const v = yield* a;
+        yield* setB(v * 10);
+        log.push(`run ${v}`);
+        yield* $cleanup(() => log.push(`cleanup ${v}`));
+      });
+      return function* () {
+        return <i>{yield* b}</i>;
+      };
+    });
+    const root = mount();
+    const dispose = render(() => <C />, root);
+    flush();
+    expect(root.textContent).toBe("10");
+    bump();
+    flush();
+    expect(root.textContent).toBe("20");
+    expect(log).toEqual(["run 1", "cleanup 1", "run 2"]);
+    dispose();
+    expect(log.at(-1)).toBe("cleanup 2");
   });
 });

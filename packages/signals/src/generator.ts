@@ -112,6 +112,8 @@ import { installGeneratorHook, type SourceAccessor } from "./signals.js";
 export const OP: unique symbol = Symbol("block-op");
 /** Runtime tag on blocks (distinguishes them from plain accessors). */
 export const BLOCK: unique symbol = Symbol("block");
+/** @internal Brand of a component's view: `yield*` on it evaluates to the view. */
+export const VIEW: unique symbol = Symbol("view");
 /** The block's body, for delegation with an input (`call`). */
 const BODY: unique symbol = Symbol("block-body");
 /** The owner in scope when the block was created (its defining component). */
@@ -1227,6 +1229,28 @@ export function runBlockAs<B extends AnyBlock>(host: Host, block: B, input: unkn
   }
 }
 
+/**
+ * Where `$cleanup` registers: the owner (a component setup, a tracked
+ * effect run), or — for the effect half of a split effect, which has no owner
+ * of its own — the list the half returns as its cleanup.
+ */
+let cleanupSink: (() => void)[] | null = null;
+function registerCleanup(fn: () => void): void {
+  if (cleanupSink) cleanupSink.push(fn);
+  else cleanup(fn);
+}
+/** @internal Run `fn`, collecting the `$cleanup`s it registers. */
+export function collectCleanups(fn: () => void): (() => void)[] {
+  const prev = cleanupSink;
+  const sink: (() => void)[] = (cleanupSink = []);
+  try {
+    fn();
+  } finally {
+    cleanupSink = prev;
+  }
+  return sink;
+}
+
 let generatorHookInstalled = false;
 const GENERATOR_FUNCTION_PROTO = Object.getPrototypeOf(function* () {});
 
@@ -1516,7 +1540,13 @@ export function perform<S extends AnySetter>(target: WriteOp<S>): ReturnType<S>;
 export function perform(target: RaiseOp<any> | AsyncOp<any, any>): never;
 export function perform(target: unknown): unknown {
   if (typeof target === "function") {
-    if ((target as any)[BLOCK]) return delegateSync(target as AnyBlock, undefined);
+    if ((target as any)[BLOCK]) {
+      // A child view is a value (`yield* Child(p)` evaluates to its view).
+      if ((target as any)[VIEW]) return target;
+      return delegateSync(target as AnyBlock, undefined);
+    }
+    // A context provider (`yield* Ctx`) is stepped; an accessor is read.
+    if (ownIterator(target)) return stepSync(target as any);
     return readGuarded(target as () => unknown);
   }
   // A lowered bare identifier that holds a path token (`const u = store.user;
@@ -1543,7 +1573,7 @@ export function perform(target: unknown): unknown {
       case "create":
         return readGuarded(target.make);
       case "cleanup":
-        return void cleanup(target.fn);
+        return void registerCleanup(target.fn);
       case "context":
         return readGuarded(target.read);
       case "flush":
@@ -1560,7 +1590,25 @@ export function perform(target: unknown): unknown {
         );
     }
   }
+  // Setter receipts and context objects: step their iterator here.
+  if (ownIterator(target)) return stepSync(target as any);
   throw invalidYield(target);
+}
+
+function ownIterator(target: unknown): boolean {
+  return (
+    target != null &&
+    Object.prototype.hasOwnProperty.call(target, Symbol.iterator) &&
+    (target as any)[Symbol.iterator] !== accessorIterator
+  );
+}
+
+/** Call-form `yield*` over a non-op iterable: perform each operation it yields. */
+function stepSync(iterable: Iterable<unknown>): unknown {
+  const it = (iterable as any)[Symbol.iterator]() as Iterator<unknown>;
+  let step = it.next();
+  while (!step.done) step = it.next(perform(step.value as any));
+  return step.value;
 }
 
 /** Call-form delegation: the callee runs under the caller's host. */
@@ -1700,7 +1748,7 @@ function step<R>(
         continue;
       case "cleanup": {
         const fn = op.fn;
-        result = settle(iterator, () => void cleanup(fn));
+        result = settle(iterator, () => void registerCleanup(fn));
         continue;
       }
       case "context":

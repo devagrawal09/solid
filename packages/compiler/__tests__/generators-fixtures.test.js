@@ -70,13 +70,28 @@ describe("block lowering contract", () => {
     expect(code).toContain("_$insert(_el$, yield* count, null);");
   });
 
-  it("does not disturb modules that never import `$`", () => {
+  it("does not disturb generators no block host receives", () => {
     const plain =
-      'import { createMemo } from "solid-js";\nexport const v = createMemo(function* () { yield* count; throw new Error("x"); });\n';
+      'import { createSignal } from "solid-js";\nexport function* walk() { yield* count; throw new Error("x"); }\n';
     const { code } = transform(plain, { filename: "src/plain.js" });
-    expect(code).toContain("function* () {");
+    expect(code).toContain("function* walk() {");
     expect(code).toContain("yield* count;");
     expect(code).toContain('throw new Error("x")');
+  });
+
+  it("lowers a generator `createMemo` body as a memo block (blocks v2)", () => {
+    const { code } = transform(
+      'import { createMemo } from "solid-js";\nexport const v = createMemo(function* () { return (yield* count) + 1; });\n',
+      { filename: "src/memo.js" }
+    );
+    expect(code).toContain("createMemo(_$$(function() {");
+    expect(code).toContain("_$perform(count) + 1");
+    expect(() =>
+      transform(
+        'import { createMemo } from "solid-js";\nexport const v = createMemo(function* () { yield* count; throw new Error("x"); });\n',
+        { filename: "src/memo.js" }
+      )
+    ).toThrow(/\[THROW_IN_BLOCK\]/);
   });
 
   describe("diagnostics", () => {

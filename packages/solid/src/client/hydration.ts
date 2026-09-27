@@ -2603,4 +2603,4 @@ export function Hydration(props: { id?: string; children: SolidElement }): Solid
 }
 
 // Generator blocks v2: `$signal` / `$memo` / `$store` create hydration-aware primitives.
-setBlockPrimitives({ createSignal, createMemo, createStore });
+setBlockPrimitives({ createSignal, createMemo, createStore, createEffect });

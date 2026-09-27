@@ -154,6 +154,31 @@ Values carry the result as phantom flags (`[PENDING]: boolean`, `[FAILS]: E`) so
 `JSX.Element`, `JSX.ElementType`, `Loading`, `Errored` and `render` can check them
 structurally.
 
+## Compiler
+
+`packages/compiler/src/blocks_v2.rs` runs before the generator pass and rewrites the
+v2 forms into `$(function* …)` blocks, which that pass lowers to call form (`yield* x`
+→ `perform(x)`, member chains → path readers, `yield*` inside JSX supported):
+
+- the generator argument of `$component` / `$memo` / `$event` / single-argument
+  `createMemo`, and the view a setup returns, are wrapped in `$` (the runtime
+  constructors accept a prebuilt block);
+- `$effect` / `createEffect(function* …)` are split: every read moves into a compute
+  block, the body becomes the effect half and receives the values as `_$v[i]`, and its
+  `$cleanup`s are returned as the half's cleanup. The split is refused (one tracked
+  pass instead) for a read in a loop, a read of a binding declared inside the effect,
+  or a body with parameters. A plain `createEffect(function* …)` becomes
+  `effectBlock(…)`;
+- `Loading(…)` / `Errored(…)` anywhere, and capitalized calls with an object literal
+  inside a view, get getters for their non-literal props. A `yield*` inside such props
+  is a compile error (`[YIELD_IN_LAZY_PROP]`): the getter would not belong to the view;
+- host rules are compile errors (`[OP_NOT_ALLOWED]`), classified from syntax: `$signal`
+  / `$store` / `$memo` / `$effect` calls create, `$cleanup` / `$flush` / `raise` /
+  `attempt` are themselves, a call of a `$signal` / `$store` setter writes, and a read
+  of a `$signal` / `$memo` accessor or a props path is a read setup may not do;
+- in memo and event bodies an `attempt` may be async, so a body that attempts stays a
+  generator for the runtime driver. Effect, setup and view bodies lower fully.
+
 ## Build plan
 
 1. Types and type tests (`packages/signals`, `solid-js`, `@solidjs/web` JSX types).

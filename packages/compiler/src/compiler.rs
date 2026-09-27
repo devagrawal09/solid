@@ -329,7 +329,12 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
                 typed: source_type.is_typescript(),
                 jsx_plain: matches!(options.generate, Generate::Dom | Generate::Ssr),
             });
-        crate::generators::transform_generators(&allocator, &mut program, source, proofs)
+        // Generator blocks v2: rewrite `$component` / `$memo` / `$effect` /
+        // `$event` bodies (and generator `createMemo` / `createEffect`) into
+        // `$` blocks the generator pass lowers.
+        let v2 = crate::blocks_v2::transform_blocks_v2(&allocator, &mut program, source)
+            .map_err(CompileError::transform)?;
+        crate::generators::transform_generators(&allocator, &mut program, source, proofs, &v2)
             .map_err(CompileError::transform)?;
     }
 

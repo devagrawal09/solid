@@ -88,6 +88,7 @@ use oxc_syntax::identifier::is_identifier_name;
 use oxc_syntax::scope::ScopeFlags;
 
 use crate::block_proofs::{BLOCK_SYNC, ProofSymbols, Prover};
+use crate::blocks_v2::{V2Bodies, V2Kind};
 use crate::shared::ast::{argument_to_expression, expression_to_argument};
 use crate::shared::ast_builder::AstBuilder;
 
@@ -128,11 +129,12 @@ pub(crate) fn transform_generators<'a>(
     program: &mut Program<'a>,
     source: &'a str,
     proofs: Option<ProofConfig>,
+    v2: &V2Bodies,
 ) -> Result<(), String> {
     if !imports_adapter(program) {
         return Ok(());
     }
-    let plan = build_plan(program, source, proofs)?;
+    let plan = build_plan(program, source, proofs, v2)?;
     if plan.calls.is_empty() {
         return Ok(());
     }
@@ -227,6 +229,8 @@ pub(crate) struct RuntimeSymbols {
     pub(crate) two_arg_hosts: Vec<SymbolId>,
     pub(crate) create_signal: Vec<SymbolId>,
     pub(crate) create_memo: Vec<SymbolId>,
+    pub(crate) wait: Vec<SymbolId>,
+    pub(crate) attempt: Vec<SymbolId>,
 }
 
 /// The runtime import bindings of a program (after `SemanticBuilder`).
@@ -252,8 +256,12 @@ pub(crate) fn collect_runtime_symbols(program: &Program<'_>) -> RuntimeSymbols {
             match specifier.imported.name().as_str() {
                 "$" => symbols.adapter.push(symbol_id),
                 "raise" | "attempt" | "write" | "call" | "readStore" => {
-                    symbols.sync_ops.push(symbol_id)
+                    symbols.sync_ops.push(symbol_id);
+                    if specifier.imported.name() == "attempt" {
+                        symbols.attempt.push(symbol_id);
+                    }
                 }
+                "wait" => symbols.wait.push(symbol_id),
                 "createMemo" => {
                     symbols.one_arg_hosts.push(symbol_id);
                     symbols.create_memo.push(symbol_id);
@@ -274,6 +282,7 @@ fn build_plan(
     program: &Program<'_>,
     source: &str,
     proofs: Option<ProofConfig>,
+    v2: &V2Bodies,
 ) -> Result<Plan, String> {
     let semantic = SemanticBuilder::new()
         .with_build_nodes(true)
@@ -306,6 +315,7 @@ fn build_plan(
         plan: Plan,
         error: Option<String>,
         prover: Option<Prover<'s>>,
+        v2: &'s V2Bodies,
     }
 
     impl<'b> Visit<'b> for Collector<'_> {
@@ -391,6 +401,7 @@ fn build_plan(
                 scoping: self.scoping,
                 symbols: self.symbols,
                 source: self.source,
+                v2: self.v2.kind_of(call.span),
                 spans: Vec::new(),
                 paths: Vec::new(),
                 lowerable: true,
@@ -434,6 +445,7 @@ fn build_plan(
         plan: Plan::default(),
         error: None,
         prover,
+        v2,
     };
     collector.visit_program(program);
     if let Some(error) = collector.error {
@@ -463,6 +475,10 @@ struct YieldCollector<'s> {
     scoping: &'s Scoping,
     symbols: &'s RuntimeSymbols,
     source: &'s str,
+    /// The v2 kind of a synthesized body (`blocks_v2.rs`): its calls are
+    /// synchronous operations (receipts, creations, child views) except an
+    /// `attempt` that may suspend.
+    v2: Option<V2Kind>,
     spans: Vec<Span>,
     /// Member-chain yields (`yield* root.a[0][k]`), lowered to path reads.
     paths: Vec<PathYield>,
@@ -524,12 +540,38 @@ impl<'b> Visit<'b> for YieldCollector<'_> {
             return;
         }
         match it.argument.as_ref() {
-            Some(operand) if is_operand_lowerable(operand, self.scoping, self.symbols) => {
+            Some(operand)
+                if match (self.v2, operand) {
+                    (Some(kind), Expression::CallExpression(_)) => {
+                        v2_operand_lowerable(operand, kind, self.scoping, self.symbols)
+                    }
+                    _ => is_operand_lowerable(operand, self.scoping, self.symbols),
+                } =>
+            {
                 self.spans.push(it.span);
             }
             _ => self.lowerable = false,
         }
         walk::walk_yield_expression(self, it);
+    }
+}
+
+/// A v2 body's call operands run synchronously under `perform` (setter
+/// receipts, `$signal` / `$memo` creations, `$cleanup`, child views, helpers),
+/// except `wait` and an `attempt` in a kind where it may suspend.
+fn v2_operand_lowerable(
+    expression: &Expression<'_>,
+    kind: V2Kind,
+    scoping: &Scoping,
+    symbols: &RuntimeSymbols,
+) -> bool {
+    let Expression::CallExpression(call) = expression else {
+        return false;
+    };
+    match resolve_callee(scoping, call) {
+        Some(symbol) if symbols.wait.contains(&symbol) => false,
+        Some(symbol) if symbols.attempt.contains(&symbol) => !kind.attempt_may_suspend(),
+        _ => true,
     }
 }
 

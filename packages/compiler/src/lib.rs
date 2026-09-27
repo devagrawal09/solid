@@ -18,6 +18,7 @@ mod block_projection;
 mod block_proofs;
 mod capabilities;
 mod block_scope;
+mod blocks_v2;
 mod compiler;
 #[cfg(feature = "node")]
 mod config;

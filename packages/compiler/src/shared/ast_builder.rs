@@ -188,7 +188,20 @@ impl<'a> AstBuilder<'a> {
         Expression::new_logical_expression(span, left, operator, right, &self.inner())
     }
 
-    pub(crate) fn expression_parenthesized(&self, span: Span, expression: Expression<'a>) -> Expression<'a> {
+    pub(crate) fn expression_yield(
+        &self,
+        span: Span,
+        delegate: bool,
+        argument: Option<Expression<'a>>,
+    ) -> Expression<'a> {
+        Expression::new_yield_expression(span, delegate, argument, &self.inner())
+    }
+
+    pub(crate) fn expression_parenthesized(
+        &self,
+        span: Span,
+        expression: Expression<'a>,
+    ) -> Expression<'a> {
         Expression::new_parenthesized_expression(span, expression, &self.inner())
     }
 

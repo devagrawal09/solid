@@ -49,6 +49,7 @@ export {
   $store,
   $cleanup,
   $flush,
+  effectBlock,
   isComponent,
   wait,
   raise,
@@ -3162,4 +3163,4 @@ export function storeHasOptimisticFamily(_proxy: any): boolean {
 }
 
 // Generator blocks v2: `$signal` / `$memo` / `$store` / `$effect` use the server primitives.
-setBlockPrimitives({ createSignal, createMemo, createStore, createTrackedEffect });
+setBlockPrimitives({ createSignal, createMemo, createStore, createTrackedEffect, createEffect });
