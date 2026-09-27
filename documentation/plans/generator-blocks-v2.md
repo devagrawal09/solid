@@ -196,5 +196,7 @@ v2 forms into `$(function* …)` blocks, which that pass lowers to call form (`y
    direct setter calls and v2 receipts). Done.
 
 Follow-ups: the effect split's dynamic-read optimization (hoist only the reads each
-branch takes), `PROPS_COMPILED` (skip the typed-props proxy when every prop read was
-lowered), and a Volar plugin so editors show the compile-time host rules inline.
+branch takes) and a Volar plugin so editors show the compile-time host rules inline.
+`PROPS_COMPILED` (skip the typed-props proxy when every prop read was lowered) is done;
+its cost, and the rest of the runtime and bundle cost of blocks, is measured in
+[blocks-v2-performance.md](./blocks-v2-performance.md).

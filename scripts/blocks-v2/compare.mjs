@@ -5,10 +5,11 @@
 //   node scripts/blocks-v2/compare.mjs --runtimes baseline,r3,current
 //        [--scenarios a,b] [--variants compiled,uncompiled] [--n 100] [--ops 20] [--jobs 2]
 //
-// Runtime names are snapshots written by `build-prod.mjs --snapshot <name>`
+// Runtime names are snapshots written by `build-prod.mjs --snapshot <name>`,
+// optionally paired with a saved compiler binary (`baseline+baseline-compiler`)
 // (node_modules/.cache/blocks-v2/runtimes/<name>), or `current`
 // (packages/signals/dist/prod). Each cell is two processes (ops, 2*ops).
-import { buildModules, parseArgs } from "./build.mjs";
+import { buildModules, parseArgs, parseSpec } from "./build.mjs";
 import { irPerOp, pool, runtimePath } from "./measure.mjs";
 import { SCENARIOS, VARIANTS } from "./scenarios.mjs";
 
@@ -25,12 +26,17 @@ const rows = [];
 for (const scenario of SCENARIOS) {
   if (!ONLY_SCENARIOS.includes(scenario.name)) continue;
   for (const mode of scenario.modes) {
-    for (const variant of ONLY) rows.push({ scenario: scenario.name, mode, variant, cells: {} });
+    for (const variant of ONLY) {
+      if (scenario[VARIANTS[variant].source])
+        rows.push({ scenario: scenario.name, mode, variant, cells: {} });
+    }
   }
 }
 for (const runtime of runtimes) {
+  const spec = parseSpec(runtime);
   const modules = buildModules({
-    runtime: runtimePath(runtime),
+    runtime: runtimePath(spec.runtime),
+    compiler: spec.compiler,
     only: ONLY,
     scenarios: ONLY_SCENARIOS,
     tag: "compare-" + runtime.replace(/\W+/g, "-")

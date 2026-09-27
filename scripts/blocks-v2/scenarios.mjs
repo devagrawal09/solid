@@ -61,7 +61,11 @@ function scenario(name, description, modes, parts) {
     filename: `${name}.jsx`,
     handwritten: shell(H, { ...common, components: parts.handwritten }),
     v2: shell(V, { ...common, components: parts.v2 }),
-    uncompiled: shell(V, { ...common, components: parts.uncompiled ?? parts.v2 })
+    uncompiled: shell(V, { ...common, components: parts.uncompiled ?? parts.v2 }),
+    // Optional: the handwritten program with each component's DOM returned
+    // through a function (`return () => <…/>`), i.e. rendered by its own
+    // insert effect exactly as a v2 view is — isolates that structural cost.
+    lazyView: parts.lazyView && shell(H, { ...common, components: parts.lazyView })
   };
 }
 
@@ -98,6 +102,12 @@ export const SCENARIOS = [
     const d = createMemo(() => c() * 2);
     const inc = () => setC(c() + 1);
     return <p onClick={inc}>{d()}{props.label}</p>;
+  }`,
+      lazyView: `function Item(props) {
+    const [c, setC] = createSignal(0);
+    const d = createMemo(() => c() * 2);
+    const inc = () => setC(c() + 1);
+    return () => <p onClick={inc}>{d()}{props.label}</p>;
   }`,
       v2: `const Item = $component(function* (props) {
     const [c, setC] = yield* $signal(0);
@@ -246,9 +256,10 @@ export const SCENARIOS = [
   )
 ];
 
-/** Variant → (source, compiler options). */
+/** Variant → (source, compiler options). A scenario without the source skips the variant. */
 export const VARIANTS = {
   handwritten: { source: "handwritten", options: {} },
+  lazyView: { source: "lazyView", options: {} },
   compiled: { source: "v2", options: {} },
   fused: { source: "v2", options: { hostFusion: true } },
   uncompiled: { source: "uncompiled", options: { generators: false } }

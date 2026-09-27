@@ -1,62 +1,33 @@
 #!/usr/bin/env node
-// Instruction counts per operation for the blocks-v2 scenarios (the Track A
-// methodology, scripts/track-a/icount.mjs): each cell runs twice under
-// `valgrind --tool=cachegrind --cache-sim=no` with the same warmup and
-// `ops` vs `2*ops` operations; (twice - once) / ops is instructions per
-// operation with startup, module loading and warmup cancelled out. Node runs
-// `--predictable --single-threaded` (deterministic JIT tiering and GC).
+// Instruction counts per operation for the blocks-v2 scenarios, one runtime,
+// with ratios to the handwritten program (the Track A methodology,
+// scripts/track-a/icount.mjs; see measure.mjs). To compare runtimes or
+// compilers side by side use compare.mjs.
 //
-//   node scripts/blocks-v2/icount.mjs [--n 100] [--ops 20] [--variants a,b]
-//        [--scenarios a,b] [--runtime packages/signals/dist/prod] [--out f.json]
-//        [--jobs 3]
-import { execFileSync, spawn } from "node:child_process";
+//   node scripts/blocks-v2/icount.mjs [--n 100] [--ops 50] [--variants a,b]
+//        [--scenarios a,b] [--runtime <snapshot name or index.js>] [--out f.json]
+//        [--jobs 4]
+import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import { ROOT } from "../track-a/compile.mjs";
 import { buildModules, parseArgs } from "./build.mjs";
+import { irPerOp, pool, runtimePath, WARMUP } from "./measure.mjs";
 import { SCENARIOS, VARIANTS } from "./scenarios.mjs";
 
-const here = dirname(fileURLToPath(import.meta.url));
 const args = parseArgs(process.argv.slice(2));
 const N = Number(args.n ?? 100);
-const OPS = Number(args.ops ?? 20);
-const JOBS = Number(args.jobs ?? 3);
-const WARMUP = { mount: 20, update: 60 };
+const OPS = Number(args.ops ?? 50);
+const JOBS = Number(args.jobs ?? 4);
 const ONLY = args.variants ? args.variants.split(",") : null;
 const ONLY_SCENARIOS = args.scenarios ? args.scenarios.split(",") : null;
+const runtime = runtimePath(args.runtime);
 const modules = buildModules({
-  runtime: args.runtime,
+  runtime,
   only: ONLY,
   scenarios: ONLY_SCENARIOS,
   tag: "icount-" + (args.runtime ?? "prod").replace(/\W+/g, "-")
 });
-
-function ir(module, mode, ops) {
-  return new Promise((resolve, reject) => {
-    const child = spawn("valgrind", [
-      "--tool=cachegrind",
-      "--cache-sim=no",
-      "--cachegrind-out-file=/dev/null",
-      process.execPath,
-      "--predictable",
-      "--single-threaded",
-      join(here, "worker.mjs"),
-      pathToFileURL(module).href,
-      mode,
-      String(N),
-      String(WARMUP[mode]),
-      String(ops)
-    ]);
-    let stderr = "";
-    child.stderr.on("data", d => (stderr += d));
-    child.on("close", () => {
-      const match = /I\s+refs:\s+([\d,]+)/.exec(stderr);
-      if (!match) reject(new Error(`no instruction count:\n${stderr.slice(-2000)}`));
-      else resolve(Number(match[1].replaceAll(",", "")));
-    });
-  });
-}
 
 const cells = [];
 for (const scenario of SCENARIOS) {
@@ -64,24 +35,21 @@ for (const scenario of SCENARIOS) {
   for (const mode of scenario.modes) {
     for (const variant of Object.keys(VARIANTS)) {
       if (ONLY && !ONLY.includes(variant)) continue;
+      if (!modules[`${scenario.name}/${variant}`]) continue;
       cells.push({ scenario: scenario.name, mode, variant });
     }
   }
 }
 
 const results = {};
-let next = 0;
-async function worker() {
-  while (next < cells.length) {
-    const cell = cells[next++];
-    const module = modules[`${cell.scenario}/${cell.variant}`];
-    const [once, twice] = await Promise.all([ir(module, cell.mode, OPS), ir(module, cell.mode, 2 * OPS)]);
+await pool(
+  cells.map(cell => async () => {
     const key = `${cell.scenario}/${cell.mode}/${cell.variant}`;
-    results[key] = { irPerOp: (twice - once) / OPS, irOnce: once, irTwice: twice };
-    process.stderr.write(`${key}: ${Math.round((twice - once) / OPS)} Ir/op\n`);
-  }
-}
-await Promise.all(Array.from({ length: Math.max(1, Math.floor(JOBS / 2)) }, worker));
+    results[key] = await irPerOp(modules[`${cell.scenario}/${cell.variant}`], cell.mode, OPS, N);
+    process.stderr.write(`${key}: ${Math.round(results[key].irPerOp)} Ir/op\n`);
+  }),
+  Math.max(1, Math.floor(JOBS / 2))
+);
 
 const variants = Object.keys(VARIANTS).filter(v => !ONLY || ONLY.includes(v));
 let md = `| scenario (per op, n=${N}) | ${variants.join(" | ")} |\n| --- |${variants.map(() => " ---: |").join("")}\n`;
@@ -107,7 +75,7 @@ const result = {
     commit: sha,
     node: process.version,
     nodeFlags: "--predictable --single-threaded",
-    runtime: args.runtime ?? "packages/signals/dist/prod",
+    runtime: runtime ?? "packages/signals/dist/prod",
     n: N,
     ops: OPS,
     warmup: WARMUP

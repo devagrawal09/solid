@@ -14,6 +14,7 @@ let failed = false;
 for (const scenario of SCENARIOS) {
   const traces = {};
   for (const variant of Object.keys(VARIANTS)) {
+    if (!modules[`${scenario.name}/${variant}`]) continue;
     const { make } = await import(pathToFileURL(modules[`${scenario.name}/${variant}`]).href);
     const app = make(N);
     const trace = [];
