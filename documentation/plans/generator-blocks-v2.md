@@ -23,9 +23,9 @@ editor.
 | Function | Block kind | Allowed inside |
 | --- | --- | --- |
 | `$component(function* (props: TypedProps<P>) { …; return function* () { return <…/> } })` | component (setup) + returned **view** | setup: `$signal`, `$memo`, `$store`, `$effect`, `$cleanup`, `yield* Ctx`; view: reads only |
-| `$memo(function* / async function* () {…})` | memo | reads, `await`, `raise`, `attempt` |
+| `$memo(function* () {…})` | memo | reads, `raise`, `attempt` (sync or async) |
 | `$effect(function* () {…})` | effect | reads, writes, `$cleanup`, `raise`, `attempt` |
-| `$event(function* / async function* (e) {…})` | event | reads (current value), writes, `await`, `$flush`, `raise`, `attempt` |
+| `$event(function* (e) {…})` | event | reads (current value), writes, `$flush`, `raise`, `attempt` (sync or async) |
 
 Operations (always `yield*`):
 
@@ -39,15 +39,21 @@ Operations (always `yield*`):
 | `yield* Ctx` → the context value | context | component |
 | `yield* $flush()` | flush | event |
 | `yield* raise(error)` | failure (typed throw) | memo, effect, event |
-| `yield* attempt(fn, ...Errors)` | try/catch around `fn` (sync, or async in async blocks) | memo, effect, event |
+| `yield* attempt(fn, ...Errors)` | try/catch around `fn`; when `fn` returns a promise the block suspends until it settles (async) | memo, event (sync `fn` also in effect) |
 | `yield* Child(props)` | the child's pending and failures, propagated | view |
 
 Rules:
 
 - A plain `throw` inside a block is a compile error; use `yield* raise(e)` so the
   failure is typed. `try`/`catch` is ordinary.
-- Async is `await` inside an `async function*` (memo and event blocks only). A memo
-  reads before its first `await`; a read after it is a compile error.
+- Async is `yield* attempt(() => promise)`: the block suspends until the promise
+  settles and resumes with its value, or with the rejection thrown at the `yield*`
+  (so `try`/`catch` around it works). Memo and event blocks only. A memo reads before
+  its first async `attempt`; a read after it is an error. Blocks are always
+  `function*`, never `async function*`: inside an async generator *every* `yield*`
+  suspends (the spec awaits each delegated step), so only the first read of an async
+  memo would be tracked. Measured: `yield* a; yield* b` in an `async function*` tracks
+  `a` and not `b`.
 - Setters returned by `$signal` / `$store` always return a *write receipt*; `yield*`
   on it evaluates to the new value. Setters of plain `createSignal` are unchanged and
   may be called without `yield*` in effect and event blocks (the compiler still
@@ -110,19 +116,19 @@ block runs as a tracked effect (reads and body in one pass, writes deferred).
 
 ## Runtime model
 
-Operations are performed **where they are evaluated**: an operation's iterator runs
-the read, write, creation, cleanup or throw immediately and returns its value without
-yielding. The generator's *declared* yield type carries the effects for TypeScript;
-at runtime a block body never suspends on a `yield`, so
+Blocks run on the existing generator driver. Each operation is yielded to the driver,
+which checks the current host (dev errors name the host and the operation), performs
+it with the strict read guard lowered, and resumes the generator with the result (or
+throws the failure into it at the `yield*`). An async `attempt` suspends the run; the
+driver resumes the generator when the promise settles, with the host and guard
+restored, and a superseded run is closed instead of resumed.
 
-- a sync block runs in one `next()`;
-- an async block (`async function*`) is an ordinary async function in disguise: its
-  synchronous prefix runs inside the host's tracking scope, and `await` suspends;
-- a `yield` that actually reaches the runner (a bare `yield x`) is an error.
-
-The runner of each kind sets the current host; each operation checks it (dev errors
-name the host and the operation). The strict read guard stays raised while a block
-body runs synchronously, so a direct `count()` inside a block still fails in dev.
+New operation kinds: `create` (`$signal`, `$store`, `$memo`, `$effect`), `cleanup`,
+`context`, `flush`. New hosts: component, effect (view = the existing JSX host, memo =
+the existing reactive host, event unchanged). Setter receipts and child views do not
+reach the driver: a `$signal` setter writes when called (refusing a host that may not
+write) and its receipt evaluates to the new value; `yield* X(props)` evaluates to X's
+view, which is rendered as its own component.
 
 ## Types
 
