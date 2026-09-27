@@ -37,6 +37,7 @@ mod ssr;
 mod strict;
 mod store_handles;
 mod sync_actions;
+mod memo_fusion;
 #[cfg(feature = "tsrx")]
 mod tsrx;
 mod universal;

@@ -81,6 +81,9 @@ pub struct TransformOptions {
     /// `yield` to `syncAction(function …)` (no transaction). DOM only.
     /// Default `false`.
     pub sync_actions: Option<bool>,
+    /// Experimental: inline single-reader memos into their reader (see
+    /// `memo_fusion.rs`). Every generate. Default `false`.
+    pub memo_fusion: Option<bool>,
     /// Linker facts for `store_handles`, flattened by the JS wrapper to
     /// `source\0export\0prop` strings.
     pub store_link_facts: Option<Vec<String>>,

@@ -262,7 +262,12 @@ describe("pay-for-use tree-shaking (#2883)", () => {
     // status-free recompute lives in core/status-free.ts and shakes out
     // unless compiled output imports `statusFree` (asserted below). Measured
     // at 22,945.
-    expect(minifiedBytes).toBeLessThan(23_000);
+    // CONSCIOUS BUMP (compiler memo fusion, documentation/plans/
+    // compiler-heuristics-build.md stage 2): +121 B for the effect `equals`
+    // cut-off — the option term in createEffectNode (CONFIG_EFFECT_EQUALS)
+    // and recompute's first-run rule for such effects. A memo fused into its
+    // only reader keeps its cut-off through it. Measured at 23,066.
+    expect(minifiedBytes).toBeLessThan(23_100);
     expect(retainedFrom(retained, ["core/status-free.ts"])).toEqual([]);
   });
 

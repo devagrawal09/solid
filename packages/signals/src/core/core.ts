@@ -28,9 +28,9 @@ import {
   CONFIG_OWNED_WRITE,
   CONFIG_SLOT_NODE,
   CONFIG_NOTHROW,
+  CONFIG_EFFECT_EQUALS,
   CONFIG_ORACLE_DIRECT,
   CONFIG_ORACLE_DETACHED,
-  CONFIG_ORACLE_FUSED,
   CONFIG_STATUS_FREE,
   CONFIG_SYNC,
   CONFIG_TRANSPARENT,
@@ -499,7 +499,9 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
     let valueChanged = false;
     try {
       valueChanged =
-        (!isEffect && wasUninitialized) || !el._equals || !el._equals(compareValue, value);
+        (wasUninitialized && (!isEffect || (el._config & CONFIG_EFFECT_EQUALS) !== 0)) ||
+        !el._equals ||
+        !el._equals(compareValue, value);
     } catch (e) {
       // A throwing user comparator is an error of this node's computation.
       // Route it through the same status path as a compute-phase throw so
@@ -507,8 +509,6 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
       // flush, bypassing every boundary and wedging the queue (#2837).
       notifyStatus(el, STATUS_ERROR, e);
     }
-    // Oracle H1: a fused effect's equality gate must not swallow its first run.
-    if (__ORACLE__ && wasUninitialized && el._config & CONFIG_ORACLE_FUSED) valueChanged = true;
 
     // A committed derived change becomes a cause for this node's subscribers,
     // chaining their attribution through this node to the root write.
@@ -1066,11 +1066,11 @@ export function createEffectNode<T>(
   // +23% effect creation, caught by the creation benches). Only genuinely
   // per-node channels (boundaries) live on _x.
   if (options?.unobserved) ext(self)._unobserved = options.unobserved;
-  // Oracle H1 (a memo fused into its only reader): the effect keeps the
-  // memo's equality cut-off, so its effect phase runs only on a change.
-  if (__ORACLE__ && options?.equals) {
+  // `equals`: an equality cut-off for the effect phase (compiled memo
+  // fusion — a memo inlined into its only reader keeps its cut-off here).
+  if (options?.equals) {
     self._equals = options.equals;
-    self._config |= CONFIG_ORACLE_FUSED;
+    self._config |= CONFIG_EFFECT_EQUALS;
   }
   if (__ORACLE__ && (options as any)?.oracle) self._config |= (options as any).oracle;
   setupComputedNode(self, lazyOptions);

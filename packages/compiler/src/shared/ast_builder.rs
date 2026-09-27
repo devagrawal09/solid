@@ -188,6 +188,10 @@ impl<'a> AstBuilder<'a> {
         Expression::new_logical_expression(span, left, operator, right, &self.inner())
     }
 
+    pub(crate) fn expression_parenthesized(&self, span: Span, expression: Expression<'a>) -> Expression<'a> {
+        Expression::new_parenthesized_expression(span, expression, &self.inner())
+    }
+
     pub(crate) fn expression_object(
         &self,
         span: Span,

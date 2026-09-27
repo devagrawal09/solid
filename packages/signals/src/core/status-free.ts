@@ -41,6 +41,7 @@ import { clearStatus, notifyStatus } from "./async.js";
 import { attrHooks } from "./attribution-hooks.js";
 import {
   CONFIG_NOTHROW,
+  CONFIG_EFFECT_EQUALS,
   EFFECT_TRACKED,
   EFFECT_USER,
   NOT_PENDING,
@@ -245,7 +246,9 @@ export function recomputeStatusFree(el: Computed<any>, create: boolean): boolean
     let comparatorThrew = false;
     try {
       valueChanged =
-        (!isEffect && wasUninitialized) || !el._equals || !el._equals(compareValue, value);
+        (wasUninitialized && (!isEffect || (el._config & CONFIG_EFFECT_EQUALS) !== 0)) ||
+        !el._equals ||
+        !el._equals(compareValue, value);
     } catch (e) {
       // A throwing comparator is an error of this node's computation (see
       // recompute) — and it disproves `noThrow`.

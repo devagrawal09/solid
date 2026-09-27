@@ -231,6 +231,15 @@ export interface EffectOptions extends BaseEffectOptions {
    */
   noThrow?: boolean;
   /**
+   * Advanced. An equality cut-off for the effect phase: when the compute
+   * produces a value `equals` to the previous one, the effect callback does
+   * not run (the first run always does). Emitted by the compiler when it
+   * fuses a memo into the effect that was its only reader, so the effect
+   * keeps the memo's cut-off. Default: no cut-off (every compute run is a
+   * change).
+   */
+  equals?: false | ((prev: any, next: any) => boolean);
+  /**
    * Advanced (integration tier). When true, the effect is invisible to the
    * hydration id scheme: it inherits its parent's id instead of consuming a
    * child slot, and during hydration its compute runs live instead of

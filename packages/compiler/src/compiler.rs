@@ -130,6 +130,10 @@ pub struct CompileOptions {
     /// `syncAction(function …)` (see `sync_actions.rs`). DOM only. Default
     /// `false`.
     pub sync_actions: bool,
+    /// Experimental: inline single-reader memos into their only reader (see
+    /// `memo_fusion.rs`). Runs on every generate so hydration ids agree.
+    /// Default `false`.
+    pub memo_fusion: bool,
     /// Linker facts for `store_handles`: `(import source, exported
     /// component, verified Borrowed prop)` triples.
     pub store_link_facts: Vec<crate::store_handles::LinkFact>,
@@ -168,6 +172,7 @@ impl Default for CompileOptions {
             block_proofs: false,
             store_handles: false,
             sync_actions: false,
+            memo_fusion: false,
             store_link_facts: Vec::new(),
         }
     }
@@ -346,6 +351,12 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
     if options.host_fusion && options.generators {
         crate::generators::fuse_host_blocks(&allocator, &mut program, source)
             .map_err(CompileError::transform)?;
+    }
+
+    // Experimental: single-reader memos inlined into their reader, on every
+    // generate (a memo consumes a hydration id; both sides must agree).
+    if options.memo_fusion {
+        crate::memo_fusion::transform_memo_fusion(&allocator, &mut program);
     }
 
     // Hydration id scopes for JSX-producing `$` blocks: identical on every

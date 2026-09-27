@@ -175,11 +175,11 @@ export const CONFIG_ORACLE_DIRECT = 1 << 23;
  * node from its sources' subscriber lists: the whole cluster becomes garbage
  * together. */
 export const CONFIG_ORACLE_LOCAL = 1 << 24;
-/** FUSED: an effect node that absorbed a memo (its only reader) and carries
- * the memo's `equals`, so its effect phase runs only on a changed value. Set
- * by `createEffectNode` when an `equals` option is passed; nothing else is
- * allowed to rely on an effect's `_equals`. */
-export const CONFIG_ORACLE_FUSED = 1 << 25;
+/** An effect created with an `equals` option (compiler memo fusion: the
+ * effect keeps its fused memo's cut-off). Its first run always counts as a
+ * change; other effects' `_equals` (tracked effects set their own) keep the
+ * plain rule. */
+export const CONFIG_EFFECT_EQUALS = 1 << 25;
 /** OWNERLESS: the compute creates no primitives, registers no cleanup and
  * reads no context — it never acts as an owner. It then consumes no child id
  * from its parent (the compiler would emit the same on server and client, so

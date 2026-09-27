@@ -8,7 +8,7 @@
 // Node options are built per node from what a compiler could prove about
 // THAT node, never blanket-applied:
 //   fuse  — memo inlined into its only tracked reader, the reader keeps the
-//           memo's cut-off (`equals: same`, which sets CONFIG_ORACLE_FUSED).
+//           memo's cut-off (`equals: same`, which sets CONFIG_EFFECT_EQUALS; shipped since stage 2).
 //   DET   — OWNERLESS | DETACHED (H8b): the compute creates nothing, has no
 //           cleanup, reads no context, and every source dies with it.
 //   OWN   — OWNERLESS only (H8a).

@@ -1,0 +1,88 @@
+{
+  "n": 1000,
+  "reps": 15,
+  "iter": 20,
+  "node": "v22.22.2",
+  "results": [
+    {
+      "program": "chain",
+      "variant": "compiled",
+      "op": "mount",
+      "plainMs": 1.119486649999999,
+      "fusedMs": 0.4065305499999994,
+      "controlMs": 1.1345733999999994,
+      "delta": -0.636859850003571,
+      "aa": 0.013476489424863125
+    },
+    {
+      "program": "chain",
+      "variant": "compiled",
+      "op": "updateAll",
+      "plainMs": 0.7227312999999981,
+      "fusedMs": 0.2779442499999959,
+      "controlMs": 0.7465961500000049,
+      "delta": -0.6154251932910659,
+      "aa": 0.03302036316955825
+    },
+    {
+      "program": "chain",
+      "variant": "compiled",
+      "op": "update10th",
+      "plainMs": 0.0742635000000064,
+      "fusedMs": 0.0315527999999972,
+      "controlMs": 0.07614885000000413,
+      "delta": -0.5751237148801971,
+      "aa": 0.025387303318555876
+    },
+    {
+      "program": "cutoff",
+      "variant": "hand",
+      "op": "mount",
+      "plainMs": 0.6726782499999899,
+      "fusedMs": 0.3557258999999931,
+      "controlMs": 0.6631014499999992,
+      "delta": -0.4711797207654649,
+      "aa": -0.014236821244021036
+    },
+    {
+      "program": "cutoff",
+      "variant": "hand",
+      "op": "smallWrites",
+      "plainMs": 0.1885530499999959,
+      "fusedMs": 0.21175429999998413,
+      "controlMs": 0.19223269999999956,
+      "delta": 0.12304892442730964,
+      "aa": 0.019515197447104393
+    },
+    {
+      "program": "cutoff",
+      "variant": "hand",
+      "op": "crossAndBack",
+      "plainMs": 0.09407875000001695,
+      "fusedMs": 0.0538957499999924,
+      "controlMs": 0.09409890000001724,
+      "delta": -0.42712089605800785,
+      "aa": 0.000214182267518348
+    },
+    {
+      "program": "select",
+      "variant": "hand",
+      "op": "mount",
+      "plainMs": 0.5864710999999942,
+      "fusedMs": 0.31063220000000913,
+      "controlMs": 0.5958245499999976,
+      "delta": -0.4703367310000234,
+      "aa": 0.01594869721628811
+    },
+    {
+      "program": "select",
+      "variant": "hand",
+      "op": "select",
+      "plainMs": 0.1379267499999969,
+      "fusedMs": 0.156928599999992,
+      "controlMs": 0.1365052000000105,
+      "delta": 0.13776769190889748,
+      "aa": -0.010306557647348558
+    }
+  ]
+}

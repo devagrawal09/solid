@@ -324,7 +324,8 @@ const nativeOptionKeys = new Set([
   "hostFusion",
   "blockProofs",
   "storeHandles",
-  "syncActions"
+  "syncActions",
+  "memoFusion"
 ]);
 
 function validateOptions(code, options) {
