@@ -1,4 +1,9 @@
 import {
+  $signal as signalOp,
+  $memo as memoOp,
+  $store as storeOp,
+  $effect as effectOp,
+  effectBlock as effectBlockOp,
   generatorEffect,
   generatorMemo,
   setBlockPrimitives,
@@ -2605,5 +2610,34 @@ export function Hydration(props: { id?: string; children: SolidElement }): Solid
   return props.children as unknown as SolidElement;
 }
 
-// Generator blocks v2: `$signal` / `$memo` / `$store` create hydration-aware primitives.
-setBlockPrimitives({ createSignal, createMemo, createStore, createEffect });
+// Generator blocks v2: `$signal` / `$memo` / `$store` / `$effect` create
+// hydration-aware primitives. Each constructor registers the primitive it
+// needs on first use — never at module load: a top-level registration kept
+// the block runtime and the whole store module alive in every client bundle,
+// blocks or not.
+let blockPrimitives = 0;
+function useBlockPrimitive(bit: number, primitive: Parameters<typeof setBlockPrimitives>[0]): void {
+  if (blockPrimitives & bit) return;
+  blockPrimitives |= bit;
+  setBlockPrimitives(primitive);
+}
+export const $signal: typeof signalOp = ((value: any, options?: any) => {
+  useBlockPrimitive(1, { createSignal });
+  return signalOp(value, options);
+}) as typeof signalOp;
+export const $memo: typeof memoOp = ((body: any, options?: any) => {
+  useBlockPrimitive(2, { createMemo });
+  return memoOp(body, options);
+}) as typeof memoOp;
+export const $store: typeof storeOp = ((value: any) => {
+  useBlockPrimitive(4, { createStore });
+  return storeOp(value);
+}) as typeof storeOp;
+export const $effect: typeof effectOp = ((body: any, compute?: unknown) => {
+  useBlockPrimitive(8, { createEffect });
+  return effectOp(body, compute);
+}) as typeof effectOp;
+export const effectBlock: typeof effectBlockOp = ((body: unknown, compute?: unknown) => {
+  useBlockPrimitive(8, { createEffect });
+  return effectBlockOp(body, compute);
+}) as typeof effectBlockOp;
