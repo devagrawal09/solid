@@ -38,6 +38,7 @@ mod strict;
 mod store_handles;
 mod sync_actions;
 mod memo_fusion;
+mod store_scalars;
 mod islands;
 #[cfg(feature = "tsrx")]
 mod tsrx;

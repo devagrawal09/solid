@@ -338,7 +338,8 @@ const nativeOptionKeys = new Set([
   "blockProofs",
   "storeHandles",
   "syncActions",
-  "memoFusion"
+  "memoFusion",
+  "storeScalars"
 ]);
 
 function validateOptions(code, options) {

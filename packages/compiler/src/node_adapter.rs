@@ -375,6 +375,7 @@ fn core_options(options: TransformOptions) -> Result<CompileOptions> {
         store_handles: options.store_handles.unwrap_or(false),
         sync_actions: options.sync_actions.unwrap_or(false),
         memo_fusion: options.memo_fusion.unwrap_or(false),
+        store_scalars: options.store_scalars.unwrap_or(false),
         store_link_facts: options
             .store_link_facts
             .unwrap_or_default()

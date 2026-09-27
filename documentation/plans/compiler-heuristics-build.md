@@ -13,8 +13,8 @@ Status: 2026-09-27. Builds the heuristics that earned a compiler proof in
 | 1 | A1 sync actions (`syncActions`) | **Done** |
 | 2 | H1 memo fusion (`memoFusion`) | **Done** |
 | 3 | Per-island hydration + compiler handler → island map (F) | **Done** |
-| 4 | S2 store-free compilation | Next |
-| 5 | C pruned resumability | Planned |
+| 4 | S2 store scalar replacement (`storeScalars`) | **Done** (narrow coverage) |
+| 5 | C pruned resumability | Next |
 
 ## Stage 1: sync actions
 
@@ -119,3 +119,53 @@ Lazy hydration is correct only under the hydrate-before-write rule ([resumabilit
   - Hydration uses the shipped runtime, with no oracle.
   - It passes the equivalence and node-identity gate.
   - It matches the oracle F within ±5% on total CPU at every footer size and throttle ([resumability.md, Stage 3](./resumability.md#stage-3-f-with-the-compiler-map-and-the-shipped-runtime)).
+
+## Stage 4: store scalar replacement
+
+The option `storeScalars` (all outputs) is implemented in `packages/compiler/src/store_scalars.rs`. It needs no new runtime: a replaced store becomes `createSignal` pairs.
+
+- **Proof** (per store; any failure keeps the store):
+  - **Declaration:** `const [s, setS] = createStore({ … })` (or `[s]`), with `createStore` imported from `solid-js` / `@solidjs/signals`.
+  - **Initial value:** an object literal of `key: <provably primitive>` properties, with no spread, computed or duplicate keys, methods or accessors.
+  - **Reads:** every reference to `s` is `s.key` of a known key, in a read-only position: not written, deleted, called, destructured, optional, or `yield*`-delegated.
+  - **Writes:** every reference to `setS` is a call `setS(d => …)` whose body is only whole-field writes: `d.key = e`, `d.key op= e`, `d.key++` / `--`. Logical assignments are refused.
+  - **What counts as provably primitive** (`e`):
+    - a literal, a template, or a unary, binary, update or `typeof` expression;
+    - an unshadowed `String`, `Number`, `Boolean` or `BigInt` call;
+    - a read of another replaced store's field;
+    - a conditional, logical or sequence expression made of those.
+  - **Draft use:** the draft appears only as reads of the field being written. There are no closures over it and no nested setter calls.
+- **Why this is equivalent** (checked with probes against the runtime):
+  - Every field only ever holds a primitive, so a store read returns the value itself (no nested proxy) and compares with `===`, as a signal does.
+  - Stores and signals both hold writes until flush; before flush, reads return the committed value.
+  - Inside a setter callback, the store's proxy *is* the draft: `d.key` and `s.key` both read the latest value, while other stores and signals read committed values. The rewrite therefore turns a read of the written field into a functional updater's `_$p` (the latest value). A read of any *other* field of the same store inside its setter is refused, because signals have no latest-value read.
+  - Returned values: a non-object return from a store setter callback is ignored, and the rewrite discards it too.
+- **Rewrite:**
+  - The declaration becomes `[_$s_key, _$set_s_key] = createSignal(init)` per field, and reads become `_$s_key()`.
+  - A setter call becomes an IIFE of `_$set_s_key(…)` calls. A right-hand side is hoisted into a `const` when it does not read its own field, and moved into the updater when it does.
+  - Replacements are generated from source text and parsed (the pass runs first, on the authored program). Every fragment must parse before anything is rewritten.
+- **Tests:**
+  - Rust: 3 tests:
+    - the rewrite, including hoisted and updater forms, cross-store reads, and same-store draft reads;
+    - 18 refusals (escapes, unknown or dynamic keys, nested or non-primitive values, `let`, non-field or conditional writes, returned objects, a setter passed as a value, a closure over the draft, another field read inside the store's own setter);
+    - JSX on DOM and SSR, and nothing when the option is off.
+  - Full suites: compiler Rust 113, compiler JS 5,901.
+- **End-to-end gate and bench:** `scripts/heuristics/fusion/stores.mjs`; data in `compiler-heuristics-build/stores-{1,2}.json`.
+  - **Method:** the same source is compiled with `storeScalars` off and on, and with `memoFusion` added; everything runs on the shipped prod runtime.
+  - **Gate:** values and effect runs must be identical after every op. Ops include an async `action` whose writes are held by the transition.
+  - **What the gate caught during development:** a same-store read inside the setter (`d.label = "c" + s.count`) diverged, with 3 in the store against 1 in the signal. That led to the draft rule above.
+  - **Refusal control:** a store that escapes (`JSON.stringify(s)`, a stored setter) compiles unchanged.
+  - **Timing:** 15 interleaved reps × 40 iterations, n = 1,000, two runs:
+
+| Program | Op | Store | Signals | Δ (run 1 / run 2) |
+| --- | --- | ---: | ---: | ---: |
+| rows (per-row `{ label, selected }`) | mount | 4.12 ms | 1.89 ms | **−54% / −60%** |
+| rows | update every 10th label | 0.121 ms | 0.035 ms | **−71% / −71%** |
+| rows | select (2 rows) | 0.006 ms | 0.003 ms | **−51% / −49%** |
+| rows | append to every label | 1.68 ms | 0.49 ms | **−71% / −72%** |
+| counter (module store, action) | mount | 0.49 ms | 0.39 ms | **−21% / −19%** |
+| counter | click (2 fields) | 0.40 ms | 0.27 ms | **−33% / −35%** |
+
+The A/A control is within ±3%, except rows mount at −9% / −12% (GC-heavy). Adding `memoFusion` on top, where a replaced read makes `createMemo(() => row.selected ? … )` fusable, stays within noise of `storeScalars` alone.
+
+- **Coverage** (the real limit, as the oracle study predicted): on the 206-file corpus of round 3 (`r3/store-census.json`), the pass replaces **0 of 15** stores. Real stores are arrays (`createStore<LogEntry[]>([])`, todo lists) or nested objects, are exported, or pass their setter around. The census's looser "S2 full" count of 1 was an exported array store. The pass therefore fits flat UI state (counters, form fields, toggles, per-row flag objects). Array- and row-level replacement would need `<For>` / `mapArray` integration and is not built.

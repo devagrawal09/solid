@@ -134,6 +134,9 @@ pub struct CompileOptions {
     /// `memo_fusion.rs`). Runs on every generate so hydration ids agree.
     /// Default `false`.
     pub memo_fusion: bool,
+    /// Experimental: store scalar replacement (see `store_scalars.rs`).
+    /// Runs first, on the authored program. Default `false`.
+    pub store_scalars: bool,
     /// Linker facts for `store_handles`: `(import source, exported
     /// component, verified Borrowed prop)` triples.
     pub store_link_facts: Vec<crate::store_handles::LinkFact>,
@@ -173,6 +176,7 @@ impl Default for CompileOptions {
             store_handles: false,
             sync_actions: false,
             memo_fusion: false,
+            store_scalars: false,
             store_link_facts: Vec::new(),
         }
     }
@@ -287,6 +291,12 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
             strict_blocks: None,
             store_summary: None,
         });
+    }
+
+    // Experimental: store scalar replacement. First, while every span still
+    // addresses `source` (the pass builds its replacements from source text).
+    if options.store_scalars && !tsrx_route {
+        crate::store_scalars::transform_store_scalars(&allocator, &mut program, source, source_type);
     }
 
     #[cfg(feature = "tsrx")]
