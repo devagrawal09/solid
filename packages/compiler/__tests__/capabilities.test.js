@@ -137,7 +137,8 @@ export function App() {
       {
         file: "src/app.tsx",
         line: null,
-        reason: "imports async capability `isPending` from solid-js"
+        reason: "imports async capability `isPending` from solid-js",
+        kind: "async"
       }
     ]);
   });
@@ -221,5 +222,78 @@ export function App() {
     expect(report.reasons.map(r => r.reason)).toEqual([
       "namespace import of solid-js (includes async capabilities)"
     ]);
+  });
+});
+
+// Core runtime slicing (documentation/plans/core-runtime-slicing.md): the
+// per-feature switches of @solidjs/signals (src/core/features.ts).
+describe("proveGraph features", () => {
+  const off = report =>
+    Object.entries(report.features)
+      .filter(([, f]) => !f.on)
+      .map(([name]) => name)
+      .sort();
+
+  test("a signals-only client graph switches every import-decided feature off", async () => {
+    const { prove } = project({
+      "src/main.tsx": MAIN,
+      "src/app.tsx": `import { createSignal, Show } from "solid-js";\nexport function App() {\n  const [n] = createSignal(0);\n  return <Show when={n() >= 0}>{n()}</Show>;\n}\n`
+    });
+    const report = await prove();
+    expect(off(report)).toEqual(["ITERABLE", "OPTIMISTIC", "SNAPSHOTS", "STORES", "VERDICTS"]);
+    // Compiled seams are a compiler-configuration fact, on by default.
+    expect(report.features.COMPILED_SEAMS.on).toBe(true);
+  });
+
+  test("each feature export turns its switch on, with the reason", async () => {
+    const { prove } = project({
+      "src/main.tsx": `import { hydrate } from "@solidjs/web";\nimport { App } from "./app";\nhydrate(() => <App />, document.body);\n`,
+      "src/app.tsx": `import { createStore, isPending, $component } from "solid-js";\nexport const App = $component(function* () { return function* () { return null; }; });\nexport const s = createStore({});\nexport const p = () => isPending(() => 0);\n`
+    });
+    const report = await prove();
+    expect(off(report)).toEqual([]);
+    expect(report.features.STORES.because).toContain("solid-js: createStore");
+    expect(report.features.VERDICTS.because).toContain("solid-js: isPending");
+    // VERDICTS implies OPTIMISTIC: companions are optimistic nodes.
+    expect(report.features.OPTIMISTIC.because).toContain(
+      "VERDICTS (companions are optimistic nodes)"
+    );
+    expect(report.features.SNAPSHOTS.because).toContain("@solidjs/web: hydrate");
+    expect(report.features.ITERABLE.because).toContain("solid-js: $component");
+  });
+
+  test("a hand-written yield* keeps ITERABLE on (AccessorIterable needs no block import)", async () => {
+    const { prove } = project({
+      "src/main.tsx": MAIN,
+      "src/app.tsx": `import { createSignal } from "solid-js";\nconst [n] = createSignal(1);\nfunction* read() { return yield* n; }\nexport const App = () => String(read);\n`
+    });
+    const report = await prove();
+    expect(report.features.ITERABLE).toEqual({ on: true, because: ["src/app.tsx uses yield*"] });
+  });
+
+  test("an incompletely known graph keeps every switch on; an async-only reason does not", async () => {
+    const { prove } = project({
+      "src/main.tsx": MAIN,
+      "src/app.tsx": `import { x } from "untyped-lib";\nexport const App = () => x;\n`
+    });
+    const report = await prove();
+    expect(off(report)).toEqual([]);
+    expect(report.features.STORES.because).toContain("module graph not fully known");
+    const asyncOnly = await project({
+      "src/main.tsx": MAIN,
+      "src/app.tsx": `import { createMemo } from "solid-js";\nconst d = createMemo(async () => 1);\nexport const App = () => null;\n`
+    }).prove();
+    expect(asyncOnly.asyncFree).toBe(false);
+    expect(off(asyncOnly)).toContain("STORES");
+  });
+
+  test("a namespace import uses every feature its package lists", async () => {
+    const { prove } = project({
+      "src/main.tsx": MAIN,
+      "src/app.tsx": `import * as Solid from "solid-js";\nexport const App = () => Solid.untrack(() => null);\n`
+    });
+    const report = await prove();
+    expect(report.features.STORES.because).toContain("namespace import of solid-js");
+    expect(off(report)).not.toContain("STORES");
   });
 });
