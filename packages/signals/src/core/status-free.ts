@@ -200,12 +200,9 @@ export function recomputeStatusFree(el: Computed<any>, create: boolean): boolean
   const oldHeight = el._height;
   let missedWake = false;
   let prevStrictRead: string | false = false;
-  let prevBlockGuard = false;
-  if (__DEV__) {
-    // A computation's run is its own read scope (see recompute).
-    prevStrictRead = setStrictRead(false);
-    prevBlockGuard = setBlockGuard(false);
-  }
+  // A computation's run is its own read scope, in every tier (see recompute).
+  const prevBlockGuard = setBlockGuard(false);
+  if (__DEV__) prevStrictRead = setStrictRead(false);
   const prevTracking = swapTracking(true);
   const prevLatestRead = latestReadActive;
   setLatestReadActive(false);
@@ -224,10 +221,8 @@ export function recomputeStatusFree(el: Computed<any>, create: boolean): boolean
   } finally {
     swapTracking(prevTracking);
     setLatestReadActive(prevLatestRead);
-    if (__DEV__) {
-      setStrictRead(prevStrictRead);
-      setBlockGuard(prevBlockGuard);
-    }
+    setBlockGuard(prevBlockGuard);
+    if (__DEV__) setStrictRead(prevStrictRead);
     if (isStaleEffect) swapStale(prevStale);
     missedWake = (el._flags & REACTIVE_MISSED_WAKE) !== 0;
     el._flags = REACTIVE_NONE | (create ? el._flags & REACTIVE_SNAPSHOT_STALE : 0);
