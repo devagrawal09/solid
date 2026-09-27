@@ -51,8 +51,11 @@ export function createContext<T>(
   }
   provider.id = id;
   provider.defaultValue = defaultValue;
-  // `yield* Ctx` in a `$component` setup (generator blocks v2).
+  // `yield* Ctx` in a `$component` setup (generator blocks v2). The block
+  // API's context op reads through this server reader (the server owner
+  // tree), not the client core's getContext.
   (provider as any)[Symbol.iterator] = iterateContext;
+  (provider as any)[Symbol.for("solid.contextRead")] = () => useContext(provider as any);
   return provider as unknown as Context<T> & ContextIterable<T>;
 }
 

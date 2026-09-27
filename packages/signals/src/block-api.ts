@@ -354,8 +354,16 @@ function receipt<T>(value: T): WriteReceipt<T> {
 
 // --- context ------------------------------------------------------------------
 
+/**
+ * A context object may carry its own reader under this registered symbol:
+ * the server runtime's providers read through the server owner tree, which
+ * this package's `getContext` (the client core's owner) cannot see. Without
+ * it, `yield* Ctx` in a `$component` setup threw NoOwnerError during SSR.
+ */
+const CONTEXT_READ = Symbol.for("solid.contextRead");
 function contextOp(context: Context<any>): ContextOp<any, any> {
-  return op({ [OP]: "context", context, read: () => getContext(context) }) as any;
+  const reader = (context as any)[CONTEXT_READ] as (() => any) | undefined;
+  return op({ [OP]: "context", context, read: reader || (() => getContext(context)) }) as any;
 }
 setContextIterator(function* (context) {
   return yield* contextOp(context);
