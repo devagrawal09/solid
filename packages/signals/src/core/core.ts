@@ -327,15 +327,16 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   let prevTracking = tracking;
   let prevLane = currentOptimisticLane;
   let prevStrictRead: string | false = false;
-  let prevBlockGuard = false;
+  // A computation's run is its own read scope: a render effect or memo
+  // created inside a `$` block body (JSX inserts) reads for itself, not for
+  // the block. The block driver re-raises the guard when it resumes. Not
+  // dev-only: the driver raises the guard and store proxies answer it with
+  // path tokens in every tier, so a production run must lower it too.
+  const prevBlockGuard = blockGuard;
+  blockGuard = false;
   if (__DEV__) {
     prevStrictRead = strictRead;
     strictRead = false;
-    // A computation's run is its own read scope: a render effect or memo
-    // created inside a `$` block body (JSX inserts) reads for itself, not
-    // for the block. The block driver re-raises the guard when it resumes.
-    prevBlockGuard = blockGuard;
-    blockGuard = false;
   }
   tracking = true;
   // A computed's fn establishes its OWN dependencies, so it must never run
@@ -456,10 +457,8 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   } finally {
     tracking = prevTracking;
     latestReadActive = prevLatestRead;
-    if (__DEV__) {
-      strictRead = prevStrictRead;
-      blockGuard = prevBlockGuard;
-    }
+    blockGuard = prevBlockGuard;
+    if (__DEV__) strictRead = prevStrictRead;
     if (isStaleEffect) stale = prevStale;
     // Consume the missed-wake latch (#3037, set by insertSubs): a dep write
     // landed beneath this pass on a link it had already validated. The wipe
