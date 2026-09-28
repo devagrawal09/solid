@@ -568,7 +568,7 @@ export function App() {
     "client/blocks-uncompiled": {
       status: "differs",
       reason:
-        "Uncompiled pipeline only (generic JSX transform + @solidjs/h, generator driver): after the resumed write the view renders `done`, then re-renders `none`. The same event on the driver under the Solid compiler (the compiled mode before the async lowering: `$eventCompiled($(function* …))`, dispatched by `dispatchBlock`) matches the oracle, and so does the compiled async body; the difference is in the uncompiled rendering path, not in the block runtime. Pinned here, not fixed.",
+        "Uncompiled pipeline only (generic JSX transform + @solidjs/h): the known child re-creation. `<Saver />` under the context provider is an h thunk; the provider resolves its children with `flatten`, which calls the thunk and renders the returned view in the same computation, so the view's read of `saved` subscribes that computation. The resumed write re-runs it, the thunk re-creates `Saver` and the fresh instance reads `none`. Needs position-based reconciliation of component calls in uncompiled views (open); compiled output creates the component outside the resolving computation and matches the oracle.",
       trace: [
         "## mount",
         'read saved = "none"',
