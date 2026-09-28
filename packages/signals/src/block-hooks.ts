@@ -11,7 +11,7 @@
  * bindings the block runtime (`generator.ts`) assigns the first time a block
  * is built: an application that never builds a block ships neither the block
  * host machinery nor its diagnostics, and one that does calls the same
- * functions as before, with no forwarding frame.
+ * functions as before, with no forwarding frame once installed.
  *
  * Every block constructor must install the runtime before its first block
  * escapes (`$` does, in its one-time setup).
@@ -19,15 +19,12 @@
 import type { Owner } from "./core/index.js";
 import type { AnyBlock, BlockInput, BlockValue } from "./generator.js";
 
-// Dev explains a call that arrives before any block exists (a production
-// build calls `undefined`: unreachable for a correctly branded value).
-const uninstalled: any = __DEV__
-  ? () => {
-      throw new Error(
-        "[BLOCK_RUNTIME_MISSING] A block renderer entry point was reached before any block was built. Blocks come from `$` / `$component` / … (the block runtime installs these entry points when it builds the first one)"
-      );
-    }
-  : undefined;
+// The installed implementations. The bindings below start as forwarders to
+// them: a call like `renderBlock($(…))` reads the binding before its
+// argument builds the first block, so the value it read must still reach
+// the implementation installed meanwhile. After installation the bindings
+// are the implementations themselves (no forwarding frame).
+let installed: [typeof renderBlock, typeof dispatchBlock, typeof lazyView] | undefined;
 
 /**
  * Render a block as a JSX child: reads only. Renderers call this at their
@@ -35,7 +32,8 @@ const uninstalled: any = __DEV__
  * attempts or writes is refused there at runtime, matching the type-level
  * admission into `JSX.Element`.
  */
-export let renderBlock: <B extends AnyBlock>(block: B) => BlockValue<B> = uninstalled;
+export let renderBlock: <B extends AnyBlock>(block: B) => BlockValue<B> = block =>
+  installed![0](block);
 
 /**
  * Dispatch a DOM event to a block: the event host. Admits every category,
@@ -47,7 +45,7 @@ export let dispatchBlock: <B extends AnyBlock>(
   block: B,
   event: BlockInput<B>,
   owner?: Owner | null
-) => void = uninstalled;
+) => void = (block, event, owner) => installed![1](block, event, owner);
 
 /**
  * @internal A component or boundary call made inside a running block body:
@@ -55,7 +53,7 @@ export let dispatchBlock: <B extends AnyBlock>(
  * renders it (see `lazyView` in generator.ts). Only reachable while a block
  * runs (`inBlock()`), so the runtime is installed.
  */
-export let lazyView: <T>(make: () => T) => () => T = uninstalled;
+export let lazyView: <T>(make: () => T) => () => T = make => installed![2](make);
 
 /** @internal Called by the block runtime when the first block is built. */
 export function installBlockRenderer(
@@ -63,6 +61,7 @@ export function installBlockRenderer(
   dispatch: typeof dispatchBlock,
   view: typeof lazyView
 ): void {
+  installed = [render, dispatch, view];
   renderBlock = render;
   dispatchBlock = dispatch;
   lazyView = view;

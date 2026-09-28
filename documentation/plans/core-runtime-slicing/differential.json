@@ -1,11 +1,11 @@
 {
-  "tests": 1922,
+  "tests": 1950,
   "featureCounts": {
-    "COMPILED_SEAMS": 16,
-    "STORES": 439,
-    "OPTIMISTIC": 519,
+    "STORES": 441,
     "VERDICTS": 302,
-    "ITERABLE": 48,
+    "OPTIMISTIC": 519,
+    "COMPILED_SEAMS": 16,
+    "ITERABLE": 51,
     "SNAPSHOTS": 20
   },
   "results": [
@@ -15,7 +15,7 @@
         "OPTIMISTIC",
         "VERDICTS"
       ],
-      "passed": 1403,
+      "passed": 1431,
       "skipped": 521,
       "regressions": [],
       "sensitivity": {
@@ -28,7 +28,7 @@
       "off": [
         "VERDICTS"
       ],
-      "passed": 1621,
+      "passed": 1649,
       "skipped": 303,
       "regressions": [],
       "sensitivity": {
@@ -41,8 +41,8 @@
       "off": [
         "STORES"
       ],
-      "passed": 1483,
-      "skipped": 441,
+      "passed": 1509,
+      "skipped": 443,
       "regressions": [],
       "sensitivity": {
         "hung": true
@@ -53,7 +53,7 @@
       "off": [
         "SNAPSHOTS"
       ],
-      "passed": 1903,
+      "passed": 1931,
       "skipped": 21,
       "regressions": [],
       "sensitivity": {
@@ -66,12 +66,12 @@
       "off": [
         "ITERABLE"
       ],
-      "passed": 1875,
-      "skipped": 49,
+      "passed": 1900,
+      "skipped": 52,
       "regressions": [],
       "sensitivity": {
-        "featureUsers": 48,
-        "failWithSwitchOff": 42
+        "featureUsers": 51,
+        "failWithSwitchOff": 45
       }
     },
     {
@@ -79,7 +79,7 @@
       "off": [
         "COMPILED_SEAMS"
       ],
-      "passed": 1907,
+      "passed": 1935,
       "skipped": 17,
       "regressions": [],
       "sensitivity": {
@@ -97,12 +97,12 @@
         "ITERABLE",
         "COMPILED_SEAMS"
       ],
-      "passed": 1108,
-      "skipped": 816,
+      "passed": 1132,
+      "skipped": 820,
       "regressions": [],
       "sensitivity": {
-        "featureUsers": 815,
-        "failWithSwitchOff": 785
+        "featureUsers": 819,
+        "failWithSwitchOff": 789
       }
     },
     {
@@ -113,12 +113,12 @@
         "ITERABLE",
         "COMPILED_SEAMS"
       ],
-      "passed": 709,
-      "skipped": 1215,
+      "passed": 733,
+      "skipped": 1219,
       "regressions": [],
       "sensitivity": {
-        "featureUsers": 506,
-        "failWithSwitchOff": 480
+        "featureUsers": 510,
+        "failWithSwitchOff": 484
       }
     }
   ]
