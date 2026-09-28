@@ -114,7 +114,9 @@ export {
   isBlock,
   outsideBlock,
   inBlock,
-  blockScope
+  blockScope,
+  syncBlock,
+  blockCleanup
 } from "./generator.js";
 // Renderer entry points: forwarders the block runtime fills when the first
 // block is built (block-hooks.ts), so renderers do not retain it.
@@ -132,7 +134,12 @@ export {
   $flush,
   effectBlock,
   isComponent,
-  setBlockPrimitives
+  setBlockPrimitives,
+  $componentCompiled,
+  $eventCompiled,
+  effectBlockCompiled,
+  settledBlockCompiled,
+  withReceipts
 } from "./block-api.js";
 export type {
   View,

@@ -168,6 +168,16 @@ export const m = createMemo($(function () { return perform(a) * 2; }));`
   { name: "web app, plain Solid", code: APP_PLAIN, jsx: {} },
   { name: "web app, v2 compiled", code: APP_V2, jsx: {} },
   { name: "web app, v2 compiled + hostFusion", code: APP_V2, jsx: { hostFusion: true } },
+  // Attribution: the default lowering with `$` in place of `syncBlock` (the
+  // generator driver retained), and the opt-out (`hostFusion: false`: the
+  // lowering before the v2 client lowering).
+  {
+    name: "web app, v2 compiled, driver kept",
+    code: APP_V2,
+    jsx: {},
+    patch: code => code.replace("syncBlock as _$$", () => "$ as _$$")
+  },
+  { name: "web app, v2 compiled, hostFusion: false", code: APP_V2, jsx: { hostFusion: false } },
   { name: "web app, v2 uncompiled", code: APP_V2_UNCOMPILED, jsx: { generators: false } }
 ];
 
@@ -179,6 +189,7 @@ async function bundle(fixture) {
   let code = fixture.code;
   if (fixture.jsx) {
     code = compiler.transform(code, { filename: "entry.jsx", generate: "dom", ...fixture.jsx }).code;
+    if (fixture.patch) code = fixture.patch(code);
   }
   const entry = join(dir, `${fixture.name.replace(/\W+/g, "-")}.js`);
   writeFileSync(entry, code);

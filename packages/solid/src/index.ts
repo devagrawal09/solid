@@ -8,11 +8,18 @@ export {
   $effect,
   $settled,
   effectBlock,
-  settledBlock
+  settledBlock,
+  effectBlockCompiled
 } from "./client/blocks.js";
 export {
   $,
   $component,
+  $componentCompiled,
+  $eventCompiled,
+  settledBlockCompiled,
+  syncBlock,
+  blockCleanup,
+  withReceipts,
   $event,
   $cleanup,
   $flush,

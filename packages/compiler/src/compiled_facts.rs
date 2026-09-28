@@ -59,6 +59,7 @@ fn create_kind(name: &str) -> Option<&'static str> {
         | "createTrackedEffect"
         | "$effect"
         | "effectBlock"
+        | "effectBlockCompiled"
         | "generatorEffect" => "effect",
         _ => return None,
     })

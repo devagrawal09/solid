@@ -531,6 +531,19 @@ impl<'s> Prover<'s> {
                     throws: true,
                 }
             }
+            // `$(…)` (the v2 pass's `_$$`, e.g. the view a component setup
+            // returns) evaluates to the block — a function, never a
+            // thenable, iterator or async iterable. Building it may throw.
+            Expression::CallExpression(call)
+                if self
+                    .callee(call)
+                    .is_some_and(|callee| self.symbols.adapter.contains(&callee)) =>
+            {
+                Fact {
+                    domain: Domain::Plain,
+                    throws: true,
+                }
+            }
             Expression::YieldExpression(it) if it.delegate => match it.argument.as_ref() {
                 Some(Expression::Identifier(source)) => self.read(scope, source),
                 _ => Fact::UNKNOWN,

@@ -5,11 +5,16 @@ import { defineConfig } from "vitest/config";
 // `vite build`. `solid-js/refresh` HMR runs in dev as in the source example.
 import solid from "@solidjs/vite-plugin";
 
-// `SOLID_HOST_FUSION=1` also turns on the compiler's experimental host
-// fusion (`createMemo($(fn))` → `createMemo(fn)`) for `vite build` and
-// `vitest` — the A/B the host-fusion prototype's measurements and end-to-end
-// runs use; the default build is the plain lowering.
-const hostFusion = process.env.SOLID_HOST_FUSION === "1";
+// The default build uses the compiler's default generator-blocks-v2 fusion and
+// client lowering. `SOLID_HOST_FUSION=1` also fuses plain `$` blocks
+// (`createMemo($(fn))` → `createMemo(fn)`); `SOLID_HOST_FUSION=0` opts out of
+// all fusion (the plain lowering) — the A/B the measurements use.
+const hostFusion =
+  process.env.SOLID_HOST_FUSION === "1"
+    ? true
+    : process.env.SOLID_HOST_FUSION === "0"
+      ? false
+      : undefined;
 // `SOLID_BLOCK_PROOFS=1` turns on the Track A stage-1 block proofs
 // (status-free fast paths): proven blocks carry `$(fn, flags)` metadata and
 // their reactive hosts receive `statusFree` / `syncOnly` options.
