@@ -1,5 +1,24 @@
 # solid-js
 
+## 2.0.0-rc.12
+
+### Patch Changes
+
+- d0e487b: `STRICT_READ_UNTRACKED` now fires in two places it was skipped (#3675). In `@solidjs/signals`, `read()` served a snapshot-scope reader the captured value and returned before the strict-read check, so a component body's direct read stayed silent during the hydration pass and only warned after client navigation; the check now runs first. In `solid-js`, `lazy()` rendered the loaded component through a bare `untrack()` instead of `createComponent`, so its body had no component label and its direct reads were never checked — and, in dev/observe builds, its owner carried no component name for diagnostics. It now renders through `createComponent`; production output is unchanged. The warning's console line also names the value that was read when it has a name — a signal's `name` option or the store key: `Reactive value "count" read directly in <Child> will not update.` (the `nodeName` field already carried it).
+- fe1eb68: The route the document arrived on, declared by the router with the call it already uses. `NavigationRef.initial` on `OBSERVE.attribution.withOrigin`: a router wraps the work that establishes its initial match (building its context) instead of a location write, on both sides. On the client the attribution engine opens the frame at the time origin (`at` defaults to `0`, the document's own navigation start; a router mounted late passes its own), takes no `from`, and settles it `committed` with `writes: 0` when the frame closes, so the first `"navigation"` record (`NavigationEvent.initial: true`) names the route the page loaded as — the pageload's route pattern, which every navigation but the first already had. It is a declaration, not a timing: kept out of `feedback().navigations`. On the server, where there is no engine, the server entry's `withOrigin` files the ref on the render, and the request's `"render"` record carries it as `RenderEvent.route` (`{ name, to, params }`, read from the ref when the render settles) — the name a consumer gives the request (`http.route`) where the URL would scatter one page across as many names as it has parameters. New type `RenderRoute` from `@solidjs/web`.
+
+  `NavigationRef.interaction`: a router that awaits between the request and the write (guards or loaders resolved in its core before it publishes the location) captures `OBSERVE.attribution.currentOrigin()` in the request and hands it back on the ref, and the write it publishes later joins the click as if it had been synchronous. Declared beats ambient: the key's presence is the declaration, and an interaction on the stack at write time is used only when the key is absent.
+
+  `formatOrigin` renders the initial declaration `initial navigation to /users/:id (/users/42)`. Prod artifacts byte-identical; the observe tier's client artifacts byte-identical.
+
+- Updated dependencies [656f0df]
+- Updated dependencies [6958367]
+- Updated dependencies [d21c2be]
+- Updated dependencies [f1b0776]
+- Updated dependencies [d0e487b]
+- Updated dependencies [fe1eb68]
+  - @solidjs/signals@2.0.0-rc.12
+
 ## 2.0.0-rc.11
 
 ### Patch Changes

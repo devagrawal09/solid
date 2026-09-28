@@ -1,5 +1,15 @@
 # @solidjs/h
 
+## 2.0.0-rc.12
+
+### Patch Changes
+
+- 829f981: Fix `class` object values rejecting `undefined` at the type level. `ClassValue`'s record form was `Record<string, boolean>`, so `class={{ active: props.active }}` with an optional prop did not type-check, which 1.x `classList` allowed. The runtime already treats `undefined` as off.
+- Updated dependencies [829f981]
+- Updated dependencies [1ad0be0]
+- Updated dependencies [fe1eb68]
+  - @solidjs/web@2.0.0-rc.12
+
 ## 2.0.0-rc.11
 
 ### Patch Changes
