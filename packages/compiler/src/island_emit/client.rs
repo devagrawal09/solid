@@ -423,7 +423,9 @@ impl<'a> Env<'a> for CEnv<'_, '_, 'a> {
                 let root_text = tx.expr(self, root)?;
                 let rest = &tx.m.src[root.span().end as usize..arg.span().end as usize];
                 self.uses.borrow_mut().helpers.insert("$r");
-                Ok(format!("$r({root_text}){rest}"))
+                // `yield*` of a member of a plain object reads it: an accessor
+                // there (a factory's `{ n, double }`) is called.
+                Ok(format!("$r($r({root_text}){rest})"))
             }
             Expression::CallExpression(c) => {
                 if let Some(n) = self.ce.m.runtime_name(&c.callee) {
@@ -1855,19 +1857,21 @@ impl<'x, 'a> Ce<'x, 'a> {
                 let attrs = jsx::attrs(el)?;
                 let kids = jsx::children(&el.children)?;
                 if self.contains_group_sites(comp, &kids) || self.kids_render_members(&kids) {
-                    let Some(AttrVal::Expr(v)) = jsx::attr(&attrs, "value").map(|a| &a.value)
-                    else {
-                        return Err("context provider without a value expression".into());
-                    };
                     let var = self.fresh("$c");
                     let none = HashMap::new();
-                    let value = self.expr(inst, &none, v)?;
+                    let (value, kinds) = match jsx::attr(&attrs, "value").map(|a| &a.value) {
+                        Some(AttrVal::Expr(v)) => {
+                            (self.expr(inst, &none, v)?, self.literal_kinds(inst, v))
+                        }
+                        Some(AttrVal::Str(v)) => (js_str(v), Vec::new()),
+                        Some(AttrVal::True) => ("true".into(), Vec::new()),
+                        _ => return Err("context provider without a value expression".into()),
+                    };
                     self.bucket(inst)
                         .seq
                         .push(Seq::Line(format!("const {var} = {value};")));
                     // The binding stays for the whole instance: its subtree is
                     // laid out lazily (one provider per context per component).
-                    let kinds = self.literal_kinds(inst, v);
                     if self.insts[inst].ctx.insert(ctx, CtxBind { var, kinds }).is_some() {
                         return Err("a context provided twice in one island component".into());
                     }

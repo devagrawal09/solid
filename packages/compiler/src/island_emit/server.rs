@@ -114,7 +114,7 @@ impl<'a> Env<'a> for SEnv<'_, '_, 'a> {
                 }
                 let root_text = tx.expr(self, root)?;
                 let rest = &tx.m.src[root.span().end as usize..arg.span().end as usize];
-                Ok(format!("_$r({root_text}){rest}"))
+                Ok(format!("_$r(_$r({root_text}){rest})"))
             }
             Expression::CallExpression(c) => {
                 match self.se.m.runtime_name(&c.callee) {

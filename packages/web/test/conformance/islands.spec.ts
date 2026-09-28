@@ -146,9 +146,16 @@ function tracedT0(recorder: Recorder) {
   };
 }
 
-const compileFor = (source: string, minTier = 0) =>
+const compileFor = (source: string, minTier = 0, modules: Record<string, string> = {}) =>
   compiler.compileIslands(source, {
-    filename: "scenario.jsx",
+    filename: "/scenario/app.jsx",
+    // Cross-module: the imported modules' sources (as the bundler plugin
+    // passes them from its summaries).
+    imports: Object.entries(modules).map(([specifier, code]) => ({
+      specifier,
+      filename: `/scenario/${specifier.replace(/^\.\//, "")}.jsx`,
+      code
+    })),
     probeHosts: ["h.signal"],
     debug: true,
     minTier,
@@ -158,7 +165,7 @@ const compileFor = (source: string, minTier = 0) =>
   });
 
 async function runIslands(scenario: Scenario, source: string, minTier: number) {
-  const out = compileFor(source, minTier);
+  const out = compileFor(source, minTier, scenario.modules);
   if (out.fallback) throw new Error(`falls back: ${out.fallback}`);
   // One recorder for the whole page: the server keeps rendering while the
   // steps run (streamed boundaries settle on the server, and an `<Errored>`
@@ -166,11 +173,19 @@ async function runIslands(scenario: Scenario, source: string, minTier: number) {
   const recorder = new Recorder();
   recorder.raw("## server");
   // --- server: the string-template module renders the page, streaming ------------------
-  const server = evaluate(out.server, {
+  const serverModules: Record<string, unknown> = {
     "solid-js": solid,
     "@solidjs/web": web,
     conformance: { h: probe(recorder, solid as any), NotFound, Forbidden }
-  });
+  };
+  // The scenario's other modules, as the server bundle has them (their own
+  // islands server output; cross-module inlining copied what the page needs).
+  for (const [spec, code] of Object.entries(scenario.modules ?? {}))
+    serverModules[spec] = evaluate(
+      compiler.compileIslands(code, { filename: `/scenario/${spec.slice(2)}.jsx` }).server,
+      serverModules
+    );
+  const server = evaluate(out.server, serverModules);
   const early: { id: string; html: string }[] = [];
   let land: ((c: { id: string; html: string }) => void) | null = null;
   const rendered = stream.renderIslandsStream(
@@ -313,7 +328,7 @@ describe("compiled islands reproduce the oracle", () => {
   for (const scenario of candidates) {
     const source = ((scenario.sources as Record<string, string | undefined>).islands ??
       scenario.sources.blocks)!;
-    const probe = compileFor(source);
+    const probe = compileFor(source, 0, scenario.modules);
     if (probe.fallback) {
       test.skip(`${scenario.name} — falls back to hydration: ${probe.fallback}`, () => {});
       continue;

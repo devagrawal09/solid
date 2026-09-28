@@ -767,3 +767,151 @@ export const B = $component(function* () {
     );
     assert!(reason.contains("module-level mutable state"), "{reason}");
 }
+
+// --- cross-module: summaries and inlining ----------------------------------------------
+
+fn run_with(src: &str, imports: &[(&str, &str)]) -> IslandsOutput {
+    let opts = IslandOptions {
+        filename: Some("/app/src/app.tsx".into()),
+        imports: imports
+            .iter()
+            .map(|(spec, code)| ImportedModule {
+                specifier: spec.to_string(),
+                filename: format!("/app/src/{}.tsx", spec.trim_start_matches("./")),
+                code: code.to_string(),
+            })
+            .collect(),
+        ..IslandOptions::default()
+    };
+    compile_islands(src, &opts).expect("compiles")
+}
+
+const COUNTER: &str = r#"
+import { createMemo, createSignal } from "solid-js";
+import { log } from "./log";
+const step = 1;
+export function createCounter(start) {
+  const [n, setN] = createSignal(start);
+  const double = createMemo(() => n() * 2);
+  return { n, double, inc: () => { log("inc"); setN(x => x + step); } };
+}
+export function plain(x) { return x + 1; }
+"#;
+
+#[test]
+fn island_exports_summarize_kinds_and_relative_imports() {
+    let s = island_exports(COUNTER, Some("counter.ts"));
+    assert!(s.contains(r#"{"name":"createCounter","kind":"factory"}"#), "{s}");
+    assert!(s.contains(r#"{"name":"plain","kind":"function"}"#), "{s}");
+    assert!(
+        s.contains(r#""imports":[{"specifier":"./log","names":["log"]}]"#),
+        "{s}"
+    );
+    let s = island_exports(
+        r#"
+import { $component, createContext } from "solid-js";
+export const Theme = createContext("light");
+export function* useTheme() { return yield* Theme; }
+export const Badge = $component(function* () { return function* () { return <b />; }; });
+"#,
+        Some("theme.tsx"),
+    );
+    assert!(s.contains(r#"{"name":"Badge","kind":"component"}"#), "{s}");
+    assert!(s.contains(r#"{"name":"Theme","kind":"value"}"#), "{s}");
+    assert!(s.contains(r#"{"name":"useTheme","kind":"helper"}"#), "{s}");
+}
+
+#[test]
+fn an_imported_factory_is_inlined_and_its_state_is_the_islands() {
+    let src = r#"
+import { $component, $event } from "solid-js";
+import { createCounter, plain } from "./counter";
+export const App = $component(function* () {
+  const c = createCounter(plain(0));
+  const inc = $event(function* () { c.inc(); });
+  return function* () { return <button onClick={inc}>{yield* c.double}</button>; };
+});
+"#;
+    // Without the module's source the factory is opaque: a `yield*` read of
+    // what it returns cannot be classified, and the module falls back.
+    let reason = fallback_of(src);
+    assert!(reason.contains("comes from `createCounter(…)`"), "{reason}");
+    let out = run_with(src, &[("./counter", COUNTER)]);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains(r#""root":"App""#), "{m}");
+    assert!(m.contains("memo `double$f"), "{m}");
+    let chunk = &out.chunks[0].code;
+    // Its closure is copied renamed apart; its other imports are absolute;
+    // a plain export it does not need stays imported from the module.
+    assert!(chunk.contains("const step$m1 = 1;"), "{chunk}");
+    assert!(chunk.contains(r#"from "/app/src/log""#), "{chunk}");
+    assert!(chunk.contains("$S(start$f"), "{chunk}");
+    assert!(out.server.contains(r#"import { plain } from "./counter";"#), "{}", out.server);
+}
+
+#[test]
+fn an_imported_context_keeps_its_identity_and_helpers_inline() {
+    let theme = r#"
+import { $component, $event, $signal, createContext } from "solid-js";
+export const Theme = createContext("light");
+function* useTheme() { const t = yield* Theme; return t; }
+export const Badge = $component(function* (props) {
+  const theme = yield* useTheme();
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); props.onBump(); });
+  return function* () { return <b class={theme} onClick={inc}>{yield* n} {yield* props.label}</b>; };
+});
+"#;
+    let src = r#"
+import { $component, $event, $signal } from "solid-js";
+import { Badge, Theme } from "./theme";
+export const App = $component(function* () {
+  const [total, setTotal] = yield* $signal(0);
+  const bump = () => setTotal(x => x + 1);
+  return function* () {
+    return <Theme value="dark"><main><Badge label={yield* total} onBump={bump} /></main></Theme>;
+  };
+});
+"#;
+    let out = run_with(src, &[("./theme", theme)]);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    // `Badge` receives live state: it is compiled into the page's island.
+    assert!(m.contains(r#""members":["App","Badge"]"#), "{m}");
+    // The context is still the module's (imported, not copied).
+    assert!(out.server.contains(r#"import { Theme } from "./theme";"#), "{}", out.server);
+    assert!(!out.server.contains("createContext(\"light\")"), "{}", out.server);
+    assert!(out.server.contains("_$ctx($c, Theme)"), "{}", out.server);
+}
+
+#[test]
+fn factory_and_helper_calls_in_setups_are_inlined_in_one_module() {
+    let out = run(r#"
+import { $component, $event, createContext, createSignal } from "solid-js";
+const Ctx = createContext();
+function createToggle(initial) {
+  const [on, setOn] = createSignal(initial);
+  return [on, () => setOn(x => !x)];
+}
+function* useCtx() {
+  const v = yield* Ctx;
+  if (!v) throw new Error("no provider");
+  return v;
+}
+const Button = $component(function* () {
+  const [on, flip] = yield* useCtx();
+  const click = $event(function* () { flip(); });
+  return function* () { return <button onClick={click}>{(yield* on) ? "on" : "off"}</button>; };
+});
+export function App() {
+  return <Ctx value={createToggle(false)}><Button /></Ctx>;
+}
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains(r#""members":["App","Button"]"#), "{m}");
+    // The provider value was hoisted and inlined: the cell is App's.
+    assert!(m.contains("App.on$f"), "{m}");
+    assert!(out.server.contains("if (!v$f"), "{}", out.server);
+}

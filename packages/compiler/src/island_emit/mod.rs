@@ -39,6 +39,12 @@ use crate::capabilities::JsonWriter;
 use crate::compiler::{CompileOptions, Generate, compile, parse_program, source_type_for_filename};
 use crate::error::CompileError;
 
+fn json_str(s: &str) -> String {
+    let mut w = JsonWriter::default();
+    w.string(s);
+    w.out
+}
+
 pub(crate) fn client_js_str(s: &str) -> String {
     let mut out = String::from("\"");
     for c in s.chars() {
@@ -137,8 +143,21 @@ pub fn compile_islands(
         .any(|k| reason.contains(k))
     {
         let second = compile_pass(original, opts, true)?;
-        if second.fallback.is_none() {
-            return Ok(second);
+        match &second.fallback {
+            None => return Ok(second),
+            Some(r2) if r2 != reason => {
+                let why = format!("{reason} (with its imported components inlined: {r2})");
+                return Ok(IslandsOutput {
+                    manifest: first.manifest.replacen(
+                        &format!("\"fallback\":{}", json_str(reason)),
+                        &format!("\"fallback\":{}", json_str(&why)),
+                        1,
+                    ),
+                    fallback: Some(why),
+                    ..first
+                });
+            }
+            _ => {}
         }
     }
     Ok(first)
@@ -180,7 +199,8 @@ fn compile_pass(
                 .map(|(a, b)| (a.to_string(), b.to_string()))
         })
         .collect();
-    let m = model::build_model(source, &program, scoping, probe_hosts);
+    let contexts = inline::imported_contexts(&program, &opts.imports);
+    let m = model::build_model_with(source, &program, scoping, probe_hosts, &contexts);
     let a = graph::analyze(&m, &opts.id_prefix);
     match emit(&m, &a, opts) {
         Ok((server, chunks, manifest)) => Ok(IslandsOutput {

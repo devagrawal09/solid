@@ -351,12 +351,28 @@ pub(crate) fn inline_imports(
             continue;
         }
         k += 1;
-        // Closure over top-level statements.
+        // Closure over top-level statements. An exported value it reads (a
+        // context, a class, shared state) keeps its identity: it is imported
+        // from the module, not copied.
+        let export_name: HashMap<SymbolId, &String> =
+            facts.exports.iter().map(|(n, s)| (*s, n)).collect();
+        let taken_syms: HashSet<SymbolId> = take.iter().map(|t| t.0).collect();
+        let mut external: Vec<SymbolId> = Vec::new();
         let mut need: Vec<usize> = Vec::new();
         let mut seen: HashSet<usize> = HashSet::new();
         let mut stack: Vec<SymbolId> = take.iter().map(|t| t.0).collect();
         while let Some(s) = stack.pop() {
             let Some(&ti) = facts.top_of.get(&s) else { continue };
+            if export_name.contains_key(&s)
+                && !taken_syms.contains(&s)
+                && function_of(&mprog, s).is_none()
+                && !mm.comp_of.contains_key(&s)
+            {
+                if !external.contains(&s) {
+                    external.push(s);
+                }
+                continue;
+            }
             if !seen.insert(ti) {
                 continue;
             }
@@ -381,6 +397,31 @@ pub(crate) fn inline_imports(
             map.insert(*sym, local.clone());
         }
         let mut import_lines = Vec::new();
+        for s in &external {
+            let name = export_name[s];
+            // The root's own import of it, if any; else a new one.
+            let local = specs.iter().find_map(|sp| match sp {
+                ImportDeclarationSpecifier::ImportSpecifier(x)
+                    if x.imported.name() == name.as_str()
+                        && x.import_kind != ImportOrExportKind::Type =>
+                {
+                    Some(x.local.name.to_string())
+                }
+                _ => None,
+            });
+            let local = match local {
+                Some(l) => l,
+                None => {
+                    let n = fresh(&mut taken, name, k);
+                    import_lines.push(format!(
+                        "import {{ {name} as {n} }} from {};",
+                        super::client_js_str(i.source.value.as_str())
+                    ));
+                    n
+                }
+            };
+            map.insert(*s, local);
+        }
         for &ti in &need {
             let (_, syms, is_import) = &facts.stmts[ti];
             if *is_import {
@@ -484,7 +525,11 @@ pub(crate) fn inline_imports(
                 // Remove `spec` and its separating comma.
                 let after = &source[span.end as usize..];
                 let comma = after.find(',').filter(|c| after[..*c].trim().is_empty());
-                let end = comma.map_or(span.end, |c| span.end + c as u32 + 1);
+                let end = comma.map_or(span.end, |c| {
+                    let rest = &after[c + 1..];
+                    let ws = rest.len() - rest.trim_start_matches([' ', '\t']).len();
+                    span.end + (c + 1 + ws) as u32
+                });
                 root_edits.push((Span::new(span.start, end), String::new()));
             }
         }
@@ -1030,4 +1075,43 @@ pub fn island_exports(source: &str, filename: Option<&str>) -> String {
     w.end_array();
     w.end_object();
     w.out
+}
+
+// --- imported contexts ---------------------------------------------------------------------
+
+/// Contexts imported from provided modules (`export const Ctx =
+/// createContext(…)` there): the model reads them as the module's own
+/// contexts (providers and `yield* Ctx` reads), keeping their identity.
+pub(crate) fn imported_contexts(program: &Program<'_>, imports: &[ImportedModule]) -> Vec<SymbolId> {
+    let mut out = Vec::new();
+    for stmt in &program.body {
+        let Statement::ImportDeclaration(i) = stmt else {
+            continue;
+        };
+        let Some(module) = imports.iter().find(|x| x.specifier == i.source.value.as_str()) else {
+            continue;
+        };
+        let alloc = Allocator::default();
+        let Some((mprog,)) = parse(&alloc, &module.code, Some(&module.filename)) else {
+            continue;
+        };
+        let msem = SemanticBuilder::new().build(&mprog).semantic;
+        let mscoping = msem.scoping();
+        let mm = model::build_model(&module.code, &mprog, mscoping, Vec::new());
+        let facts = module_facts(&mprog, mscoping);
+        for sp in i.specifiers.iter().flatten() {
+            let ImportDeclarationSpecifier::ImportSpecifier(s) = sp else {
+                continue;
+            };
+            let Some(sym) = facts.exports.get(s.imported.name().as_str()) else {
+                continue;
+            };
+            if mm.contexts.contains_key(sym)
+                && let Some(local) = s.local.symbol_id.get()
+            {
+                out.push(local);
+            }
+        }
+    }
+    out
 }

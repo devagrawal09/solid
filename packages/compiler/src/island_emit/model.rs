@@ -367,6 +367,17 @@ pub(crate) fn build_model<'a>(
     scoping: &'a Scoping,
     probe_hosts: Vec<(String, String)>,
 ) -> Model<'a> {
+    build_model_with(src, program, scoping, probe_hosts, &[])
+}
+
+/// With `contexts`: imported bindings that are contexts of other modules.
+pub(crate) fn build_model_with<'a>(
+    src: &'a str,
+    program: &'a Program<'a>,
+    scoping: &'a Scoping,
+    probe_hosts: Vec<(String, String)>,
+    contexts: &[SymbolId],
+) -> Model<'a> {
     let mut m = Model {
         src,
         scoping,
@@ -379,6 +390,9 @@ pub(crate) fn build_model<'a>(
         probe_hosts,
         issues: Vec::new(),
     };
+    for c in contexts {
+        m.contexts.insert(*c, None);
+    }
     // Imports first, so runtime names resolve while components are read.
     for stmt in &program.body {
         let Statement::ImportDeclaration(import) = stmt else {

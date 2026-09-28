@@ -149,6 +149,11 @@ export interface Scenario {
   steps: Step[];
   /** Per-mode expectations; unlisted modes must be equivalent. */
   modes?: Record<ModeId, ModeExpectation>;
+  /**
+   * Islands mode only: sources of modules the `islands` source imports
+   * relatively (by specifier), for the compiler's cross-module inlining.
+   */
+  modules?: Record<string, string>;
 }
 
 /** What one mode observed for one scenario. */

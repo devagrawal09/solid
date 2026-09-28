@@ -49,6 +49,8 @@ pub(crate) struct Refs {
     /// Symbols passed to `refresh(…)`: a refresh re-runs their source (a
     /// write, for liveness).
     pub refreshed: Vec<SymbolId>,
+    /// Roots of `yield*` reads (`yield* x`, `yield* x.a.b`).
+    pub yielded: Vec<SymbolId>,
 }
 
 struct Walker<'m, 'a> {
@@ -131,6 +133,24 @@ impl<'a> Visit<'a> for Walker<'_, 'a> {
     fn visit_jsx_element(&mut self, e: &JSXElement<'a>) {
         self.out.has_jsx = true;
         walk::walk_jsx_element(self, e);
+    }
+    fn visit_yield_expression(&mut self, y: &oxc_ast::ast::YieldExpression<'a>) {
+        if y.delegate
+            && let Some(arg) = &y.argument
+        {
+            let mut root = arg.without_parentheses();
+            loop {
+                match root {
+                    Expression::StaticMemberExpression(s) => root = &s.object,
+                    Expression::ComputedMemberExpression(c) => root = &c.object,
+                    _ => break,
+                }
+            }
+            if let Some(s) = self.m.symbol_of_expr(root) {
+                self.out.yielded.push(s);
+            }
+        }
+        walk::walk_yield_expression(self, y);
     }
 }
 
@@ -718,6 +738,16 @@ impl<'a> Analysis<'a> {
     }
 }
 
+/// The imported (non-runtime) function a local's initializer calls at its
+/// top level, if any.
+fn model_call_callee(m: &Model<'_>, init: &Expression<'_>) -> Option<String> {
+    let e = super::model::yield_delegate(init).unwrap_or(init);
+    let call = super::model::call_of(e)?;
+    let s = m.symbol_of_expr(&call.callee)?;
+    let t = &m.top[*m.top_of.get(&s)?];
+    (t.import && !t.runtime_import).then(|| m.sym_name(s).to_string())
+}
+
 /// Store keys among `reads`, through the memos that read them.
 fn store_keys(m: &Model<'_>, a: &Analysis<'_>, reads: &BTreeSet<Key>) -> BTreeSet<Key> {
     let mut out = BTreeSet::new();
@@ -827,6 +857,53 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
         let mut f = w.f;
         f.issues.extend(c.issues.iter().cloned());
         facts.push(f);
+    }
+
+    // --- opaque values ---------------------------------------------------------------
+    // A setup local computed by a function imported from a module the
+    // compiler cannot see (not a runtime, not inlined): its reactive state is
+    // invisible, so a `yield*` read of it (strict v2 reads only reactive
+    // values that way) cannot be classified: refuse.
+    for (ci, c) in m.comps.iter().enumerate() {
+        let mut opaque: Vec<(SymbolId, String)> = Vec::new();
+        for item in &c.setup {
+            let Item::Local {
+                decl: LocalDecl::Var(d),
+                symbols,
+                ..
+            } = item
+            else {
+                continue;
+            };
+            let Some(init) = &d.init else { continue };
+            let Some(callee) = model_call_callee(m, init) else { continue };
+            for s in symbols {
+                opaque.push((*s, callee.clone()));
+            }
+        }
+        if opaque.is_empty() {
+            continue;
+        }
+        let f = &facts[ci];
+        let yielded: Vec<SymbolId> = f
+            .sites
+            .iter()
+            .map(|s| &s.refs)
+            .chain(f.item_refs.iter())
+            .flat_map(|r| r.yielded.iter().copied())
+            .collect();
+        let mut reported = HashSet::new();
+        for y in &yielded {
+            if let Some((s, callee)) = opaque.iter().find(|(s, _)| s == y)
+                && reported.insert(*s)
+            {
+                let msg = format!(
+                    "`{}` comes from `{callee}(…)`, imported from a module the compiler does not see; a `yield*` read of it cannot be classified (the bundler plugin passes relative modules' sources)",
+                    m.sym_name(*s)
+                );
+                facts[ci].issues.push(msg);
+            }
+        }
     }
 
     // --- flows: abstract values to a fixpoint ----------------------------------

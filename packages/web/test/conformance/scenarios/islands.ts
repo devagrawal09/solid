@@ -583,10 +583,114 @@ export function App() {
   ]
 };
 
+/**
+ * Islands spanning modules: the page calls a factory from `./counter`
+ * (a signal, a memo and a closure that writes) and renders `Row` from
+ * `./row` with live props and a callback. The compiler reads the imported
+ * modules' sources (what the bundler plugin passes from its per-module
+ * summaries) and inlines them: the factory's state is the island's, and
+ * `Row` becomes a member of the page's island (it receives live state).
+ * The reference is the same program in one module.
+ */
+export const islandsModules: Scenario = {
+  name: "islands-modules",
+  covers: [
+    "a factory imported from another module (inlined into the setup)",
+    "an imported component receiving live props joins the island",
+    "a helper generator imported from another module"
+  ],
+  entry: { component: "App" },
+  sources: {
+    reference: `
+import { createContext, createMemo, createSignal, useContext } from "solid-js";
+const Label = createContext("count");
+function createCounter(start) {
+  const [n, setN] = createSignal(start);
+  const double = createMemo(() => n() * 2);
+  return { n, double, inc: () => setN(x => x + 1) };
+}
+function Row(props) {
+  const label = useContext(Label);
+  return (
+    <li>
+      <span class="v">{label}: {props.value}</span>
+      <button class="bump" onClick={() => props.onBump()}>+</button>
+    </li>
+  );
+}
+export function App() {
+  const c = createCounter(1);
+  return (
+    <Label value="double">
+      <ul>
+        <Row value={c.double()} onBump={c.inc} />
+        <li class="n">{c.n()}</li>
+      </ul>
+    </Label>
+  );
+}
+`,
+    islands: `
+import { $component } from "solid-js";
+import { createCounter } from "./counter";
+import { Row, Label } from "./row";
+export const App = $component(function* () {
+  const c = createCounter(1);
+  return function* () {
+    return (
+      <Label value="double">
+        <ul>
+          <Row value={yield* c.double} onBump={c.inc} />
+          <li class="n">{yield* c.n}</li>
+        </ul>
+      </Label>
+    );
+  };
+});
+`
+  },
+  modules: {
+    "./counter": `
+import { createMemo, createSignal } from "solid-js";
+export function createCounter(start) {
+  const [n, setN] = createSignal(start);
+  const double = createMemo(() => n() * 2);
+  return { n, double, inc: () => setN(x => x + 1) };
+}
+`,
+    "./row": `
+import { $component, $event, createContext } from "solid-js";
+export const Label = createContext("count");
+function* useLabel() {
+  const label = yield* Label;
+  return label;
+}
+export const Row = $component(function* (props) {
+  const label = yield* useLabel();
+  const bump = $event(function* () { props.onBump(); });
+  return function* () {
+    return (
+      <li>
+        <span class="v">{label}: {yield* props.value}</span>
+        <button class="bump" onClick={bump}>+</button>
+      </li>
+    );
+  };
+});
+`
+  },
+  steps: [
+    { name: "initial", run: ({ html }) => html() },
+    step("bump (the imported component calls the factory's closure)", ctx => ctx.click(".bump")),
+    step("bump again", ctx => ctx.click(".bump"))
+  ]
+};
+
 export const islandsScenarios = [
   islandsList,
   islandsStream,
   islandsStore,
   islandsAsync,
-  islandsOptimistic
+  islandsOptimistic,
+  islandsModules
 ];

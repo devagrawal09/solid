@@ -191,4 +191,50 @@ export const App = $component(function* () {
     expect([...chunks.keys()]).toEqual(["i0", "i1_0"]);
     fs.rmSync(dir, { recursive: true });
   });
+
+  test("cross-module: summaries name the imported factories an importer's compile inlines", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "islands-"));
+    fs.writeFileSync(
+      path.join(dir, "counter.ts"),
+      `import { createSignal } from "solid-js";
+export function createCounter(start) {
+  const [n, setN] = createSignal(start);
+  return { n, inc: () => setN(x => x + 1) };
+}
+export const label = "count";`
+    );
+    fs.writeFileSync(
+      path.join(dir, "app.tsx"),
+      `import { $component, $event } from "solid-js";
+import { createCounter, label } from "./counter";
+export const App = $component(function* () {
+  const c = createCounter(0);
+  const inc = $event(function* () { c.inc(); });
+  return function* () { return <button onClick={inc}>{label}: {yield* c.n}</button>; };
+});`
+    );
+    const compiler = new IslandsCompiler();
+    const app = path.join(dir, "app.tsx");
+    expect(compiler.summary(path.join(dir, "counter.ts")).exports).toEqual([
+      { name: "createCounter", kind: "factory" },
+      { name: "label", kind: "value" }
+    ]);
+    expect(compiler.importsFor(app, fs.readFileSync(app, "utf8")).map(i => i.specifier)).toEqual([
+      "./counter"
+    ]);
+    const out = compiler.compileFile(app);
+    expect(out.fallback).toBe(null);
+    expect(out.deps).toEqual([path.join(dir, "counter.ts")]);
+    expect(out.manifest.islands.map(i => [i.root, i.cells])).toEqual([["App", ["App.n$f1"]]]);
+    // Without the pass, the factory is opaque and the module falls back.
+    const blind = new IslandsCompiler({ crossModule: false }).compileFile(app);
+    expect(blind.fallback).toMatch(/comes from `createCounter/);
+    // The cache follows the imported module's content.
+    fs.writeFileSync(
+      path.join(dir, "counter.ts"),
+      fs.readFileSync(path.join(dir, "counter.ts"), "utf8").replace("x + 1", "x + 2")
+    );
+    expect(compiler.compileFile(app)).not.toBe(out);
+    fs.rmSync(dir, { recursive: true });
+  });
 });
