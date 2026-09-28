@@ -243,6 +243,10 @@ enum Yield {
     Imported(SymbolId),
 }
 
+/// `Candidate::statement` of a function-scoped helper: no `program.body`
+/// slot, so it is only ever lowered in place.
+const NESTED: usize = usize::MAX;
+
 struct Candidate {
     symbol: SymbolId,
     name: String,
@@ -630,31 +634,22 @@ pub(super) fn plan_helpers(
         symbols: collect_fusion_symbols(program),
     };
 
-    // Candidates: module-level generator declarations (exported or not).
+    // Candidates: generator declarations — module-level (exported or not;
+    // `statement` indexes `program.body`, where a twin can be inserted) and
+    // function-scoped (`NESTED`: lowered in place only, never twinned).
     let mut list: Vec<Candidate> = Vec::new();
-    for (index, statement) in program.body.iter().enumerate() {
-        let (function, exported) = match statement {
-            Statement::FunctionDeclaration(function) => (function, false),
-            Statement::ExportDeclaration(export) => match &export.declaration {
-                Declaration::FunctionDeclaration(function) => (function, true),
-                _ => continue,
-            },
-            _ => continue,
-        };
+    let mut functions: Vec<&Function<'_>> = Vec::new();
+    let push = |function: &Function<'_>, statement: usize, exported: bool| -> Option<Candidate> {
         if !function.generator || function.r#async || function.body.is_none() {
-            continue;
+            return None;
         }
-        let Some(id) = function.id.as_ref() else {
-            continue;
-        };
-        let Some(symbol) = id.symbol_id.get() else {
-            continue;
-        };
-        list.push(Candidate {
+        let id = function.id.as_ref()?;
+        let symbol = id.symbol_id.get()?;
+        Some(Candidate {
             symbol,
             name: id.name.to_string(),
             function: function.span,
-            statement: index,
+            statement,
             exports: if exported {
                 vec![id.name.to_string()]
             } else {
@@ -664,7 +659,35 @@ pub(super) fn plan_helpers(
             throws: Vec::new(),
             own: 0,
             sites: Vec::new(),
-        });
+        })
+    };
+    for (index, statement) in program.body.iter().enumerate() {
+        let (function, exported) = match statement {
+            Statement::FunctionDeclaration(function) => (function, false),
+            Statement::ExportDeclaration(export) => match &export.declaration {
+                Declaration::FunctionDeclaration(function) => (function, true),
+                _ => continue,
+            },
+            _ => continue,
+        };
+        if let Some(candidate) = push(function, index, exported) {
+            list.push(candidate);
+            functions.push(function);
+        }
+    }
+    // Function-scoped declarations (the semantic's nodes hand out
+    // references with the program's lifetime).
+    for node in nodes.iter() {
+        let AstKind::Function(function) = node.kind() else {
+            continue;
+        };
+        if !function.is_declaration() || list.iter().any(|c| c.function == function.span) {
+            continue;
+        }
+        if let Some(candidate) = push(function, NESTED, false) {
+            list.push(candidate);
+            functions.push(function);
+        }
     }
 
     // Imported helpers the build summarized.
@@ -718,23 +741,7 @@ pub(super) fn plan_helpers(
         .enumerate()
         .map(|(i, c)| (c.symbol, i))
         .collect();
-    for statement in &program.body {
-        let function = match statement {
-            Statement::FunctionDeclaration(function) => function,
-            Statement::ExportDeclaration(export) => match &export.declaration {
-                Declaration::FunctionDeclaration(function) => function,
-                _ => continue,
-            },
-            _ => continue,
-        };
-        let Some(&index) = function
-            .id
-            .as_ref()
-            .and_then(|id| id.symbol_id.get())
-            .and_then(|symbol| analysis.candidates.get(&symbol))
-        else {
-            continue;
-        };
+    for (index, function) in functions.iter().enumerate() {
         let (yields, throws, own) = analysis.classify(function);
         let (sites, exports) = analysis.sites(list[index].symbol);
         let candidate = &mut list[index];
@@ -750,56 +757,72 @@ pub(super) fn plan_helpers(
         .iter()
         .map(|c| if c.yields.is_some() { c.own } else { 0 })
         .collect();
+    let n = list.len();
+    let mut in_place: Vec<bool>;
     loop {
-        let mut changed = false;
-        for i in 0..list.len() {
-            let Some(yields) = list[i].yields.as_ref() else {
-                continue;
-            };
-            let mut bits = admitted[i];
-            for (_, y) in yields {
-                if let Yield::Local(callee) = y {
-                    bits &= admitted[analysis.candidates[callee]];
+        loop {
+            let mut changed = false;
+            for i in 0..list.len() {
+                let Some(yields) = list[i].yields.as_ref() else {
+                    continue;
+                };
+                let mut bits = admitted[i];
+                for (_, y) in yields {
+                    if let Yield::Local(callee) = y {
+                        bits &= admitted[analysis.candidates[callee]];
+                    }
+                }
+                if bits != admitted[i] {
+                    admitted[i] = bits;
+                    changed = true;
                 }
             }
-            if bits != admitted[i] {
-                admitted[i] = bits;
-                changed = true;
+            if !changed {
+                break;
             }
         }
-        if !changed {
-            break;
-        }
-    }
 
-    // Lowered helpers: in place (not exported, every reference a site that
-    // lowers, every helper site in an in-place helper) or a twin (exported,
-    // a site that lowers, or a lowered helper calling it). Fixpoints.
-    let n = list.len();
-    let mut in_place: Vec<bool> = (0..n)
-        .map(|i| {
-            admitted[i] != 0
-                && list[i].exports.is_empty()
-                && !list[i].sites.is_empty()
-                && list[i].sites.iter().all(|site| match site {
-                    Site::Perform { kind, .. } => admitted[i] & bit(*kind) != 0,
-                    Site::Helper { .. } => true,
-                    Site::Other => false,
-                })
-        })
-        .collect();
-    loop {
-        let mut changed = false;
-        for i in 0..n {
-            if in_place[i]
-                && list[i].sites.iter().any(|site| matches!(site,
-                    Site::Helper { in_helper } if !in_place[analysis.candidates[in_helper]]))
-            {
-                in_place[i] = false;
-                changed = true;
+        // Lowered helpers: in place (not exported, every reference a site that
+        // lowers, every helper site in an in-place helper) or a twin (exported,
+        // a site that lowers, or a lowered helper calling it). Fixpoints.
+        in_place = (0..n)
+            .map(|i| {
+                admitted[i] != 0
+                    && list[i].exports.is_empty()
+                    && !list[i].sites.is_empty()
+                    && list[i].sites.iter().all(|site| match site {
+                        Site::Perform { kind, .. } => admitted[i] & bit(*kind) != 0,
+                        Site::Helper { .. } => true,
+                        Site::Other => false,
+                    })
+            })
+            .collect();
+        loop {
+            let mut changed = false;
+            for i in 0..n {
+                if in_place[i]
+                    && list[i].sites.iter().any(|site| matches!(site,
+                        Site::Helper { in_helper } if !in_place[analysis.candidates[in_helper]]))
+                {
+                    in_place[i] = false;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
             }
         }
-        if !changed {
+
+        // A function-scoped helper has no slot for a twin: when it cannot
+        // lower in place it stays a generator, and so do its lowered callers.
+        let mut stuck = false;
+        for i in 0..n {
+            if list[i].statement == NESTED && admitted[i] != 0 && !in_place[i] {
+                admitted[i] = 0;
+                stuck = true;
+            }
+        }
+        if !stuck {
             break;
         }
     }

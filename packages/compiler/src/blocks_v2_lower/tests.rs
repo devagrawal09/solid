@@ -781,3 +781,45 @@ export const D = $component(function* () {
     let out = with("/app/src/other.ts");
     assert!(!out.contains("$lowered"), "{out}");
 }
+
+#[test]
+fn function_scoped_helpers_lower_in_place() {
+    let out = dom(r#"import { $component, $signal, $memo } from "solid-js";
+export function make() {
+  function* useCounter(start) {
+    const [c] = yield* $signal(start);
+    return yield* $memo(function* () { return (yield* c) * 2; });
+  }
+  return $component(function* () {
+    const d = yield* useCounter(1);
+    return function* () { return <p>{yield* d}</p>; };
+  });
+}
+"#);
+    let flat = flat(&out);
+    assert!(flat.contains("function useCounter(start) {"), "{out}");
+    assert!(flat.contains("const d = useCounter(1);"), "{out}");
+    assert!(!flat.contains("_$perform(useCounter"), "{out}");
+}
+
+#[test]
+fn a_function_scoped_helper_that_escapes_stays_a_generator() {
+    // No slot for a twin: a reference that is not a lowerable call site
+    // keeps the generator, and its call site keeps `perform`.
+    let out = dom(r#"import { $component, $signal } from "solid-js";
+export function make(register) {
+  function* useCounter(start) {
+    const [c] = yield* $signal(start);
+    return c;
+  }
+  register(useCounter);
+  return $component(function* () {
+    const c = yield* useCounter(1);
+    return function* () { return <p>{yield* c}</p>; };
+  });
+}
+"#);
+    let flat = flat(&out);
+    assert!(flat.contains("function* useCounter(start) {"), "{out}");
+    assert!(flat.contains("_$perform(useCounter(1))"), "{out}");
+}
