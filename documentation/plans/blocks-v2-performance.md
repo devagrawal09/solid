@@ -1,6 +1,7 @@
 # Generator blocks v2 — runtime and bundle cost
 
-Status: measured and optimized (2026-09-27). Companion to
+Status: measured and optimized (2026-09-27); client lowering landed
+(2026-09-28, section 9). Companion to
 [generator-blocks-v2.md](./generator-blocks-v2.md). Harness: `scripts/blocks-v2/`.
 
 ## Summary
@@ -365,29 +366,152 @@ plain app's bytes were block machinery it did not use). Of `generator.ts`'s
 retained code (unminified), the driver is ~3.5 kB, the path tokens ~2.4 kB,
 `perform` and its dispatch ~3.4 kB.
 
+## 9. Client lowering (2026-09-28)
+
+Recommendations 1–3 below, and the effect-half fusion from "Evaluated and not
+done", landed as one compiler pass plus compiled-only runtime entry points.
+Compiler: `packages/compiler/src/blocks_v2_lower.rs` (DOM output), the default
+v2 fusion (`generators.rs`, `compiler.rs`) and the control-flow effect split
+(`blocks_v2.rs`). Runtime: `syncBlock`, `blockCleanup`, `withReceipts`,
+`$componentCompiled`, `$eventCompiled` (+ `dispatchFused`),
+`effectBlockCompiled`, `settledBlockCompiled` in `@solidjs/signals`, re-exported
+by `solid-js` (whose `effectBlockCompiled` registers the hydration-aware
+`createEffect`, as `effectBlock` does).
+
+What the compiled `$component` of the size fixture becomes (`APP_V2`):
+
+```js
+const App = $componentCompiled(function () {            // setup block erased
+  const [count, setCount] = createSignal(0);             // was _$perform($signal(0))
+  const [store, setStore] = createStore({ items: [...] });
+  const doubled = createMemo(function () { return count() * 2; });
+  createEffect(function () { return [count()]; },        // was $effect(_$$(half), _$$(compute))
+    function (_$v) { const c = _$v[0]; document.title = "count " + c;
+      const _$cleanup0 = () => { document.title = ""; }; return _$cleanup0; });
+  const inc = $eventCompiled(function () { setCount(count() + 1); });  // event block erased
+  return _$$(function () { /* the view: still a block */ }, 1);
+});
+// import { syncBlock as _$$, createSignal, createStore, createMemo, createEffect,
+//          $componentCompiled, $eventCompiled } from "solid-js"   — no `$`, no `perform`
+```
+
+The pieces, each exact by construction (anything unproven stays as lowered):
+
+| change | why it is the same program |
+| --- | --- |
+| v2 host fusion on by default (`hostFusion: false` opts out; `true` also fuses plain `$` blocks) | the existing proof-driven fusion, restricted to the bodies the v2 pass synthesized; runs on every generate, so hydration ids agree |
+| setup creations → direct primitive calls from the constructor's module (`$signal` → `createSignal`, `$store` → `createStore`, `$memo(block)` → `createMemo(block)`, `$effect` → `effectBlock`, `$settled` → `settledBlock`, `$cleanup` → `blockCleanup`, `$flush()` → `flush()`) | `perform` of a `create` / `cleanup` / `flush` op is its host check (the compile-time host rules already did it) plus the `make` call; the primitives do no reactive read outside their own computations, so the setup's raised guard is unobservable. Only at the body's own depth (a nested callback may run under another host) |
+| a `$signal` / `$store` setter is the primitive's own setter unless it escapes; `_$perform(set(x))` → `set(x)`, or `set(x).value` for a receipt setter | a setter returns the written value, which is exactly the receipt's `value`; `perform` reads a receipt's value before any host check. A setter escapes when a use is not a call whose result is discarded or performed (`() => set(x)` returns it; `withReceipts` keeps the receipts) |
+| `_$perform(raise(e));` → `throw e;` (memo, effect, event) | the host admits `raise`; `perform` throws it |
+| fused effect half: `effectBlock(_$$(half, SYNC), compute)` → `createEffect(compute, half')` | when the half passes the fusion's body check, registers `$cleanup` only as top-level statements and never `return`s: `runEffectHalf` collects exactly those and returns the one cleanup, or a function running them in order |
+| `$event(_$$(fn, SYNC))` → `$eventCompiled(fn)` when the body check passes (proven-accessor reads become calls) | `dispatchFused` keeps the handler contract of `dispatchBlock` (no owner context, failures to the boundary above the creation owner); nothing is left to run under the event host |
+| setup `_$$(fn, SYNC)` erased (`$componentCompiled(fn)`) when no operation is left (nested blocks are their own bodies) and every `return` is a block | the setup runs untracked either way; with no operation left, neither the host nor the guard is observable |
+| `_$$` imported as `syncBlock` when every block of the module is lowered and SYNC | `syncBlock` is `$`'s SYNC wrapper without the driver branches and the generator-body hook |
+| the effect split keeps control flow (`if`/`else`, `?:`, `&&`, `\|\|`, `??`, early `return`) | the compute reads a slot only under the body's condition, evaluated over compute values and never-written outer bindings; an unevaluable condition is dropped (never inverted), so reads are a superset of the body's, never a subset. Compiled `blocks-effect` is now `=` handwritten Solid in the conformance matrix (was `≠ declared`) |
+
+Only SYNC-flagged blocks are erased (a flagged `$` call is never wrapped in a
+hydration id scope, `block_scope.rs`), a setup returning its view block is now
+proven SYNC on every generate, and every primitive is created in the same
+order, so client-only erasure keeps hydration ids aligned with the server.
+
+**Instructions per op, n=100** (before = baseline runtime + compiler of
+section "After", measured again on this machine; after = final runtime +
+compiler; × = vs handwritten):
+
+| scenario | handwritten | compiled before | compiled after | uncompiled before → after |
+| --- | ---: | ---: | ---: | ---: |
+| memo | 609k | 730k (1.20×) | 618k (1.01×, −15.3%) | 827k → 827k |
+| create | 1122k | 1966k (1.75×) | 1657k (1.48×, −15.7%) | 11300k → 11259k |
+| view | 272k | 310k (1.14×) | 321k (1.18×, +3.8%)¹ | 475k → 475k |
+| holes | 648k | 677k (1.05×) | 665k (1.03×, −1.7%) | 669k → 670k |
+| event | 306k | 370k (1.21×) | 322k (1.05×, −13.0%) | 561k → 572k (+1.9%)² |
+| effect | 273k | 427k (1.56×) | 290k (1.06×, −32.0%) | 1934k → 1934k |
+| paths | 1642k | 1623k (0.99×) | 1623k (0.99×) | 4901k → 4905k |
+| async | 7372k | 8253k (1.12×) | 8259k (1.12×) | 8258k → 8258k |
+
+`fused` (`hostFusion: true`) is now identical to `compiled` on every scenario
+(the programs have no plain `$` block). The new `unfused` variant
+(`hostFusion: false`) is the opt-out. n=300: see below.
+
+¹ A microbenchmark artifact of the erased setup, not a cost: in `view` the
+only body the block wrapper ever runs is the view, and V8's code for the
+monomorphic wrapper is slower. The same compiled program with one other block
+body run anywhere in the module measures 305k (A/B in the same process
+configuration: 321k erased setup, 305k with the setup kept as a block, 305k
+with the erased setup plus one unrelated block) — below the 310k before. Any
+real app runs more than one body through the wrapper.
+² Within the ~5% noise band but reproducible, with the old and the new
+compiler alike (a runtime effect). No function on the uncompiled event path
+changed; reverting the `$signal` tuple construction did not move it, and the
+remaining candidates (new exports and helpers beside that path) were not
+bisected further. A branding helper shared by `$` and `syncBlock` cost
+uncompiled `paths` +3.5% and was reverted (blocks are branded inline).
+
+**Bundles** (min / gzip, bytes; before = the same harness on the baseline):
+
+| fixture | before | after |
+| --- | ---: | ---: |
+| signals + one lowered `$` memo | 28,098 / 11,122 | 28,098 / 11,122 |
+| store app, plain Solid | 75,750 / 23,631 | 75,750 / 23,631 |
+| same app, v2 compiled | 90,007 / 27,791 | 84,751 / 26,260 (−5.8% / −5.5%) |
+| same app, v2 compiled, `hostFusion: false` (opt-out) | — | 90,172 / 27,835 |
+| same app, v2 compiled, lowered but `$` kept (driver retained) | — | 88,319 / 27,303 |
+| same app, v2 uncompiled | 88,898 / 27,512 | 89,059 / 27,553 (+0.2% / +0.1%) |
+| `examples/sync-blocks` (fully lowered, `syncBlock`) | 64,085 / 23,308 | 60,883 / 22,145 (−5.0% / −5.0%) |
+| `examples/todos-blocks` (async events and a `yield* useTodos()` helper keep `$`) | 92,034 / 32,984 | 91,944 / 32,917 |
+
+Attribution for the v2 app: the client lowering itself (direct creations,
+fused halves, erased blocks, no operation objects) is 1.9 kB min / 0.5 kB gzip
+(90,172 → 88,319); dropping the driver is 3.6 kB min / 1.0 kB gzip
+(88,319 → 84,751 — `drive` / `step` / `settle` / `resume`, `$`, the
+generator-body hook). The marginal cost of blocks in the small app is now
+9.0 kB min / 2.6 kB gzip over the same app in plain Solid (was 14.3 / 4.2). The
+uncompiled app pays +161 / +41 bytes for the shared component / effect
+helpers. `perform` itself is still retained by a fully compiled app: the path
+readers' token fallback and `readThrough` (reading through an accessor found
+at a path) reference it.
+
+**Not done:**
+
+- A slimmer `perform` for operand kinds the compiler can name (recommendation 2,
+  second half). After this pass the benchmark programs contain no `perform`
+  except one view-top read in `view` (a proven accessor under the view's raised
+  guard); a named reader would save the operand type test on that read only,
+  and `perform` stays in bundles through the path readers. Not measurable.
+- Attribute holes (`<input value={yield* draft}>` compiles to an `effect`
+  whose compute is `_$perform(draft)`) keep `perform`: which attributes the JSX
+  transform turns into effects (vs. evaluated inline: `on*`, `ref`, directives,
+  `@static`) is decided after this pass.
+- Events and setups that read context (`yield* Ctx`) or call helpers keep their
+  block (the context read needs the component host); their creations are
+  direct regardless. Async `attempt` bodies keep `$` and the driver.
+- `$settled` bodies stay blocks (`settledBlockCompiled`); fusing them like
+  effect halves is possible but not measured by any scenario.
+- The linker (`@solidjs/compiler/capabilities`) reasons about authored source,
+  so the new compiler-emitted names need no feature facts; if a compiled-output
+  analysis is added, `syncBlock` and the `…Compiled` entries belong under the
+  block feature.
+
 ## Evaluated and not done
 
 | idea | measurement | why not |
 | --- | --- | --- |
-| Driver-free compiled output (a call-form-only `$`) | stubbing the driver out of the compiled app: −2.85 kB min / −0.9 kB gzip; no runtime effect | `$component` / `$memo` / `$event` / views must accept uncompiled bodies, so they reference `$` and, through it, the driver. Dropping it needs compiled-only constructors (a second entry or `…Compiled` exports, mirrored by `solid-js`'s wrappers) that the compiler targets when every body in the module was lowered and proven SYNC. Recommended below; not worth the API surface in this pass. |
+| Driver-free compiled output (a call-form-only `$`) | stubbing the driver out of the compiled app: −2.85 kB min / −0.9 kB gzip; no runtime effect | Done in section 9 (`syncBlock` and the `…Compiled` entries): −3.6 kB min / −1.0 kB gzip. |
 | An accessor fast path in the old `perform` | holes +48%, memo/view regressions | Root cause: the closure-context allocation described in 2; done after the split instead. |
 | Rest parameter → `arguments[0]` alone | ±0.02% | Kept for the unoptimized tiers, but not a win by itself. |
 | Eager ("static") views | the structural share above: 282k per 100 components | A view with no top-level read could run once, untracked, when its component is called; but a view must stay a value `yield* Child(p)` can carry, and the renderer, not the component, owns where it runs. Needs a renderer-level contract. |
 | Cheaper uncompiled prop chains | uncompiled `paths` 3.0×, `create` 10.7× | Each `props.x` access in an uncompiled body builds a Proxy chain and an operation object. A shared-prototype-Proxy design (own fields on a plain object, deeper keys through a prototype trap) would cut it; uncompiled is the interop path, so left as a recommendation. |
 | Skip the typed-props WeakMap registration for uncompiled setups; one shared Proxy handler for typed props and prop chains | uncompiled create: +20% at n=100/50 ops, +0.2% at n=300, −1.3% at n=100/150 ops; paths −0.9% | Fewer allocations, but no win the harness can show above its GC noise for this cell: reverted. |
-| Fusing the effect half | fused effect 1.36× | The half's `$cleanup`s must become its returned cleanup and its writes plain calls; the split machinery exists (`blocks_v2.rs`), the fused form does not. |
+| Fusing the effect half | fused effect 1.36× | Done in section 9: effect 1.06× plain Solid. |
 
 ## Recommendations
 
-1. Keep `hostFusion`-style v2 fusion on the path to default: it is a proof-driven
-   erasure (no heuristic) and closes most of the creation and effect gap.
-2. Add compiled-only constructors (`$component` / `$memo` / `$event` / view for
-   prebuilt, SYNC-proven blocks) so fully compiled modules do not retain the
-   driver (−0.9 kB gzip), then consider a slimmer `perform` for the operand
-   kinds the compiler can name (reads, receipts, creations).
-3. Lower setup creations (`_$perform($signal(v))`, `$store`, `$cleanup`) to
-   direct runtime calls: the compile-time host rules already cover what
-   `perform`'s host check verifies at runtime.
+1. ~~Keep `hostFusion`-style v2 fusion on the path to default.~~ Default since
+   section 9 (`hostFusion: false` opts out).
+2. ~~Add compiled-only constructors so fully compiled modules do not retain the
+   driver.~~ Done (section 9). A slimmer `perform` was evaluated: nothing left
+   to measure once creations, writes and events are lowered.
+3. ~~Lower setup creations to direct runtime calls.~~ Done (section 9).
 4. Treat the view's own render effect as the cost floor of a v2 component
    (1.27× plain Solid at creation) and document it; everything else is
    within ~1.0–1.4× with fusion.
@@ -399,6 +523,9 @@ retained code (unminified), the driver is ~3.5 kB, the path tokens ~2.4 kB,
 
 - Uncompiled v2 is still 3–11× plain Solid on creation, effects and path reads
   (typed-props proxy chains, generator delegation per `yield*`).
+- Compiled v2 is within 1.01–1.06× plain Solid except creation (1.48×, mostly
+  the view's own render effect, recommendation 4) and async memos (1.12×,
+  the driver). `blocks-effect`'s compiled mode now equals handwritten Solid.
 - A `$memo` imported from `@solidjs/signals` in a `solid-js` app, compiled with
   `hostFusion`, fuses to `@solidjs/signals`' `createMemo`; uncompiled it would
   use the primitive `solid-js` registered (hydration-aware) if any `solid-js`
