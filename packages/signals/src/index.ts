@@ -230,5 +230,6 @@ export {
   createErrorBoundary,
   createRevealOrder,
   flatten,
+  isReadOp,
   type RevealOrder
 } from "./boundaries.js";

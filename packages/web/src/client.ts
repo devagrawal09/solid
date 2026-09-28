@@ -1066,7 +1066,15 @@ export function insert(parent, accessor, marker, initial, options) {
   effect(
     prev => {
       if (hydrationRt !== null) current = hydrationRt.reclaimRegion(current, parent, marker);
-      const value = normalize(read(), current, multi, true);
+      let raw = read();
+      // A hole whose value is a `$` block (a component call returning its
+      // view, e.g. the hydration root `() => <Page />`) renders the view
+      // here, not in the inner unwrapping effect: that effect re-runs
+      // whenever the content it unwraps changes (a `<Loading>` the view
+      // returns settling), and re-running the view there re-created the
+      // deferred boundary — and its fetches — on every settle.
+      while (isBlock(raw)) raw = renderBlock(raw);
+      const value = normalize(raw, current, multi, true);
       if (typeof value !== "function") return value;
       effect(
         () => (

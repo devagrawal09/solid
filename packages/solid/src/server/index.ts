@@ -70,6 +70,7 @@ export {
   createTrackedEffect,
   deep,
   flatten,
+  isReadOp,
   flush,
   getNextChildId,
   getObserver,

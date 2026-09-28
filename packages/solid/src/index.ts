@@ -61,6 +61,7 @@ export {
   createPlainStore,
   deep,
   flatten,
+  isReadOp,
   flush,
   getNextChildId,
   getObserver,

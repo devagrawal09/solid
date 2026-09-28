@@ -226,7 +226,7 @@ function ssrLoadingBoundary(
   // promises verbatim, and createErrorBoundary tags its aggregate).
   const hasFinalHole = () =>
     (retryPromise as any)?.$clientHole === true ||
-    !!(ret as any)?.p?.some((p: any) => p.$clientHole);
+    !!(ret as any)?.p?.some((p: any) => p?.$clientHole === true);
 
   let ret = runDiscovery();
   if (!retryPromise && !ret?.p?.length) {

@@ -10,13 +10,14 @@ import {
   getNextChildId,
   runWithOwner,
   setContext,
-  RevealGroupContext
+  RevealGroupContext,
+  lazyView
 } from "./signals.js";
 import { createLoadingBoundary } from "./hydration.js";
 import { sharedConfig } from "./shared.js";
 import type { Accessor, RevealOrder } from "./signals.js";
 import type { Element as SolidElement } from "../types.js";
-import { inBlock, lazyView, type View } from "@solidjs/signals";
+import { inBlock, type View } from "@solidjs/signals";
 export type { RevealOrder };
 
 type NonZeroParams<T extends (...args: any[]) => any> = Parameters<T>["length"] extends 0

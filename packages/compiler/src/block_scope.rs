@@ -125,8 +125,11 @@ struct Collector<'s> {
 
 impl<'b> Visit<'b> for Collector<'_> {
     fn visit_call_expression(&mut self, call: &CallExpression<'b>) {
+        // `$(fn)` or `$(fn, flags)`: a `$component`'s view is lowered to
+        // `$(function () { … }, BLOCK_SYNC)` and is the block that most
+        // often carries JSX.
         if self.is_adapter_call(call)
-            && call.arguments.len() == 1
+            && matches!(call.arguments.len(), 1 | 2)
             && body_has_jsx(&call.arguments[0])
         {
             self.targets.push(call.span);
@@ -321,6 +324,28 @@ function C() {
                 1,
                 "{out}"
             );
+        }
+    }
+
+    #[test]
+    fn wraps_component_views_lowered_with_flags() {
+        // A `$component`'s view lowers to `$(function () { … }, BLOCK_SYNC)`:
+        // unscoped, its keys came from the section's counter at render time,
+        // which the server reaches after later siblings took their slots
+        // (todos-blocks: 104 key misses).
+        let source = r#"
+import { $component } from "solid-js";
+const Header = $component(function* () {
+  return function* () {
+    return <header><h1>todos</h1></header>;
+  };
+});
+"#;
+        for generate in [Generate::Dom, Generate::Ssr] {
+            let out = compile_with(source, generate, true);
+            // The setup and the view (`$(_$blockScope(…), 1)`).
+            assert_eq!(out.matches("_$blockScope(function").count(), 2, "{out}");
+            assert!(out.contains("}), 1);\n})), 1);"), "{out}");
         }
     }
 

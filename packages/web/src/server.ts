@@ -11,7 +11,8 @@ import {
   createComponent,
   untrack,
   merge as mergeProps,
-  ssrScope as scope
+  ssrScope as scope,
+  isReadOp
 } from "solid-js";
 import { effect, memo } from "./render.js";
 import {
@@ -3946,6 +3947,7 @@ export function escape(s, attr) {
       return s;
     }
     if (!attr && t === "function") return escapeLate(s);
+    if (!attr && isReadOp(s)) return escapeLate(readOpThunk(s));
     if (attr) {
       // Nullish and boolean values pass through so callers can omit the
       // attribute or emit it as a boolean attribute. Numbers can never
@@ -4451,7 +4453,19 @@ function flattenClassList(list, result) {
 //                 read stateful getters such as JSX `props.children`
 //                 whose backing component rebuilds an owner subtree on
 //                 each access, producing a divergent hydration tree.
+/**
+ * A v2 path read in a content position (`{props.children}` in a
+ * `$component` view: the prop forwarded without `yield*`) renders as the
+ * value it reads, like an accessor — the client's `flatten` does the same.
+ * Resolving the read's proxy as a template object instead would answer every
+ * `h` / `t` / `p` probe with another read.
+ */
+function readOpThunk(op) {
+  return () => op.source();
+}
+
 function tryResolveString(node) {
+  if (isReadOp(node)) node = readOpThunk(node);
   const t = typeof node;
   if (t === "string") return node;
   if (t === "number") return "" + node;
@@ -4507,6 +4521,7 @@ export function resolveSSRNode(
   },
   top
 ) {
+  if (isReadOp(node)) node = readOpThunk(node);
   const t = typeof node;
   if (t === "string" || t === "number") {
     result.t[result.t.length - 1] += node;
