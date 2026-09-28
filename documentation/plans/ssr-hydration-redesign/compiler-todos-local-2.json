@@ -9,8 +9,8 @@
     "todos-local": {
       "variants": {
         "A": {
-          "ssrMs": 0.8696229999999332,
-          "ssrCpuMs": 0.855,
+          "ssrMs": 0.5369480000000522,
+          "ssrCpuMs": 0.531,
           "html": {
             "bytes": 18228,
             "gzip": 1425,
@@ -57,7 +57,7 @@
             }
           },
           "counts": {
-            "gatherMs": 0.3,
+            "gatherMs": 0.5,
             "owner": 103,
             "signal": 2,
             "computed": 17,
@@ -77,26 +77,26 @@
           },
           "timing": {
             "1": {
-              "readyAt": 40.60000000055879,
-              "hydrateMs": 10.100000000558794,
-              "scriptMs": 11.681000000000001,
+              "readyAt": 45.60000000055879,
+              "hydrateMs": 10.400000000372529,
+              "scriptMs": 11.535,
               "heapKB": 2170.0234375,
-              "firstMs": 2.300000000745058,
-              "scriptTotalMs": 13.689
+              "firstMs": 2.2000000001862645,
+              "scriptTotalMs": 13.568999999999999
             },
             "4": {
-              "readyAt": 173.09999999962747,
-              "hydrateMs": 47.799999999813735,
-              "scriptMs": 54.923,
+              "readyAt": 176,
+              "hydrateMs": 59.40000000037253,
+              "scriptMs": 66.232,
               "heapKB": 2170.0234375,
-              "firstMs": 14.5,
-              "scriptTotalMs": 65.77
+              "firstMs": 12.5,
+              "scriptTotalMs": 79.771
             }
           }
         },
         "T2-eager": {
-          "ssrMs": 0.6779710000000705,
-          "ssrCpuMs": 0.673,
+          "ssrMs": 0.46753500000068016,
+          "ssrCpuMs": 0.464,
           "html": {
             "bytes": 16575,
             "gzip": 874,
@@ -161,26 +161,26 @@
           },
           "timing": {
             "1": {
-              "readyAt": 23.5,
-              "hydrateMs": 3.400000000372529,
-              "scriptMs": 4.509,
+              "readyAt": 30.299999999813735,
+              "hydrateMs": 3.5,
+              "scriptMs": 4.925,
               "heapKB": 1747.78515625,
-              "firstMs": 1.8999999994412065,
-              "scriptTotalMs": 6.695
+              "firstMs": 1.7999999998137355,
+              "scriptTotalMs": 6.760999999999999
             },
             "4": {
-              "readyAt": 126.3999999994412,
-              "hydrateMs": 14.5,
-              "scriptMs": 20.47,
+              "readyAt": 129.6000000005588,
+              "hydrateMs": 15.200000000186265,
+              "scriptMs": 24.654,
               "heapKB": 1747.78515625,
-              "firstMs": 10.100000000558794,
-              "scriptTotalMs": 29.564
+              "firstMs": 8.299999999813735,
+              "scriptTotalMs": 29.996
             }
           }
         },
         "T1-eager": {
-          "ssrMs": 0.8547519999992801,
-          "ssrCpuMs": 0.808,
+          "ssrMs": 0.45408800000041083,
+          "ssrCpuMs": 0.452,
           "html": {
             "bytes": 16575,
             "gzip": 874,
@@ -235,26 +235,26 @@
           },
           "timing": {
             "1": {
-              "readyAt": 23.40000000037253,
-              "hydrateMs": 2.2999999998137355,
-              "scriptMs": 3.234,
+              "readyAt": 26.399999999441206,
+              "hydrateMs": 2.3999999994412065,
+              "scriptMs": 3.49,
               "heapKB": 1624.76171875,
               "firstMs": 1.3999999994412065,
-              "scriptTotalMs": 4.378
+              "scriptTotalMs": 4.713
             },
             "4": {
-              "readyAt": 113.6000000005588,
-              "hydrateMs": 9.299999999813735,
-              "scriptMs": 12.315,
+              "readyAt": 109.40000000037253,
+              "hydrateMs": 10.099999999627471,
+              "scriptMs": 14.652999999999999,
               "heapKB": 1624.76171875,
-              "firstMs": 5.8999999994412065,
-              "scriptTotalMs": 16.704
+              "firstMs": 8.200000000186265,
+              "scriptTotalMs": 21.979
             }
           }
         },
         "T2-lazy": {
-          "ssrMs": 0.43882900000062364,
-          "ssrCpuMs": 0.436,
+          "ssrMs": 0.5399269999998069,
+          "ssrCpuMs": 0.531,
           "html": {
             "bytes": 16574,
             "gzip": 874,
@@ -316,26 +316,26 @@
           },
           "timing": {
             "1": {
-              "readyAt": 23.5,
+              "readyAt": 23.200000000186265,
               "hydrateMs": 0,
-              "scriptMs": 0.739,
+              "scriptMs": 0.627,
               "heapKB": 1501.32421875,
-              "firstMs": 17,
-              "scriptTotalMs": 3.506
+              "firstMs": 18.5,
+              "scriptTotalMs": 3.2439999999999998
             },
             "4": {
-              "readyAt": 98,
+              "readyAt": 112.20000000018626,
               "hydrateMs": 0,
-              "scriptMs": 2.933,
+              "scriptMs": 2.372,
               "heapKB": 1501.32421875,
-              "firstMs": 60.59999999962747,
-              "scriptTotalMs": 14.603
+              "firstMs": 54.09999999962747,
+              "scriptTotalMs": 13.622
             }
           }
         },
         "T1-lazy": {
-          "ssrMs": 0.5202829999980167,
-          "ssrCpuMs": 0.516,
+          "ssrMs": 0.5345310000011523,
+          "ssrCpuMs": 0.53,
           "html": {
             "bytes": 16574,
             "gzip": 874,
@@ -392,26 +392,26 @@
           },
           "timing": {
             "1": {
-              "readyAt": 18.200000000186265,
+              "readyAt": 24,
               "hydrateMs": 0,
-              "scriptMs": 0.627,
+              "scriptMs": 0.716,
               "heapKB": 1501.32421875,
-              "firstMs": 9.5,
-              "scriptTotalMs": 2.283
+              "firstMs": 21.399999999441206,
+              "scriptTotalMs": 2.7369999999999997
             },
             "4": {
-              "readyAt": 109.90000000037253,
+              "readyAt": 133.80000000074506,
               "hydrateMs": 0,
-              "scriptMs": 2.612,
+              "scriptMs": 1.03,
               "heapKB": 1501.32421875,
-              "firstMs": 50.59999999962747,
-              "scriptTotalMs": 11.671000000000001
+              "firstMs": 49.09999999962747,
+              "scriptTotalMs": 12.283999999999999
             }
           }
         },
         "T0*-eager": {
-          "ssrMs": 0.4576859999979206,
-          "ssrCpuMs": 0.455,
+          "ssrMs": 0.45335399999748915,
+          "ssrCpuMs": 0.451,
           "html": {
             "bytes": 16578,
             "gzip": 876,
@@ -466,26 +466,26 @@
           },
           "timing": {
             "1": {
-              "readyAt": 28.200000000186265,
-              "hydrateMs": 0.7999999998137355,
-              "scriptMs": 1.868,
+              "readyAt": 24.299999999813735,
+              "hydrateMs": 0.599999999627471,
+              "scriptMs": 1.501,
               "heapKB": 1547.66015625,
-              "firstMs": 1.400000000372529,
-              "scriptTotalMs": 2.784
+              "firstMs": 1.2000000001862645,
+              "scriptTotalMs": 2.521
             },
             "4": {
-              "readyAt": 119.40000000037253,
-              "hydrateMs": 4.1000000005587935,
-              "scriptMs": 9.288,
-              "heapKB": 1547.66015625,
-              "firstMs": 5.2999999998137355,
-              "scriptTotalMs": 13.662
+              "readyAt": 112.19999999925494,
+              "hydrateMs": 2.6000000005587935,
+              "scriptMs": 6.511,
+              "heapKB": 1547.6484375,
+              "firstMs": 5,
+              "scriptTotalMs": 8.84
             }
           }
         },
         "C-eager": {
-          "ssrMs": 0.22367900000244845,
-          "ssrCpuMs": 0.223,
+          "ssrMs": 0.18101599999863538,
+          "ssrCpuMs": 0.18,
           "html": {
             "bytes": 16589,
             "gzip": 885,
@@ -509,13 +509,13 @@
             }
           },
           "js": {
-            "bytes": 9453,
-            "gzip": 4077,
+            "bytes": 9257,
+            "gzip": 4061,
             "groups": {
-              "signals": 4418,
+              "signals": 4410,
               "solid": 0,
               "web": 0,
-              "app": 5034,
+              "app": 4846,
               "other": 0
             },
             "lazy": {
@@ -540,186 +540,26 @@
           },
           "timing": {
             "1": {
-              "readyAt": 16.399999999441206,
-              "hydrateMs": 2.5,
-              "scriptMs": 3.376,
-              "heapKB": 1678.37890625,
-              "firstMs": 1.2999999998137355,
-              "scriptTotalMs": 4.356
+              "readyAt": 34.39999999944121,
+              "hydrateMs": 3,
+              "scriptMs": 3.882,
+              "heapKB": 1678.14453125,
+              "firstMs": 1.400000000372529,
+              "scriptTotalMs": 4.851
             },
             "4": {
-              "readyAt": 127.59999999962747,
-              "hydrateMs": 15.5,
-              "scriptMs": 18.848,
-              "heapKB": 1678.37890625,
-              "firstMs": 6.199999999254942,
-              "scriptTotalMs": 21.663999999999998
+              "readyAt": 107.79999999981374,
+              "hydrateMs": 8.400000000372529,
+              "scriptMs": 11.173,
+              "heapKB": 1678.14453125,
+              "firstMs": 4.7999999998137355,
+              "scriptTotalMs": 16.084999999999997
             }
           }
         },
         "C-lazy": {
-          "ssrMs": 0.27467800000158604,
-          "ssrCpuMs": 0.264,
-          "html": {
-            "bytes": 16589,
-            "gzip": 885,
-            "data": {
-              "bytes": 0,
-              "gzip": 0
-            },
-            "bootstrap": {
-              "bytes": 56,
-              "gzip": 36
-            },
-            "hk": {
-              "count": 0,
-              "bytes": 0,
-              "gzip": 0
-            },
-            "markers": {
-              "count": 10,
-              "bytes": 80,
-              "gzip": 31
-            }
-          },
-          "js": {
-            "bytes": 1166,
-            "gzip": 680,
-            "groups": {
-              "signals": 0,
-              "solid": 0,
-              "web": 0,
-              "app": 1165,
-              "other": 0
-            },
-            "lazy": {
-              "names": [
-                "chunk-VYHL2VKW.js"
-              ],
-              "bytes": 9309,
-              "gzip": 4009,
-              "groups": {
-                "signals": 4418,
-                "solid": 0,
-                "web": 0,
-                "app": 4839,
-                "other": 0
-              }
-            }
-          },
-          "counts": {},
-          "countsAfterSession": {},
-          "gate": {
-            "steps": 8,
-            "identity": "11",
-            "equalToA": true
-          },
-          "timing": {
-            "1": {
-              "readyAt": 15.100000000558794,
-              "hydrateMs": 0.09999999962747097,
-              "scriptMs": 0.647,
-              "heapKB": 1502.57421875,
-              "firstMs": 13.700000000186265,
-              "scriptTotalMs": 2.641
-            },
-            "4": {
-              "readyAt": 96.70000000018626,
-              "hydrateMs": 0.2999999998137355,
-              "scriptMs": 3.439,
-              "heapKB": 1502.57421875,
-              "firstMs": 52.90000000037253,
-              "scriptTotalMs": 10.901
-            }
-          }
-        },
-        "C-T2-eager": {
-          "ssrMs": 0.19508399999904213,
-          "ssrCpuMs": 0.194,
-          "html": {
-            "bytes": 16589,
-            "gzip": 885,
-            "data": {
-              "bytes": 0,
-              "gzip": 0
-            },
-            "bootstrap": {
-              "bytes": 56,
-              "gzip": 36
-            },
-            "hk": {
-              "count": 0,
-              "bytes": 0,
-              "gzip": 0
-            },
-            "markers": {
-              "count": 10,
-              "bytes": 80,
-              "gzip": 31
-            }
-          },
-          "js": {
-            "bytes": 29517,
-            "gzip": 11727,
-            "groups": {
-              "signals": 24405,
-              "solid": 0,
-              "web": 0,
-              "app": 5111,
-              "other": 0
-            },
-            "lazy": {
-              "names": [],
-              "bytes": 0,
-              "gzip": 0,
-              "groups": {
-                "signals": 0,
-                "solid": 0,
-                "web": 0,
-                "app": 0,
-                "other": 0
-              }
-            }
-          },
-          "counts": {
-            "owner": 4,
-            "signal": 2,
-            "computed": 4,
-            "recompute": 12
-          },
-          "countsAfterSession": {
-            "owner": 4,
-            "signal": 2,
-            "computed": 4,
-            "recompute": 78
-          },
-          "gate": {
-            "steps": 8,
-            "identity": "11",
-            "equalToA": true
-          },
-          "timing": {
-            "1": {
-              "readyAt": 29,
-              "hydrateMs": 3.699999999254942,
-              "scriptMs": 4.8260000000000005,
-              "heapKB": 1787,
-              "firstMs": 1.699999999254942,
-              "scriptTotalMs": 6.35
-            },
-            "4": {
-              "readyAt": 119.29999999981374,
-              "hydrateMs": 19.40000000037253,
-              "scriptMs": 22.693,
-              "heapKB": 1787,
-              "firstMs": 7.2000000001862645,
-              "scriptTotalMs": 27.064
-            }
-          }
-        },
-        "C-T2-lazy": {
-          "ssrMs": 0.2136160000009113,
-          "ssrCpuMs": 0.211,
+          "ssrMs": 0.18979700000636512,
+          "ssrCpuMs": 0.189,
           "html": {
             "bytes": 16589,
             "gzip": 885,
@@ -754,15 +594,175 @@
             },
             "lazy": {
               "names": [
-                "chunk-CNI543DY.js"
+                "chunk-7O3YCM6X.js"
               ],
-              "bytes": 29373,
-              "gzip": 11673,
+              "bytes": 9115,
+              "gzip": 3998,
+              "groups": {
+                "signals": 4410,
+                "solid": 0,
+                "web": 0,
+                "app": 4653,
+                "other": 0
+              }
+            }
+          },
+          "counts": {},
+          "countsAfterSession": {},
+          "gate": {
+            "steps": 8,
+            "identity": "11",
+            "equalToA": true
+          },
+          "timing": {
+            "1": {
+              "readyAt": 24,
+              "hydrateMs": 0.10000000055879354,
+              "scriptMs": 0.712,
+              "heapKB": 1502.5625,
+              "firstMs": 11.5,
+              "scriptTotalMs": 2.9859999999999998
+            },
+            "4": {
+              "readyAt": 101,
+              "hydrateMs": 1,
+              "scriptMs": 3.776,
+              "heapKB": 1502.55078125,
+              "firstMs": 46,
+              "scriptTotalMs": 13.374
+            }
+          }
+        },
+        "C-T2-eager": {
+          "ssrMs": 2.7075980000008713,
+          "ssrCpuMs": 0.328,
+          "html": {
+            "bytes": 16589,
+            "gzip": 885,
+            "data": {
+              "bytes": 0,
+              "gzip": 0
+            },
+            "bootstrap": {
+              "bytes": 56,
+              "gzip": 36
+            },
+            "hk": {
+              "count": 0,
+              "bytes": 0,
+              "gzip": 0
+            },
+            "markers": {
+              "count": 10,
+              "bytes": 80,
+              "gzip": 31
+            }
+          },
+          "js": {
+            "bytes": 29321,
+            "gzip": 11721,
+            "groups": {
+              "signals": 24405,
+              "solid": 0,
+              "web": 0,
+              "app": 4915,
+              "other": 0
+            },
+            "lazy": {
+              "names": [],
+              "bytes": 0,
+              "gzip": 0,
+              "groups": {
+                "signals": 0,
+                "solid": 0,
+                "web": 0,
+                "app": 0,
+                "other": 0
+              }
+            }
+          },
+          "counts": {
+            "owner": 4,
+            "signal": 2,
+            "computed": 4,
+            "recompute": 12
+          },
+          "countsAfterSession": {
+            "owner": 4,
+            "signal": 2,
+            "computed": 4,
+            "recompute": 78
+          },
+          "gate": {
+            "steps": 8,
+            "identity": "11",
+            "equalToA": true
+          },
+          "timing": {
+            "1": {
+              "readyAt": 28,
+              "hydrateMs": 3.900000000372529,
+              "scriptMs": 5.3309999999999995,
+              "heapKB": 1786.8125,
+              "firstMs": 1.800000000745058,
+              "scriptTotalMs": 7.118
+            },
+            "4": {
+              "readyAt": 119.1000000005588,
+              "hydrateMs": 15.700000000186265,
+              "scriptMs": 18.314,
+              "heapKB": 1786.8125,
+              "firstMs": 8.400000000372529,
+              "scriptTotalMs": 25.423000000000002
+            }
+          }
+        },
+        "C-T2-lazy": {
+          "ssrMs": 0.24840899999981048,
+          "ssrCpuMs": 0.248,
+          "html": {
+            "bytes": 16589,
+            "gzip": 885,
+            "data": {
+              "bytes": 0,
+              "gzip": 0
+            },
+            "bootstrap": {
+              "bytes": 56,
+              "gzip": 36
+            },
+            "hk": {
+              "count": 0,
+              "bytes": 0,
+              "gzip": 0
+            },
+            "markers": {
+              "count": 10,
+              "bytes": 80,
+              "gzip": 31
+            }
+          },
+          "js": {
+            "bytes": 1166,
+            "gzip": 681,
+            "groups": {
+              "signals": 0,
+              "solid": 0,
+              "web": 0,
+              "app": 1165,
+              "other": 0
+            },
+            "lazy": {
+              "names": [
+                "chunk-ZC3D7EAQ.js"
+              ],
+              "bytes": 29177,
+              "gzip": 11663,
               "groups": {
                 "signals": 24405,
                 "solid": 0,
                 "web": 0,
-                "app": 4916,
+                "app": 4720,
                 "other": 0
               }
             }
@@ -781,20 +781,20 @@
           },
           "timing": {
             "1": {
-              "readyAt": 22.5,
-              "hydrateMs": 0.10000000055879354,
-              "scriptMs": 0.6449999999999999,
+              "readyAt": 22.09999999962747,
+              "hydrateMs": 0.20000000018626451,
+              "scriptMs": 0.664,
               "heapKB": 1502.57421875,
-              "firstMs": 19.5,
-              "scriptTotalMs": 3.282
+              "firstMs": 24.5,
+              "scriptTotalMs": 3.593
             },
             "4": {
-              "readyAt": 118,
-              "hydrateMs": 0.7999999998137355,
-              "scriptMs": 4.093,
+              "readyAt": 124.40000000037253,
+              "hydrateMs": 0.900000000372529,
+              "scriptMs": 2.794,
               "heapKB": 1502.57421875,
-              "firstMs": 62.5,
-              "scriptTotalMs": 17.013
+              "firstMs": 65.6000000005588,
+              "scriptTotalMs": 13.155999999999999
             }
           }
         }

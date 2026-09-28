@@ -444,7 +444,44 @@ The page's only script. Hot islands (a load-time effect other than a listener st
 - **esbuild** (`esbuildIslands`) drives the measurement harness (`scripts/ssr-redesign/lib.mjs`, variants with `islands: { root, mode, minTier }`).
 - **Fallback.** A module the compiler does not compile keeps today's pipeline: the plugin serves its hydratable SSR and DOM compiles, and the entry hydrates its root component (`rootExport`, `mount`). todos-blocks takes this path (its state is an optimistic async store behind a factory, with actions and boundaries: tier 2 by the rules, and read through a helper generator the partitioner does not follow).
 
-MEASUREMENTS_PLACEHOLDER
+### Measurements: compiler output against the hand-written prototypes
+
+Same harness and methodology as §5 and the tier study (`measure.mjs`: prod dists, esbuild minify, Chromium, 7 fresh loads per run and CPU rate, median per run, mean of two runs; byte numbers exact). The compiler variants (`C-*`) compile the blocks-v2 source of each page (`apps/hn-blocks/story.tsx`, `apps/todos-local-blocks/app.tsx`, `examples/todos-blocks/src/app.tsx`) with `compileIslands` and bundle the generated entry and chunks; `minTier` raises HN's tier-0 islands to compare with the prototypes at every tier. Every variant passes the gate against today's hydrated page (after load and after every session step, server nodes kept). Tables: `node scripts/ssr-redesign/compiler-report.mjs`; data: `compiler-{hn,todos-local,todos}-{1,2}.json`, `compiler-ssr-bench-{1,2}.json`.
+
+**HN story page** (1,406 comments; today: 405.6 KB gz HTML, 22.4 KB gz JS, 118 / 335 ms of script at load at 1× / 4×). Pairs are hand-written / **compiler**:
+
+| Tier, activation | HTML gz | JS gz at load | + JS gz on first click | script at load 1× | 4× | first click 1× | 4× |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| tier 0, eager (`T0-eager` / `C-eager`) | 189.7 / **188.3** | 0.56 / **0.62** | – | 4.2 / **4.2** | 12.5 / **7.4** | 0.7 / **0.7** | 3.2 / **1.7** |
+| tier 0, lazy (`T0-lazy` / `C-lazy`) | 189.7 / **188.3** | 0.28 / **0.52** | 0.50 / **0.54** | 1.6 / **1.8** | 7.7 / **1.8** | 5.9 / **8.9** | 27.7 / **44.1** |
+| tier 1 kernel, eager (`T1-eager` / `C-T1-eager`) | 189.7 / **188.3** | 2.21 / **2.29** | – | 8.6 / **7.8** | 18.1 / **23.9** | 1.4 / **1.4** | 4.1 / **4.9** |
+| tier 1 kernel, lazy | 189.7 / **188.3** | 0.28 / **0.52** | 2.13 / **2.21** | 1.7 / **1.8** | 6.3 / **6.2** | 15.2 / **7.6** | 28.3 / **64.8** |
+| tier 2 core, eager (`P1-eager` / `C-T2-eager`) | 189.7 / **188.3** | 9.70 / **9.78** | – | 18.0 / **20.6** | 45.9 / **36.6** | 1.5 / **1.6** | 5.0 / **6.6** |
+| tier 2 core, lazy (`P1-lazy` / `C-T2-lazy`) | 189.7 / **188.3** | 0.28 / **0.52** | 9.63 / **9.70** | 1.5 / **1.5** | 3.1 / **5.6** | 17.9 / **24.3** | 34.0 / **30.6** |
+
+**todos-local** (100 todos; today: 1.4 KB gz HTML, 22.9 KB gz JS, 11.6 / 58.7 ms of script at load). The compiler puts App, Header, MainSection, TodoItem and Footer in one island at tier 1, as the analysis did:
+
+| Tier, activation | HTML gz | JS gz at load | + JS gz on first interaction | script at load 1× | 4× | first interaction 1× | 4× |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| tier 1 kernel, eager (`T1-eager` / `C-eager`) | 0.85 / **0.86** | 3.69 / **3.97** | – | 3.3 / **3.8** | 15.1 / **14.3** | 1.3 / **1.3** | 7.3 / **5.7** |
+| tier 1 kernel, lazy (`T1-lazy` / `C-lazy`) | 0.85 / **0.86** | 0.45 / **0.67** | 3.64 / **3.90** | 0.7 / **0.8** | 2.5 / **3.8** | 19.6 / **14.3** | 46.9 / **48.5** |
+| tier 2 core, eager (`T2-eager` / `C-T2-eager`) | 0.85 / **0.86** | 11.13 / **11.45** | – | 4.6 / **5.2** | 23.7 / **20.2** | 1.8 / **1.7** | 8.5 / **9.1** |
+| tier 2 core, lazy (`T2-lazy` / `C-T2-lazy`) | 0.85 / **0.86** | 0.45 / **0.67** | 11.09 / **11.39** | 0.6 / **0.7** | 2.3 / **3.0** | 15.5 / **21.6** | 52.7 / **63.5** |
+
+**todos-blocks** stays tier 2 and falls back: `C` serves the same page and the same JS (38.5 KB gz; script at load 38.9 / 141.5 ms for A, 36.9 / 132.3 ms for C, within noise). Its first-interaction probe times out on this branch for A and C alike (see Defects found).
+
+**Server render** of the HN page (`ssr-bench.mjs`, median of 30 renders, two runs; HTML gated equal modulo markers and island ids):
+
+| | today (hydratable) | NoHydration zone (P1-zone) | hand-written string template | **compiler string template** |
+| --- | ---: | ---: | ---: | ---: |
+| ms / render | 35.8 · 27.3 | 8.2 · 9.3 | 0.58 · 0.53 | **1.38 · 0.95** |
+| HTML | 1,422.6 KB raw, 405.3 KB gz | 740.6 KB, 189.6 KB gz | 696.6 KB, 188.2 KB gz | 697.2 KB, 188.2 KB gz |
+
+What the numbers say:
+- **Bytes are at parity.** The compiler's chunks are within 0.1 KB gz of the hand-written ones at every tier on HN (0.62 vs 0.56 KB at tier 0), and within 0.3 KB on todos-local (3.97 vs 3.69 KB at tier 1: generic region / list / marker helpers instead of the stand-in's special cases). The HTML is 1.3 KB gz *smaller* than the prototypes', because the string templates drop the `<!--$-->` hole markers the prototypes' NoHydration server still emitted (740.6 → 697.2 KB raw).
+- **The lazy loader is 0.52 KB gz against the prototype's 0.28 KB** (both with the harness's timing hooks). The extra bytes buy what the stand-in did not do: one ordered queue across islands (an event on an active island waits behind a loading chunk), replay of every queued event, nested anchors, `data-pd`, checkbox replay and window-event stubs — each included only when the page needs it.
+- **Load-time script is at parity** (HN tier 0 eager 4.2 vs 4.2 ms at 1×; todos-local tier 1 eager 3.8 vs 3.3 ms at 1×, 14.3 vs 15.1 ms at 4×): the emitted activation does the same work — static paths, constant cells, live holes only, no work for inert holes, no roots for plain rows. First-interaction times of the lazy variants swing by tens of ms between runs at 4× in both columns (the chunk fetch and compile dominate them, as the tier study found); read them as ties.
+- **The server render is 1.0–1.4 ms, 20–30× faster than today's hydratable render** and 7–9× faster than rendering the same components in a NoHydration zone; the hand-written template is still 1.8–2.4× faster (it inlines every escape and allocates no props objects).
 
 ### Behaviour evidence
 
