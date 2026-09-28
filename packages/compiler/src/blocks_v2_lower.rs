@@ -18,7 +18,7 @@
 //!    | lowered | becomes |
 //!    | --- | --- |
 //!    | `_$perform($signal(v, o))` | `_$createSignal(v, o)`, or `_$withReceipts(_$createSignal(v, o))` when the setter escapes |
-//!    | `_$perform($store(v))` | `_$createStore(v)` / `_$withReceipts(…)` |
+//!    | `_$perform($store(v))` | `_$createPlainStore(v)` / `_$withReceipts(…)` |
 //!    | `_$perform(set(x))` of a non-escaping setter | `set(x)` (a setter returns the value its receipt carries) |
 //!    | `_$perform($memo(_$$(…), o))` | `_$createMemo(_$$(…), o)` |
 //!    | `_$perform($effect(_$$(…), c))` | `_$effectBlock(_$$(…), c)` |
@@ -181,7 +181,12 @@ impl Imports {
         {
             return local.clone();
         }
-        let base = format!("_${imported}");
+        // `store_forms.rs` (a later pass) adds `createPlainStore as
+        // _$createPlainStore` without checking for an existing specifier.
+        let base = match imported {
+            "createPlainStore" => "_$plainStore".to_string(),
+            _ => format!("_${imported}"),
+        };
         let mut local = base.clone();
         let mut n = 2;
         while self.taken.contains(&local) {
@@ -388,10 +393,11 @@ impl<'s> OpsCollector<'s, '_> {
         let prebuilt = block_function(self.names, self.scoping, op.arguments.first()).is_some();
         let (imported, wrap) = match (name, kind) {
             ("$signal" | "$store", V2Kind::Setup) => {
+                // `$store(value)` creates the plain store form.
                 let factory = if name == "$signal" {
                     "createSignal"
                 } else {
-                    "createStore"
+                    "createPlainStore"
                 };
                 let escapes = self.setter_escapes(call);
                 (factory, escapes)

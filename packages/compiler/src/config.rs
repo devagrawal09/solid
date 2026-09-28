@@ -88,6 +88,10 @@ pub struct TransformOptions {
     /// Experimental: replace provably flat, non-escaping stores by one signal
     /// per field (see `store_scalars.rs`). Every generate. Default `false`.
     pub store_scalars: Option<bool>,
+    /// Rewrite `createStore` calls whose first argument settles the form to
+    /// the single-form constructors (`createPlainStore` /
+    /// `createDerivedStore`). Every generate. Default `true`.
+    pub store_forms: Option<bool>,
     /// Linker facts for `store_handles`, flattened by the JS wrapper to
     /// `source\0export\0prop` strings.
     pub store_link_facts: Option<Vec<String>>,

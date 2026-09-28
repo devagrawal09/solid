@@ -120,8 +120,12 @@ describe("server functions on an adapter's lazy request (#3311)", () => {
     // listener methods) that is not an AbortSignal, so the read succeeds
     // and only the rebuild refuses it. Whatever the runtime does with that
     // failure, it is not the caller's malformed payload: no 400 relabel.
+    // `aborted` is a falsy non-boolean on purpose: the read only tests its
+    // truthiness, while undici refuses it on every version — older ones
+    // brand-check for a real AbortSignal, newer ones (Node 22.22+) accept
+    // a duck-typed signal but require `typeof aborted === "boolean"`.
     const signal = {
-      aborted: false,
+      aborted: 0,
       reason: undefined,
       addEventListener() {},
       removeEventListener() {}

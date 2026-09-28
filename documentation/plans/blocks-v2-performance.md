@@ -431,7 +431,27 @@ compiler; × = vs handwritten):
 
 `fused` (`hostFusion: true`) is now identical to `compiled` on every scenario
 (the programs have no plain `$` block). The new `unfused` variant
-(`hostFusion: false`) is the opt-out. n=300: see below.
+(`hostFusion: false`, the opt-out) reproduces the old default on the new
+runtime: memo 729k, create 1979k, view 309k, holes 679k, event 370k, effect
+426k, paths 1623k, async 8253k.
+
+n=300 (30 ops):
+
+| scenario | handwritten | compiled before | compiled after |
+| --- | ---: | ---: | ---: |
+| memo | 1894k | 2028k (1.07×) | 2070k (1.09×, +2.1%)³ |
+| create | 3536k | 5417k (1.53×) | 4673k (1.32×, −13.7%) |
+| view | 800k | 869k (1.09×) | 904k (1.13×, +4.0%)¹ |
+| holes | 1926k | 2016k (1.05×) | 1981k (1.03×, −1.7%) |
+| event | 917k | 1070k (1.17×) | 901k (0.98×, −15.8%) |
+| effect | 783k | 1207k (1.54×) | 839k (1.07×, −30.4%) |
+| paths | 4919k | 4899k (1.00×) | 4899k (1.00×) |
+| async | 45480k | 48264k (1.06×) | 48232k (1.06×) |
+
+³ The memo cell's known noise band (section "After": it swapped order between
+n=100 and n=300 before too); at n=100 it is −15.3%. The compiled memo program
+is the same code as handwritten apart from the erased setup, so the remaining
+difference is the component/view structure, not the memo.
 
 ¹ A microbenchmark artifact of the erased setup, not a cost: in `view` the
 only body the block wrapper ever runs is the view, and V8's code for the
@@ -460,7 +480,23 @@ uncompiled `paths` +3.5% and was reverted (blocks are branded inline).
 | `examples/sync-blocks` (fully lowered, `syncBlock`) | 64,085 / 23,308 | 60,883 / 22,145 (−5.0% / −5.0%) |
 | `examples/todos-blocks` (async events and a `yield* useTodos()` helper keep `$`) | 92,034 / 32,984 | 91,944 / 32,917 |
 
-Attribution for the v2 app: the client lowering itself (direct creations,
+After merging core runtime slicing (block renderer install-on-use, store
+forms; same harness, same day):
+
+| fixture | min / gzip |
+| --- | ---: |
+| store app, plain Solid | 67,362 / 21,379 |
+| same app, v2 compiled (default) | 77,615 / 24,330 |
+| same app, v2 compiled, lowered but `$` kept | 81,107 / 25,364 |
+| same app, v2 compiled, `hostFusion: false` | 82,985 / 25,889 |
+| same app, v2 uncompiled | 81,872 / 25,608 |
+| `examples/sync-blocks` | 55,318 / 20,321 |
+| `examples/todos-blocks` | 92,125 / 32,998 |
+
+(the lowered `$store` creates with `createPlainStore`, as `$store` itself now
+does; `syncBlock` installs the block renderer hooks as `$` does).
+
+Attribution for the v2 app (numbers before the merge): the client lowering itself (direct creations,
 fused halves, erased blocks, no operation objects) is 1.9 kB min / 0.5 kB gzip
 (90,172 → 88,319); dropping the driver is 3.6 kB min / 1.0 kB gzip
 (88,319 → 84,751 — `drive` / `step` / `settle` / `resume`, `$`, the

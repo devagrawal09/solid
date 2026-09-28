@@ -383,11 +383,16 @@ function updateIfNecessary(el: Comp) {
       if (el.f & DIRTY) break;
     }
   if (el.f & DIRTY) recompute(el);
-  // As in the core, this also drops ZOMBIE from a doomed node that may still
-  // be linked into the zombie heap. The core then unlinks it from the dirty
-  // heap (queueFor picks by flag) and corrupts a bucket; here `remove` unlinks
-  // from the heap the node is physically in (see the doc's defects).
-  el.f &= IN_HEAP | IN_HEAP_HEIGHT;
+  // As in the core, this drops ZOMBIE from a doomed node; one still linked
+  // into the zombie heap moves to the heap its flags now name (the core's
+  // zombie-heap fix, see the doc's defects).
+  const f = el.f;
+  el.f = f & (IN_HEAP | IN_HEAP_HEIGHT);
+  if (f & ZOMBIE && f & (IN_HEAP | IN_HEAP_HEIGHT)) {
+    remove(el);
+    if (f & IN_HEAP) insert(el, dirty);
+    else insertHeight(el, dirty);
+  }
 }
 function runEffect(el: Comp) {
   if (!el.m || el.f & DISPOSED) return;

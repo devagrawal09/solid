@@ -815,7 +815,12 @@ mod tests {
     use crate::{CompileOptions, Generate, compile};
 
     fn run(source: &str, generate: Generate, on: bool) -> String {
-        compile(source, &CompileOptions { generate, store_scalars: on, ..CompileOptions::default() })
+        // `storeForms` off: these cases assert on the authored `createStore(`
+        // calls the scalar pass keeps.
+        compile(
+            source,
+            &CompileOptions { generate, store_scalars: on, store_forms: false, ..CompileOptions::default() },
+        )
             .map(|o| o.code)
             .unwrap_or_else(|e| panic!("{e}"))
     }

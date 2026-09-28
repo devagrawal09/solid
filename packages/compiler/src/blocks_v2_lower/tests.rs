@@ -52,7 +52,7 @@ fn a_fully_lowered_component_is_plain_solid() {
         "{out}"
     );
     assert!(
-        flat.contains("const [state, setState] = _$createStore({ items: [] });"),
+        flat.contains("const [state, setState] = _$plainStore({ items: [] });"),
         "{out}"
     );
     assert!(
@@ -91,7 +91,7 @@ fn a_fully_lowered_component_is_plain_solid() {
     assert!(!out.contains("_$withReceipts"), "{out}");
     for imported in [
         "createSignal as _$createSignal",
-        "createStore as _$createStore",
+        "createPlainStore as _$plainStore",
         "createMemo as _$createMemo",
         "createEffect as _$createEffect",
         "blockCleanup as _$blockCleanup",
@@ -279,4 +279,21 @@ export const m = createMemo(function* () { return (yield* n) + 1; });
         "{out}"
     );
     assert!(flat.contains("syncBlock as _$$"), "{out}");
+}
+
+#[test]
+fn store_forms_and_lowered_stores_share_a_module() {
+    // `store_forms` names its plain store `_$createPlainStore`; the lowered
+    // `$store` must not collide with it.
+    let out = dom(r#"import { $component, $store, createStore } from "solid-js";
+const [shared] = createStore({ n: 1 });
+export const C = $component(function* () {
+  const [s, setS] = yield* $store({ n: 2 });
+  return function* () { return <i>{yield* s.n}{yield* shared.n}</i>; };
+});
+"#);
+    assert!(out.contains("_$plainStore({ n: 2 })"), "{out}");
+    assert!(out.contains("_$createPlainStore({ n: 1 })"), "{out}");
+    assert_eq!(out.matches("as _$plainStore").count(), 1, "{out}");
+    assert_eq!(out.matches("as _$createPlainStore").count(), 1, "{out}");
 }

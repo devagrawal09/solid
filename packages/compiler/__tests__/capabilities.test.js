@@ -38,6 +38,7 @@ function project(files) {
   };
   return {
     root,
+    resolve,
     prove: (typedSummary, entry = "src/main.tsx") =>
       proveGraph({ entries: [path.join(root, entry)], resolve, root, typedSummary })
   };
@@ -295,5 +296,147 @@ describe("proveGraph features", () => {
     const report = await prove();
     expect(report.features.STORES.because).toContain("namespace import of solid-js");
     expect(off(report)).not.toContain("STORES");
+  });
+});
+
+describe("proveGraph features from compiled facts", () => {
+  const { transform } = require("..");
+  const off = report =>
+    Object.entries(report.features)
+      .filter(([, f]) => !f.on)
+      .map(([name]) => name)
+      .sort();
+  // The bundler's loader: each module's transformed code (what the bundle
+  // includes), here the native compiler's DOM output.
+  const loader =
+    (compileOptions = {}, virtual = {}) =>
+    async id =>
+      id in virtual
+        ? virtual[id]
+        : transform(fs.readFileSync(id, "utf8"), {
+            filename: id,
+            generate: "dom",
+            ...compileOptions
+          }).code;
+  const withLoad = (files, compileOptions, virtual) => {
+    const p = project(files);
+    return {
+      ...p,
+      proveCompiled: () =>
+        proveGraph({
+          entries: [path.join(p.root, "src/main.tsx")],
+          resolve: p.resolve,
+          root: p.root,
+          load: loader(compileOptions, virtual)
+        })
+    };
+  };
+  const ALL_OFF = ["COMPILED_SEAMS", "ITERABLE", "OPTIMISTIC", "SNAPSHOTS", "STORES", "VERDICTS"];
+
+  // Every body lowers to call form: no generator is left at runtime.
+  const LOWERED = `import { $component, $signal, $memo, $event } from "solid-js";
+export const App = $component(function* () {
+  const [n, setN] = yield* $signal(0);
+  const doubled = yield* $memo(function* () { return (yield* n) * 2; });
+  const inc = $event(function* () { yield* setN(v => v + 1); });
+  return function* () { return <button onClick={inc}>{yield* doubled}</button>; };
+});
+`;
+
+  test("a fully lowered block app turns ITERABLE off; its authored imports would not", async () => {
+    const p = withLoad({ "src/main.tsx": MAIN, "src/app.tsx": LOWERED });
+    const bySource = await p.prove();
+    expect(bySource.features.ITERABLE.on).toBe(true);
+    const report = await p.proveCompiled();
+    expect(report.facts.withFacts).toBe(report.facts.modules);
+    expect(report.facts.delegations).toBe(0);
+    expect(off(report)).toEqual(ALL_OFF);
+  });
+
+  test("a residual generator with yield* keeps ITERABLE on, naming the module", async () => {
+    const p = withLoad({
+      "src/main.tsx": MAIN,
+      "src/app.tsx": `import { $component, $event, attempt } from "solid-js";
+export const App = $component(function* () {
+  const save = $event(function* () { yield* attempt(() => fetch("/x")); });
+  return function* () { return <button onClick={save}>save</button>; };
+});
+`
+    });
+    const report = await p.proveCompiled();
+    expect(report.features.ITERABLE.on).toBe(true);
+    expect(report.features.ITERABLE.because[0]).toMatch(
+      /^src\/app\.tsx:\d+: 1 yield\* left in compiled output$/
+    );
+    expect(report.facts.residualGenerators).toEqual([
+      expect.objectContaining({ file: "src/app.tsx", delegations: 1 })
+    ]);
+  });
+
+  test("an imported but never created store keeps STORES off; a created one turns it on", async () => {
+    const unused = await withLoad({
+      "src/main.tsx": MAIN,
+      "src/app.tsx": `import { createSignal, createStore } from "solid-js";\nexport const App = () => { const [n] = createSignal(0); return <p>{n()}</p>; };\n`
+    }).proveCompiled();
+    expect(unused.features.STORES.on).toBe(false);
+    const used = await withLoad({
+      "src/main.tsx": MAIN,
+      "src/app.tsx": `import { createStore } from "solid-js";\nexport const App = () => { const [s] = createStore({ n: 1 }); return <p>{s.n}</p>; };\n`
+    }).proveCompiled();
+    expect(used.features.STORES.on).toBe(true);
+    // The plain form is compiled to its own constructor (storeForms).
+    expect(used.features.STORES.because).toContain("solid-js: createPlainStore (src/app.tsx)");
+    expect(used.facts.creates).toEqual({ store: 1 });
+  });
+
+  test("compiled seams come from the output: none in plain output, the effect cut-off with memo fusion", async () => {
+    const files = {
+      "src/main.tsx": MAIN,
+      "src/app.tsx": `import { createSignal, createMemo, createEffect } from "solid-js";\nconst [n] = createSignal(1);\nconst d = createMemo(() => n() * 2);\ncreateEffect(() => d(), v => console.log(v));\nexport const App = () => <p>x</p>;\n`
+    };
+    const plain = await withLoad(files).proveCompiled();
+    expect(plain.features.COMPILED_SEAMS.on).toBe(false);
+    // Block proofs emit `syncOnly` (not a seam: `sync` is kernel).
+    const proven = await withLoad(files, { blockProofs: true, hostFusion: true }).proveCompiled();
+    expect(proven.features.COMPILED_SEAMS.on).toBe(false);
+    const fused = await withLoad(files, { memoFusion: true }).proveCompiled();
+    expect(fused.features.COMPILED_SEAMS.on).toBe(true);
+    expect(fused.features.COMPILED_SEAMS.because).toEqual([
+      "src/app.tsx: compiled output requests effectEquals",
+      "src/app.tsx: compiled output requests isEqual"
+    ]);
+  });
+
+  test("a module whose compiled output is unknown falls back to its authored imports", async () => {
+    const p = project({ "src/main.tsx": MAIN, "src/app.tsx": LOWERED });
+    const report = await proveGraph({
+      entries: [path.join(p.root, "src/main.tsx")],
+      resolve: p.resolve,
+      root: p.root,
+      load: async id => (id.endsWith("app.tsx") ? null : loader()(id))
+    });
+    expect(report.facts.withFacts).toBe(report.facts.modules - 1);
+    expect(report.features.ITERABLE.because).toContain("solid-js: $component (src/app.tsx)");
+    expect(report.features.COMPILED_SEAMS.on).toBe(true);
+  });
+
+  test("a virtual entry is summarized from the loader, so the graph stays fully known", async () => {
+    const p = project({ "src/app.tsx": `export const App = () => <p>hi</p>;\n` });
+    const virtualEntry = "\0virtual:entry-client.tsx";
+    const entryCode = `import { render } from "@solidjs/web";\nimport { App } from "./src/app.tsx";\nrender(App, document.body);\n`;
+    const resolve = async (source, importer) =>
+      importer === virtualEntry && source.startsWith(".")
+        ? path.join(p.root, source)
+        : p.resolve(source, importer);
+    const withoutLoad = await proveGraph({ entries: [virtualEntry], resolve, root: p.root });
+    expect(off(withoutLoad)).toEqual([]);
+    const report = await proveGraph({
+      entries: [virtualEntry],
+      resolve,
+      root: p.root,
+      load: loader({}, { [virtualEntry]: entryCode })
+    });
+    expect(report.modules).toContain("virtual:entry-client.tsx");
+    expect(off(report)).toEqual(ALL_OFF);
   });
 });

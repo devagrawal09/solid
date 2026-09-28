@@ -1,0 +1,1705 @@
+{
+  "sync-blocks": {
+    "baseline": {
+      "min": 68129,
+      "gz": 24921,
+      "chunks": [
+        [
+          "assets/index-CqdfrivY.js",
+          68129
+        ]
+      ],
+      "decision": null,
+      "byPackage": {
+        "app": 5202,
+        "signals": 330329,
+        "solid": 1866,
+        "web": 19667
+      },
+      "byModule": {
+        "core/constants.js": 11536,
+        "core/lanes.js": 3108,
+        "core/scheduler.js": 41196,
+        "core/heap.js": 4974,
+        "core/owner.js": 9126,
+        "core/graph.js": 5745,
+        "core/async.js": 30625,
+        "core/core.js": 52473,
+        "core/error.js": 2010,
+        "core/effect.js": 6914,
+        "block-hooks.js": 1238,
+        "generator.js": 35322,
+        "signals.js": 3514,
+        "store/next/target.js": 1925,
+        "store/store.js": 5108,
+        "store/next/store.js": 93049,
+        "store/index.js": 508,
+        "block-api.js": 5539,
+        "boundaries.js": 2834,
+        "core/attribution-hooks.js": 21,
+        "map.js": 13564
+      }
+    },
+    "async": {
+      "min": 58701,
+      "gz": 21558,
+      "chunks": [
+        [
+          "assets/index-C2866yrh.js",
+          58701
+        ]
+      ],
+      "decision": {
+        "asyncFree": true,
+        "firstReason": null,
+        "off": []
+      },
+      "byPackage": {
+        "app": 5202,
+        "signals": 263954,
+        "solid": 1866,
+        "web": 19667
+      },
+      "byModule": {
+        "core/features.js": 1566,
+        "core/constants.js": 9653,
+        "core/error.js": 2379,
+        "core/owner.js": 9118,
+        "core/graph.js": 5735,
+        "core/scheduler.js": 24796,
+        "core/heap.js": 4953,
+        "core/async.js": 2994,
+        "core/core.js": 35346,
+        "core/effect.js": 5536,
+        "signals.js": 3514,
+        "block-hooks.js": 1238,
+        "generator.js": 35292,
+        "store/store.js": 5108,
+        "store/next/target.js": 1925,
+        "store/next/store.js": 92860,
+        "store/index.js": 508,
+        "block-api.js": 5429,
+        "boundaries.js": 2796,
+        "map.js": 13208
+      }
+    },
+    "sliced": {
+      "min": 58441,
+      "gz": 21442,
+      "chunks": [
+        [
+          "assets/index-DpDKQfuZ.js",
+          58441
+        ]
+      ],
+      "decision": {
+        "asyncFree": true,
+        "firstReason": null,
+        "off": [
+          "OPTIMISTIC",
+          "VERDICTS",
+          "SNAPSHOTS",
+          "ITERABLE",
+          "COMPILED_SEAMS"
+        ]
+      },
+      "byPackage": {
+        "app": 5252,
+        "signals": 260314,
+        "solid": 1866,
+        "web": 19667
+      },
+      "byModule": {
+        "core/constants.js": 8672,
+        "core/error.js": 2379,
+        "core/owner.js": 9118,
+        "core/graph.js": 5735,
+        "core/scheduler.js": 24587,
+        "core/heap.js": 4953,
+        "core/async.js": 2994,
+        "core/core.js": 34767,
+        "core/effect.js": 5536,
+        "signals.js": 3209,
+        "block-hooks.js": 1238,
+        "generator.js": 35292,
+        "store/store.js": 5108,
+        "store/next/target.js": 1925,
+        "store/next/store.js": 92860,
+        "store/index.js": 508,
+        "block-api.js": 5429,
+        "boundaries.js": 2796,
+        "map.js": 13208
+      }
+    }
+  },
+  "todos-blocks": {
+    "baseline": {
+      "min": 92154,
+      "gz": 33055,
+      "chunks": [
+        [
+          "assets/index-mQT5TMPZ.js",
+          92154
+        ]
+      ],
+      "decision": null,
+      "byPackage": {
+        "app": 14933,
+        "signals": 450526,
+        "solid": 3360,
+        "web": 16765
+      },
+      "byModule": {
+        "core/constants.js": 11536,
+        "core/lanes.js": 5873,
+        "core/scheduler.js": 45657,
+        "core/heap.js": 4974,
+        "core/owner.js": 9642,
+        "core/graph.js": 5745,
+        "core/async.js": 32870,
+        "core/core.js": 57373,
+        "core/error.js": 2184,
+        "core/context.js": 1816,
+        "core/optimistic.js": 20319,
+        "core/effect.js": 6914,
+        "core/action.js": 6848,
+        "block-hooks.js": 1584,
+        "generator.js": 39591,
+        "signals.js": 9756,
+        "store/next/target.js": 1972,
+        "store/store.js": 5345,
+        "store/next/store.js": 96169,
+        "store/next/reconcile.js": 18364,
+        "store/next/projection.js": 7119,
+        "block-api.js": 5760,
+        "boundaries.js": 11704,
+        "core/attribution-hooks.js": 21,
+        "map.js": 13564,
+        "store/next/optimistic.js": 27826
+      }
+    },
+    "async": {
+      "min": 92154,
+      "gz": 33055,
+      "chunks": [
+        [
+          "assets/index-mQT5TMPZ.js",
+          92154
+        ]
+      ],
+      "decision": {
+        "asyncFree": false,
+        "firstReason": "imports async capability `Loading` from solid-js",
+        "off": []
+      },
+      "byPackage": {
+        "app": 14933,
+        "signals": 450526,
+        "solid": 3360,
+        "web": 16765
+      },
+      "byModule": {
+        "core/constants.js": 11536,
+        "core/lanes.js": 5873,
+        "core/scheduler.js": 45657,
+        "core/heap.js": 4974,
+        "core/owner.js": 9642,
+        "core/graph.js": 5745,
+        "core/async.js": 32870,
+        "core/core.js": 57373,
+        "core/error.js": 2184,
+        "core/context.js": 1816,
+        "core/optimistic.js": 20319,
+        "core/effect.js": 6914,
+        "core/action.js": 6848,
+        "block-hooks.js": 1584,
+        "generator.js": 39591,
+        "signals.js": 9756,
+        "store/next/target.js": 1972,
+        "store/store.js": 5345,
+        "store/next/store.js": 96169,
+        "store/next/reconcile.js": 18364,
+        "store/next/projection.js": 7119,
+        "block-api.js": 5760,
+        "boundaries.js": 11704,
+        "core/attribution-hooks.js": 21,
+        "map.js": 13564,
+        "store/next/optimistic.js": 27826
+      }
+    },
+    "sliced": {
+      "min": 91783,
+      "gz": 32936,
+      "chunks": [
+        [
+          "assets/index-CG_8knNP.js",
+          91783
+        ]
+      ],
+      "decision": {
+        "asyncFree": false,
+        "firstReason": "imports async capability `Loading` from solid-js",
+        "off": [
+          "VERDICTS",
+          "SNAPSHOTS",
+          "COMPILED_SEAMS"
+        ]
+      },
+      "byPackage": {
+        "app": 14957,
+        "signals": 446960,
+        "solid": 3360,
+        "web": 16765
+      },
+      "byModule": {
+        "core/constants.js": 10082,
+        "core/lanes.js": 5873,
+        "core/scheduler.js": 45457,
+        "core/heap.js": 4974,
+        "core/owner.js": 9642,
+        "core/graph.js": 5745,
+        "core/async.js": 32444,
+        "core/core.js": 55518,
+        "core/error.js": 2553,
+        "core/context.js": 1816,
+        "core/optimistic.js": 20319,
+        "core/effect.js": 6914,
+        "core/action.js": 6848,
+        "block-hooks.js": 1584,
+        "generator.js": 39591,
+        "signals.js": 9756,
+        "store/next/target.js": 1972,
+        "store/store.js": 5345,
+        "store/next/store.js": 96169,
+        "store/next/reconcile.js": 18364,
+        "store/next/projection.js": 7119,
+        "block-api.js": 5760,
+        "boundaries.js": 11704,
+        "core/attribution-hooks.js": 21,
+        "map.js": 13564,
+        "store/next/optimistic.js": 27826
+      }
+    }
+  },
+  "todos": {
+    "baseline": {
+      "min": 81274,
+      "gz": 29388,
+      "chunks": [
+        [
+          "assets/index-DawCF85z.js",
+          81274
+        ]
+      ],
+      "decision": null,
+      "byPackage": {
+        "app": 13152,
+        "signals": 409385,
+        "solid": 3032,
+        "web": 16712
+      },
+      "byModule": {
+        "core/constants.js": 11536,
+        "core/lanes.js": 5873,
+        "core/scheduler.js": 45657,
+        "core/heap.js": 4974,
+        "core/owner.js": 9642,
+        "core/graph.js": 5745,
+        "core/async.js": 32870,
+        "core/core.js": 57282,
+        "core/error.js": 2184,
+        "core/context.js": 1584,
+        "core/optimistic.js": 20319,
+        "core/effect.js": 6914,
+        "core/action.js": 6848,
+        "block-hooks.js": 1361,
+        "generator.js": 7006,
+        "signals.js": 8314,
+        "store/next/target.js": 1972,
+        "store/store.js": 5345,
+        "store/next/store.js": 95365,
+        "store/next/reconcile.js": 18364,
+        "store/next/projection.js": 7119,
+        "boundaries.js": 11700,
+        "core/attribution-hooks.js": 21,
+        "map.js": 13564,
+        "store/next/optimistic.js": 27826
+      }
+    },
+    "async": {
+      "min": 81274,
+      "gz": 29388,
+      "chunks": [
+        [
+          "assets/index-DawCF85z.js",
+          81274
+        ]
+      ],
+      "decision": {
+        "asyncFree": false,
+        "firstReason": "imports async capability `Loading` from solid-js",
+        "off": []
+      },
+      "byPackage": {
+        "app": 13152,
+        "signals": 409385,
+        "solid": 3032,
+        "web": 16712
+      },
+      "byModule": {
+        "core/constants.js": 11536,
+        "core/lanes.js": 5873,
+        "core/scheduler.js": 45657,
+        "core/heap.js": 4974,
+        "core/owner.js": 9642,
+        "core/graph.js": 5745,
+        "core/async.js": 32870,
+        "core/core.js": 57282,
+        "core/error.js": 2184,
+        "core/context.js": 1584,
+        "core/optimistic.js": 20319,
+        "core/effect.js": 6914,
+        "core/action.js": 6848,
+        "block-hooks.js": 1361,
+        "generator.js": 7006,
+        "signals.js": 8314,
+        "store/next/target.js": 1972,
+        "store/store.js": 5345,
+        "store/next/store.js": 95365,
+        "store/next/reconcile.js": 18364,
+        "store/next/projection.js": 7119,
+        "boundaries.js": 11700,
+        "core/attribution-hooks.js": 21,
+        "map.js": 13564,
+        "store/next/optimistic.js": 27826
+      }
+    },
+    "sliced": {
+      "min": 80723,
+      "gz": 29225,
+      "chunks": [
+        [
+          "assets/index-BwJ3Cg7Q.js",
+          80723
+        ]
+      ],
+      "decision": {
+        "asyncFree": false,
+        "firstReason": "imports async capability `Loading` from solid-js",
+        "off": [
+          "VERDICTS",
+          "SNAPSHOTS",
+          "ITERABLE",
+          "COMPILED_SEAMS"
+        ]
+      },
+      "byPackage": {
+        "app": 13176,
+        "signals": 399364,
+        "solid": 3032,
+        "web": 16712
+      },
+      "byModule": {
+        "core/constants.js": 10082,
+        "core/lanes.js": 5873,
+        "core/scheduler.js": 45457,
+        "core/heap.js": 4974,
+        "core/owner.js": 9642,
+        "core/graph.js": 5745,
+        "core/async.js": 32444,
+        "core/core.js": 55427,
+        "core/error.js": 2553,
+        "core/context.js": 1584,
+        "core/optimistic.js": 20319,
+        "core/effect.js": 6914,
+        "core/action.js": 6848,
+        "block-hooks.js": 1361,
+        "generator.js": 856,
+        "signals.js": 8009,
+        "store/next/target.js": 1972,
+        "store/store.js": 5345,
+        "store/next/store.js": 95365,
+        "store/next/reconcile.js": 18364,
+        "store/next/projection.js": 7119,
+        "boundaries.js": 11700,
+        "core/attribution-hooks.js": 21,
+        "map.js": 13564,
+        "store/next/optimistic.js": 27826
+      }
+    }
+  },
+  "sierpinski": {
+    "baseline": {
+      "min": 35286,
+      "gz": 13885,
+      "chunks": [
+        [
+          "assets/index-DWReGxDN.js",
+          35286
+        ]
+      ],
+      "decision": null,
+      "byPackage": {
+        "app": 4303,
+        "signals": 182585,
+        "solid": 691,
+        "web": 15887
+      },
+      "byModule": {
+        "core/constants.js": 11536,
+        "core/lanes.js": 3102,
+        "core/scheduler.js": 40621,
+        "core/heap.js": 4974,
+        "core/owner.js": 7751,
+        "core/graph.js": 5745,
+        "core/async.js": 30621,
+        "core/core.js": 48596,
+        "core/error.js": 2010,
+        "core/effect.js": 5456,
+        "block-hooks.js": 1361,
+        "generator.js": 6534,
+        "signals.js": 3985,
+        "boundaries.js": 10293
+      }
+    },
+    "async": {
+      "min": 35286,
+      "gz": 13885,
+      "chunks": [
+        [
+          "assets/index-DWReGxDN.js",
+          35286
+        ]
+      ],
+      "decision": {
+        "asyncFree": false,
+        "firstReason": "imports async capability `Loading` from solid-js",
+        "off": []
+      },
+      "byPackage": {
+        "app": 4303,
+        "signals": 182585,
+        "solid": 691,
+        "web": 15887
+      },
+      "byModule": {
+        "core/constants.js": 11536,
+        "core/lanes.js": 3102,
+        "core/scheduler.js": 40621,
+        "core/heap.js": 4974,
+        "core/owner.js": 7751,
+        "core/graph.js": 5745,
+        "core/async.js": 30621,
+        "core/core.js": 48596,
+        "core/error.js": 2010,
+        "core/effect.js": 5456,
+        "block-hooks.js": 1361,
+        "generator.js": 6534,
+        "signals.js": 3985,
+        "boundaries.js": 10293
+      }
+    },
+    "sliced": {
+      "min": 32597,
+      "gz": 12859,
+      "chunks": [
+        [
+          "assets/index-AfRvBT4M.js",
+          32597
+        ]
+      ],
+      "decision": {
+        "asyncFree": false,
+        "firstReason": "imports async capability `Loading` from solid-js",
+        "off": [
+          "OPTIMISTIC",
+          "VERDICTS",
+          "STORES",
+          "SNAPSHOTS",
+          "ITERABLE",
+          "COMPILED_SEAMS"
+        ]
+      },
+      "byPackage": {
+        "app": 4350,
+        "signals": 149587,
+        "solid": 691,
+        "web": 15887
+      },
+      "byModule": {
+        "core/constants.js": 4616,
+        "core/lanes.js": 3102,
+        "core/scheduler.js": 35327,
+        "core/heap.js": 4510,
+        "core/owner.js": 7751,
+        "core/graph.js": 5689,
+        "core/async.js": 27408,
+        "core/core.js": 37631,
+        "core/error.js": 2379,
+        "core/effect.js": 5456,
+        "block-hooks.js": 1361,
+        "generator.js": 384,
+        "signals.js": 3680,
+        "boundaries.js": 10293
+      }
+    }
+  },
+  "hackernews": {
+    "baseline": {
+      "min": 212155,
+      "gz": 72447,
+      "chunks": [
+        [
+          "assets/decode-vONAX5F_.js",
+          2208
+        ],
+        [
+          "assets/serialization-xXhzUlNZ.js",
+          3547
+        ],
+        [
+          "assets/virtual_solid-ssr-entry-client-Jr-9WFLx.js",
+          155799
+        ],
+        [
+          "assets/serverForms-Agd94Mcx.js",
+          5117
+        ],
+        [
+          "assets/web-DNZ0oF7u.js",
+          45484
+        ]
+      ],
+      "decision": null,
+      "byPackage": {
+        "web": 138052,
+        "signals": 118714,
+        "solid": 30895,
+        "app": 6716,
+        "deps": 148786
+      },
+      "byModule": {
+        "core/constants.js": 859,
+        "core/lanes.js": 2165,
+        "core/scheduler.js": 13847,
+        "core/heap.js": 2171,
+        "core/owner.js": 2975,
+        "core/graph.js": 1735,
+        "core/async.js": 9405,
+        "core/core.js": 16712,
+        "core/error.js": 788,
+        "core/context.js": 734,
+        "core/optimistic.js": 5778,
+        "core/verdict.js": 8283,
+        "core/effect.js": 1598,
+        "block-hooks.js": 217,
+        "generator.js": 1346,
+        "signals.js": 1018,
+        "store/next/target.js": 490,
+        "store/store.js": 2207,
+        "store/next/store.js": 30566,
+        "store/next/reconcile.js": 5888,
+        "store/next/projection.js": 3530,
+        "boundaries.js": 4731,
+        "store/utils.js": 181,
+        "core/action.js": 1490
+      }
+    },
+    "async": {
+      "min": 212155,
+      "gz": 72447,
+      "chunks": [
+        [
+          "assets/decode-vONAX5F_.js",
+          2208
+        ],
+        [
+          "assets/serialization-xXhzUlNZ.js",
+          3547
+        ],
+        [
+          "assets/virtual_solid-ssr-entry-client-Jr-9WFLx.js",
+          155799
+        ],
+        [
+          "assets/serverForms-Agd94Mcx.js",
+          5117
+        ],
+        [
+          "assets/web-DNZ0oF7u.js",
+          45484
+        ]
+      ],
+      "decision": {
+        "asyncFree": false,
+        "firstReason": "virtual module `virtual:solid-ssr-entry-client.tsx` has no summary",
+        "off": []
+      },
+      "byPackage": {
+        "web": 138052,
+        "signals": 118714,
+        "solid": 30895,
+        "app": 6716,
+        "deps": 148786
+      },
+      "byModule": {
+        "core/constants.js": 859,
+        "core/lanes.js": 2165,
+        "core/scheduler.js": 13847,
+        "core/heap.js": 2171,
+        "core/owner.js": 2975,
+        "core/graph.js": 1735,
+        "core/async.js": 9405,
+        "core/core.js": 16712,
+        "core/error.js": 788,
+        "core/context.js": 734,
+        "core/optimistic.js": 5778,
+        "core/verdict.js": 8283,
+        "core/effect.js": 1598,
+        "block-hooks.js": 217,
+        "generator.js": 1346,
+        "signals.js": 1018,
+        "store/next/target.js": 490,
+        "store/store.js": 2207,
+        "store/next/store.js": 30566,
+        "store/next/reconcile.js": 5888,
+        "store/next/projection.js": 3530,
+        "boundaries.js": 4731,
+        "store/utils.js": 181,
+        "core/action.js": 1490
+      }
+    },
+    "sliced": {
+      "min": 212155,
+      "gz": 72447,
+      "chunks": [
+        [
+          "assets/decode-vONAX5F_.js",
+          2208
+        ],
+        [
+          "assets/serialization-xXhzUlNZ.js",
+          3547
+        ],
+        [
+          "assets/virtual_solid-ssr-entry-client-Jr-9WFLx.js",
+          155799
+        ],
+        [
+          "assets/serverForms-Agd94Mcx.js",
+          5117
+        ],
+        [
+          "assets/web-DNZ0oF7u.js",
+          45484
+        ]
+      ],
+      "decision": {
+        "asyncFree": false,
+        "firstReason": "virtual module `virtual:solid-ssr-entry-client.tsx` has no summary",
+        "off": []
+      },
+      "byPackage": {
+        "web": 138052,
+        "signals": 118714,
+        "solid": 30895,
+        "app": 6716,
+        "deps": 148786
+      },
+      "byModule": {
+        "core/constants.js": 859,
+        "core/lanes.js": 2165,
+        "core/scheduler.js": 13847,
+        "core/heap.js": 2171,
+        "core/owner.js": 2975,
+        "core/graph.js": 1735,
+        "core/async.js": 9405,
+        "core/core.js": 16712,
+        "core/error.js": 788,
+        "core/context.js": 734,
+        "core/optimistic.js": 5778,
+        "core/verdict.js": 8283,
+        "core/effect.js": 1598,
+        "block-hooks.js": 217,
+        "generator.js": 1346,
+        "signals.js": 1018,
+        "store/next/target.js": 490,
+        "store/store.js": 2207,
+        "store/next/store.js": 30566,
+        "store/next/reconcile.js": 5888,
+        "store/next/projection.js": 3530,
+        "boundaries.js": 4731,
+        "store/utils.js": 181,
+        "core/action.js": 1490
+      }
+    }
+  },
+  "hackernews-spa": {
+    "baseline": {
+      "min": 158244,
+      "gz": 54427,
+      "chunks": [
+        [
+          "assets/decode-vONAX5F_.js",
+          2208
+        ],
+        [
+          "assets/serialization-xXhzUlNZ.js",
+          3547
+        ],
+        [
+          "assets/virtual_solid-ssr-entry-client-K_MdpD78.js",
+          101888
+        ],
+        [
+          "assets/serverForms-DijUEUsd.js",
+          5117
+        ],
+        [
+          "assets/web-DNZ0oF7u.js",
+          45484
+        ]
+      ],
+      "decision": null,
+      "byPackage": {
+        "web": 62521,
+        "signals": 80795,
+        "solid": 30066,
+        "app": 18053,
+        "deps": 148786
+      },
+      "byModule": {
+        "core/constants.js": 859,
+        "core/lanes.js": 2159,
+        "core/scheduler.js": 13721,
+        "core/heap.js": 2171,
+        "core/owner.js": 2975,
+        "core/graph.js": 1735,
+        "core/async.js": 9401,
+        "core/core.js": 15410,
+        "core/error.js": 788,
+        "core/context.js": 734,
+        "core/optimistic.js": 5774,
+        "core/verdict.js": 8275,
+        "core/effect.js": 1598,
+        "block-hooks.js": 217,
+        "generator.js": 865,
+        "signals.js": 1018,
+        "store/store.js": 89,
+        "boundaries.js": 4731,
+        "map.js": 6785,
+        "core/action.js": 1490
+      }
+    },
+    "async": {
+      "min": 158244,
+      "gz": 54427,
+      "chunks": [
+        [
+          "assets/decode-vONAX5F_.js",
+          2208
+        ],
+        [
+          "assets/serialization-xXhzUlNZ.js",
+          3547
+        ],
+        [
+          "assets/virtual_solid-ssr-entry-client-K_MdpD78.js",
+          101888
+        ],
+        [
+          "assets/serverForms-DijUEUsd.js",
+          5117
+        ],
+        [
+          "assets/web-DNZ0oF7u.js",
+          45484
+        ]
+      ],
+      "decision": {
+        "asyncFree": false,
+        "firstReason": "virtual module `virtual:solid-ssr-entry-client.tsx` has no summary",
+        "off": []
+      },
+      "byPackage": {
+        "web": 62521,
+        "signals": 80795,
+        "solid": 30066,
+        "app": 18053,
+        "deps": 148786
+      },
+      "byModule": {
+        "core/constants.js": 859,
+        "core/lanes.js": 2159,
+        "core/scheduler.js": 13721,
+        "core/heap.js": 2171,
+        "core/owner.js": 2975,
+        "core/graph.js": 1735,
+        "core/async.js": 9401,
+        "core/core.js": 15410,
+        "core/error.js": 788,
+        "core/context.js": 734,
+        "core/optimistic.js": 5774,
+        "core/verdict.js": 8275,
+        "core/effect.js": 1598,
+        "block-hooks.js": 217,
+        "generator.js": 865,
+        "signals.js": 1018,
+        "store/store.js": 89,
+        "boundaries.js": 4731,
+        "map.js": 6785,
+        "core/action.js": 1490
+      }
+    },
+    "sliced": {
+      "min": 158244,
+      "gz": 54427,
+      "chunks": [
+        [
+          "assets/decode-vONAX5F_.js",
+          2208
+        ],
+        [
+          "assets/serialization-xXhzUlNZ.js",
+          3547
+        ],
+        [
+          "assets/virtual_solid-ssr-entry-client-K_MdpD78.js",
+          101888
+        ],
+        [
+          "assets/serverForms-DijUEUsd.js",
+          5117
+        ],
+        [
+          "assets/web-DNZ0oF7u.js",
+          45484
+        ]
+      ],
+      "decision": {
+        "asyncFree": false,
+        "firstReason": "virtual module `virtual:solid-ssr-entry-client.tsx` has no summary",
+        "off": []
+      },
+      "byPackage": {
+        "web": 62521,
+        "signals": 80795,
+        "solid": 30066,
+        "app": 18053,
+        "deps": 148786
+      },
+      "byModule": {
+        "core/constants.js": 859,
+        "core/lanes.js": 2159,
+        "core/scheduler.js": 13721,
+        "core/heap.js": 2171,
+        "core/owner.js": 2975,
+        "core/graph.js": 1735,
+        "core/async.js": 9401,
+        "core/core.js": 15410,
+        "core/error.js": 788,
+        "core/context.js": 734,
+        "core/optimistic.js": 5774,
+        "core/verdict.js": 8275,
+        "core/effect.js": 1598,
+        "block-hooks.js": 217,
+        "generator.js": 865,
+        "signals.js": 1018,
+        "store/store.js": 89,
+        "boundaries.js": 4731,
+        "map.js": 6785,
+        "core/action.js": 1490
+      }
+    }
+  },
+  "notes": {
+    "baseline": {
+      "min": 254616,
+      "gz": 86837,
+      "chunks": [
+        [
+          "assets/decode-vONAX5F_.js",
+          2208
+        ],
+        [
+          "assets/edit-5wQ3D2Tp.js",
+          185
+        ],
+        [
+          "assets/new-BuA3COin.js",
+          158
+        ],
+        [
+          "assets/serialization-xXhzUlNZ.js",
+          3547
+        ],
+        [
+          "assets/virtual_solid-ssr-entry-client-aL9wqtyv.js",
+          40289
+        ],
+        [
+          "assets/NoteEditor-C7Td31kA.js",
+          36159
+        ],
+        [
+          "assets/api-Be2ZXMX1.js",
+          126518
+        ],
+        [
+          "assets/serverForms-CXFIyT9w.js",
+          68
+        ],
+        [
+          "assets/web-DNZ0oF7u.js",
+          45484
+        ]
+      ],
+      "decision": null,
+      "byPackage": {
+        "web": 138501,
+        "app": 13253,
+        "deps": 206747,
+        "signals": 121146,
+        "solid": 32385
+      },
+      "byModule": {
+        "core/constants.js": 909,
+        "core/lanes.js": 2165,
+        "core/scheduler.js": 13847,
+        "core/heap.js": 2171,
+        "core/owner.js": 2975,
+        "core/graph.js": 1735,
+        "core/async.js": 9405,
+        "core/core.js": 16712,
+        "core/error.js": 788,
+        "core/context.js": 734,
+        "core/optimistic.js": 5778,
+        "core/verdict.js": 8283,
+        "core/effect.js": 1598,
+        "core/action.js": 1492,
+        "block-hooks.js": 217,
+        "generator.js": 1346,
+        "signals.js": 1018,
+        "store/next/target.js": 490,
+        "store/store.js": 2333,
+        "store/next/store.js": 30566,
+        "store/next/reconcile.js": 5888,
+        "store/next/projection.js": 3530,
+        "boundaries.js": 4731,
+        "store/utils.js": 2435
+      }
+    },
+    "async": {
+      "min": 254616,
+      "gz": 86837,
+      "chunks": [
+        [
+          "assets/decode-vONAX5F_.js",
+          2208
+        ],
+        [
+          "assets/edit-5wQ3D2Tp.js",
+          185
+        ],
+        [
+          "assets/new-BuA3COin.js",
+          158
+        ],
+        [
+          "assets/serialization-xXhzUlNZ.js",
+          3547
+        ],
+        [
+          "assets/virtual_solid-ssr-entry-client-aL9wqtyv.js",
+          40289
+        ],
+        [
+          "assets/NoteEditor-C7Td31kA.js",
+          36159
+        ],
+        [
+          "assets/api-Be2ZXMX1.js",
+          126518
+        ],
+        [
+          "assets/serverForms-CXFIyT9w.js",
+          68
+        ],
+        [
+          "assets/web-DNZ0oF7u.js",
+          45484
+        ]
+      ],
+      "decision": {
+        "asyncFree": false,
+        "firstReason": "virtual module `virtual:solid-ssr-entry-client.tsx` has no summary",
+        "off": []
+      },
+      "byPackage": {
+        "web": 138501,
+        "app": 13253,
+        "deps": 206747,
+        "signals": 121146,
+        "solid": 32385
+      },
+      "byModule": {
+        "core/constants.js": 909,
+        "core/lanes.js": 2165,
+        "core/scheduler.js": 13847,
+        "core/heap.js": 2171,
+        "core/owner.js": 2975,
+        "core/graph.js": 1735,
+        "core/async.js": 9405,
+        "core/core.js": 16712,
+        "core/error.js": 788,
+        "core/context.js": 734,
+        "core/optimistic.js": 5778,
+        "core/verdict.js": 8283,
+        "core/effect.js": 1598,
+        "core/action.js": 1492,
+        "block-hooks.js": 217,
+        "generator.js": 1346,
+        "signals.js": 1018,
+        "store/next/target.js": 490,
+        "store/store.js": 2333,
+        "store/next/store.js": 30566,
+        "store/next/reconcile.js": 5888,
+        "store/next/projection.js": 3530,
+        "boundaries.js": 4731,
+        "store/utils.js": 2435
+      }
+    },
+    "sliced": {
+      "min": 254616,
+      "gz": 86837,
+      "chunks": [
+        [
+          "assets/decode-vONAX5F_.js",
+          2208
+        ],
+        [
+          "assets/edit-5wQ3D2Tp.js",
+          185
+        ],
+        [
+          "assets/new-BuA3COin.js",
+          158
+        ],
+        [
+          "assets/serialization-xXhzUlNZ.js",
+          3547
+        ],
+        [
+          "assets/virtual_solid-ssr-entry-client-aL9wqtyv.js",
+          40289
+        ],
+        [
+          "assets/NoteEditor-C7Td31kA.js",
+          36159
+        ],
+        [
+          "assets/api-Be2ZXMX1.js",
+          126518
+        ],
+        [
+          "assets/serverForms-CXFIyT9w.js",
+          68
+        ],
+        [
+          "assets/web-DNZ0oF7u.js",
+          45484
+        ]
+      ],
+      "decision": {
+        "asyncFree": false,
+        "firstReason": "virtual module `virtual:solid-ssr-entry-client.tsx` has no summary",
+        "off": []
+      },
+      "byPackage": {
+        "web": 138501,
+        "app": 13253,
+        "deps": 206747,
+        "signals": 121146,
+        "solid": 32385
+      },
+      "byModule": {
+        "core/constants.js": 909,
+        "core/lanes.js": 2165,
+        "core/scheduler.js": 13847,
+        "core/heap.js": 2171,
+        "core/owner.js": 2975,
+        "core/graph.js": 1735,
+        "core/async.js": 9405,
+        "core/core.js": 16712,
+        "core/error.js": 788,
+        "core/context.js": 734,
+        "core/optimistic.js": 5778,
+        "core/verdict.js": 8283,
+        "core/effect.js": 1598,
+        "core/action.js": 1492,
+        "block-hooks.js": 217,
+        "generator.js": 1346,
+        "signals.js": 1018,
+        "store/next/target.js": 490,
+        "store/store.js": 2333,
+        "store/next/store.js": 30566,
+        "store/next/reconcile.js": 5888,
+        "store/next/projection.js": 3530,
+        "boundaries.js": 4731,
+        "store/utils.js": 2435
+      }
+    }
+  },
+  "chat": {
+    "baseline": {
+      "min": 184391,
+      "gz": 62021,
+      "chunks": [
+        [
+          "assets/decode-vONAX5F_.js",
+          2208
+        ],
+        [
+          "assets/serialization-xXhzUlNZ.js",
+          3547
+        ],
+        [
+          "assets/virtual_solid-ssr-entry-client-V8W6svGE.js",
+          133152
+        ],
+        [
+          "assets/web-DNZ0oF7u.js",
+          45484
+        ]
+      ],
+      "decision": null,
+      "byPackage": {
+        "web": 131767,
+        "signals": 109307,
+        "solid": 30454,
+        "app": 9834,
+        "deps": 96487
+      },
+      "byModule": {
+        "core/constants.js": 859,
+        "core/lanes.js": 1417,
+        "core/scheduler.js": 13714,
+        "core/heap.js": 2171,
+        "core/owner.js": 2975,
+        "core/graph.js": 1735,
+        "core/async.js": 9405,
+        "core/core.js": 16347,
+        "core/error.js": 788,
+        "core/context.js": 732,
+        "core/effect.js": 1997,
+        "block-hooks.js": 217,
+        "generator.js": 1346,
+        "signals.js": 1228,
+        "store/next/target.js": 490,
+        "store/store.js": 2207,
+        "store/next/store.js": 30566,
+        "store/next/reconcile.js": 5888,
+        "store/next/projection.js": 3530,
+        "boundaries.js": 4729,
+        "map.js": 6785,
+        "store/utils.js": 181
+      }
+    },
+    "async": {
+      "min": 184391,
+      "gz": 62021,
+      "chunks": [
+        [
+          "assets/decode-vONAX5F_.js",
+          2208
+        ],
+        [
+          "assets/serialization-xXhzUlNZ.js",
+          3547
+        ],
+        [
+          "assets/virtual_solid-ssr-entry-client-V8W6svGE.js",
+          133152
+        ],
+        [
+          "assets/web-DNZ0oF7u.js",
+          45484
+        ]
+      ],
+      "decision": {
+        "asyncFree": false,
+        "firstReason": "virtual module `virtual:solid-ssr-entry-client.tsx` has no summary",
+        "off": []
+      },
+      "byPackage": {
+        "web": 131767,
+        "signals": 109307,
+        "solid": 30454,
+        "app": 9834,
+        "deps": 96487
+      },
+      "byModule": {
+        "core/constants.js": 859,
+        "core/lanes.js": 1417,
+        "core/scheduler.js": 13714,
+        "core/heap.js": 2171,
+        "core/owner.js": 2975,
+        "core/graph.js": 1735,
+        "core/async.js": 9405,
+        "core/core.js": 16347,
+        "core/error.js": 788,
+        "core/context.js": 732,
+        "core/effect.js": 1997,
+        "block-hooks.js": 217,
+        "generator.js": 1346,
+        "signals.js": 1228,
+        "store/next/target.js": 490,
+        "store/store.js": 2207,
+        "store/next/store.js": 30566,
+        "store/next/reconcile.js": 5888,
+        "store/next/projection.js": 3530,
+        "boundaries.js": 4729,
+        "map.js": 6785,
+        "store/utils.js": 181
+      }
+    },
+    "sliced": {
+      "min": 184391,
+      "gz": 62021,
+      "chunks": [
+        [
+          "assets/decode-vONAX5F_.js",
+          2208
+        ],
+        [
+          "assets/serialization-xXhzUlNZ.js",
+          3547
+        ],
+        [
+          "assets/virtual_solid-ssr-entry-client-V8W6svGE.js",
+          133152
+        ],
+        [
+          "assets/web-DNZ0oF7u.js",
+          45484
+        ]
+      ],
+      "decision": {
+        "asyncFree": false,
+        "firstReason": "virtual module `virtual:solid-ssr-entry-client.tsx` has no summary",
+        "off": []
+      },
+      "byPackage": {
+        "web": 131767,
+        "signals": 109307,
+        "solid": 30454,
+        "app": 9834,
+        "deps": 96487
+      },
+      "byModule": {
+        "core/constants.js": 859,
+        "core/lanes.js": 1417,
+        "core/scheduler.js": 13714,
+        "core/heap.js": 2171,
+        "core/owner.js": 2975,
+        "core/graph.js": 1735,
+        "core/async.js": 9405,
+        "core/core.js": 16347,
+        "core/error.js": 788,
+        "core/context.js": 732,
+        "core/effect.js": 1997,
+        "block-hooks.js": 217,
+        "generator.js": 1346,
+        "signals.js": 1228,
+        "store/next/target.js": 490,
+        "store/store.js": 2207,
+        "store/next/store.js": 30566,
+        "store/next/reconcile.js": 5888,
+        "store/next/projection.js": 3530,
+        "boundaries.js": 4729,
+        "map.js": 6785,
+        "store/utils.js": 181
+      }
+    }
+  },
+  "attribution-lab": {
+    "baseline": {
+      "min": 24406,
+      "gz": 9966,
+      "chunks": [
+        [
+          "assets/index-D1XXetsB.js",
+          24406
+        ]
+      ],
+      "decision": null,
+      "byPackage": {
+        "app": 1713,
+        "signals": 158083,
+        "solid": 74,
+        "web": 3357
+      },
+      "byModule": {
+        "core/constants.js": 11364,
+        "core/lanes.js": 3102,
+        "core/scheduler.js": 39097,
+        "core/heap.js": 4974,
+        "core/owner.js": 7708,
+        "core/graph.js": 5745,
+        "core/async.js": 30621,
+        "core/core.js": 45863,
+        "core/error.js": 1860,
+        "block-hooks.js": 734,
+        "generator.js": 6334,
+        "signals.js": 681
+      }
+    },
+    "async": {
+      "min": 24406,
+      "gz": 9966,
+      "chunks": [
+        [
+          "assets/index-D1XXetsB.js",
+          24406
+        ]
+      ],
+      "decision": {
+        "asyncFree": false,
+        "firstReason": "<For each> not proven synchronous",
+        "off": []
+      },
+      "byPackage": {
+        "app": 1713,
+        "signals": 158083,
+        "solid": 74,
+        "web": 3357
+      },
+      "byModule": {
+        "core/constants.js": 11364,
+        "core/lanes.js": 3102,
+        "core/scheduler.js": 39097,
+        "core/heap.js": 4974,
+        "core/owner.js": 7708,
+        "core/graph.js": 5745,
+        "core/async.js": 30621,
+        "core/core.js": 45863,
+        "core/error.js": 1860,
+        "block-hooks.js": 734,
+        "generator.js": 6334,
+        "signals.js": 681
+      }
+    },
+    "sliced": {
+      "min": 21771,
+      "gz": 8956,
+      "chunks": [
+        [
+          "assets/index-D8AxiWGy.js",
+          21771
+        ]
+      ],
+      "decision": {
+        "asyncFree": false,
+        "firstReason": "<For each> not proven synchronous",
+        "off": [
+          "OPTIMISTIC",
+          "VERDICTS",
+          "STORES",
+          "SNAPSHOTS",
+          "ITERABLE",
+          "COMPILED_SEAMS"
+        ]
+      },
+      "byPackage": {
+        "app": 1760,
+        "signals": 125204,
+        "solid": 74,
+        "web": 3357
+      },
+      "byModule": {
+        "core/constants.js": 4444,
+        "core/lanes.js": 3102,
+        "core/scheduler.js": 33803,
+        "core/heap.js": 4510,
+        "core/owner.js": 7708,
+        "core/graph.js": 5689,
+        "core/async.js": 27408,
+        "core/core.js": 35017,
+        "core/error.js": 2229,
+        "block-hooks.js": 734,
+        "generator.js": 184,
+        "signals.js": 376
+      }
+    }
+  },
+  "effect": {
+    "baseline": {
+      "min": 232510,
+      "gz": 78824,
+      "chunks": [
+        [
+          "assets/index-BKpSASqq.js",
+          232510
+        ]
+      ],
+      "decision": null,
+      "byPackage": {
+        "app": 27138,
+        "signals": 433779,
+        "solid": 3567,
+        "web": 19130,
+        "deps": 474115
+      },
+      "byModule": {
+        "core/constants.js": 11536,
+        "core/lanes.js": 5873,
+        "core/scheduler.js": 45657,
+        "core/heap.js": 4974,
+        "core/owner.js": 9684,
+        "core/graph.js": 5745,
+        "core/async.js": 32874,
+        "core/core.js": 57942,
+        "core/error.js": 2184,
+        "core/context.js": 1584,
+        "core/optimistic.js": 20319,
+        "core/verdict.js": 19922,
+        "core/effect.js": 5466,
+        "core/action.js": 6848,
+        "block-hooks.js": 1361,
+        "generator.js": 7006,
+        "signals.js": 10206,
+        "store/next/target.js": 1972,
+        "store/store.js": 6946,
+        "store/next/store.js": 95838,
+        "store/next/reconcile.js": 18370,
+        "store/next/projection.js": 8194,
+        "store/index.js": 153,
+        "boundaries.js": 11704,
+        "core/attribution-hooks.js": 21,
+        "map.js": 13564,
+        "store/next/optimistic.js": 27836
+      }
+    },
+    "async": {
+      "min": 232510,
+      "gz": 78824,
+      "chunks": [
+        [
+          "assets/index-BKpSASqq.js",
+          232510
+        ]
+      ],
+      "decision": {
+        "asyncFree": false,
+        "firstReason": "<For each> not proven synchronous",
+        "off": []
+      },
+      "byPackage": {
+        "app": 27138,
+        "signals": 433779,
+        "solid": 3567,
+        "web": 19130,
+        "deps": 474115
+      },
+      "byModule": {
+        "core/constants.js": 11536,
+        "core/lanes.js": 5873,
+        "core/scheduler.js": 45657,
+        "core/heap.js": 4974,
+        "core/owner.js": 9684,
+        "core/graph.js": 5745,
+        "core/async.js": 32874,
+        "core/core.js": 57942,
+        "core/error.js": 2184,
+        "core/context.js": 1584,
+        "core/optimistic.js": 20319,
+        "core/verdict.js": 19922,
+        "core/effect.js": 5466,
+        "core/action.js": 6848,
+        "block-hooks.js": 1361,
+        "generator.js": 7006,
+        "signals.js": 10206,
+        "store/next/target.js": 1972,
+        "store/store.js": 6946,
+        "store/next/store.js": 95838,
+        "store/next/reconcile.js": 18370,
+        "store/next/projection.js": 8194,
+        "store/index.js": 153,
+        "boundaries.js": 11704,
+        "core/attribution-hooks.js": 21,
+        "map.js": 13564,
+        "store/next/optimistic.js": 27836
+      }
+    },
+    "sliced": {
+      "min": 232510,
+      "gz": 78824,
+      "chunks": [
+        [
+          "assets/index-BKpSASqq.js",
+          232510
+        ]
+      ],
+      "decision": {
+        "asyncFree": false,
+        "firstReason": "<For each> not proven synchronous",
+        "off": []
+      },
+      "byPackage": {
+        "app": 27138,
+        "signals": 433779,
+        "solid": 3567,
+        "web": 19130,
+        "deps": 474115
+      },
+      "byModule": {
+        "core/constants.js": 11536,
+        "core/lanes.js": 5873,
+        "core/scheduler.js": 45657,
+        "core/heap.js": 4974,
+        "core/owner.js": 9684,
+        "core/graph.js": 5745,
+        "core/async.js": 32874,
+        "core/core.js": 57942,
+        "core/error.js": 2184,
+        "core/context.js": 1584,
+        "core/optimistic.js": 20319,
+        "core/verdict.js": 19922,
+        "core/effect.js": 5466,
+        "core/action.js": 6848,
+        "block-hooks.js": 1361,
+        "generator.js": 7006,
+        "signals.js": 10206,
+        "store/next/target.js": 1972,
+        "store/store.js": 6946,
+        "store/next/store.js": 95838,
+        "store/next/reconcile.js": 18370,
+        "store/next/projection.js": 8194,
+        "store/index.js": 153,
+        "boundaries.js": 11704,
+        "core/attribution-hooks.js": 21,
+        "map.js": 13564,
+        "store/next/optimistic.js": 27836
+      }
+    }
+  },
+  "migrating-element": {
+    "baseline": {
+      "min": 41839,
+      "gz": 16760,
+      "chunks": [
+        [
+          "assets/index-2qFOe3ul.js",
+          41839
+        ]
+      ],
+      "decision": null,
+      "byPackage": {
+        "app": 16232,
+        "signals": 174875,
+        "solid": 973,
+        "web": 19483
+      },
+      "byModule": {
+        "core/constants.js": 11536,
+        "core/lanes.js": 3102,
+        "core/scheduler.js": 40621,
+        "core/heap.js": 4974,
+        "core/owner.js": 8379,
+        "core/graph.js": 5745,
+        "core/async.js": 30621,
+        "core/core.js": 47870,
+        "core/error.js": 2010,
+        "core/effect.js": 6914,
+        "block-hooks.js": 1037,
+        "generator.js": 6334,
+        "signals.js": 2644,
+        "store/store.js": 258,
+        "boundaries.js": 2830
+      }
+    },
+    "async": {
+      "min": 41839,
+      "gz": 16760,
+      "chunks": [
+        [
+          "assets/index-2qFOe3ul.js",
+          41839
+        ]
+      ],
+      "decision": {
+        "asyncFree": false,
+        "firstReason": "@solidjs/signals ships no async-free entry",
+        "off": []
+      },
+      "byPackage": {
+        "app": 16232,
+        "signals": 174875,
+        "solid": 973,
+        "web": 19483
+      },
+      "byModule": {
+        "core/constants.js": 11536,
+        "core/lanes.js": 3102,
+        "core/scheduler.js": 40621,
+        "core/heap.js": 4974,
+        "core/owner.js": 8379,
+        "core/graph.js": 5745,
+        "core/async.js": 30621,
+        "core/core.js": 47870,
+        "core/error.js": 2010,
+        "core/effect.js": 6914,
+        "block-hooks.js": 1037,
+        "generator.js": 6334,
+        "signals.js": 2644,
+        "store/store.js": 258,
+        "boundaries.js": 2830
+      }
+    },
+    "sliced": {
+      "min": 39151,
+      "gz": 15700,
+      "chunks": [
+        [
+          "assets/index-TXbh9pRr.js",
+          39151
+        ]
+      ],
+      "decision": {
+        "asyncFree": false,
+        "firstReason": "@solidjs/signals ships no async-free entry",
+        "off": [
+          "OPTIMISTIC",
+          "VERDICTS",
+          "STORES",
+          "SNAPSHOTS",
+          "ITERABLE",
+          "COMPILED_SEAMS"
+        ]
+      },
+      "byPackage": {
+        "app": 16279,
+        "signals": 141877,
+        "solid": 973,
+        "web": 19483
+      },
+      "byModule": {
+        "core/constants.js": 4616,
+        "core/lanes.js": 3102,
+        "core/scheduler.js": 35327,
+        "core/heap.js": 4510,
+        "core/owner.js": 8379,
+        "core/graph.js": 5689,
+        "core/async.js": 27408,
+        "core/core.js": 36905,
+        "core/error.js": 2379,
+        "core/effect.js": 6914,
+        "block-hooks.js": 1037,
+        "generator.js": 184,
+        "signals.js": 2339,
+        "store/store.js": 258,
+        "boundaries.js": 2830
+      }
+    }
+  }
+}

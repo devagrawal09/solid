@@ -2,6 +2,8 @@
 
 Status as of 2026-09-27. A design, measured, with a working prototype: link-time feature switches in `@solidjs/signals`, selected per application by the capability linker, plus one decoupling fix in `solid-js`. The published default build is unchanged: with every switch on, the core floor is byte-identical to the unswitched core. Raw data is in [`core-runtime-slicing/`](./core-runtime-slicing/).
 
+Update 2026-09-28: couplings 2 and 3 are fixed and the linker proves its switches from each module's compiled output (migration steps 3b, 4 and 5). See [§7 Landed](#7-landed-bundle-slicing-from-compiler-facts).
+
 ## Question
 
 `@solidjs/signals` already pays for use in three ways:
@@ -25,8 +27,8 @@ What remains is the part no import can remove: each feature's **seams** inside t
 - **Hot path.** With all switches off, the full runtime runs 5.7% fewer instructions on creation, 9.3% fewer on write propagation and 12.2% fewer on tracked reads. The sync runtime runs 1.4%, 4.9% and 7.3% fewer (cachegrind, stable). A store-free graph also gives every signal a smaller, uniform shape: 10 fields instead of 13.
 - **Behaviour.** A census differential runs the whole signals suite (1,922 tests) under every switch configuration. Every test that does not use a switched-off feature passes unchanged, and the tests that do use it fail with the switch off. So the switches are real, and they are safe for graphs that do not use the feature.
 - **Remaining couplings, measured.**
-  - `@solidjs/web`'s `insert` retains the `$` driver in every app.
-  - `createStore` statically couples `reconcile`/`projection` (≈12.7 kB rendered).
+  - `@solidjs/web`'s `insert` retains the `$` driver in every app. _(Fixed, §7.)_
+  - `createStore` statically couples `reconcile`/`projection` (≈12.7 kB rendered). _(Fixed for compiled call sites, §7.)_
   - `store/next/store.ts` carries transaction machinery that the async-free runtime cannot use and that `__ASYNC__` does not gate.
   - The verdict layer requires the optimistic engine.
 
@@ -363,11 +365,159 @@ Wall time on the shared 4-core VM, three interleaved runs of 9–11 rounds each,
 
 ## 6. Open questions
 
-1. Should the linker's feature slicing default on? It is the same trust model as the async-free entry, which is already opt-in per app.
+1. Should the linker's feature slicing default on? It is the same trust model as the async-free entry, which is already opt-in per app. _(§7: yes inside the linker — features and compiled facts default on; the Vite plugin, which lives in `solidjs/solid-vite-plugin`, still has to add the linker to its build path.)_
 2. Is a store kernel without transaction machinery (migration step 3) acceptable as a sync-runtime-only shape? Or should the store's optimistic layers become their own install-on-use module in every runtime?
 3. The verdict → optimistic-engine coupling (#2887) makes `isPending` cost 7.4 kB. Is a lane-free companion implementation worth a design round?
-4. Could `@solidjs/web`'s block binding (coupling 2) move to an install-on-use slot in the next generator-blocks iteration?
-5. Could per-module compiler facts (step 5) ride the existing `summarizeCapabilities` summary? Or do they need the typed summary, because `CreateOp` kinds are type-level?
+4. Could `@solidjs/web`'s block binding (coupling 2) move to an install-on-use slot in the next generator-blocks iteration? _(Done, §7.)_
+5. Could per-module compiler facts (step 5) ride the existing `summarizeCapabilities` summary? Or do they need the typed summary, because `CreateOp` kinds are type-level? _(§7: neither. The facts that decide switches are facts about the code that runs, so they come from the compiled output (`summarizeCompiled`), which the linker reads through the bundler. `CreateOp` kinds appear there as the creation calls lowering emits.)_
+
+## 7. Landed: bundle slicing from compiler facts
+
+Status 2026-09-28 (Track B of the Generator Blocks v2 compiler work). Four changes, each measured on the example apps below:
+
+1. **Compiled facts.** The linker proves the switches from what each application module compiles to, not from what it imports.
+2. **Block rendering on use.** `@solidjs/web` and the `solid-js` boundaries no longer retain the block host machinery (coupling 2).
+3. **Store forms.** The compiler splits `createStore` into its plain and derived forms, so plain stores stop carrying projection and reconcile (coupling 3).
+4. **Default on.** Feature slicing and compiled facts are the linker's defaults. Adding the linker to `@solidjs/vite-plugin`'s build path is an upstream change, sketched below.
+
+### 7.1 Per-module compiled facts
+
+`summarizeCompiled(code)` (`packages/compiler/src/compiled_facts.rs`) reads one module's compiled output and reports:
+
+| Fact                                | What it is                                                                                                                                                           | Switch it decides                                                                        |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `uses`                              | Per import source, the names the output references. An import that lowering left unreferenced is not a use; a referenced namespace import or an `export *` is `"*"`. | `OPTIMISTIC`, `VERDICTS`, `STORES`, `SNAPSHOTS`, through the manifests' `featureExports` |
+| `creates`                           | Creation calls by kind: `signal`, `memo`, `store`, `projection`, `optimistic`, `optimisticStore`, `effect`. This is the runtime face of the `CreateOp` kinds.        | reported                                                                                 |
+| `storeReads`                        | Calls of the store and path readers (`readStore`, `readPath*`, `readHandle*`, `readBorrowed`, `readProp`).                                                           | reported; the readers alone never turn `STORES` on                                       |
+| `residualGenerators`, `delegations` | Generator functions left in the output (bodies the compiler could not lower, and hand-written generators), with the `yield*` count of each.                          | `ITERABLE`: on iff some module keeps a `yield*`                                          |
+| `seams`                             | Compiled seams the output requests: `statusFree`, `isEqual` (memo fusion), a `noThrow` option key, and effect options that carry or may carry `equals`.              | `COMPILED_SEAMS`: on iff some module requests one                                        |
+
+How the linker uses them (`packages/compiler/capabilities.js`):
+
+- **When.** In a build, the proof runs when the runtime's `core/features.js` is first resolved. By then every plugin's `buildStart` has run. The linker loads each application module through the bundler (`this.load`), so the facts describe exactly the code the bundle includes, after every transform. Only runtime modules import `features.js`, and application transforms never wait on it, so the wait cannot deadlock.
+- **Generated entries.** Modules the bundler makes up, such as the start-mode `virtual:solid-ssr-entry-client.tsx`, are summarized from their loaded code. The graph therefore stays fully known.
+- **Fallback.** A module whose output cannot be read is judged by its authored imports, as before. `COMPILED_SEAMS` then falls back to the `compiledSeams` option.
+- **Scope.** The asynchronous-entry proof (`buildStart`) is unchanged. Test runs (vitest) keep the authored-import proof. `compiledFacts: false` restores it in builds.
+- **Report.** `capabilities-report.json` gains `facts` (a per-graph summary) and `featureGaps` (what kept the feature proof's graph from being fully known).
+
+Soundness:
+
+- The compiled output is the module. A name it does not reference cannot run, and a `yield*` it does not contain cannot iterate an accessor.
+- With `ITERABLE` off, `perform(accessor)` loses only its fast-path test. It falls through to `readGuarded(accessor)`, which gives the same value.
+- The path readers read whatever they are given. A store needs a store creation somewhere in the graph, and that creation keeps `STORES` on.
+- Compiled uses are resolved like authored imports. A package without a manifest leaves the graph not fully known, which keeps every switch on.
+
+This is the migration plan's step 5, and it answers the switch table's "fact source with v2 block typing" column. The facts come from the compiled output, not from the type-level union: the output already names every creation, read and residual generator.
+
+### 7.2 Block rendering on use (coupling 2)
+
+`packages/signals/src/block-hooks.ts` holds `renderBlock`, `dispatchBlock` and `lazyView` as ESM live bindings. The package index exports these bindings. `$` assigns them with `installBlockRenderer(…)` in its one-time setup, next to the generator hook and the path tokens.
+
+Every renderer call site sits behind `isBlock(value)` or `inBlock()`:
+
+- `@solidjs/web`'s `insert`, `addEvent` and delegated events;
+- `flatten`;
+- the `solid-js` `Loading` and `Errored` boundaries, through `lazyView`.
+
+A block exists only after `$` has run, so the binding is always installed when it is read. Consumers call the real function directly; no forwarding frame is added. Dev builds explain a premature call (`[BLOCK_RUNTIME_MISSING]`).
+
+Effect: apps that build no block drop `runBlockAs`, the host rules, `reportBlockError`, `readGuarded`, `lazyView` and the view iterator. In rendered bytes (comments included), `generator.js` goes from 12.4 to 7.0 kB in todos and effect, and from 11.9 to 6.5 kB in sierpinski. The rest is the accessor iterator plus `isBlock` and `inBlock`. With `ITERABLE` off it goes from 6.2 to 0.9 kB in todos and from 5.8 to 0.4 kB in sierpinski. The new `block-hooks.js` adds 1.4 kB rendered, mostly comments. `tests/treeshake.test.ts` pins this.
+
+**Handoff to the compiled-only constructors (Track A).** `renderBlock` and `dispatchBlock` never reference the driver: they run the block under a host. The driver stays in fully compiled block apps only because compiled output imports `$` and `perform`. A compiled-only block constructor must call `installBlockRenderer(renderBlock, dispatchBlock, lazyView)` before its first block escapes, as `$` does. With that, a fully compiled block app sheds the driver with no further renderer change.
+
+### 7.3 Store forms (coupling 3)
+
+- **Runtime.** `@solidjs/signals` and `solid-js` export `createPlainStore(value, options?)` and `createDerivedStore(fn, seed, options?)`. The `solid-js` derived constructor is hydration-aware exactly like `createStore(fn, seed)`, and the server entry exports both constructors. `createStore` still accepts both forms at runtime. `$store(value)`, the plain form only, now creates through `createPlainStore`, both in `@solidjs/signals` and in the `solid-js` wrapper's registration.
+- **Compiler.** `storeForms` (default on, every generate; `packages/compiler/src/store_forms.rs`) rewrites a `createStore` call whose first argument settles the form. The argument is looked at through parentheses, `as`, `satisfies` and `!`:
+  - A function, an arrow, a `$(…)` block, a function declaration, or a `const` bound to one of these becomes `createDerivedStore`.
+  - An object, array, primitive or template literal, or a `const` bound to one of these becomes `createPlainStore`. At runtime a non-function always takes the plain branch, so this rewrite cannot change behavior.
+  - Anything else keeps `createStore`: parameters, imports, call results and spreads.
+- **Guards.** `test/store-pay-for-use.spec.ts` pins that the plain constructors ship no `projection.js` or `reconcile.js`, with `createStore` and `createDerivedStore` as positive controls.
+- **Effect.** sync-blocks, the only example whose stores are all plain, drops reconcile (18.4 kB rendered) and projection (8.2 kB rendered): **−5.5 kB min / −1.8 kB gz** before any slicing. todos and todos-blocks derive an optimistic store, so they legitimately keep both.
+
+### 7.4 Default on
+
+- **Why it is safe.** The census differential below has 0 regressions in every configuration. `smoke-apps.mjs` builds sync-blocks, todos-blocks, todos and sierpinski with the linker defaults, then runs each app's main flow on the **sliced production bundle** in jsdom. All four pass, including sync-blocks with `ITERABLE` and `COMPILED_SEAMS` off in a block app. This closes the "dev never runs the slice" gap from §5 for these apps.
+- **What landed.** Inside `solidCapabilities`, feature slicing (`features`) and compiled facts (`compiledFacts`) are on by default. Each has an opt-out.
+- **What did not land, and why.** `@solidjs/vite-plugin` is not in this repository. Its source is `solidjs/solid-vite-plugin`, and the workspace consumes `3.0.0-next.35` from npm. So the plugin's build path could not be changed here. The upstream change is small:
+  - In `solidPlugin(options)`, when `command === "build"` and `options.capabilities !== false`, return `solidCapabilities({ report, ...options.capabilities })` from `@solidjs/compiler/capabilities` alongside the existing plugins.
+  - The linker takes its entries from the build input, including generated start-mode entries (§7.1), so no configuration is needed.
+  - `capabilities: false` is the opt-out.
+
+### 7.5 Bytes
+
+Every example that builds with the repository's harness is measured with `scripts/slices/measure-apps.mjs`:
+
+- **before:** the base commit, `a601739a`;
+- **after:** this change;
+- **no linker:** a plain `vite build`;
+- **sliced:** with `solidCapabilities` (feature slicing on; after this change it also reads compiled facts).
+
+Values are min / gz bytes of emitted client JS (esbuild minify, gzip −9).
+
+| Example           | before, no linker |   before, sliced | after, no linker |        after, sliced | gz vs before sliced | gz vs before no linker | after: switched off                                                         |
+| ----------------- | ----------------: | ---------------: | ---------------: | -------------------: | ------------------: | ---------------------: | --------------------------------------------------------------------------- |
+| sync-blocks       |   73,700 / 26,755 |  64,085 / 23,308 |  68,129 / 24,921 |  **58,441 / 21,442** |               -8.0% |                 -19.9% | async-free entry; OPTIMISTIC, VERDICTS, SNAPSHOTS, ITERABLE, COMPILED_SEAMS |
+| todos-blocks      |   92,034 / 32,984 |  91,796 / 32,946 |  92,154 / 33,055 |  **91,783 / 32,936** |               -0.0% |                  -0.1% | VERDICTS, SNAPSHOTS, COMPILED_SEAMS                                         |
+| todos             |   82,168 / 29,699 |  81,750 / 29,588 |  81,274 / 29,388 |  **80,723 / 29,225** |               -1.2% |                  -1.6% | VERDICTS, SNAPSHOTS, ITERABLE, COMPILED_SEAMS                               |
+| sierpinski        |   36,202 / 14,204 |  33,639 / 13,231 |  35,286 / 13,885 |  **32,597 / 12,859** |               -2.8% |                  -9.5% | OPTIMISTIC, VERDICTS, STORES, SNAPSHOTS, ITERABLE, COMPILED_SEAMS           |
+| hackernews        |  213,015 / 72,721 | 213,015 / 72,721 | 212,155 / 72,447 | **212,155 / 72,447** |               -0.4% |                  -0.4% | none                                                                        |
+| hackernews-spa    |  159,104 / 54,724 | 159,104 / 54,724 | 158,244 / 54,427 | **158,244 / 54,427** |               -0.5% |                  -0.5% | none                                                                        |
+| notes             |  255,479 / 87,098 | 255,479 / 87,098 | 254,616 / 86,837 | **254,616 / 86,837** |               -0.3% |                  -0.3% | none                                                                        |
+| chat              |  185,250 / 62,280 | 185,250 / 62,280 | 184,391 / 62,021 | **184,391 / 62,021** |               -0.4% |                  -0.4% | none                                                                        |
+| attribution-lab   |   26,510 / 10,672 |   23,949 / 9,698 |   24,406 / 9,966 |   **21,771 / 8,956** |               -7.7% |                 -16.1% | OPTIMISTIC, VERDICTS, STORES, SNAPSHOTS, ITERABLE, COMPILED_SEAMS           |
+| effect            |  233,405 / 79,125 | 233,405 / 79,125 | 232,510 / 78,824 | **232,510 / 78,824** |               -0.4% |                  -0.4% | none                                                                        |
+| migrating-element |   42,438 / 16,945 |  39,877 / 15,956 |  41,839 / 16,760 |  **39,151 / 15,700** |               -1.6% |                  -7.3% | OPTIMISTIC, VERDICTS, STORES, SNAPSHOTS, ITERABLE, COMPILED_SEAMS           |
+
+Notes:
+
+- **Why five apps change so little.** Each imports a package that has no capability manifest, so no switch can be proven off (`featureGaps` in the report names it):
+  - hackernews, hackernews-spa and notes import `@solidjs/router`;
+  - chat imports `marked` and `highlight.js`;
+  - effect imports the `effect` library;
+  - every start-mode client entry imports `@solidjs/web/frames`, a subpath package of this repository with no manifest of its own. Giving it one is the next cheap step.
+
+  Their generated entries are now summarized (§7.1), so what remains is a gap in the library ecosystem, not in the linker. What these apps gain comes from coupling 2 alone.
+
+- **todos-blocks stays flat.** It keeps `ITERABLE` legitimately: two `$event` bodies wait (`yield* attempt`), and the `useTodos` helper generator stays in the output. The renderer slot costs block apps about 120 B min in the no-linker build, which `COMPILED_SEAMS` off more than pays back.
+- **Not measured.** diagnostics uses Vite 8 / rolldown, and its build fails under this harness's inline config before and after this change. rendering is three SSR configurations without an app entry.
+
+### 7.6 Behaviour
+
+`node packages/signals/scripts/slices-differential.mjs`, run on this change (data: [`differential.json`](./core-runtime-slicing/differential.json), [`differential.txt`](./core-runtime-slicing/differential.txt)). There are 1,952 tests, including the new `block-hooks` tests.
+
+| Configuration                   | Passed | Skipped (use the feature) | Regressions | Sensitivity           |
+| ------------------------------- | -----: | ------------------------: | ----------: | --------------------- |
+| full −OPTIMISTIC (and VERDICTS) |  1,431 |                       521 |       **0** | 518 / 520             |
+| full −VERDICTS                  |  1,649 |                       303 |       **0** | 300 / 302             |
+| full −STORES                    |  1,509 |                       443 |       **0** | run hangs (as before) |
+| full −SNAPSHOTS                 |  1,931 |                        21 |       **0** | 20 / 20               |
+| full −ITERABLE                  |  1,900 |                        52 |       **0** | 45 / 51               |
+| full −COMPILED_SEAMS            |  1,935 |                        17 |       **0** | 7 / 16                |
+| full −all                       |  1,132 |                       820 |       **0** | 789 / 819             |
+| sync −all                       |    733 |                     1,219 |       **0** | 484 / 510             |
+
+An earlier run caught one real defect, in the −ITERABLE configuration. With a pure live binding, `renderBlock($(…))` read the binding before its argument built the first block, so it captured the uninstalled value. The bindings now start as forwarders to the installed implementations. `tests/block-hooks.test.ts` pins the case in a fresh module registry.
+
+Sliced production bundles (`node scripts/slices/smoke-apps.mjs`), each app's main flow in jsdom:
+
+| Example      | Switched off                                              | Flow                                                   |
+| ------------ | --------------------------------------------------------- | ------------------------------------------------------ |
+| sync-blocks  | OPTIMISTIC, VERDICTS, SNAPSHOTS, ITERABLE, COMPILED_SEAMS | add two items, toggle, filter, converter event: ok     |
+| todos-blocks | VERDICTS, SNAPSHOTS, COMPILED_SEAMS                       | add two todos through the async action, toggle one: ok |
+| todos        | VERDICTS, SNAPSHOTS, ITERABLE, COMPILED_SEAMS             | same flow: ok                                          |
+| sierpinski   | all six                                                   | 731 dots render through `Loading` and async memos: ok  |
+
+Test suites:
+
+- `packages/signals`: 175 files, 1,951 passed.
+- `packages/solid`: `test` 603 passed; `test-types` clean.
+- `packages/web`: only the known `server-functions-adapter-request` failure. `lazy-shell-gating` failed once under full-machine load and passes in isolation, 3 of 3 runs.
+- `packages/h`: 61 passed.
+- `packages/compiler`:
+  - Rust, all three feature configurations: 134, 88 and 127 passed.
+  - vitest: 5,912 passed. `tsrx-typecheck-projection` times out at 5 s with the debug binary under load and passes in isolation. The three block-lowering and strict fixtures whose output now shows `createPlainStore` were regenerated with their update commands.
+- `examples/todos-blocks` and `examples/sync-blocks`: `pnpm test` passes.
 
 ## Reproduce
 
@@ -383,6 +533,10 @@ npx vitest run tests/slices.test.ts tests/treeshake.test.ts
 cd ../..
 (cd examples/sync-blocks && pnpm summary)       # its typed summary
 node scripts/slices/measure-apps.mjs --out documentation/plans/core-runtime-slicing/apps.json
+node scripts/slices/smoke-apps.mjs             # §7: the sliced production bundles run in jsdom
+(cd packages/compiler && npx vitest run __tests__/capabilities.test.js)   # §7: the compiled-facts proof
 ```
+
+For §7's "before" column, check out the base commit (`a601739a`) in a separate worktree, build it the same way, and run the same `measure-apps.mjs` there.
 
 Environment: Node v22, Vite 7/rollup 4, esbuild minify, Valgrind 3.22 (`cachegrind --cache-sim=no`), on a shared 4-core cloud VM.

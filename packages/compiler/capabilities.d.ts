@@ -20,6 +20,24 @@ export type FeatureSwitch =
 /** Per switch: whether the graph may use the feature, and why (first few). */
 export type FeatureFacts = Record<FeatureSwitch, { on: boolean; because: string[] }>;
 
+/** Facts about the application modules' compiled output (build only). */
+export interface CompiledFactsSummary {
+  /** Application modules in the graph. */
+  modules: number;
+  /** Modules whose compiled output the linker read. */
+  withFacts: number;
+  /** Generator functions left in compiled output, with their `yield*` count. */
+  residualGenerators: { file: string; line: number; delegations: number }[];
+  /** `yield*` delegations left in compiled output (ITERABLE). */
+  delegations: number;
+  /** Compiled seams requested (`statusFree`, `isEqual`, `noThrow`, `effectEquals`). */
+  seams: string[];
+  /** Creation calls by kind (`signal`, `memo`, `store`, `projection`, …). */
+  creates: Record<string, number>;
+  /** Store / path reader calls. */
+  storeReads: number;
+}
+
 export interface CapabilityReport {
   /** Whether the whole graph was proven async-free. */
   asyncFree: boolean;
@@ -29,6 +47,8 @@ export interface CapabilityReport {
   reasons: CapabilityReason[];
   /** The feature switches the graph may use (core runtime slicing). */
   features: FeatureFacts;
+  /** Compiled-output facts the feature proof used (null without a loader). */
+  facts?: CompiledFactsSummary | null;
   /** Application modules in the graph (relative to the root). */
   modules: string[];
   /** Library packages reached, with the names imported from each. */
@@ -53,6 +73,12 @@ export function proveGraph(options: {
   root: string;
   /** Whether the build's compiler passes may emit compiled seams (default true). */
   compiledSeams?: boolean;
+  /**
+   * The bundler's transformed code of a module (Rollup's `this.load`). With
+   * it, virtual modules are summarized from their code and the feature
+   * proof reads every application module's compiled output.
+   */
+  load?: (id: string) => Promise<string | null>;
 }): Promise<CapabilityReport>;
 
 export const FEATURE_SWITCHES: readonly FeatureSwitch[];
@@ -63,6 +89,18 @@ export function proveFeatures(options: {
   compiledSeams: boolean;
   /** App modules whose source contains `yield*` (ITERABLE stays on). */
   yieldStar?: string[];
+  /** Per application module: authored imports, and compiled facts when known. */
+  modules?: {
+    rel: string;
+    libraries: Map<string, { manifest: any; names: Set<string> }>;
+    yieldStar: boolean;
+    facts?: {
+      libraries: Map<string, { manifest: any; names: Set<string> }>;
+      delegations: number;
+      residualGenerators: { line: number; delegations: number }[];
+      seams: string[];
+    };
+  }[];
 }): FeatureFacts;
 
 export interface SolidCapabilitiesOptions {
@@ -76,6 +114,8 @@ export interface SolidCapabilitiesOptions {
   features?: boolean;
   /** Whether this build's compiler passes may emit compiled seams (default true). */
   compiledSeams?: boolean;
+  /** Prove the feature switches from compiled output (build only; default true). */
+  compiledFacts?: boolean;
 }
 
 /** Vite / Rollup plugin: selects the async-free runtime for proven graphs,

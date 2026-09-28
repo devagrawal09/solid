@@ -30,7 +30,16 @@ const EXAMPLES = {
   "sync-blocks": { entry: "src/main.tsx", typedSummary: ".solid-capabilities.json" },
   "todos-blocks": { entry: "src/main.tsx" },
   todos: { entry: "src/main.tsx" },
-  sierpinski: { entry: "src/main.tsx" }
+  sierpinski: { entry: "src/main.tsx" },
+  hackernews: { entry: "src/app.tsx" },
+  "hackernews-spa": { entry: "src/app.tsx" },
+  notes: { entry: "src/app.tsx" },
+  chat: { entry: "src/app.tsx" },
+  "attribution-lab": { entry: "src/main.tsx" },
+  effect: { entry: "src/main.tsx" },
+  "migrating-element": { entry: "src/main.tsx" }
+  // Not measured: diagnostics (Vite 8 / rolldown: its own build fails with
+  // this harness's inline config), rendering (three SSR configs, no app).
 };
 
 async function buildVariant(name, spec, variant) {

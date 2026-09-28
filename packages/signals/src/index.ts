@@ -114,13 +114,13 @@ export {
   isBlock,
   outsideBlock,
   inBlock,
-  lazyView,
-  renderBlock,
-  dispatchBlock,
   blockScope,
   syncBlock,
   blockCleanup
 } from "./generator.js";
+// Renderer entry points: forwarders the block runtime fills when the first
+// block is built (block-hooks.ts), so renderers do not retain it.
+export { lazyView, renderBlock, dispatchBlock } from "./block-hooks.js";
 export {
   $component,
   $memo,

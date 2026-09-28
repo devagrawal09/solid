@@ -1160,7 +1160,9 @@ pub(crate) fn collect_fusion_symbols(program: &Program<'_>) -> FusionSymbols {
             match name {
                 "createSignal" | "createOptimistic" => symbols.accessor_tuples.push(symbol),
                 "createMemo" => symbols.accessor_values.push(symbol),
-                "createStore" | "createOptimisticStore" => symbols.store_tuples.push(symbol),
+                "createStore" | "createPlainStore" | "createOptimisticStore" => {
+                    symbols.store_tuples.push(symbol)
+                }
                 "createProjection" => symbols.store_values.push(symbol),
                 "$signal" => symbols.v2_accessor_tuples.push(symbol),
                 "$memo" => {

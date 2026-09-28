@@ -2071,6 +2071,30 @@ export function createStore<T extends object = {}>(
   return [state as Store<T>, storeSetter(state)];
 }
 
+/** The plain form of `createStore` alone (client parity: the compiler's
+ * target for a `createStore` call whose first argument is not a function). */
+export function createPlainStore<T extends object = {}>(
+  initialValue: NoFn<T> | Store<NoFn<T>>,
+  options?: StoreOptions
+): [get: Store<T>, set: StoreSetter<T>] {
+  return createStore(initialValue, options);
+}
+
+/** The derived form of `createStore` alone (client parity). */
+export function createDerivedStore<T extends object, B extends ProjectionBlock<T>>(
+  fn: B & ProjectionBlock<T>,
+  seed: Partial<T> | Store<NoFn<T>>,
+  options?: ServerProjectionOptions
+): BlockStoreReturn<B, T>;
+export function createDerivedStore<T extends object = {}>(
+  fn: ((draft: T) => void | T | Promise<void | T> | AsyncIterable<void | T>) & ReactiveHostBlock,
+  seed: Partial<T> | Store<NoFn<T>>,
+  options?: ServerProjectionOptions
+): [get: Refreshable<Store<T>>, set: StoreSetter<T>];
+export function createDerivedStore(fn: any, seed: any, options?: any): any {
+  return (createStore as Function)(fn, seed, options);
+}
+
 /**
  * Parity with the client's `storeSetterNext` as a plain data operation: run
  * the function against the state (draft mutations are literal mutations

@@ -267,7 +267,12 @@ describe("pay-for-use tree-shaking (#2883)", () => {
     // cut-off — the option term in createEffectNode (CONFIG_EFFECT_EQUALS)
     // and recompute's first-run rule for such effects. A memo fused into its
     // only reader keeps its cut-off through it. Measured at 23,066.
-    expect(minifiedBytes).toBeLessThan(23_100);
+    // CONSCIOUS BUMP (zombie-heap fix, island-runtime-tiers.md "Defects
+    // found"): +69 B — updateIfNecessary moves a pulled zombie's heap entry
+    // from zombieQueue to dirtyQueue when it clears REACTIVE_ZOMBIE, so the
+    // flag keeps naming the heap the node is linked in
+    // (tests/zombie-pull-heap.test.ts). Measured at 23,135.
+    expect(minifiedBytes).toBeLessThan(23_170);
     expect(retainedFrom(retained, ["core/status-free.ts"])).toEqual([]);
   });
 
@@ -316,6 +321,23 @@ describe("pay-for-use tree-shaking (#2883)", () => {
     // The module is the specialized recompute: measured at 25,185 (+2,240 B
     // over the floor) when it landed.
     expect(minifiedBytes).toBeLessThan(25_500);
+  });
+
+  it("renderer block entry points do not retain the block runtime (install-on-use)", async () => {
+    // What @solidjs/web's insert / event delegation and flatten reference:
+    // forwarders the first block constructor fills (block-hooks.ts).
+    const { code } = await bundleFixture(
+      `export { createSignal, createRoot, flatten, isBlock, inBlock, renderBlock, dispatchBlock, lazyView } from "sigsrc";`
+    );
+    for (const marker of [
+      "function runBlockAs",
+      "function reportBlockError",
+      "function readGuarded",
+      "function drive",
+      "function perform",
+      "function $("
+    ])
+      expect(code, marker).not.toContain(marker);
   });
 
   it("plain stores shed the verdict layer, affects, boundaries, and map", async () => {

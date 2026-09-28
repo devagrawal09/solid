@@ -38,6 +38,8 @@ mod shared;
 mod ssr;
 mod strict;
 mod store_handles;
+mod compiled_facts;
+mod store_forms;
 mod sync_actions;
 mod memo_fusion;
 mod store_scalars;
@@ -51,6 +53,7 @@ pub use block_projection::{
     BlockProjectionEdit, BlockTypecheckProjection, project_blocks_for_typecheck,
 };
 pub use capabilities::summarize_capabilities;
+pub use compiled_facts::summarize_compiled;
 pub use islands::summarize_islands;
 pub use resumable::compile_resumable;
 pub use compiler::{CompileOptions, CompileOutput, Generate, Renderer, Syntax, Wrapper, compile};

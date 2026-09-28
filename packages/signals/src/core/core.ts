@@ -54,6 +54,7 @@ import {
   REACTIVE_REASK,
   REACTIVE_RECOMPUTING_DEPS,
   REACTIVE_SNAPSHOT_STALE,
+  REACTIVE_ZOMBIE,
   STATUS_ERROR,
   STATUS_PENDING,
   STATUS_UNINITIALIZED,
@@ -821,7 +822,22 @@ function updateIfNecessary(el: Computed<unknown>): void {
     recompute(el);
   }
 
-  el._flags = el._flags & (REACTIVE_SNAPSHOT_STALE | REACTIVE_IN_HEAP | REACTIVE_IN_HEAP_HEIGHT);
+  const flags = el._flags;
+  el._flags = flags & (REACTIVE_SNAPSHOT_STALE | REACTIVE_IN_HEAP | REACTIVE_IN_HEAP_HEIGHT);
+  // The mask drops REACTIVE_ZOMBIE: a pulled zombie is served like a live
+  // node until its owner's pending disposal commits (as after a recompute,
+  // which also clears it). A zombie pulled while it still holds a heap
+  // entry (in practice a height-adjust entry, which the pull does not
+  // consume) is physically linked in `zombieQueue`; left there, every later
+  // `deleteFromHeap(el, queueFor(el))` unlinks it from `dirtyQueue` instead,
+  // clearing or re-tailing a dirty bucket and leaving a dangling zombie
+  // bucket that a later insert chains onto (TypeError in deleteFromHeap, or
+  // lost dirty work). Move the entry to the heap the flags now name.
+  if (flags & REACTIVE_ZOMBIE && flags & (REACTIVE_IN_HEAP | REACTIVE_IN_HEAP_HEIGHT)) {
+    deleteFromHeap(el, zombieQueue);
+    if (flags & REACTIVE_IN_HEAP) insertIntoHeap(el, dirtyQueue);
+    else insertIntoHeapHeight(el, dirtyQueue);
+  }
 }
 
 export function computed<T>(fn: (prev?: T) => T | PromiseLike<T> | AsyncIterable<T>): Computed<T>;

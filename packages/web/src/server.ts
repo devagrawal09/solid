@@ -1417,6 +1417,11 @@ const VOID_ELEMENTS =
 // - $dfj(ids): reveal a group in registration order, waiting if any member still has pending styles.
 const REPLACE_SCRIPT = `function $df(e){return _$HY.f?_$HY.f(e):$dfr(e)}function $dfr(e,n,o,t){if(!(n=document.getElementById(e)))return 0;if(!(o=document.getElementById("pl-"+e)))return(_$HY.dq=_$HY.dq||{})[e]=1,0;for(;o&&(8!==o.nodeType||o.nodeValue!=="pl-"+e);)t=o.nextSibling,o.remove(),o=t;t=o.parentNode,o.replaceWith(n.content),n.remove(),(_$HY.v=_$HY.v||{})[e]=1,_$HY.fe(e,t),_$HY.hp&&_$HY.hp[e]&&($dh(_$HY.hp[e]),delete _$HY.hp[e]),$dfd();return 1}function $dfl(e,o,n){if(!(o=document.getElementById("pl-"+e)))return(_$HY.dlq=_$HY.dlq||{})[e]=1,0;if(o._$fl)return 1;for(n=o.nextSibling;n;){if(8===n.nodeType&&n.nodeValue==="pl-"+e){o.parentNode&&o.parentNode.insertBefore(o.content.cloneNode(!0),n),o._$fl=1,$dfd();return 1}n=n.nextSibling}return 0}function $dflj(e,i){for(i=0;i<e.length;i++)$dfl(e[i])}function $dfd(e,i){if(e=_$HY.dq){_$HY.dq=0;for(i in e)$df(i)}if(e=_$HY.dlq){_$HY.dlq=0;for(i in e)$dfl(i)}}function $dfs(e,c,d){(_$HY.sc=_$HY.sc||{})[e]=c,d&&((_$HY.sd=_$HY.sd||{})[e]=1)}function $dfg(e,g,i,k){if(!(g=_$HY.sg&&_$HY.sg[e]))return;for(i=0;i<g.length;i++)if(_$HY.sc&&_$HY.sc[g[i]]>0)return;for(i=0;i<g.length;i++)k=g[i],delete _$HY.sg[k],$df(k)}function $dfc(e){if(--_$HY.sc[e]<=0){delete _$HY.sc[e],_$HY.sg&&_$HY.sg[e]?$dfg(e):!(_$HY.sd&&_$HY.sd[e])&&$df(e);_$HY.sd&&delete _$HY.sd[e]}}function $dfj(e,i,n){for(i=0;i<e.length;i++)if(_$HY.sc&&_$HY.sc[e[i]]>0){for(n=0;n<e.length;n++)(_$HY.sg=_$HY.sg||{})[e[n]]=e;return}for(i=0;i<e.length;i++)$df(e[i])}`;
 
+// Written right after a streamed shell that still has pending fragments:
+// runs the document-root hydrate() waiting for the shell (see hydrate in
+// client.ts), or records that the shell is parsed for one that starts later.
+const SHELL_PARSED_SCRIPT = `typeof _$HY.sh=="function"&&_$HY.sh();_$HY.sh=1`;
+
 // Head patch runtime, emitted once alongside the first head-patch task:
 // - $dha(ops): apply patch ops to document.head — "t" sets the title (and
 //   marks the element so the client registry can claim it), "r" removes tags
@@ -1866,6 +1871,12 @@ export function renderToStream(code, options = {}) {
           onHead
         )
       );
+      // Shell-parsed marker: with fragments still pending the document stays
+      // "loading" until the stream ends, so a document-root hydrate() that
+      // started mid-parse (an async client entry) waits for this script, which
+      // runs once everything before it — the whole shell — is parsed.
+      if (!noScripts && registry.size)
+        buffer.write(`<script${nonceAttr(nonce, "script")}>${SHELL_PARSED_SCRIPT}</script>`);
     },
     ...options.sink
   };

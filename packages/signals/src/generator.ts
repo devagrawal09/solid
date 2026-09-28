@@ -18,6 +18,7 @@ import {
   type Owner
 } from "./core/index.js";
 import { installGeneratorHook, type SourceAccessor } from "./signals.js";
+import { installBlockRenderer } from "./block-hooks.js";
 
 /*
  * `$` blocks — typed reactive computations with host-restricted effects.
@@ -1485,6 +1486,10 @@ export function $(
   if (!generatorHookInstalled) {
     generatorHookInstalled = true;
     installGeneratorHook(generatorBody);
+    // Renderers reach blocks through block-hooks.ts (install-on-use): a
+    // block exists from here on, so its render / dispatch / deferred-view
+    // implementations do too.
+    installBlockRenderer(renderBlock, dispatchBlock, lazyView);
     // The strict guard is only ever raised by a block run, so the store's
     // path tokens are only reachable once a block exists.
     makePathToken = pathToken;
@@ -1545,6 +1550,8 @@ export function $(
   return block;
 }
 
+let syncRuntimeInstalled = false;
+
 /**
  * @internal Compiled-only block constructor. The compiler emits it (as `$`'s
  * stand-in) in a module where every block body it built was lowered to call
@@ -1561,9 +1568,14 @@ export function syncBlock<Input, R>(
   body: (input: Input) => R,
   flags: number = BLOCK_SYNC
 ): Block<R, any, never, any, any, Input> {
-  // The strict guard is only ever raised by a block run, so the store's path
-  // tokens are only reachable once a block exists (as in `$`).
-  makePathToken = pathToken;
+  if (!syncRuntimeInstalled) {
+    syncRuntimeInstalled = true;
+    // As in `$`: renderers reach blocks through block-hooks.ts, and the
+    // store's path tokens are only reachable once a block exists. (No
+    // generator-body hook: that is the driver.)
+    installBlockRenderer(renderBlock, dispatchBlock, lazyView);
+    makePathToken = pathToken;
+  }
   const block = function () {
     const host = pendingHost === -1 ? REACTIVE : pendingHost;
     pendingHost = -1;
