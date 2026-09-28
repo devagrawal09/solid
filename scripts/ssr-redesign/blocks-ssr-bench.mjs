@@ -6,8 +6,8 @@
 //                 1,406 comments);
 //   todos-blocks  examples/todos-blocks (100 todos) through apps/todos, the
 //                 mock API's latency removed.
-// App `.ts` modules are compiled too (todos-blocks' filter.ts holds a block,
-// as its Vite config compiles it). Also reports what is left of the block
+// App `.ts` modules holding a generator body are compiled too (lib.mjs; e.g.
+// todos-blocks' filter.ts, as its Vite config compiles it). Also reports what is left of the block
 // machinery in each app module's server output: `_$perform(` calls,
 // generator block bodies (`function*` handed to the block wrapper) and
 // whether the module imports `$` (the driver).
@@ -75,7 +75,7 @@ if (args.includes("--tag")) {
   mkdirSync(dirOf(tag), { recursive: true });
   const meta = {};
   for (const [name, app] of Object.entries(APPS)) {
-    await loadServer(app.entry, join(dirOf(tag), `${name}.mjs`), { compileTs: true, rewrites: app.rewrites });
+    await loadServer(app.entry, join(dirOf(tag), `${name}.mjs`), { rewrites: app.rewrites });
     meta[name] = Object.fromEntries(app.modules.map(m => [m, residue(transform, m)]));
     const r = Object.values(meta[name]);
     console.log(
