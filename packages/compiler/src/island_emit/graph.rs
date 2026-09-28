@@ -203,6 +203,8 @@ pub(crate) struct Site<'a> {
     pub refs: Refs,
     /// The live-region sites (Show/For) of this component enclosing it.
     pub regions: Vec<usize>,
+    /// `Show` / `For`: the render callback's parameter (`item => …`).
+    pub param: Option<SymbolId>,
 }
 
 pub(crate) struct Call<'a> {
@@ -250,6 +252,7 @@ impl<'a> ViewWalk<'_, 'a> {
             expr,
             refs,
             regions: self.regions.clone(),
+            param: None,
         });
         i
     }
@@ -486,6 +489,15 @@ impl<'a> ViewWalk<'_, 'a> {
                     }
                     if let Some(s) = site {
                         self.regions.push(s);
+                        // The render callback's parameter carries the input.
+                        if let Ok(kids) = jsx::children(&el.children)
+                            && let [Child::Expr(e)] = kids.as_slice()
+                            && let Some(f) = FnRef::from_expr(e)
+                            && let Some(p) = f.params().items.first()
+                            && let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &p.pattern
+                        {
+                            self.f.sites[s].param = id.symbol_id.get();
+                        }
                     }
                     if let Some(fb) = jsx::attr(&attrs, "fallback") {
                         self.attr_jsx(&fb.value);
@@ -687,6 +699,32 @@ impl<'a> Analysis<'a> {
     }
 }
 
+/// Store keys among `reads`, through the memos that read them.
+fn store_keys(m: &Model<'_>, a: &Analysis<'_>, reads: &BTreeSet<Key>) -> BTreeSet<Key> {
+    let mut out = BTreeSet::new();
+    let mut seen = BTreeSet::new();
+    let mut stack: Vec<Key> = reads.iter().copied().collect();
+    while let Some(k) = stack.pop() {
+        if !seen.insert(k) {
+            continue;
+        }
+        match &m.comps[k.0].setup[k.1] {
+            Item::Cell {
+                host: CellHost::Store | CellHost::Optimistic,
+                ..
+            } => {
+                out.insert(k);
+            }
+            Item::Memo { .. } => {
+                let v = a.av_of(k.0, &a.facts[k.0].item_refs[k.1]);
+                stack.extend(v.reads);
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 fn key_is_memo(m: &Model<'_>, k: Key) -> bool {
     matches!(m.comps[k.0].setup[k.1], Item::Memo { .. })
 }
@@ -721,6 +759,7 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                 expr: None,
                 refs: rw.out,
                 regions: vec![],
+                param: None,
             });
             w.f.issues
                 .push("statements before the view's return".into());
@@ -745,6 +784,7 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                         expr: None,
                         refs: r.clone(),
                         regions: vec![],
+                param: None,
                     });
                     r
                 }
@@ -839,6 +879,28 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                     };
                     changed |= a.prop_av.entry((child, name)).or_default().join(&v);
                 }
+            }
+            // Render callback parameters: a keyed `Show`'s value is its
+            // input; a `For` row over a store is the store's (a row reads
+            // its item's fields through the proxy: live when the store is).
+            // Rows over plain values (an immutable array in a signal) stay
+            // plain: the item never changes for a keyed row.
+            for si in 0..a.facts[ci].sites.len() {
+                let site = &a.facts[ci].sites[si];
+                let Some(p) = site.param else { continue };
+                let v = a.av_of(ci, &site.refs.clone());
+                let v = if site.kind == SiteKind::For {
+                    Av {
+                        reads: store_keys(m, &a, &v.reads),
+                        writes: BTreeSet::new(),
+                    }
+                } else {
+                    Av {
+                        reads: v.reads,
+                        writes: BTreeSet::new(),
+                    }
+                };
+                changed |= a.sym_av.entry(p).or_default().join(&v);
             }
             for pi in 0..a.facts[ci].providers.len() {
                 let (ctx, value) = a.facts[ci].providers[pi];
@@ -1300,6 +1362,34 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                 }
             }
         }
+        // Core-only runtime (stores, actions, refresh, …) referenced by the
+        // island's code: its sites, and its members' setup items the client
+        // rebuilds (a server-authoritative async memo stays on the server).
+        let mut core_refs: BTreeSet<String> = BTreeSet::new();
+        for (c, s) in &sites {
+            for (sym, _) in &a.facts[*c].sites[*s].refs.syms {
+                if let Some(n) = m.runtime.get(sym) {
+                    core_refs.insert(n.clone());
+                }
+            }
+        }
+        for c in &members {
+            for (ii, item) in m.comps[*c].setup.iter().enumerate() {
+                if matches!(item, Item::Memo { is_async: true, .. }) && !a.live.contains(&(*c, ii)) {
+                    continue;
+                }
+                for (sym, _) in &a.facts[*c].item_refs[ii].syms {
+                    if let Some(n) = m.runtime.get(sym) {
+                        core_refs.insert(n.clone());
+                    }
+                }
+            }
+        }
+        for n in &core_refs {
+            if super::client::CORE_ONLY.contains(&n.as_str()) || n == "readStore" {
+                t2.push(format!("`{n}` (the full core)"));
+            }
+        }
         for c in &members {
             for (b, regions) in &a.facts[*c].boundaries {
                 if regions.iter().any(|r| a.site_live[*c][*r]) {
@@ -1356,9 +1446,6 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                     .count()
             )],
         };
-        if tier == 2 {
-            unsupported.push(format!("tier 2: {}", t2.join("; ")));
-        }
         let mut own_tiers: Vec<(usize, u8)> = members.iter().map(|c| (*c, own[c])).collect();
         own_tiers.sort();
         for (c, s) in &sites {

@@ -247,4 +247,204 @@ export const App = $component(function* () {
   ]
 };
 
-export const islandsScenarios = [islandsList, islandsStream];
+/**
+ * A stateful island over a store (tier 2: the core's plain store): its
+ * initial value comes from server data (the caller's props), so the anchor
+ * serializes it — only the keys the island's code reads or writes (`items`,
+ * `label`; not `other`). Rows of a `For` over the store read their item's
+ * fields through the proxy, so they bind: a toggle writes in place.
+ */
+export const islandsStore: Scenario = {
+  name: "islands-store",
+  covers: [
+    "store island rebuilt from serialized server data (live keys only)",
+    "readStore selectors and draft setters",
+    "For rows over a store bind their item's fields"
+  ],
+  entry: { component: "App" },
+  sources: {
+    reference: `
+import { createMemo, createStore, For } from "solid-js";
+function List(props) {
+  const [state, setState] = createStore({ items: props.items.slice(), label: props.label, other: props.other });
+  const remaining = createMemo(() => state.items.filter(i => !i.done).length);
+  const add = () => setState(s => { s.items.push({ id: s.items.length + 1, title: "new", done: false }); });
+  const toggle = id => setState(s => { const it = s.items.find(x => x.id === id); if (it) it.done = !it.done; });
+  return (
+    <section>
+      <h2>{state.label}</h2>
+      <ul>
+        <For each={state.items}>
+          {item => <li class={item.done ? "done" : ""} onClick={() => toggle(item.id)}>{item.title}</li>}
+        </For>
+      </ul>
+      <p class="left">{remaining()} left</p>
+      <button class="add" onClick={add}>add</button>
+    </section>
+  );
+}
+export function App() {
+  return (
+    <main>
+      <List
+        label="todo"
+        items={[{ id: 1, title: "a", done: false }, { id: 2, title: "b", done: true }]}
+        other={{ secret: "x" }}
+      />
+    </main>
+  );
+}
+`,
+    islands: `
+import { $component, $event, $memo, $store, For, readStore } from "solid-js";
+const List = $component(function* (props) {
+  const [state, setState] = yield* $store({
+    items: (yield* props.items).slice(),
+    label: yield* props.label,
+    other: yield* props.other
+  });
+  const remaining = yield* $memo(function* () {
+    return yield* readStore(state, s => s.items.filter(i => !i.done).length);
+  });
+  const add = $event(function* () {
+    setState(s => { s.items.push({ id: s.items.length + 1, title: "new", done: false }); });
+  });
+  const toggle = id => setState(s => { const it = s.items.find(x => x.id === id); if (it) it.done = !it.done; });
+  return function* () {
+    return (
+      <section>
+        <h2>{yield* state.label}</h2>
+        <ul>
+          <For each={yield* state.items}>
+            {item => <li class={item.done ? "done" : ""} onClick={() => toggle(item.id)}>{item.title}</li>}
+          </For>
+        </ul>
+        <p class="left">{yield* remaining} left</p>
+        <button class="add" onClick={add}>add</button>
+      </section>
+    );
+  };
+});
+export const App = $component(function* () {
+  return function* () {
+    return (
+      <main>
+        <List
+          label="todo"
+          items={[{ id: 1, title: "a", done: false }, { id: 2, title: "b", done: true }]}
+          other={{ secret: "x" }}
+        />
+      </main>
+    );
+  };
+});
+`
+  },
+  steps: [
+    { name: "initial", run: ({ html }) => html() },
+    step("toggle a (a row binds its item)", ctx => ctx.click("li")),
+    step("add (a row is created)", ctx => ctx.click(".add")),
+    step("toggle the new row", ctx => ctx.click("li:nth-child(3)"))
+  ]
+};
+
+/**
+ * Async inside a live island (tier 2): a live async memo is adopted (P2) —
+ * its first run subscribes to what it reads before its `attempt` and takes
+ * the server's settled value from the anchor, never calling the attempt
+ * (the task for id 1 is never started on the client); a later write re-runs
+ * it asynchronously. An `$event` that `attempt`s awaits its work (an async
+ * handler), then writes.
+ */
+export const islandsAsync: Scenario = {
+  name: "islands-async",
+  covers: [
+    "live async memo adopted from the server value (no re-run)",
+    "a write re-runs the adopted memo asynchronously",
+    "an $event awaiting an attempt, then writing"
+  ],
+  entry: { component: "App" },
+  sources: {
+    reference: `
+import { createMemo, createSignal } from "solid-js";
+import { h } from "conformance";
+export function App() {
+  const [id, setId] = createSignal(1);
+  const [saved, setSaved] = createSignal("no");
+  const user = createMemo(() => {
+    const i = id();
+    return i === 1 ? Promise.resolve({ name: "Ada" }) : h.task("load", i);
+  });
+  const save = async () => {
+    const r = await h.task("save", id());
+    setSaved(r);
+  };
+  return (
+    <div>
+      <p class="name">{user().name}</p>
+      <button class="next" onClick={() => setId(x => x + 1)}>next</button>
+      <button class="save" onClick={save}>save</button>
+      <span class="saved">{saved()}</span>
+    </div>
+  );
+}
+`,
+    islands: `
+import { $component, $event, $memo, $signal, attempt } from "solid-js";
+import { h } from "conformance";
+export const App = $component(function* () {
+  const [id, setId] = yield* $signal(1);
+  const [saved, setSaved] = yield* $signal("no");
+  const user = yield* $memo(function* () {
+    const i = yield* id;
+    return yield* attempt(() => (i === 1 ? Promise.resolve({ name: "Ada" }) : h.task("load", i)));
+  });
+  const next = $event(function* () { setId(x => x + 1); });
+  const save = $event(function* () {
+    const i = yield* id;
+    const r = yield* attempt(() => h.task("save", i));
+    setSaved(r);
+  });
+  return function* () {
+    return (
+      <div>
+        <p class="name">{(yield* user).name}</p>
+        <button class="next" onClick={next}>next</button>
+        <button class="save" onClick={save}>save</button>
+        <span class="saved">{yield* saved}</span>
+      </div>
+    );
+  };
+});
+`
+  },
+  steps: [
+    {
+      name: "initial",
+      run: async ({ settle, html }) => {
+        await settle();
+        html();
+      }
+    },
+    step("next (the adopted memo re-runs)", ctx => ctx.click(".next")),
+    {
+      name: "resolve load#1",
+      run: async ({ tasks, settle, html }) => {
+        tasks.resolve("load#1", { name: "Bea" });
+        await settle();
+        html();
+      }
+    },
+    step("save (the handler awaits)", ctx => ctx.click(".save")),
+    {
+      name: "resolve save#1",
+      run: async ({ tasks, settle, html }) => {
+        tasks.resolve("save#1", "yes");
+        await settle();
+        html();
+      }
+    }
+  ]
+};
+
+export const islandsScenarios = [islandsList, islandsStream, islandsStore, islandsAsync];

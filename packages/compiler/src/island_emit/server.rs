@@ -42,6 +42,7 @@ function _$for(l, f, fb) { if (!l || !l.length) return _$e(fb); let s = ""; for 
 async function _$forA(l, f, fb) { if (!l || !l.length) return _$e(fb); const r = await Promise.all(l.map((x, i) => f(x, () => i))); let s = ""; for (const x of r) s += _$e(x); return s; }
 function _$err(f, fb) { try { return _$e(f()); } catch (e) { return _$e(typeof fb === "function" ? fb(() => e, () => {}) : fb); } }
 async function _$errA(f, fb) { try { return _$e(await f()); } catch (e) { return _$e(typeof fb === "function" ? fb(() => e, () => {}) : fb); } }
+function _$pick(o, ks) { const r = {}; for (const k of ks) if (k in o) r[k] = o[k]; return r; }
 function _$ld($c, f, fb) { const s = $c && $c.get(Symbol.for("solid.islands.stream")); return s ? s.boundary($c, f, fb, _$e) : f($c); }
 function _$errS($c, f, fb) { const s = $c && $c.get(Symbol.for("solid.islands.stream")); return s ? s.errored($c, f, fb, _$e) : _$errA(() => f($c), fb); }
 "#;
@@ -117,6 +118,17 @@ impl<'a> Env<'a> for SEnv<'_, '_, 'a> {
             Expression::CallExpression(c) => {
                 match self.se.m.runtime_name(&c.callee) {
                     Some("$cleanup" | "$flush") => return Ok("void 0".into()),
+                    Some("readStore") => {
+                        let (Some(store), Some(sel)) = (
+                            c.arguments.first().and_then(|a| a.as_expression()),
+                            c.arguments.get(1).and_then(|a| a.as_expression()),
+                        ) else {
+                            return Err("readStore without a store and a selector".into());
+                        };
+                        let st = tx.expr(self, store)?;
+                        let f = tx.expr(self, sel)?;
+                        return Ok(format!("({f})(_$r({st}))"));
+                    }
                     Some("attempt") => {
                         let f = c
                             .arguments
@@ -704,12 +716,36 @@ impl<'x, 'a> Se<'x, 'a> {
                             super::client_js_str(p)
                         )),
                         Serial::Cell(ii) => {
-                            let Item::Cell { get, .. } = &c.setup[*ii] else {
+                            // An adopted async memo: its settled value.
+                            if let Item::Memo { sym, .. } = &c.setup[*ii] {
+                                let n = self.m.sym_name(*sym);
+                                fields.push(format!(
+                                    "{}: {n}()",
+                                    super::client_js_str(&format!("${n}"))
+                                ));
+                                continue;
+                            }
+                            let Item::Cell { get, set, host, .. } = &c.setup[*ii] else {
                                 continue;
                             };
                             let n = self.m.sym_name(*get);
-                            fields
-                                .push(format!("{}: {n}()", super::client_js_str(&format!("${n}"))));
+                            // A store's getter is its value on the server;
+                            // only the keys its code touches are serialized.
+                            let v = if *host == CellHost::Store {
+                                match super::store_paths::store_keys(self.m, c, *get, *set) {
+                                    Some(keys) => format!(
+                                        "_$pick({n}, [{}])",
+                                        keys.iter()
+                                            .map(|k| super::client_js_str(k))
+                                            .collect::<Vec<_>>()
+                                            .join(", ")
+                                    ),
+                                    None => n.to_string(),
+                                }
+                            } else {
+                                format!("{n}()")
+                            };
+                            fields.push(format!("{}: {v}", super::client_js_str(&format!("${n}"))));
                         }
                     }
                 }

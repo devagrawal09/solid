@@ -158,6 +158,11 @@ struct Ce<'x, 'a> {
     uid: usize,
     helpers: BTreeSet<&'static str>,
     rt: BTreeSet<&'static str>,
+    /// Core-only runtime exports the chunk imports (tier 2: `name as $$name`).
+    core: BTreeSet<String>,
+    /// The group needs the full core (stores, async, optimistic writes,
+    /// actions, boundaries in live regions).
+    t2: bool,
     top_syms: BTreeSet<SymbolId>,
     templates: Vec<String>,
     settled: Vec<String>,
@@ -206,12 +211,31 @@ const HELPERS: &[(&str, &str)] = &[
     (
         "$list",
         // Keyed rows; `plain` rows create no reactive work, so they get no root.
-        "const $list = (e, each, row, plain) => { let rows = new Map(); const mk = plain ? (it, n) => ({ n: row(it, n) }) : (it, n) => $R(d => ({ n: row(it, n), d })); $E(each, (items, p) => { if (p === undefined) { let n = $start(e).nextSibling; for (const it of items) { while (n.nodeType !== 1) n = n.nextSibling; const r = mk(it, n); rows.set(it, r); n = r.n.nextSibling; } return; } const next = new Map(); for (const it of items) next.set(it, rows.get(it) || mk(it, null)); for (const [it, r] of rows) if (!next.has(it)) { r.d && r.d(); r.n.remove(); } let c = $start(e).nextSibling; for (const r of next.values()) { if (r.n === c) c = c.nextSibling; else e.parentNode.insertBefore(r.n, c); } rows = next; }); };",
+        // The input is copied in the compute (a store array tracks its items).
+        "const $list = (e, each, row, plain) => { let rows = new Map(); const mk = plain ? (it, n) => ({ n: row(it, n) }) : (it, n) => $R(d => ({ n: row(it, n), d })); $E(() => { const l = each(); return l ? Array.from(l) : []; }, (items, p) => { if (p === undefined) { let n = $start(e).nextSibling; for (const it of items) { while (n.nodeType !== 1) n = n.nextSibling; const r = mk(it, n); rows.set(it, r); n = r.n.nextSibling; } return; } const next = new Map(); for (const it of items) next.set(it, rows.get(it) || mk(it, null)); for (const [it, r] of rows) if (!next.has(it)) { r.d && r.d(); r.n.remove(); } let c = $start(e).nextSibling; for (const r of next.values()) { if (r.n === c) c = c.nextSibling; else e.parentNode.insertBefore(r.n, c); } rows = next; }); };",
     ),
     (
         "$cls",
         "const $cls = v => { if (!v || typeof v !== \"object\") return v == null || v === false ? \"\" : \"\" + v; const o = {}, f = l => { for (const x of l) Array.isArray(x) ? f(x) : x && typeof x === \"object\" ? Object.assign(o, x) : typeof x !== \"boolean\" && (x || x === 0) && (o[x] = 1); }; Array.isArray(v) ? f(v) : Object.assign(o, v); return Object.keys(o).filter(k => o[k]).join(\" \"); };",
     ),
+];
+
+/// Runtime exports only the full core has (tier 2), imported by name.
+pub(crate) const CORE_ONLY: &[&str] = &[
+    "createPlainStore",
+    "createStore",
+    "createOptimistic",
+    "createOptimisticStore",
+    "createProjection",
+    "action",
+    "refresh",
+    "reconcile",
+    "snapshot",
+    "isPending",
+    "latest",
+    "resolve",
+    "createErrorBoundary",
+    "createLoadingBoundary",
 ];
 
 fn helper_deps(h: &str) -> &'static [&'static str] {
@@ -273,6 +297,8 @@ pub(crate) fn emit_group<'a>(
         uid: 0,
         helpers: BTreeSet::new(),
         rt: BTreeSet::new(),
+        core: BTreeSet::new(),
+        t2: g.tier >= 2,
         top_syms: BTreeSet::new(),
         templates: Vec::new(),
         settled: Vec::new(),
@@ -298,6 +324,7 @@ struct CEnv<'e, 'x, 'a> {
 struct Uses {
     helpers: BTreeSet<&'static str>,
     rt: BTreeSet<&'static str>,
+    core: BTreeSet<String>,
     top: BTreeSet<SymbolId>,
     serial: Vec<Serial>,
 }
@@ -395,6 +422,19 @@ impl<'a> Env<'a> for CEnv<'_, '_, 'a> {
             Expression::CallExpression(c) => {
                 if let Some(n) = self.ce.m.runtime_name(&c.callee) {
                     match n {
+                        // A structural store read: the selector over the
+                        // (tracked) store proxy.
+                        "readStore" => {
+                            let (Some(store), Some(sel)) = (
+                                c.arguments.first().and_then(|a| a.as_expression()),
+                                c.arguments.get(1).and_then(|a| a.as_expression()),
+                            ) else {
+                                return Err("readStore without a store and a selector".into());
+                            };
+                            let st = tx.expr(self, store)?;
+                            let f = tx.expr(self, sel)?;
+                            return Ok(format!("({f})({st})"));
+                        }
                         "$cleanup" => {
                             self.uses.borrow_mut().rt.insert("onCleanup");
                             let args = self.args(tx, c)?;
@@ -403,6 +443,17 @@ impl<'a> Env<'a> for CEnv<'_, '_, 'a> {
                         "$flush" => {
                             self.uses.borrow_mut().rt.insert("flush");
                             return Ok("$F()".into());
+                        }
+                        // In an event (or an async memo's run): await the
+                        // work; a rejection throws at the `yield*`.
+                        "attempt" => {
+                            let f = c
+                                .arguments
+                                .first()
+                                .and_then(|a| a.as_expression())
+                                .ok_or("attempt without a function")?;
+                            let f = tx.expr(self, f)?;
+                            return Ok(format!("(await ({f})())"));
                         }
                         other => return Err(format!("`yield* {other}(…)` in client code")),
                     }
@@ -438,6 +489,10 @@ impl<'a> Env<'a> for CEnv<'_, '_, 'a> {
             if let Some((r, alias)) = mapped {
                 self.uses.borrow_mut().rt.insert(r);
                 return Some(alias.into());
+            }
+            if self.ce.t2 && CORE_ONLY.contains(&n.as_str()) {
+                self.uses.borrow_mut().core.insert(n.clone());
+                return Some(format!("$${n}"));
             }
             return Some(format!("__UNSUPPORTED_RUNTIME_{n}"));
         }
@@ -561,6 +616,67 @@ impl<'a> Env<'a> for EffEnv<'_, '_, '_, 'a> {
     }
 }
 
+/// An adopted async memo's first run: its `attempt` is the server's value.
+struct AdoptEnv<'e, 'c, 'x, 'a> {
+    inner: &'e CEnv<'c, 'x, 'a>,
+    value: String,
+}
+
+impl<'a> Env<'a> for AdoptEnv<'_, '_, '_, 'a> {
+    fn read(&self, tx: &Tx<'_, 'a>, arg: &'a Expression<'a>) -> R<String> {
+        if let Expression::CallExpression(c) = arg.without_parentheses()
+            && self.inner.ce.m.runtime_name(&c.callee) == Some("attempt")
+        {
+            return Ok(self.value.clone());
+        }
+        self.inner.read(tx, arg)
+    }
+    fn ident(&self, tx: &Tx<'_, 'a>, id: &IdentifierReference<'a>) -> Option<String> {
+        self.inner.ident(tx, id)
+    }
+    fn is_props(&self, tx: &Tx<'_, 'a>, e: &Expression<'a>) -> bool {
+        self.inner.is_props(tx, e)
+    }
+    fn props_member(&self, tx: &Tx<'_, 'a>, name: &str) -> R<Option<String>> {
+        self.inner.props_member(tx, name)
+    }
+    fn call(&self, tx: &Tx<'_, 'a>, c: &'a CallExpression<'a>) -> R<Option<String>> {
+        self.inner.call(tx, c)
+    }
+}
+
+/// An async memo whose value is its one `attempt`'s result: exactly one
+/// `attempt`, as the final `return yield* attempt(…)`.
+fn adoptable(body: FnRef<'_>) -> bool {
+    let stmts = body.statements();
+    let Some(Statement::ReturnStatement(r)) = stmts.last() else {
+        return false;
+    };
+    let Some(arg) = &r.argument else {
+        return false;
+    };
+    let is_attempt = super::model::yield_delegate(arg)
+        .and_then(call_of)
+        .is_some_and(|c| matches!(c.callee.without_parentheses(), Expression::Identifier(id) if id.name == "attempt"));
+    is_attempt && !stmts[..stmts.len() - 1].iter().any(|s| contains_attempt_call(s))
+}
+
+fn contains_attempt_call(s: &Statement<'_>) -> bool {
+    struct F(bool);
+    impl<'a> oxc_ast_visit::Visit<'a> for F {
+        fn visit_call_expression(&mut self, c: &CallExpression<'a>) {
+            if matches!(c.callee.without_parentheses(), Expression::Identifier(id) if id.name == "attempt")
+            {
+                self.0 = true;
+            }
+            oxc_ast_visit::walk::walk_call_expression(self, c);
+        }
+    }
+    let mut f = F(false);
+    oxc_ast_visit::Visit::visit_statement(&mut f, s);
+    f.0
+}
+
 impl<'a> CEnv<'_, '_, 'a> {
     fn args(&self, tx: &Tx<'_, 'a>, c: &'a CallExpression<'a>) -> R<String> {
         let mut out = Vec::new();
@@ -623,6 +739,7 @@ impl<'x, 'a> Ce<'x, 'a> {
         }
         self.helpers.extend(uses.helpers);
         self.rt.extend(uses.rt);
+        self.core.extend(uses.core);
         self.top_syms.extend(uses.top);
         for s in uses.serial {
             if !self.serial.contains(&s) {
@@ -733,6 +850,15 @@ impl<'x, 'a> Ce<'x, 'a> {
                     names.push(format!("{r} as {alias}"));
                 }
             }
+            if !self.core.is_empty() && !self.t2 {
+                return Err(format!(
+                    "core-only runtime ({}) in a tier-{tier} island",
+                    self.core.iter().cloned().collect::<Vec<_>>().join(", ")
+                ));
+            }
+            for n in &self.core {
+                names.push(format!("{n} as $${n}"));
+            }
             imports.push(format!(
                 "import {{ {} }} from {};",
                 names.join(", "),
@@ -766,7 +892,11 @@ impl<'x, 'a> Ce<'x, 'a> {
         let data = if serial.is_empty() {
             String::new()
         } else if self.element_anchor {
-            "const $d = JSON.parse($a.getAttribute(\"data-s\"));\n".to_string()
+            // The anchor carries every island rooted there, keyed by id.
+            format!(
+                "const $d = JSON.parse($a.getAttribute(\"data-s\"))[{}];\n",
+                js_str(&self.g.id)
+            )
         } else {
             return Err("serialized values on a comment anchor".into());
         };
@@ -1029,11 +1159,16 @@ impl<'x, 'a> Ce<'x, 'a> {
         // to later items (hoisted functions, events used by earlier locals).
         for (ii, item) in c.setup.iter().enumerate() {
             match item {
-                Item::Cell { get, set, .. } => {
+                Item::Cell { get, set, host, .. } => {
                     let gn = self.name_for(inst, *get);
-                    self.insts[inst]
-                        .names
-                        .insert(*get, (gn.clone(), if t0 { Kind::Cell0 } else { Kind::Acc }));
+                    let kind = if *host == CellHost::Store {
+                        Kind::Val
+                    } else if t0 {
+                        Kind::Cell0
+                    } else {
+                        Kind::Acc
+                    };
+                    self.insts[inst].names.insert(*get, (gn.clone(), kind));
                     if let Some(s) = set {
                         let sn = self.name_for(inst, *s);
                         self.insts[inst]
@@ -1093,7 +1228,7 @@ impl<'x, 'a> Ce<'x, 'a> {
                     label,
                     ..
                 } => {
-                    if *host != CellHost::Signal {
+                    if *host == CellHost::Optimistic || (*host == CellHost::Store && !self.t2) {
                         return Err("store / optimistic cell in a compiled island".into());
                     }
                     let gn = self.insts[inst].names[get].0.clone();
@@ -1129,7 +1264,11 @@ impl<'x, 'a> Ce<'x, 'a> {
                             Some(s) => format!("[{gn}, {}]", self.insts[inst].names[s].0),
                             None => format!("[{gn}]"),
                         };
-                        if let Some(l) = label {
+                        if *host == CellHost::Store {
+                            // A plain store (the core's; `$store` lowers to it).
+                            self.core.insert("createPlainStore".into());
+                            format!("const {pat} = $$createPlainStore({init_text});")
+                        } else if let Some(l) = label {
                             // Probe host (instrumented builds): keep the host call.
                             let callee = self.probe_callee(ii, comp)?;
                             self.top_syms.extend(callee.1);
@@ -1146,18 +1285,77 @@ impl<'x, 'a> Ce<'x, 'a> {
                     is_async,
                     ..
                 } => {
-                    if *is_async {
-                        return Err("async memo in a compiled island".into());
-                    }
                     if t0 {
                         return Err("memo at tier 0".into());
                     }
+                    if *is_async {
+                        // A live async memo (tier 2): adopted (P2). Its first
+                        // run subscribes to the reads before its `attempt`
+                        // and returns the server's settled value (from the
+                        // anchor) without running the attempt; later runs
+                        // are the async body.
+                        if !self.t2 {
+                            return Err("async memo below tier 2".into());
+                        }
+                        if !self.insts[inst].root {
+                            return Err(format!(
+                                "live async memo `{}` in a non-root island component",
+                                self.m.sym_name(*sym)
+                            ));
+                        }
+                        if !adoptable(*body) {
+                            return Err(format!(
+                                "async memo `{}` is not adoptable (its value must be the result of one final `return yield* attempt(…)`)",
+                                self.m.sym_name(*sym)
+                            ));
+                        }
+                        let key = js_str(&format!("${}", self.m.sym_name(*sym)));
+                        let s = Serial::Cell(ii);
+                        if !self.serial.contains(&s) {
+                            self.serial.push(s);
+                        }
+                        let adopt = {
+                            let tx = self.tx();
+                            let env = CEnv {
+                                ce: self,
+                                inst,
+                                extra: &none,
+                                uses: Default::default(),
+                            };
+                            let ad = AdoptEnv {
+                                inner: &env,
+                                value: format!("$d[{key}]"),
+                            };
+                            let r = tx.body(&ad, *body);
+                            let uses = env.uses.into_inner();
+                            r.map(|c| (c, uses))
+                        };
+                        let (adopt, uses) = adopt?;
+                        self.helpers.extend(uses.helpers);
+                        self.rt.extend(uses.rt);
+                        self.core.extend(uses.core);
+                        self.top_syms.extend(uses.top);
+                        let run = self.translate(inst, &none, |tx, env| tx.func(env, *body, true))?;
+                        self.rt.insert("createMemo");
+                        let v = self.fresh("$ad");
+                        let n = &self.insts[inst].names[sym].0;
+                        format!(
+                            "let {v} = 1; const {n} = $M(() => {v} ? ({v} = 0, (() => {adopt})()) : ({run})());"
+                        )
+                    } else {
                     self.rt.insert("createMemo");
                     let f = self.translate(inst, &none, |tx, env| tx.func(env, *body, false))?;
                     format!("const {} = $M({f});", self.insts[inst].names[sym].0)
+                    }
                 }
                 Item::Event { sym, body, .. } => {
-                    let f = self.translate(inst, &none, |tx, env| tx.func(env, *body, false))?;
+                    // A handler that `attempt`s async work suspends there: an
+                    // async function awaiting it (the driver's semantics).
+                    let asy = self.a.facts[comp].item_refs[ii]
+                        .calls
+                        .iter()
+                        .any(|c| c == "attempt");
+                    let f = self.translate(inst, &none, |tx, env| tx.func(env, *body, asy))?;
                     format!("const {} = {f};", self.insts[inst].names[sym].0)
                 }
                 Item::Effect { body, settled, .. } => {
@@ -1206,6 +1404,7 @@ impl<'x, 'a> Ce<'x, 'a> {
                     let (code, uses) = code?;
                     self.helpers.extend(uses.helpers);
                     self.rt.extend(uses.rt);
+                    self.core.extend(uses.core);
                     self.top_syms.extend(uses.top);
                     self.rt.insert("createEffect");
                     let body_inner = code

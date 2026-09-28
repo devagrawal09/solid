@@ -27,6 +27,7 @@ mod graph;
 mod jsx;
 mod model;
 mod server;
+mod store_paths;
 mod tx;
 
 use oxc_allocator::Allocator;
@@ -341,11 +342,11 @@ fn manifest(
         for s in &code.serial {
             match s {
                 client::Serial::Prop(p) => w.string(&format!("props.{p}")),
-                client::Serial::Cell(ii) => {
-                    if let model::Item::Cell { name, .. } = &m.comps[g.root].setup[*ii] {
-                        w.string(&format!("cell {name}"));
-                    }
-                }
+                client::Serial::Cell(ii) => match &m.comps[g.root].setup[*ii] {
+                    model::Item::Cell { name, .. } => w.string(&format!("cell {name}")),
+                    model::Item::Memo { name, .. } => w.string(&format!("memo {name}")),
+                    _ => {}
+                },
             }
         }
         w.end_array();

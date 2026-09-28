@@ -144,7 +144,7 @@ export const App = $component(function* () {
 }
 
 #[test]
-fn a_store_needs_tier2_and_falls_back() {
+fn a_store_island_is_tier2_on_the_cores_plain_store() {
     let out = run(r#"
 import { $component, $event, $store } from "solid-js";
 export const App = $component(function* () {
@@ -153,10 +153,48 @@ export const App = $component(function* () {
   return function* () { return <button onClick={inc}>{yield* s.n}</button>; };
 });
 "#);
-    let reason = out.fallback.expect("falls back");
-    assert!(reason.contains("tier 2"), "{reason}");
-    assert!(out.client.is_some());
-    assert!(out.server.contains("ssr"), "{}", out.server);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains(r#""tier":2"#), "{m}");
+    assert!(m.contains("store `s` (the kernel has no stores)"), "{m}");
+    let chunk = &out.chunks[0].code;
+    assert!(chunk.contains(r#"from "@solidjs/signals""#), "{chunk}");
+    // Rebuilt from its constant: nothing serialized.
+    assert!(chunk.contains("$$createPlainStore({ n: 1 })"), "{chunk}");
+    assert!(!out.server.contains("data-s"), "{}", out.server);
+}
+
+#[test]
+fn a_store_from_server_data_serializes_only_the_keys_its_code_touches() {
+    let out = run(r#"
+import { $component, $event, $store, readStore } from "solid-js";
+export const App = $component(function* (props) {
+  const [s, setS] = yield* $store({ items: yield* props.items, label: yield* props.label, big: yield* props.big });
+  const add = $event(function* () { setS(d => { d.items.push(1); }); });
+  return function* () {
+    return <p onClick={add}>{yield* s.label}: {yield* readStore(s, x => x.items.length)}</p>;
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    assert!(
+        out.server
+            .contains(r#""$s": _$pick(s, ["items", "label"])"#),
+        "{}",
+        out.server
+    );
+    let chunk = &out.chunks[0].code;
+    assert!(chunk.contains(r#"$$createPlainStore($d["$s"])"#), "{chunk}");
+    // The same store used as a value serializes whole.
+    let out = run(r#"
+import { $component, $event, $store } from "solid-js";
+export const App = $component(function* (props) {
+  const [s, setS] = yield* $store({ a: yield* props.a, b: 1 });
+  const log = $event(function* () { console.log(s); setS(d => { d.b++; }); });
+  return function* () { return <p onClick={log}>{yield* s.b}</p>; };
+});
+"#);
+    assert!(out.server.contains(r#""$s": s }"#), "{}", out.server);
 }
 
 #[test]
@@ -437,9 +475,8 @@ export const Page = $component(function* () {
 }
 
 #[test]
-fn an_async_memo_read_by_a_live_island_needs_tier2() {
-    let reason = fallback_of(
-        r#"
+fn a_live_async_memo_is_tier2_and_adopts_the_server_value() {
+    let out = run(r#"
 import { $component, $event, $memo, $signal, attempt } from "solid-js";
 export const App = $component(function* () {
   const [id, setId] = yield* $signal(1);
@@ -447,12 +484,46 @@ export const App = $component(function* () {
   const next = $event(function* () { setId(x => x + 1); });
   return function* () { return <p onClick={next}>{(yield* user).name}</p>; };
 });
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains("async memo `user`") && m.contains(r#""tier":2"#), "{m}");
+    assert!(m.contains(r#""serialized":["memo user"]"#), "{m}");
+    // The server serializes the settled value; the client's first run reads
+    // `id` (subscribing) and returns it without calling `load`.
+    assert!(out.server.contains(r#""$user": user()"#), "{}", out.server);
+    let chunk = &out.chunks[0].code;
+    assert!(chunk.contains(r#"return $d["$user"];"#), "{chunk}");
+    assert!(chunk.contains("(await (() => load(i))())"), "{chunk}");
+    // A memo whose value is not its one attempt's result is refused.
+    let reason = fallback_of(
+        r#"
+import { $component, $event, $memo, $signal, attempt } from "solid-js";
+export const App = $component(function* () {
+  const [id, setId] = yield* $signal(1);
+  const user = yield* $memo(function* () { const u = yield* attempt(() => load(yield* id)); return u.name; });
+  const next = $event(function* () { setId(x => x + 1); });
+  return function* () { return <p onClick={next}>{yield* user}</p>; };
+});
 "#,
     );
-    assert!(
-        reason.contains("tier 2") && reason.contains("async memo"),
-        "{reason}"
-    );
+    assert!(reason.contains("not adoptable"), "{reason}");
+}
+
+#[test]
+fn an_event_that_attempts_async_work_is_an_async_handler() {
+    let out = run(r#"
+import { $component, $event, $signal, attempt } from "solid-js";
+export const App = $component(function* () {
+  const [n, setN] = yield* $signal(0);
+  const save = $event(function* () { const r = yield* attempt(() => fetch("/n")); setN(r.status); });
+  return function* () { return <p onClick={save}>{yield* n}</p>; };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let chunk = &out.chunks[0].code;
+    assert!(chunk.contains("const save = async () => {"), "{chunk}");
+    assert!(chunk.contains(r#"(await (() => fetch("/n"))())"#), "{chunk}");
 }
 
 #[test]
@@ -584,7 +655,7 @@ export const App = $component(function* (props) {
     assert!(
         out.chunks[0]
             .code
-            .contains(r#"const $d = JSON.parse($a.getAttribute("data-s"))"#),
+            .contains(r#"const $d = JSON.parse($a.getAttribute("data-s"))["i0"]"#),
         "{}",
         out.chunks[0].code
     );

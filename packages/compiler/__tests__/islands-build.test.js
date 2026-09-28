@@ -48,15 +48,15 @@ describe("compileIslands", () => {
 
   test("a module the compiler cannot compile falls back to the hydratable outputs", () => {
     const out = compileIslands(
-      `import { $component, $store, $event } from "solid-js";
+      `import { $component, $signal, $event } from "solid-js";
 export const App = $component(function* () {
-  const [s, set] = yield* $store({ n: 0 });
-  const inc = $event(function* () { set(x => { x.n++; }); });
-  return function* () { return <button onClick={inc}>{yield* s.n}</button>; };
+  const [on, set] = yield* $signal(false);
+  const flip = $event(function* () { set(x => !x); });
+  return function* () { return <button onClick={flip}>{(yield* on) ? <b>on</b> : <i>off</i>}</button>; };
 });`,
       { filename: "app.tsx" }
     );
-    expect(out.fallback).toMatch(/tier 2: store/);
+    expect(out.fallback).toMatch(/live expression producing JSX/);
     expect(out.manifest.fallback).toBe(out.fallback);
     expect(out.client).toContain("getNextElement");
     expect(out.chunks).toEqual([]);
