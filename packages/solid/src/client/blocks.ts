@@ -13,16 +13,11 @@ import {
   $settled as signals$settled,
   $signal as signals$signal,
   $store as signals$store,
+  createPlainStore,
   effectBlock as signalsEffectBlock,
   settledBlock as signalsSettledBlock
 } from "@solidjs/signals";
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  createStore,
-  useBlockPrimitive
-} from "./hydration.js";
+import { createEffect, createMemo, createSignal, useBlockPrimitive } from "./hydration.js";
 
 export const $signal: typeof signals$signal = ((...args: [any, any?]) => {
   useBlockPrimitive(1, { createSignal });
@@ -30,7 +25,9 @@ export const $signal: typeof signals$signal = ((...args: [any, any?]) => {
 }) as typeof signals$signal;
 
 export const $store: typeof signals$store = ((...args: [any, any?]) => {
-  useBlockPrimitive(4, { createStore });
+  // `$store(value)` is the plain form, which has no hydration adapter: the
+  // plain store alone keeps projection / reconcile out of the bundle.
+  useBlockPrimitive(4, { createStore: createPlainStore });
   return (signals$store as any)(...args);
 }) as typeof signals$store;
 

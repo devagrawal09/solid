@@ -137,6 +137,10 @@ pub struct CompileOptions {
     /// Experimental: store scalar replacement (see `store_scalars.rs`).
     /// Runs first, on the authored program. Default `false`.
     pub store_scalars: bool,
+    /// Rewrite `createStore` calls whose first argument settles the form to
+    /// `createPlainStore` / `createDerivedStore`, so plain-only apps shed the
+    /// projection machinery (see `store_forms.rs`). Default `true`.
+    pub store_forms: bool,
     /// Linker facts for `store_handles`: `(import source, exported
     /// component, verified Borrowed prop)` triples.
     pub store_link_facts: Vec<crate::store_handles::LinkFact>,
@@ -177,6 +181,7 @@ impl Default for CompileOptions {
             sync_actions: false,
             memo_fusion: false,
             store_scalars: false,
+            store_forms: true,
             store_link_facts: Vec::new(),
         }
     }
@@ -379,6 +384,12 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
     // lowered path reads skips the typed-props proxy (`PROPS_COMPILED`).
     if options.generators {
         crate::blocks_v2::mark_compiled_props(&allocator, &mut program);
+    }
+
+    // Plain / derived `createStore` forms decided at compile time (every
+    // generate: the server exports both single-form constructors too).
+    if options.store_forms {
+        crate::store_forms::transform_store_forms(&allocator, &mut program);
     }
 
     // Experimental: single-reader memos inlined into their reader, on every

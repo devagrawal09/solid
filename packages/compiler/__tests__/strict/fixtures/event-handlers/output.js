@@ -3,12 +3,12 @@ import { insert as _$insert } from "@solidjs/web";
 import { effect as _$effect } from "@solidjs/web";
 import { delegateEvents as _$delegateEvents } from "@solidjs/web";
 var _tmpl$ = /* @__PURE__ */ _$template(`<form><input><button type=button></button><button type=button>again`);
-import { $, createSignal, createStore } from "solid-js";
+import { $, createSignal, createStore, createPlainStore as _$createPlainStore } from "solid-js";
 export function Form(props: {
 	onSaved: (id: string) => void;
 }) {
 	const [count, setCount] = createSignal(0);
-	const [store, setStore] = createStore({
+	const [store, setStore] = _$createPlainStore({
 		draft: "",
 		saved: [] as string[]
 	});

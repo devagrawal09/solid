@@ -105,6 +105,18 @@ pub fn summarize_capabilities(
         .map_err(|error| Error::from_reason(error.to_string()))
 }
 
+/// Core runtime slicing: one module's facts about its COMPILED output
+/// (JSON) for the linker's feature proof. See `compiled_facts.rs`.
+#[napi]
+pub fn summarize_compiled(
+    code: String,
+    options: Option<ProjectBlocksForTypecheckOptions>,
+) -> Result<String> {
+    let options = options.unwrap_or_default();
+    crate::compiled_facts::summarize_compiled(&code, options.filename.as_deref())
+        .map_err(|error| Error::from_reason(error.to_string()))
+}
+
 #[napi(object)]
 #[derive(Default)]
 pub struct CompileResumableOptions {
@@ -457,6 +469,7 @@ fn core_options(options: TransformOptions) -> Result<CompileOptions> {
         sync_actions: options.sync_actions.unwrap_or(false),
         memo_fusion: options.memo_fusion.unwrap_or(false),
         store_scalars: options.store_scalars.unwrap_or(false),
+        store_forms: options.store_forms.unwrap_or(true),
         store_link_facts: options
             .store_link_facts
             .unwrap_or_default()

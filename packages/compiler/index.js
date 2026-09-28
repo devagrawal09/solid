@@ -71,6 +71,20 @@ function summarizeCapabilities(code, options) {
 }
 
 /**
+ * Core runtime slicing: facts about one module's COMPILED output (runtime
+ * names it references, creation kinds, store reads, residual generators and
+ * their `yield*` delegations, compiled seams) for the capability linker's
+ * feature proof (see src/compiled_facts.rs).
+ */
+function summarizeCompiled(code, options) {
+  if (typeof code !== "string") {
+    throw new TypeError("@solidjs/compiler summarizeCompiled() expects source code as a string");
+  }
+  const nativeOptions = validateTypecheckProjectionOptions(options);
+  return JSON.parse(native.summarizeCompiled(code, nativeOptions));
+}
+
+/**
  * Stage 3 (F): one module's island summary — cells, per-function reads /
  * writes / calls, JSX handlers — for the island linker
  * (`@solidjs/compiler/islands`).
@@ -382,7 +396,8 @@ const nativeOptionKeys = new Set([
   "storeHandles",
   "syncActions",
   "memoFusion",
-  "storeScalars"
+  "storeScalars",
+  "storeForms"
 ]);
 
 function validateOptions(code, options) {
@@ -589,6 +604,7 @@ module.exports = {
   projectBlocksForTypecheck,
   analyzeStrictBlocks,
   summarizeCapabilities,
+  summarizeCompiled,
   summarizeIslands,
   compileIslands,
   compileResumable,

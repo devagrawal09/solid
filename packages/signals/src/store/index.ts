@@ -64,6 +64,41 @@ export function createStore(first: any, second?: any, third?: any): any {
   return createStoreNext(first, !!second?.shallow);
 }
 
+/**
+ * The plain form of `createStore` alone: `createPlainStore(value, options?)`
+ * is `createStore(value, options?)`. The compiler rewrites a `createStore`
+ * call whose first argument is statically not a function to this export, so
+ * a bundle that never derives a store sheds the projection and reconcile
+ * machinery the derived overload statically couples
+ * (documentation/plans/core-runtime-slicing.md, coupling 3).
+ */
+export function createPlainStore<T extends object = {}>(
+  initialValue: NoFn<T> | Store<NoFn<T>>,
+  options?: StoreOptions
+): [get: Store<T>, set: StoreSetter<T>] {
+  return createStoreNext(initialValue as any, !!options?.shallow) as any;
+}
+
+/**
+ * The derived form of `createStore` alone: `createDerivedStore(fn, seed,
+ * options?)` is `createStore(fn, seed, options?)` (a projection store with
+ * its setter). The compiler's target for a `createStore` call whose first
+ * argument is a function or a block.
+ */
+export function createDerivedStore<T extends object, B extends ProjectionBlock<T>>(
+  fn: B & ProjectionBlock<T>,
+  seed: Partial<T> | Store<NoFn<T>>,
+  options?: ProjectionOptions
+): BlockStoreReturn<B, T>;
+export function createDerivedStore<T extends object = {}>(
+  fn: ((draft: T) => void | T | Promise<void | T> | AsyncIterable<void | T>) & ReactiveHostBlock,
+  seed: Partial<T> | Store<NoFn<T>>,
+  options?: ProjectionOptions
+): [get: Refreshable<Store<T>>, set: StoreSetter<T>];
+export function createDerivedStore(fn: any, seed: any, options?: any): any {
+  return createStoreDerivedNext(fn, seed, options);
+}
+
 export function reconcile<T extends U, U>(
   value: T,
   key: string | ((item: NonNullable<any>) => any) | null = "id"

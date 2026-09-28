@@ -65,6 +65,8 @@ export {
   createRoot,
   createSignal,
   createStore,
+  createPlainStore,
+  createDerivedStore,
   createTrackedEffect,
   deep,
   flatten,

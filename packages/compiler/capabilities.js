@@ -34,7 +34,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { summarizeCapabilities } = require("./index.js");
+const { summarizeCapabilities, summarizeCompiled } = require("./index.js");
 
 const RUNTIME_PACKAGE = "@solidjs/signals";
 const SOURCE_RE = /\.[cm]?[jt]sx?$/;
@@ -45,6 +45,30 @@ const ASSET_RE =
 function stripQuery(id) {
   const q = id.search(/[?#]/);
   return q === -1 ? id : id.slice(0, q);
+}
+
+/** A module the bundler makes up: `\0`-prefixed, or not a file on disk. */
+function isVirtual(id) {
+  if (id.startsWith("\0")) return true;
+  const file = stripQuery(id);
+  return !path.isAbsolute(file) || !fs.existsSync(file);
+}
+
+/** How a module is named in reports: root-relative files, virtual ids as is. */
+function displayId(root, id) {
+  return isVirtual(id) ? id.replace(/^\0/, "") : path.relative(root, id);
+}
+
+/** A parser-friendly filename for a virtual module's summary. */
+function virtualFilename(id) {
+  const clean = stripQuery(id).replace(/^\0/, "");
+  return SOURCE_RE.test(clean) ? clean : `${clean}.js`;
+}
+
+/** The module's own dialect: transformed code is usually plain ES, which
+ * every dialect parses (`summarizeCompiled` falls back to plain ES). */
+function compiledFilename(id) {
+  return virtualFilename(id);
 }
 
 const packageCache = new Map();
@@ -105,6 +129,11 @@ function typedVerdict(typedSummary, file, kind, start) {
  * @param {(file: string) => string} [options.readFile]
  * @param {object} [options.typedSummary] `solid-tsc --capabilities` output
  * @param {string} options.root project root (application modules live under it)
+ * @param {(id: string) => Promise<string | null>} [options.load] the bundler's
+ *   transformed code of a module (Rollup's `this.load`). With it, modules
+ *   that are not files (virtual entries) are summarized from their code, and
+ *   the feature proof reads every application module's COMPILED output
+ *   (`summarizeCompiled`) instead of its authored imports.
  * @returns {Promise<object>} the report: `asyncFree`, `entry`, `reasons`, and
  *   the retained graph (`modules`, `libraries`, counts)
  */
@@ -114,7 +143,8 @@ async function proveGraph({
   readFile = f => fs.readFileSync(f, "utf8"),
   typedSummary,
   root,
-  compiledSeams = true
+  compiledSeams = true,
+  load
 }) {
   const reasons = [];
   // `kind`: "async" — a fact about the graph's async use; "graph" — the graph
@@ -143,10 +173,19 @@ async function proveGraph({
   const seen = new Set();
   const queue = [...entries];
   const yieldStar = [];
+  // Per application module: its id, the library names its authored source
+  // imports, and whether it has a `yield*` (the feature proof's fallback for
+  // a module without compiled facts).
+  const appModules = new Map();
 
   const useLibrary = (pkg, names, file, line) => {
     let entry = libraries.get(pkg.name);
     if (!entry) libraries.set(pkg.name, (entry = { manifest: pkg.manifest, names: new Set() }));
+    const own = appModules.get(file)?.libraries;
+    if (own) {
+      if (!own.has(pkg.name)) own.set(pkg.name, { manifest: pkg.manifest, names: new Set() });
+      for (const name of names) own.get(pkg.name).names.add(name);
+    }
     for (const name of names) {
       entry.names.add(name);
       if (name === "*" && pkg.manifest.asyncExports.length)
@@ -164,8 +203,12 @@ async function proveGraph({
       gap(file, line, `unresolved import \`${source}\``);
       return;
     }
-    if (resolved.startsWith("\0")) {
-      gap(file, line, `virtual module \`${source}\` has no summary`);
+    if (isVirtual(resolved)) {
+      // A module the bundler makes up (a generated entry, a helper): with the
+      // bundler's loader it is summarized from its code like any app module.
+      if (load) {
+        if (!seen.has(resolved)) queue.push(resolved);
+      } else gap(file, line, `virtual module \`${source}\` has no summary`);
       return;
     }
     const id = stripQuery(resolved);
@@ -192,19 +235,32 @@ async function proveGraph({
     const file = queue.shift();
     if (seen.has(file)) continue;
     seen.add(file);
-    if (!SOURCE_RE.test(file)) {
+    const virtual = isVirtual(file);
+    if (virtual && !load) {
+      // An entry the bundler generates; only its loader has its code.
+      gap(file, null, `virtual module \`${displayId(root, file)}\` has no summary`);
+      continue;
+    }
+    if (!virtual && !SOURCE_RE.test(file)) {
       if (ASSET_RE.test(file)) counts.assets++;
       else gap(file, null, "not a JavaScript / TypeScript module");
       continue;
     }
-    app.push(path.relative(root, file));
+    const rel = displayId(root, file);
+    app.push(rel);
+    const record = { id: file, rel, libraries: new Map(), yieldStar: false };
+    appModules.set(file, record);
     let summary;
     try {
-      const source = readFile(file);
+      const source = virtual ? await load(file) : readFile(file);
+      if (source == null) throw new Error("the bundler has no code for it");
       // A hand-written `yield*` may iterate an accessor (AccessorIterable)
       // without importing any block API: the ITERABLE switch stays on.
-      if (/yield\s*\*/.test(source)) yieldStar.push(path.relative(root, file));
-      summary = summarizeCapabilities(source, { filename: file });
+      if (/yield\s*\*/.test(source)) {
+        yieldStar.push(rel);
+        record.yieldStar = true;
+      }
+      summary = summarizeCapabilities(source, { filename: virtualFilename(file) });
     } catch (error) {
       gap(file, null, `no summary: ${String(error.message ?? error).split("\n")[0]}`);
       continue;
@@ -285,18 +341,86 @@ async function proveGraph({
   if (!runtimeManifest?.asyncFreeEntry)
     reason(null, null, `${RUNTIME_PACKAGE} ships no async-free entry`);
 
+  // Compiled facts: what each application module's output — the code the
+  // bundle includes — references, creates and leaves to the driver.
+  let facts = null;
+  const factGaps = [];
+  if (load) {
+    facts = {
+      modules: 0,
+      withFacts: 0,
+      residualGenerators: [],
+      delegations: 0,
+      seams: [],
+      creates: {},
+      storeReads: 0
+    };
+    for (const record of appModules.values()) {
+      facts.modules++;
+      let compiled;
+      try {
+        const code = await load(record.id);
+        if (code == null) continue;
+        compiled = summarizeCompiled(code, { filename: compiledFilename(record.id) });
+      } catch {
+        continue;
+      }
+      const used = new Map();
+      for (const use of compiled.uses) {
+        const resolved = await resolve(use.source, record.id);
+        if (!resolved) {
+          factGaps.push(`${record.rel}: compiled output imports unresolved \`${use.source}\``);
+          continue;
+        }
+        if (isVirtual(resolved) || ASSET_RE.test(stripQuery(resolved))) continue;
+        const id = stripQuery(resolved);
+        const pkg = packageOf(id);
+        const inApp =
+          !path.relative(root, id).startsWith("..") &&
+          !id.includes(`${path.sep}node_modules${path.sep}`);
+        if (pkg?.manifest && !(inApp && pkg.dir === root)) {
+          if (!used.has(pkg.name)) used.set(pkg.name, { manifest: pkg.manifest, names: new Set() });
+          for (const name of use.names) used.get(pkg.name).names.add(name);
+        } else if (!inApp) {
+          factGaps.push(
+            `${record.rel}: compiled output imports \`${use.source}\` (${pkg?.name ?? id}), which has no capability manifest`
+          );
+        }
+      }
+      record.facts = {
+        libraries: used,
+        delegations: compiled.delegations,
+        residualGenerators: compiled.residualGenerators,
+        seams: compiled.seams
+      };
+      facts.withFacts++;
+      facts.delegations += compiled.delegations;
+      facts.storeReads += compiled.storeReads;
+      for (const g of compiled.residualGenerators)
+        facts.residualGenerators.push({ file: record.rel, ...g });
+      for (const seam of compiled.seams) if (!facts.seams.includes(seam)) facts.seams.push(seam);
+      for (const [kind, n] of Object.entries(compiled.creates))
+        facts.creates[kind] = (facts.creates[kind] ?? 0) + n;
+    }
+  }
+
   const features = proveFeatures({
     libraries,
-    complete: !reasons.some(r => r.kind === "graph"),
+    complete: !reasons.some(r => r.kind === "graph") && factGaps.length === 0,
     compiledSeams,
-    yieldStar
+    yieldStar,
+    modules: load ? [...appModules.values()] : undefined
   });
+  if (factGaps.length)
+    for (const f of FEATURE_SWITCHES)
+      if (features[f].because.length < 8) features[f].because.push(factGaps[0]);
 
   return {
     asyncFree: reasons.length === 0,
     entry: reasons.length === 0 ? runtimeManifest.asyncFreeEntry : null,
     reasons,
     features,
+    facts,
     modules: app,
     libraries: Object.fromEntries(
       [...libraries].map(([name, { names }]) => [name, [...names].sort()])
@@ -328,10 +452,46 @@ const FEATURE_SWITCHES = [
   "COMPILED_SEAMS"
 ];
 
+// The store / path readers the compiler emits for lowered path reads
+// (`yield* props.todo.title` → `readPath2(props, "todo", "title")`): they
+// read through whatever they are given, and a store read needs a store that
+// some module created — a creation is what keeps STORES on. Exempt only when
+// the module's compiled output is known.
+const STORE_READERS = new Set([
+  "readStore",
+  "readPath",
+  "readPath1",
+  "readPath2",
+  "readPath3",
+  "readPath4",
+  "readPathN",
+  "readHandle1",
+  "readHandle2",
+  "readHandle3",
+  "readHandle4",
+  "readHandleN",
+  "readHandleChild",
+  "readBorrowed",
+  "markHandle"
+]);
+
 /**
+ * @param {object} options
+ * @param {Map} options.libraries library names the graph's authored sources import
+ * @param {boolean} options.complete the graph is fully known
+ * @param {boolean} options.compiledSeams the build may emit compiled seams
+ *   (the fallback when a module's compiled output is unknown)
+ * @param {string[]} [options.yieldStar] app modules whose source has `yield*`
+ * @param {object[]} [options.modules] per application module: `rel`,
+ *   `libraries` (authored imports), `yieldStar`, and `facts` (from its
+ *   compiled output: `libraries`, `delegations`, `residualGenerators`,
+ *   `seams`) when known. With it, a module with facts is judged by its
+ *   compiled output — ITERABLE by residual `yield*`, COMPILED_SEAMS by the
+ *   seams it requests, the import-decided switches by the names it
+ *   references — and one without by its authored imports, as before.
  * @returns {Record<string, { on: boolean, because: string[] }>}
  */
-function proveFeatures({ libraries, complete, compiledSeams, yieldStar = [] }) {
+function proveFeatures({ libraries, complete, compiledSeams, yieldStar = [], modules }) {
   const out = {};
   for (const feature of FEATURE_SWITCHES) out[feature] = { on: false, because: [] };
   const use = (feature, why) => {
@@ -339,23 +499,61 @@ function proveFeatures({ libraries, complete, compiledSeams, yieldStar = [] }) {
     if (out[feature].because.length < 8) out[feature].because.push(why);
   };
   if (!complete) for (const f of FEATURE_SWITCHES) use(f, "module graph not fully known");
-  for (const [pkg, { manifest, names }] of libraries) {
-    const featureExports = manifest?.featureExports;
-    if (!featureExports) {
-      // A manifest without feature facts says nothing about features.
-      for (const f of FEATURE_SWITCHES) use(f, `${pkg} declares no featureExports`);
-      continue;
+  const useLibraries = (libs, { compiled, where = "" }) => {
+    for (const [pkg, { manifest, names }] of libs) {
+      const featureExports = manifest?.featureExports;
+      if (!featureExports) {
+        // A manifest without feature facts says nothing about features.
+        for (const f of FEATURE_SWITCHES) use(f, `${pkg} declares no featureExports`);
+        continue;
+      }
+      for (const [feature, exportsOf] of Object.entries(featureExports)) {
+        if (!out[feature]) continue;
+        // Compiled output answers ITERABLE by its residual `yield*`, not by
+        // the block API names lowering leaves behind.
+        if (compiled && feature === "ITERABLE") continue;
+        for (const name of names) {
+          if (compiled && feature === "STORES" && STORE_READERS.has(name)) continue;
+          if (name === "*" ? exportsOf.length > 0 : exportsOf.includes(name))
+            use(
+              feature,
+              name === "*" ? `namespace import of ${pkg}${where}` : `${pkg}: ${name}${where}`
+            );
+        }
+      }
     }
-    for (const [feature, exportsOf] of Object.entries(featureExports)) {
-      if (!out[feature]) continue;
-      for (const name of names)
-        if (name === "*" ? exportsOf.length > 0 : exportsOf.includes(name))
-          use(feature, name === "*" ? `namespace import of ${pkg}` : `${pkg}: ${name}`);
+  };
+  if (!modules) {
+    useLibraries(libraries, { compiled: false });
+    for (const file of yieldStar) use("ITERABLE", `${file} uses yield*`);
+    if (compiledSeams)
+      use("COMPILED_SEAMS", "compiler passes may emit noThrow / equals / statusFree");
+  } else {
+    let unknownOutput = false;
+    for (const m of modules) {
+      if (m.facts) {
+        useLibraries(m.facts.libraries, { compiled: true, where: ` (${m.rel})` });
+        if (m.facts.delegations > 0) {
+          const at = m.facts.residualGenerators.find(g => g.delegations > 0);
+          use(
+            "ITERABLE",
+            `${m.rel}${at ? `:${at.line}` : ""}: ${m.facts.delegations} yield* left in compiled output`
+          );
+        }
+        for (const seam of m.facts.seams)
+          use("COMPILED_SEAMS", `${m.rel}: compiled output requests ${seam}`);
+      } else {
+        unknownOutput = true;
+        useLibraries(m.libraries, { compiled: false, where: ` (${m.rel})` });
+        if (m.yieldStar) use("ITERABLE", `${m.rel} uses yield*`);
+      }
     }
+    if (unknownOutput && compiledSeams)
+      use(
+        "COMPILED_SEAMS",
+        "a module's compiled output is unknown; compiler passes may emit seams"
+      );
   }
-  for (const file of yieldStar) use("ITERABLE", `${file} uses yield*`);
-  if (compiledSeams)
-    use("COMPILED_SEAMS", "compiler passes may emit noThrow / equals / statusFree");
   if (out.VERDICTS.on) use("OPTIMISTIC", "VERDICTS (companions are optimistic nodes)");
   return out;
 }
@@ -387,13 +585,47 @@ function featuresModuleSource(features, tier) {
  *   turned off in the @solidjs/signals tree the build resolves
  * @param {boolean} [options.compiledSeams] whether the compiler passes of
  *   this build may emit status-free / effect-equals seams (default true; pass
- *   false only when blockProofs, host fusion and memo fusion are all off)
+ *   false only when blockProofs, host fusion and memo fusion are all off).
+ *   Only consulted for a module whose compiled output is unknown.
+ * @param {boolean} [options.compiledFacts] prove the feature switches from
+ *   each application module's compiled output (build only; default true):
+ *   ITERABLE by residual `yield*`, COMPILED_SEAMS by the seams the output
+ *   requests, the other switches by the runtime names it references. Off:
+ *   the authored imports decide, as before.
  */
 function solidCapabilities(options = {}) {
   let config;
   let decision = null;
+  // The proof inputs, fixed in buildStart and reused by the feature proof.
+  let proofInputs = null;
+  // The feature proof over compiled output (build only), run once per build
+  // when the runtime's features module is first resolved.
+  let featureDecision = null;
   const featureSlicing = options.features !== false;
   const FEATURES_ID = "\0solid-features:";
+  let isBuild = false;
+  const writeReport = root => {
+    if (!options.report || !decision) return;
+    const file = path.resolve(root, options.report);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(decision, null, 2));
+  };
+  const logFeatures = () => {
+    if (!featureSlicing || !decision?.features) return;
+    const off = FEATURE_SWITCHES.filter(f => !decision.features[f].on);
+    const facts = decision.facts
+      ? ` (compiled facts for ${decision.facts.withFacts}/${decision.facts.modules} modules)`
+      : "";
+    config?.logger?.info?.(
+      `[solid:capabilities] ${decision.graph} runtime slice${facts}: ${off.length ? `switched off ${off.join(", ")}` : "every feature switch stays on"}`
+    );
+  };
+  // Resolution for the proof: skip this plugin (its own resolveId awaits
+  // the proof).
+  const resolverOf = ctx => async (source, importer) => {
+    const resolved = await ctx.resolve(source, importer, { skipSelf: true });
+    return resolved && !resolved.external ? resolved.id : null;
+  };
   return {
     name: "solid:capabilities",
     enforce: "pre",
@@ -404,8 +636,10 @@ function solidCapabilities(options = {}) {
     },
     configResolved(resolved) {
       config = resolved;
+      isBuild = resolved.command === "build" && !process.env.VITEST;
     },
     async buildStart(input) {
+      featureDecision = null;
       const root = config?.root ?? process.cwd();
       // The build input when it names entries (client HTML / JS inputs, an
       // SSR entry); `options.entries` when it does not (vitest).
@@ -416,14 +650,25 @@ function solidCapabilities(options = {}) {
             ? input.input
             : Object.values(input?.input ?? {});
       const inputs = named.length ? named : (options.entries ?? []);
-      const entries = inputs
-        .map(entry => path.resolve(root, entry))
-        .flatMap(entry => (/\.html?$/.test(entry) ? htmlEntries(entry, root) : [entry]));
+      const entries = [];
+      for (const entry of inputs) {
+        const file = path.resolve(root, entry);
+        if (/\.html?$/.test(file)) entries.push(...htmlEntries(file, root));
+        else if (fs.existsSync(file)) entries.push(file);
+        else {
+          // A generated entry (`virtual:…`): its resolved id. The async
+          // proof reports it as unsummarized; the feature proof (build)
+          // loads it through the bundler.
+          const resolved = await this.resolve(entry, undefined, { skipSelf: true });
+          entries.push(resolved && !resolved.external ? resolved.id : file);
+        }
+      }
       let typedSummary = options.typedSummary;
       if (typeof typedSummary === "string") {
         const file = path.resolve(root, typedSummary);
         typedSummary = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : undefined;
       }
+      proofInputs = { entries, root, typedSummary };
       if (!entries.length) {
         decision = { asyncFree: false, entry: null, reasons: [{ reason: "no entry modules" }] };
       } else {
@@ -432,28 +677,20 @@ function solidCapabilities(options = {}) {
           root,
           typedSummary,
           compiledSeams: options.compiledSeams !== false,
-          resolve: async (source, importer) => {
-            const resolved = await this.resolve(source, importer, { skipSelf: true });
-            return resolved && !resolved.external ? resolved.id : null;
-          }
+          resolve: resolverOf(this)
         });
       }
-      decision.graph = config?.build?.ssr ? "server" : "client";
-      if (options.report) {
-        const file = path.resolve(root, options.report);
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.writeFileSync(file, JSON.stringify(decision, null, 2));
-      }
+      decision.graph =
+        this.environment?.config?.consumer === "server" || config?.build?.ssr ? "server" : "client";
+      writeReport(root);
       const summary = decision.asyncFree
         ? `async-free ${decision.graph} graph (${decision.modules.length} modules): ${RUNTIME_PACKAGE} → ${decision.entry}`
         : `${decision.graph} graph keeps the full runtime (${decision.reasons.length} reason${decision.reasons.length === 1 ? "" : "s"}; first: ${decision.reasons[0]?.reason})`;
       config?.logger?.info?.(`[solid:capabilities] ${summary}`);
-      if (featureSlicing && decision.features) {
-        const off = FEATURE_SWITCHES.filter(f => !decision.features[f].on);
-        config?.logger?.info?.(
-          `[solid:capabilities] ${decision.graph} runtime slice: ${off.length ? `switched off ${off.join(", ")}` : "every feature switch stays on"}`
-        );
-      }
+      // Test runs and builds with compiled facts disabled keep the proof
+      // from authored imports; a build refines it from compiled output when
+      // the runtime's features module is first resolved.
+      if (!isBuild || options.compiledFacts === false) logFeatures();
     },
     async resolveId(source, importer, resolveOptions) {
       if (source === RUNTIME_PACKAGE) {
@@ -466,8 +703,7 @@ function solidCapabilities(options = {}) {
         !featureSlicing ||
         !decision?.features ||
         !importer ||
-        !/(^|\/)features\.js$/.test(source) ||
-        FEATURE_SWITCHES.every(f => decision.features[f].on)
+        !/(^|\/)features\.js$/.test(source)
       )
         return null;
       const resolved = await this.resolve(source, importer, { ...resolveOptions, skipSelf: true });
@@ -475,6 +711,30 @@ function solidCapabilities(options = {}) {
         resolved &&
         /[\\/]dist[\\/](prod|observe|sync)[\\/]core[\\/]features\.js$/.exec(resolved.id);
       if (!tier || packageOf(resolved.id)?.name !== RUNTIME_PACKAGE) return null;
+      // Build: prove the switches from every application module's compiled
+      // output (the code this bundle includes). The runtime's features
+      // module is imported only by runtime modules, never by application
+      // code, so waiting here for the application modules' transforms
+      // cannot wait on itself.
+      if (isBuild && options.compiledFacts !== false && proofInputs?.entries.length) {
+        featureDecision ??= (async () => {
+          const refined = await proveGraph({
+            ...proofInputs,
+            compiledSeams: options.compiledSeams !== false,
+            resolve: resolverOf(this),
+            load: async id => (await this.load({ id }))?.code ?? null
+          });
+          decision.features = refined.features;
+          decision.facts = refined.facts;
+          // What kept the graph from being fully known for the feature
+          // proof (the async reasons above are the buildStart proof's).
+          decision.featureGaps = refined.reasons.filter(r => r.kind === "graph");
+          writeReport(proofInputs.root);
+          logFeatures();
+        })();
+        await featureDecision;
+      }
+      if (FEATURE_SWITCHES.every(f => decision.features[f].on)) return null;
       return FEATURES_ID + tier[1];
     },
     load(id) {
