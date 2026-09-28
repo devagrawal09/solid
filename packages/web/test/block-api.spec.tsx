@@ -141,6 +141,76 @@ describe("$component in the DOM", () => {
     dispose();
   });
 
+  test("a root view returning <Loading> fetches once and settles", async () => {
+    // The root hole's value is the view block: it used to render in the
+    // insert's inner unwrapping effect, which re-runs when the boundary it
+    // unwraps settles — re-creating the boundary, the memo and its fetch.
+    let loads = 0;
+    let views = 0;
+    const countView = () => {
+      // Guarded: the regression is an endless re-render, not a wrong count.
+      if (++views > 20) throw new Error("the view re-rendered in a loop");
+    };
+    const Story = $component(function* () {
+      const story = yield* $memo(function* () {
+        return yield* attempt(() => {
+          if (++loads > 20) throw new Error("the story re-fetched in a loop");
+          return Promise.resolve({ title: "t" });
+        });
+      });
+      return function* () {
+        return <h1>{(yield* story).title}</h1>;
+      };
+    });
+    const Page = $component(function* () {
+      return function* () {
+        countView();
+        return Loading({ fallback: <p>loading</p>, children: Story({}) });
+      };
+    });
+    const root = mount();
+    const dispose = render(() => <Page />, root);
+    expect(root.textContent).toBe("loading");
+    for (let i = 0; i < 5; i++) await landed();
+    expect(root.textContent).toBe("t");
+    expect(loads).toBe(1);
+    expect(views).toBe(1);
+    dispose();
+  });
+
+  test("{props.children} forwarded into a view renders the children", () => {
+    const Box = $component(function* (props: TypedProps<{ children: any }>) {
+      const [open, setOpen] = yield* $signal(true);
+      const toggle = $event(function* () {
+        yield* setOpen(o => !o);
+      });
+      return function* () {
+        return (
+          <div class={{ open: yield* open }} onClick={toggle}>
+            {props.children}
+          </div>
+        );
+      };
+    });
+    const root = mount();
+    const dispose = render(
+      () => (
+        <Box>
+          <i>a</i>
+          <i>b</i>
+        </Box>
+      ),
+      root
+    );
+    expect(root.innerHTML).toBe('<div class="open"><i>a</i><i>b</i></div>');
+    const i = root.querySelector("i");
+    root.querySelector("div")!.click();
+    flush();
+    expect(root.innerHTML).toBe('<div class=""><i>a</i><i>b</i></div>');
+    expect(root.querySelector("i")).toBe(i);
+    dispose();
+  });
+
   test("a split $effect reads, writes and cleans up", () => {
     const log: string[] = [];
     let bump!: () => void;

@@ -28,7 +28,7 @@ import type { IQueue, Signal } from "./core/index.js";
 import { emitDiagnostic, reportDiagnostic } from "./core/dev.js";
 import { attrHooks } from "./core/attribution-hooks.js";
 import { haltReactivity, schedule } from "./core/scheduler.js";
-import { isBlock } from "./generator.js";
+import { isBlock, OP } from "./generator.js";
 import { renderBlock } from "./block-hooks.js";
 import { accessor, type Accessor } from "./signals.js";
 
@@ -622,6 +622,7 @@ export function flatten(
   children: any,
   options?: { skipNonRendered?: boolean; doNotUnwrap?: boolean }
 ): any {
+  if (isReadOp(children)) children = children.source();
   if (typeof children === "function" && !children.length) {
     if (options?.doNotUnwrap) return children;
     do {
@@ -659,6 +660,7 @@ function flattenArray(
   for (let i = 0; i < children.length; i++) {
     try {
       let child = children[i];
+      if (isReadOp(child)) child = child.source();
       if (typeof child === "function" && !child.length) {
         if (options?.doNotUnwrap) {
           results.push(child);
@@ -687,4 +689,14 @@ function flattenArray(
   }
   if (notReady) throw notReady;
   return needsUnwrap;
+}
+
+/**
+ * @internal A v2 path read reaching a renderer as content: `props.children`
+ * (or `store.a`) forwarded into JSX without `yield*`. `PropsInput` admits a
+ * read wherever a value is accepted, so renderers treat it like an accessor:
+ * the read runs in the renderer's computation and its value is rendered.
+ */
+export function isReadOp(value: unknown): value is { source: () => unknown } {
+  return value !== null && typeof value === "object" && (value as any)[OP] === "read";
 }

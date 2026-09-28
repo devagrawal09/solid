@@ -4,7 +4,9 @@
     "baseUrl": "",
     "paths": {
       "@solidjs/web/jsx-runtime": ["./jsx/jsx.d.ts"],
-      "@solidjs/web/jsx-dev-runtime": ["./jsx/jsx.d.ts"]
+      "@solidjs/web/jsx-dev-runtime": ["./jsx/jsx.d.ts"],
+      "@solidjs/h/jsx-runtime": ["../h/jsx-runtime/src/index.ts"],
+      "@solidjs/h": ["../h/src/index.ts"]
     }
   },
   "include": ["./test"]

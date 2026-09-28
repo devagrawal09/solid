@@ -11,7 +11,13 @@ import {
 // Mock @solidjs/signals for server-side rendering
 // Re-exports infrastructure from the real package, reimplements reactive primitives as pull-based.
 
-import { $REFRESH, markHandle } from "@solidjs/signals";
+import {
+  $REFRESH,
+  markHandle,
+  lazyView as signalsLazyView,
+  inBlock,
+  outsideBlock
+} from "@solidjs/signals";
 export { $REFRESH };
 
 // === Re-exports from @solidjs/signals (infrastructure — no reactive scheduling) ===
@@ -36,7 +42,7 @@ export {
   enforceLoadingBoundary
 } from "@solidjs/signals";
 
-export { flatten } from "@solidjs/signals";
+export { flatten, isReadOp } from "@solidjs/signals";
 export { snapshot, omit, storePath, $PROXY, $TRACK } from "@solidjs/signals";
 // The `$` block driver and its operations are pure (they only call the
 // accessors and functions they are handed), so the server shares the client
@@ -675,6 +681,29 @@ function scopeSteps(it: Iterator<unknown>, scopeId: string, count: number) {
   return scoped;
 }
 
+/**
+ * Server twin of `@solidjs/signals`' `lazyView` — a component or boundary
+ * called inside a running view (`$component` view returning `<Loading>` or
+ * `<Child />`) is deferred to where it renders. The client resolves the
+ * thunk under a fresh owner, which takes one child id from the rendering
+ * owner's counter; the shared implementation only creates a client-core
+ * owner, which on the server carries no id, so the deferred content landed
+ * one id level higher than on the client (a `$component` view returning
+ * `<Loading>`: server `1`, client `10`, every key below it missed and the
+ * boundary's serialized memos were never found). Resolving `make` under a
+ * server owner restores the level; the shared thunk keeps its view brand and
+ * its once-per-owner instance caching.
+ *
+ * @internal Registered as the block primitive and used by the server
+ * `Loading` / `Errored`.
+ */
+export function lazyView<T>(make: () => T): () => T {
+  return signalsLazyView(() => {
+    const owner = createOwner();
+    return runWithOwner(owner, make);
+  });
+}
+
 // === Observer tracking (for async memo) ===
 
 interface ServerComputation<T = any> {
@@ -763,7 +792,9 @@ function runWithObserver<T>(comp: ServerComputation, fn: () => T): T {
   const prev = Observer;
   Observer = comp;
   try {
-    return fn();
+    // A computation's run is its own read scope (the client's `recompute`
+    // lowers the block guard the same way): see `createSyncMemo`.
+    return inBlock() ? outsideBlock(fn) : fn();
   } finally {
     Observer = prev;
   }
@@ -1233,7 +1264,14 @@ function createSyncMemo<T>(
     // (#2801, generalized to all retry paths in #2900).
     resetOwnerForRerun(owner);
     try {
-      value = compute(value) as T;
+      // A computation's run is its own read scope, as on the client, whose
+      // `recompute` lowers the block guard: a memo (`Show`'s condition and
+      // children, `For`'s rows) created inside a running view evaluates
+      // with the guard down. Otherwise `inBlock()` answered true there on
+      // the server only, and a `$component` / `Loading` / `Errored` called
+      // in it deferred on the server but not on the client — a deferral
+      // owns an id-carrying owner, so the two sides' keys diverged.
+      value = (inBlock() ? outsideBlock(() => compute(value)) : compute(value)) as T;
       error = undefined;
       errored = false;
       cached = true;
@@ -2894,7 +2932,7 @@ export function createErrorBoundary<T, U>(
       // the outer Loading boundary must see the tag to hand off instead of
       // awaiting it (see CLIENT_HOLE).
       const all: any = Promise.all(pending.p);
-      if (pending.p.some(p => (p as any).$clientHole)) all.$clientHole = true;
+      if (pending.p.some(p => (p as any)?.$clientHole === true)) all.$clientHole = true;
       throw new NotReadyError(all);
     }
     return resolved;
@@ -3209,5 +3247,6 @@ setBlockPrimitives({
   createStore,
   createTrackedEffect,
   createEffect,
-  onSettled
+  onSettled,
+  lazyView
 });

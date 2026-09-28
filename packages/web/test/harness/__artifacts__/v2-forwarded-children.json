@@ -1,0 +1,5 @@
+{
+  "name": "v2-forwarded-children",
+  "shell": "<ol _hk=0><!--$--><li _hk=10><b>ann</b><!--$--><div _hk=1400 class=\"open\"><ul><i _hk=1401000>k1</i><i _hk=1401010>k2</i></ul></div><!--/--></li><!--/--><!--$--><li _hk=20><b>bob</b><!--$--><!--/--></li><!--/--></ol>",
+  "rest": ""
+}
