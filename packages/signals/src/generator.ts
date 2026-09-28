@@ -1257,6 +1257,14 @@ function registerCleanup(fn: () => void): void {
   else cleanupSink.push(fn);
 }
 /**
+ * @internal Compiled `yield* $cleanup(fn)`: exactly what `perform` does with
+ * the cleanup operation (the compiler has already checked the host), without
+ * the operation object and the dispatch.
+ */
+export function blockCleanup(fn: () => void): void {
+  registerCleanup(fn);
+}
+/**
  * @internal Run the effect half of a split effect block: the body under the
  * effect host with the compute values as its input. Its `$cleanup`s become
  * the returned cleanup (the function itself when there is one).
@@ -1359,6 +1367,23 @@ export function dispatchBlock<B extends AnyBlock>(
     (result as PromiseLike<unknown>).then(undefined, error => {
       if (!reportBlockError(owner, error)) throw error;
     });
+  }
+}
+
+/**
+ * @internal Dispatch an event to a fused handler: the compiler erased the
+ * `$event` block of a body it lowered and proved synchronous, with every
+ * operation erased (reads of proven accessors are direct calls, writes are
+ * setter calls), so no operation runs under the event host. What remains of
+ * `dispatchBlock` is the handler contract: no owner context while it runs,
+ * and a failure routed to the nearest error boundary above `owner`.
+ */
+export function dispatchFused<E>(fn: (event: E) => unknown, event: E, owner: Owner | null): void {
+  try {
+    if (getOwner() === null) fn(event);
+    else runWithOwner(null, () => fn(event));
+  } catch (error) {
+    if (!reportBlockError(owner, error)) throw error;
   }
 }
 
@@ -1469,6 +1494,8 @@ export function $(
   // so the result-shape probes — an untracked, guard-lowered walk of the
   // result's prototype chain on every run — are skipped. Dev builds keep
   // the probes as a verification of the claim.
+  // (`syncBlock` is the same wrapper for modules whose every block is SYNC;
+  // it is not called from here, so a bundle only retains it when one exists.)
   const sync = (flags & BLOCK_SYNC) !== 0;
   // An uncompiled body (a `function*`): every call returns a fresh native
   // generator object, so the result needs no shape probe — it is driven.
@@ -1510,12 +1537,59 @@ export function $(
       currentHost = prevHost;
     }
   } as unknown as AnyBlock;
+  return brandBlock(block, body, flags);
+}
+
+function brandBlock(block: AnyBlock, body: unknown, flags: number): AnyBlock {
   (block as any)[BLOCK] = true;
   (block as any)[BODY] = body;
   (block as any)[FLAGS] = flags;
   (block as any)[OWNER] = getOwner();
   (block as any)[Symbol.iterator] = blockIterator;
   return block;
+}
+
+/**
+ * @internal Compiled-only block constructor. The compiler emits it (as `$`'s
+ * stand-in) in a module where every block body it built was lowered to call
+ * form and proven `BLOCK_SYNC`: the body never returns a generator, thenable
+ * or async iterable, so the block never drives, never probes its result and
+ * never needs the generator-body hook. A module that only builds blocks with
+ * `syncBlock` (and the `…Compiled` constructors of `block-api.ts`) does not
+ * retain the runtime generator driver (`drive` / `step` / `settle` /
+ * `resume`) — `$` references it, this does not. Everything a run observes is
+ * `$`'s: the host the block runs under, the raised strict guard, path tokens
+ * checked and released per run, dev verification of the SYNC claim.
+ */
+export function syncBlock<Input, R>(
+  body: (input: Input) => R,
+  flags: number = BLOCK_SYNC
+): Block<R, any, never, any, any, Input> {
+  // The strict guard is only ever raised by a block run, so the store's path
+  // tokens are only reachable once a block exists (as in `$`).
+  makePathToken = pathToken;
+  const block = function () {
+    const host = pendingHost === -1 ? REACTIVE : pendingHost;
+    pendingHost = -1;
+    const prevHost = currentHost;
+    currentHost = host;
+    const prevGuard = setBlockGuard(true);
+    const prevBase = tokenBase;
+    const base = (tokenBase = liveTokens.length);
+    try {
+      // `arguments[0]`, not a rest parameter: no array per run.
+      const result = body(arguments[0]);
+      if (__DEV__) verifySyncBlockResult(result);
+      if (liveTokens.length !== base) checkTokens(base);
+      return result;
+    } finally {
+      if (liveTokens.length !== base) liveTokens.length = base;
+      tokenBase = prevBase;
+      setBlockGuard(prevGuard);
+      currentHost = prevHost;
+    }
+  } as unknown as AnyBlock;
+  return brandBlock(block, body, flags) as any;
 }
 
 /** `yield* block`: delegation (shared by every block; `this` is the block). */

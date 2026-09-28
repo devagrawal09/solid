@@ -461,9 +461,40 @@ impl Plan {
 struct EffectPlan {
     /// A plain `createEffect(function* …)`: becomes `effectBlock(…)`.
     plain: bool,
-    /// The hoisted reads (`yield` span → slot), or `None` when the split is
-    /// refused.
-    split: Option<Vec<(Span, usize)>>,
+    /// The hoisted reads, or `None` when the split is refused.
+    split: Option<SplitPlan>,
+}
+
+/// An effect split: the reads the compute half performs, and when.
+#[derive(Clone, Default)]
+struct SplitPlan {
+    /// The hoisted reads (`yield` span → slot).
+    reads: Vec<(Span, usize)>,
+    /// Per slot: `None` when the compute reads it on every run, else the
+    /// disjunction of the conjunctions under which the body reads it (the
+    /// compute half keeps the body's control flow: a read in an untaken
+    /// branch is not subscribed).
+    guards: Vec<Option<Vec<Vec<GuardTerm>>>>,
+}
+
+/// One branch condition a read sits under: the test (by span) and the
+/// outcome the branch needs. `subs` maps the test's reads and read aliases
+/// (`const v = yield* a`) to compute slots.
+#[derive(Clone, Debug, PartialEq)]
+struct GuardTerm {
+    test: Span,
+    polarity: Polarity,
+    subs: Vec<(Span, usize)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Polarity {
+    /// The test is truthy (`if` consequent, `?:` consequent, `&&` right).
+    Truthy,
+    /// The test is falsy (`else`, `?:` alternate, `||` right, after an early return).
+    Falsy,
+    /// The test is nullish (`??` right).
+    Nullish,
 }
 
 struct Analysis<'s> {
@@ -564,7 +595,7 @@ impl Analysis<'_> {
 
     /// The reads an effect hoists into its compute block, or `None` when the
     /// split is refused.
-    fn plan_split(&self, function: &Function<'_>) -> Option<Vec<(Span, usize)>> {
+    fn plan_split(&self, function: &Function<'_>) -> Option<SplitPlan> {
         if !function.params.items.is_empty() || function.params.rest.is_some() {
             return None;
         }
@@ -576,9 +607,46 @@ impl Analysis<'_> {
             reads: Vec::new(),
             slots: Vec::new(),
             refused: false,
+            guards: Vec::new(),
+            unknown: 0,
+            read_guards: Vec::new(),
+            aliases: HashMap::new(),
         };
         hoister.visit_function_body(body);
-        (!hoister.refused).then_some(hoister.reads)
+        if hoister.refused {
+            return None;
+        }
+        // Per slot: unconditional as soon as one occurrence is.
+        let mut guards: Vec<Option<Vec<Vec<GuardTerm>>>> =
+            vec![Some(Vec::new()); hoister.slots.len()];
+        for ((_, slot), guard) in hoister.reads.iter().zip(&hoister.read_guards) {
+            match guard {
+                None => guards[*slot] = None,
+                Some(terms) => {
+                    if let Some(disjuncts) = guards[*slot].as_mut()
+                        && !disjuncts.contains(terms)
+                    {
+                        disjuncts.push(terms.clone());
+                    }
+                }
+            }
+        }
+        // A condition may only use slots the compute has already read.
+        for (slot, guard) in guards.iter_mut().enumerate() {
+            if guard.as_ref().is_some_and(|disjuncts| {
+                disjuncts
+                    .iter()
+                    .flatten()
+                    .flat_map(|term| &term.subs)
+                    .any(|&(_, used)| used >= slot)
+            }) {
+                *guard = None;
+            }
+        }
+        Some(SplitPlan {
+            reads: hoister.reads,
+            guards,
+        })
     }
 
     fn classify(&self, operand: &Expression<'_>, props: Option<SymbolId>) -> OpClass {
@@ -736,11 +804,248 @@ struct Hoister<'x, 's> {
     /// Operand source text of each slot (duplicate reads share a slot).
     slots: Vec<String>,
     refused: bool,
+    /// The branch conditions around the current position, innermost last;
+    /// `None` for a condition the compute half cannot evaluate (dropped: the
+    /// read is then guarded by the rest — a superset, never a subset).
+    guards: Vec<Option<GuardTerm>>,
+    /// Inside control flow the guards do not model (`switch`, `try`,
+    /// labels, optional chains, after an unstructured `return`): reads there
+    /// are hoisted unconditionally, as in the first version of the split.
+    unknown: usize,
+    /// Parallel to `reads`: the conjunction each read sits under (`None`:
+    /// every run).
+    read_guards: Vec<Option<Vec<GuardTerm>>>,
+    /// `const v = yield* a` bindings: the slot holding their value.
+    aliases: HashMap<SymbolId, usize>,
+}
+
+/// Does the statement contain a `return` of the effect body (nested
+/// functions excluded)?
+fn may_return(statement: &Statement<'_>) -> bool {
+    struct Finder {
+        found: bool,
+    }
+    impl<'b> Visit<'b> for Finder {
+        fn visit_function(&mut self, _: &Function<'b>, _: ScopeFlags) {}
+        fn visit_arrow_function_expression(
+            &mut self,
+            _: &oxc_ast::ast::ArrowFunctionExpression<'b>,
+        ) {
+        }
+        fn visit_return_statement(&mut self, _: &ReturnStatement<'b>) {
+            self.found = true;
+        }
+    }
+    let mut finder = Finder { found: false };
+    finder.visit_statement(statement);
+    finder.found
+}
+
+/// Does every path through the statement end in a `return`?
+fn always_returns(statement: &Statement<'_>) -> bool {
+    match statement {
+        Statement::ReturnStatement(_) => true,
+        Statement::BlockStatement(block) => block.body.iter().any(always_returns),
+        Statement::IfStatement(it) => {
+            always_returns(&it.consequent) && it.alternate.as_ref().is_some_and(always_returns)
+        }
+        _ => false,
+    }
+}
+
+impl Hoister<'_, '_> {
+    fn term(&self, test: &Expression<'_>, polarity: Polarity) -> Option<GuardTerm> {
+        let mut subs = Vec::new();
+        self.evaluable(test, &mut subs).then(|| GuardTerm {
+            test: test.span(),
+            polarity,
+            subs,
+        })
+    }
+
+    /// Whether the compute half can evaluate `expression` to the value the
+    /// body sees: operators over literals, reads it hoisted, aliases of
+    /// those reads, and bindings declared before the effect that nothing
+    /// writes. `subs` receives the reads and aliases to replace by slots.
+    fn evaluable(&self, expression: &Expression<'_>, subs: &mut Vec<(Span, usize)>) -> bool {
+        match expression {
+            Expression::NumericLiteral(_)
+            | Expression::StringLiteral(_)
+            | Expression::BooleanLiteral(_)
+            | Expression::NullLiteral(_)
+            | Expression::BigIntLiteral(_) => true,
+            Expression::TemplateLiteral(template) => template
+                .expressions
+                .iter()
+                .all(|expression| self.evaluable(expression, subs)),
+            Expression::Identifier(identifier) => {
+                let scoping = self.analysis.scoping;
+                match resolve(scoping, identifier) {
+                    Some(symbol) => {
+                        if let Some(&slot) = self.aliases.get(&symbol) {
+                            subs.push((identifier.span, slot));
+                            return true;
+                        }
+                        let declared = scoping.symbol_span(symbol);
+                        declared.end <= self.function_span.start
+                            && scoping
+                                .get_resolved_references(symbol)
+                                .all(|reference| !reference.is_write())
+                    }
+                    None => matches!(identifier.name.as_str(), "undefined" | "NaN" | "Infinity"),
+                }
+            }
+            Expression::ParenthesizedExpression(it) => self.evaluable(&it.expression, subs),
+            Expression::TSAsExpression(it) => self.evaluable(&it.expression, subs),
+            Expression::TSSatisfiesExpression(it) => self.evaluable(&it.expression, subs),
+            Expression::TSNonNullExpression(it) => self.evaluable(&it.expression, subs),
+            Expression::TSTypeAssertion(it) => self.evaluable(&it.expression, subs),
+            Expression::UnaryExpression(it) => {
+                it.operator != oxc_syntax::operator::UnaryOperator::Delete
+                    && self.evaluable(&it.argument, subs)
+            }
+            Expression::BinaryExpression(it) => {
+                self.evaluable(&it.left, subs) && self.evaluable(&it.right, subs)
+            }
+            Expression::LogicalExpression(it) => {
+                self.evaluable(&it.left, subs) && self.evaluable(&it.right, subs)
+            }
+            Expression::ConditionalExpression(it) => {
+                self.evaluable(&it.test, subs)
+                    && self.evaluable(&it.consequent, subs)
+                    && self.evaluable(&it.alternate, subs)
+            }
+            // A read the split hoisted (visited before the test is used).
+            Expression::YieldExpression(it) if it.delegate => {
+                match self.reads.iter().find(|(span, _)| *span == it.span) {
+                    Some(&(span, slot)) => {
+                        subs.push((span, slot));
+                        true
+                    }
+                    None => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    fn guarded<F: FnOnce(&mut Self)>(&mut self, term: Option<GuardTerm>, visit: F) {
+        self.guards.push(term);
+        visit(self);
+        self.guards.pop();
+    }
+
+    fn opaque<F: FnOnce(&mut Self)>(&mut self, visit: F) {
+        self.unknown += 1;
+        visit(self);
+        self.unknown -= 1;
+    }
 }
 
 impl<'b> Visit<'b> for Hoister<'_, '_> {
     fn visit_function(&mut self, _: &Function<'b>, _: ScopeFlags) {}
     fn visit_arrow_function_expression(&mut self, _: &oxc_ast::ast::ArrowFunctionExpression<'b>) {}
+
+    fn visit_if_statement(&mut self, it: &oxc_ast::ast::IfStatement<'b>) {
+        self.visit_expression(&it.test);
+        let truthy = self.term(&it.test, Polarity::Truthy);
+        self.guarded(truthy, |this| this.visit_statement(&it.consequent));
+        if let Some(alternate) = &it.alternate {
+            let falsy = self.term(&it.test, Polarity::Falsy);
+            self.guarded(falsy, |this| this.visit_statement(alternate));
+        }
+    }
+
+    fn visit_conditional_expression(&mut self, it: &oxc_ast::ast::ConditionalExpression<'b>) {
+        self.visit_expression(&it.test);
+        let truthy = self.term(&it.test, Polarity::Truthy);
+        self.guarded(truthy, |this| this.visit_expression(&it.consequent));
+        let falsy = self.term(&it.test, Polarity::Falsy);
+        self.guarded(falsy, |this| this.visit_expression(&it.alternate));
+    }
+
+    fn visit_logical_expression(&mut self, it: &oxc_ast::ast::LogicalExpression<'b>) {
+        use oxc_syntax::operator::LogicalOperator;
+        self.visit_expression(&it.left);
+        let polarity = match it.operator {
+            LogicalOperator::And => Polarity::Truthy,
+            LogicalOperator::Or => Polarity::Falsy,
+            LogicalOperator::Coalesce => Polarity::Nullish,
+        };
+        let term = self.term(&it.left, polarity);
+        self.guarded(term, |this| this.visit_expression(&it.right));
+    }
+
+    fn visit_switch_statement(&mut self, it: &oxc_ast::ast::SwitchStatement<'b>) {
+        self.opaque(|this| walk::walk_switch_statement(this, it));
+    }
+    fn visit_try_statement(&mut self, it: &oxc_ast::ast::TryStatement<'b>) {
+        self.opaque(|this| walk::walk_try_statement(this, it));
+    }
+    fn visit_labeled_statement(&mut self, it: &oxc_ast::ast::LabeledStatement<'b>) {
+        self.opaque(|this| walk::walk_labeled_statement(this, it));
+    }
+    fn visit_chain_expression(&mut self, it: &oxc_ast::ast::ChainExpression<'b>) {
+        self.opaque(|this| walk::walk_chain_expression(this, it));
+    }
+
+    /// A statement after an early return runs only when the return did not:
+    /// `if (c) return; …` guards the rest by `!c`.
+    fn visit_statements(&mut self, statements: &oxc_allocator::ArenaVec<'b, Statement<'b>>) {
+        let mut pushed = 0;
+        let mut opaque = 0;
+        for statement in statements {
+            self.visit_statement(statement);
+            if !may_return(statement) {
+                continue;
+            }
+            let term = match statement {
+                Statement::IfStatement(it)
+                    if always_returns(&it.consequent)
+                        && it.alternate.as_ref().is_none_or(|a| !may_return(a)) =>
+                {
+                    Some(self.term(&it.test, Polarity::Falsy))
+                }
+                Statement::IfStatement(it)
+                    if it.alternate.as_ref().is_some_and(always_returns)
+                        && !may_return(&it.consequent) =>
+                {
+                    Some(self.term(&it.test, Polarity::Truthy))
+                }
+                _ => None,
+            };
+            match term {
+                Some(term) => {
+                    self.guards.push(term);
+                    pushed += 1;
+                }
+                None => {
+                    self.unknown += 1;
+                    opaque += 1;
+                }
+            }
+        }
+        for _ in 0..pushed {
+            self.guards.pop();
+        }
+        self.unknown -= opaque;
+    }
+
+    fn visit_variable_declaration(&mut self, it: &oxc_ast::ast::VariableDeclaration<'b>) {
+        walk::walk_variable_declaration(self, it);
+        if it.kind != oxc_ast::ast::VariableDeclarationKind::Const {
+            return;
+        }
+        for declarator in &it.declarations {
+            if let BindingPattern::BindingIdentifier(id) = &declarator.id
+                && let Some(Expression::YieldExpression(read)) = &declarator.init
+                && let Some(symbol) = id.symbol_id.get()
+                && let Some(&(_, slot)) = self.reads.iter().find(|(span, _)| *span == read.span)
+            {
+                self.aliases.insert(symbol, slot);
+            }
+        }
+    }
 
     fn visit_for_statement(&mut self, it: &ForStatement<'b>) {
         self.loop_depth += 1;
@@ -794,6 +1099,10 @@ impl<'b> Visit<'b> for Hoister<'_, '_> {
             }
         };
         self.reads.push((it.span, slot));
+        let guard = (self.unknown == 0)
+            .then(|| self.guards.iter().flatten().cloned().collect::<Vec<_>>())
+            .filter(|terms| !terms.is_empty());
+        self.read_guards.push(guard);
     }
 }
 
@@ -954,7 +1263,16 @@ impl<'a> Rewriter<'a> {
         let body_span = function.span;
         let mut arguments = ast.vec();
         let mut compute = None;
-        if let Some(reads) = effect.split.filter(|reads| !reads.is_empty()) {
+        if let Some(split) = effect.split.filter(|split| !split.reads.is_empty()) {
+            // The conditions of guarded slots, cloned (with their reads and
+            // read aliases replaced by the compute's slot bindings) before the
+            // body's reads are replaced.
+            let conditions = function
+                .body
+                .as_ref()
+                .map(|body| self.guard_conditions(body, &split))
+                .unwrap_or_default();
+            let SplitPlan { reads, guards } = split;
             // Replace the reads with `_$v[i]`, keeping each slot's first operand.
             let slots = reads
                 .iter()
@@ -982,21 +1300,66 @@ impl<'a> Rewriter<'a> {
             );
             function.params.items.push(param);
             // `_$$(function* () { return [yield* a, yield* b]; })`, on a span
-            // no source node has (the call's first byte).
+            // no source node has (the call's first byte). With guarded slots
+            // the compute keeps the body's control flow:
+            // `const _$r0 = yield* a; const _$r1 = _$r0 > 1 ? yield* c : void 0;
+            //  return [_$r0, _$r1];`
             let compute_span = Span::new(call.span.start, call.span.start + 1);
-            let elements = ast.vec_from_iter(replacer.operands.into_iter().flatten().map(
-                |(span, operand)| {
-                    ArrayExpressionElement::from(ast.expression_yield(span, true, Some(operand)))
-                },
-            ));
-            let body = ast.function_body(
-                compute_span,
-                ast.vec(),
-                ast.vec1(ast.statement_return(
+            let body = if guards.iter().all(Option::is_none) {
+                let elements = ast.vec_from_iter(replacer.operands.into_iter().flatten().map(
+                    |(span, operand)| {
+                        ArrayExpressionElement::from(ast.expression_yield(
+                            span,
+                            true,
+                            Some(operand),
+                        ))
+                    },
+                ));
+                ast.function_body(
+                    compute_span,
+                    ast.vec(),
+                    ast.vec1(ast.statement_return(
+                        compute_span,
+                        Some(ast.expression_array(compute_span, elements)),
+                    )),
+                )
+            } else {
+                let synth = Span::new(0, 0);
+                let mut statements = ast.vec();
+                let mut elements = ast.vec();
+                for (slot, operand) in replacer.operands.into_iter().enumerate() {
+                    let Some((span, operand)) = operand else {
+                        continue;
+                    };
+                    let read = ast.expression_yield(span, true, Some(operand));
+                    let condition = guards
+                        .get(slot)
+                        .and_then(Option::as_ref)
+                        .and_then(|disjuncts| self.disjunction(disjuncts, &conditions));
+                    let init = match condition {
+                        Some(condition) => {
+                            ast.expression_conditional(synth, condition, read, ast.void_0(synth))
+                        }
+                        None => read,
+                    };
+                    let name = slot_binding(slot);
+                    statements.push(crate::shared::ast::variable_statement(
+                        self.allocator,
+                        synth,
+                        oxc_ast::ast::VariableDeclarationKind::Const,
+                        &name,
+                        init,
+                    ));
+                    elements.push(ArrayExpressionElement::from(
+                        ast.expression_identifier(synth, ast.ident(&name)),
+                    ));
+                }
+                statements.push(ast.statement_return(
                     compute_span,
                     Some(ast.expression_array(compute_span, elements)),
-                )),
-            );
+                ));
+                ast.function_body(compute_span, ast.vec(), statements)
+            };
             let function_expression = ast.expression_function(
                 compute_span,
                 FunctionType::FunctionExpression,
@@ -1032,6 +1395,127 @@ impl<'a> Rewriter<'a> {
             let callee_span = call.callee.span();
             call.callee = ast.expression_identifier(callee_span, ast.ident(EFFECT_BLOCK_LOCAL));
         }
+    }
+}
+
+/// The compute half's binding for slot `slot` (guarded computes only).
+fn slot_binding(slot: usize) -> String {
+    format!("_$r{slot}")
+}
+
+impl<'a> Rewriter<'a> {
+    /// Clones of every guard condition of `split`, found in the effect body
+    /// by span, with the reads and read aliases they use replaced by the
+    /// compute's slot bindings.
+    fn guard_conditions(
+        &self,
+        body: &oxc_ast::ast::FunctionBody<'a>,
+        split: &SplitPlan,
+    ) -> HashMap<Span, Expression<'a>> {
+        use oxc_allocator::CloneIn;
+        let terms: Vec<&GuardTerm> = split.guards.iter().flatten().flatten().flatten().collect();
+        if terms.is_empty() {
+            return HashMap::new();
+        }
+        let tests: HashSet<Span> = terms.iter().map(|term| term.test).collect();
+        let subs: HashMap<Span, usize> = terms
+            .iter()
+            .flat_map(|term| term.subs.iter().copied())
+            .collect();
+        struct Cloner<'a, 's> {
+            allocator: &'a Allocator,
+            tests: &'s HashSet<Span>,
+            found: HashMap<Span, Expression<'a>>,
+        }
+        impl<'a> Visit<'a> for Cloner<'a, '_> {
+            fn visit_expression(&mut self, expression: &Expression<'a>) {
+                let span = expression.span();
+                if self.tests.contains(&span) && !self.found.contains_key(&span) {
+                    self.found.insert(span, expression.clone_in(self.allocator));
+                }
+                walk::walk_expression(self, expression);
+            }
+        }
+        struct Substitute<'a, 's> {
+            allocator: &'a Allocator,
+            subs: &'s HashMap<Span, usize>,
+        }
+        impl<'a> VisitMut<'a> for Substitute<'a, '_> {
+            fn visit_expression(&mut self, expression: &mut Expression<'a>) {
+                let slot = match expression {
+                    Expression::Identifier(id) => self.subs.get(&id.span),
+                    Expression::YieldExpression(it) => self.subs.get(&it.span),
+                    _ => None,
+                };
+                if let Some(&slot) = slot {
+                    let ast = AstBuilder::new(self.allocator);
+                    *expression =
+                        ast.expression_identifier(Span::new(0, 0), ast.ident(&slot_binding(slot)));
+                    return;
+                }
+                walk_mut::walk_expression(self, expression);
+            }
+        }
+        let mut cloner = Cloner {
+            allocator: self.allocator,
+            tests: &tests,
+            found: HashMap::new(),
+        };
+        cloner.visit_function_body(body);
+        let mut substitute = Substitute {
+            allocator: self.allocator,
+            subs: &subs,
+        };
+        for expression in cloner.found.values_mut() {
+            substitute.visit_expression(expression);
+        }
+        cloner.found
+    }
+
+    /// `(a && b) || c` over the guard terms; `None` when a condition was not
+    /// found (the slot is then read on every run).
+    fn disjunction(
+        &self,
+        disjuncts: &[Vec<GuardTerm>],
+        conditions: &HashMap<Span, Expression<'a>>,
+    ) -> Option<Expression<'a>> {
+        use oxc_allocator::CloneIn;
+        use oxc_syntax::operator::{BinaryOperator, LogicalOperator, UnaryOperator};
+        let ast = AstBuilder::new(self.allocator);
+        let synth = Span::new(0, 0);
+        let mut any: Option<Expression<'a>> = None;
+        for terms in disjuncts {
+            let mut all: Option<Expression<'a>> = None;
+            for term in terms {
+                let test = conditions.get(&term.test)?.clone_in(self.allocator);
+                let test = ast.expression_parenthesized(synth, test);
+                let term = match term.polarity {
+                    Polarity::Truthy => test,
+                    Polarity::Falsy => ast.expression_unary(synth, UnaryOperator::LogicalNot, test),
+                    Polarity::Nullish => ast.expression_binary(
+                        synth,
+                        test,
+                        BinaryOperator::Equality,
+                        ast.expression_null_literal(synth),
+                    ),
+                };
+                all = Some(match all {
+                    Some(left) => ast.expression_logical(synth, left, LogicalOperator::And, term),
+                    None => term,
+                });
+            }
+            let all = all?;
+            any = Some(match any {
+                Some(left) => ast.expression_logical(
+                    synth,
+                    ast.expression_parenthesized(synth, left),
+                    LogicalOperator::Or,
+                    ast.expression_parenthesized(synth, all),
+                ),
+                None => all,
+            });
+        }
+        any
     }
 }
 
@@ -1112,6 +1596,9 @@ const PATH_READER_NAMES: &[&str] = &[
 /// generator pass (and host fusion), before JSX lowering.
 pub(crate) fn mark_compiled_props<'a>(allocator: &'a Allocator, program: &mut Program<'a>) {
     let mut components = Vec::new();
+    // `$componentCompiled` (the v2 client lowering): its setup may be the
+    // plain function of an erased block.
+    let mut compiled_components = Vec::new();
     let mut adapters = Vec::new();
     let mut readers = Vec::new();
     let mut any = false;
@@ -1129,7 +1616,7 @@ pub(crate) fn mark_compiled_props<'a>(allocator: &'a Allocator, program: &mut Pr
                 && specifier.import_kind != ImportOrExportKind::Type
             {
                 let name = specifier.imported.name();
-                if name == "$component" {
+                if name == "$component" || name == "$componentCompiled" {
                     any = true;
                 }
             }
@@ -1165,7 +1652,10 @@ pub(crate) fn mark_compiled_props<'a>(allocator: &'a Allocator, program: &mut Pr
                 let name = name.as_str();
                 if name == "$component" {
                     components.push(symbol);
-                } else if name == "$" {
+                } else if name == "$componentCompiled" {
+                    components.push(symbol);
+                    compiled_components.push(symbol);
+                } else if name == "$" || name == "syncBlock" {
                     adapters.push(symbol);
                 } else if PATH_READER_NAMES.contains(&name) {
                     readers.push(symbol);
@@ -1176,6 +1666,7 @@ pub(crate) fn mark_compiled_props<'a>(allocator: &'a Allocator, program: &mut Pr
             scoping: &'s Scoping,
             nodes: &'s oxc_semantic::AstNodes<'s>,
             components: &'s [SymbolId],
+            compiled_components: &'s [SymbolId],
             adapters: &'s [SymbolId],
             readers: &'s [SymbolId],
             spans: Vec<Span>,
@@ -1212,15 +1703,28 @@ pub(crate) fn mark_compiled_props<'a>(allocator: &'a Allocator, program: &mut Pr
         }
         impl<'b> Visit<'b> for Finder<'_> {
             fn visit_call_expression(&mut self, call: &CallExpression<'b>) {
+                let component = self.callee(call);
+                let setup = match call.arguments.first() {
+                    Some(Argument::CallExpression(block))
+                        if self
+                            .callee(block)
+                            .is_some_and(|symbol| self.adapters.contains(&symbol)) =>
+                    {
+                        match block.arguments.first() {
+                            Some(Argument::FunctionExpression(setup)) => Some(setup),
+                            _ => None,
+                        }
+                    }
+                    Some(Argument::FunctionExpression(setup))
+                        if component.is_some_and(|s| self.compiled_components.contains(&s)) =>
+                    {
+                        Some(setup)
+                    }
+                    _ => None,
+                };
                 if call.arguments.len() == 1
-                    && self
-                        .callee(call)
-                        .is_some_and(|symbol| self.components.contains(&symbol))
-                    && let Some(Argument::CallExpression(block)) = call.arguments.first()
-                    && self
-                        .callee(block)
-                        .is_some_and(|symbol| self.adapters.contains(&symbol))
-                    && let Some(Argument::FunctionExpression(setup)) = block.arguments.first()
+                    && component.is_some_and(|symbol| self.components.contains(&symbol))
+                    && let Some(setup) = setup
                     // Lowered: a setup the runtime driver still runs reads
                     // props through the proxy.
                     && !setup.generator
@@ -1248,6 +1752,7 @@ pub(crate) fn mark_compiled_props<'a>(allocator: &'a Allocator, program: &mut Pr
             scoping,
             nodes,
             components: &components,
+            compiled_components: &compiled_components,
             adapters: &adapters,
             readers: &readers,
             spans: Vec::new(),
@@ -1315,11 +1820,14 @@ fn add_imports<'a>(
 mod tests {
     use crate::{CompileOptions, Generate, compile};
 
+    /// The pre-pass and the lowering alone: v2 fusion and the client
+    /// lowering (on by default; tested in `blocks_v2_lower.rs`) are off.
     fn compile_as(source: &str, generate: Generate) -> Result<String, String> {
         compile(
             source,
             &CompileOptions {
                 generate,
+                v2_fusion: false,
                 ..CompileOptions::default()
             },
         )
@@ -1381,6 +1889,94 @@ export const Search = $component(function* (props) {
         assert!(
             out.contains(r#"return [_$readPath1(props, "query"), _$perform(url)];"#),
             "{out}"
+        );
+    }
+
+    #[test]
+    fn the_compute_half_keeps_the_bodys_control_flow() {
+        let out = ssr(
+            r#"import { $component, $signal, $effect, $cleanup } from "solid-js";
+const limit = 1;
+export const C = $component(function* () {
+  const [a] = yield* $signal(1);
+  const [flag] = yield* $signal(false);
+  const [c] = yield* $signal(0);
+  const [d] = yield* $signal(0);
+  yield* $effect(function* () {
+    const v = yield* a;
+    const f = yield* flag;
+    if (v > limit) log(yield* c);
+    else log(f && (yield* d));
+    yield* $cleanup(() => log(v));
+  });
+  return function* () { return 1; };
+});
+"#,
+        )
+        .unwrap();
+        let flat = out.split_whitespace().collect::<Vec<_>>().join(" ");
+        // Unconditional reads first, then each guarded read under the
+        // condition the body reads it under (aliases become slots).
+        assert!(flat.contains("const _$r0 = _$perform(a);"), "{out}");
+        assert!(flat.contains("const _$r1 = _$perform(flag);"), "{out}");
+        assert!(
+            flat.contains("const _$r2 = _$r0 > limit ? _$perform(c) : void 0;"),
+            "{out}"
+        );
+        assert!(
+            flat.contains("const _$r3 = !(_$r0 > limit) && _$r1 ? _$perform(d) : void 0;"),
+            "{out}"
+        );
+        assert!(flat.contains("return [ _$r0, _$r1, _$r2, _$r3 ];"), "{out}");
+        // The body is unchanged apart from the slots.
+        assert!(flat.contains("if (v > limit) log(_$v[2]);"), "{out}");
+        assert!(flat.contains("else log(f && _$v[3]);"), "{out}");
+
+        // Early returns guard what follows; an unevaluable condition (a
+        // call) is dropped, never inverted; a mutable binding is not trusted.
+        let early = ssr(r#"import { $component, $signal, $effect } from "solid-js";
+let mutable = 0;
+export const bump = () => mutable++;
+export const C = $component(function* () {
+  const [a] = yield* $signal(1);
+  const [b] = yield* $signal(1);
+  const [c] = yield* $signal(1);
+  yield* $effect(function* () {
+    const v = yield* a;
+    if (!v) return;
+    if (check(v)) log(yield* b);
+    if (mutable) log(yield* c);
+  });
+  return function* () { return 1; };
+});
+"#)
+        .unwrap();
+        let flat = early.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            flat.contains("const _$r1 = !!_$r0 ? _$perform(b) : void 0;"),
+            "{early}"
+        );
+        assert!(
+            flat.contains("const _$r2 = !!_$r0 ? _$perform(c) : void 0;"),
+            "{early}"
+        );
+
+        // Reads under control flow the split does not model stay unconditional.
+        let opaque = ssr(r#"import { $component, $signal, $effect } from "solid-js";
+export const C = $component(function* () {
+  const [a] = yield* $signal(1);
+  const [b] = yield* $signal(1);
+  yield* $effect(function* () {
+    switch (yield* a) { case 1: log(yield* b); }
+  });
+  return function* () { return 1; };
+});
+"#)
+        .unwrap();
+        let flat = opaque.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            flat.contains("return [_$perform(a), _$perform(b)];"),
+            "{opaque}"
         );
     }
 
@@ -1627,7 +2223,8 @@ export const Empty = $component(function* () {
 });
 "#)
         .unwrap();
-        assert_eq!(out.matches("}), 1);").count(), 2, "{out}");
+        // (The setup is proven BLOCK_SYNC too: it returns its view block.)
+        assert_eq!(out.matches("}, 1), 1);").count(), 2, "{out}");
 
         // Forwarding `props.id` forwards the read: the proxy stays.
         let forwarded = dom(r#"import { $component } from "solid-js";
@@ -1639,7 +2236,7 @@ export const Parent = $component(function* (props) {
 });
 "#)
         .unwrap();
-        assert_eq!(forwarded.matches("}), 1);").count(), 1, "{forwarded}");
+        assert_eq!(forwarded.matches("}, 1), 1);").count(), 1, "{forwarded}");
         assert!(
             forwarded.contains("const Child = $component(_$$(function(props)"),
             "{forwarded}"
@@ -1653,6 +2250,6 @@ export const Async = $component(function* (props) {
 });
 "#)
         .unwrap();
-        assert!(!driven.contains("}), 1);"), "{driven}");
+        assert!(!driven.contains("}, 1), 1);"), "{driven}");
     }
 }

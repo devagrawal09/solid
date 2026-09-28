@@ -30,6 +30,7 @@ import {
   runEffectHalf,
   isBlock,
   dispatchBlock,
+  dispatchFused,
   readProp,
   runBlockAs,
   Receipt,
@@ -69,7 +70,7 @@ import {
   type SourceAccessor,
   type Setter
 } from "./signals.js";
-import { createStore, type Store, type StoreSetter } from "./store/index.js";
+import { createStore } from "./store/index.js";
 
 // --- types -------------------------------------------------------------------
 
@@ -274,23 +275,18 @@ export function $signal<T>(
   value: T,
   options?: SignalOptions<T>
 ): CreateOp<[get: SourceAccessor<T>, set: BlockSetter<T>], "signal"> {
-  return new Operation("create", "signal", () => {
-    const [get, set] = (primitives.createSignal || createSignal)(value, options) as [
-      SourceAccessor<T>,
-      Setter<T>
-    ];
-    return [get, blockSetter(set as any)];
-  }) as any;
+  return new Operation("create", "signal", () =>
+    withReceipts((primitives.createSignal || createSignal)(value, options) as any)
+  ) as any;
 }
 
 /** `yield* $store(value)` — create a store in a component's setup. */
 export function $store<T extends object>(
   value: T
 ): CreateOp<[get: TypedStore<T>, set: BlockStoreSetter<T>], "store"> {
-  return new Operation("create", "store", () => {
-    const [get, set] = (primitives.createStore || createStore)(value) as [Store<T>, StoreSetter<T>];
-    return [get, blockSetter(set as any)];
-  }) as any;
+  return new Operation("create", "store", () =>
+    withReceipts((primitives.createStore || createStore)(value) as any)
+  ) as any;
 }
 
 /** `yield* $memo(function* () {…})` — create a memo in a component's setup. */
@@ -324,7 +320,15 @@ export function $effect<Y extends EffectOp>(
  * tracked pass.
  */
 export function effectBlock(body: unknown, compute?: unknown): void {
-  const block = toBlock(body);
+  effectBlockCompiled(toBlock(body), compute);
+}
+
+/**
+ * @internal `effectBlock` for a block the compiler built (`syncBlock`, or
+ * `$`): there is no generator body to wrap, so a fully compiled module does
+ * not retain the driver through here.
+ */
+export function effectBlockCompiled(block: any, compute?: unknown): void {
   if (!compute) {
     (primitives.createTrackedEffect || createTrackedEffect)(() => {
       runBlockAs(EFFECT, block, undefined);
@@ -352,7 +356,12 @@ export function $settled<Y extends EffectOp>(
 
 /** @internal Create a run-once effect block (compiled `onSettled(function* …)`). */
 export function settledBlock(body: unknown): void {
-  (primitives.onSettled || onSettled)(settledCallback(toBlock(body)));
+  settledBlockCompiled(toBlock(body));
+}
+
+/** @internal `settledBlock` for a block the compiler built. */
+export function settledBlockCompiled(block: any): void {
+  (primitives.onSettled || onSettled)(settledCallback(block));
 }
 
 /** `yield* $cleanup(fn)` — run `fn` when the component (or the effect run) is disposed. */
@@ -368,6 +377,19 @@ export function $flush(): FlushOp {
 /** A setter whose calls return a receipt: `yield* set(v)` is the new value. */
 function blockSetter(set: (value: any) => any): (value: any) => WriteReceipt<any> {
   return (value: any) => new Receipt(set(value)) as any;
+}
+
+/**
+ * @internal `[get, set]` from a signal or store primitive, with a setter that
+ * returns write receipts: what `yield* $signal(v)` / `yield* $store(v)`
+ * evaluates to. The compiler creates a setup's state with the primitive
+ * directly and applies this only when the setter escapes what it can see (a
+ * use it cannot see may `yield*` the receipt).
+ */
+export function withReceipts<G, V>(
+  tuple: readonly [G, (value: any) => V]
+): [G, (value: any) => WriteReceipt<V>] {
+  return [tuple[0], blockSetter(tuple[1]) as any];
 }
 
 // --- context ------------------------------------------------------------------
@@ -410,6 +432,19 @@ export function $event<E = unknown, Y extends EventOp = never>(
   return handler as any;
 }
 
+/**
+ * @internal `$event` for a body the compiler built: a block (`syncBlock` or
+ * `$`) — or, when the compiler erased every operation of a lowered,
+ * synchronous body, the plain function itself, dispatched with the same
+ * handler contract (`dispatchFused`: no owner context while it runs, a
+ * failure routed to the nearest boundary above the creation owner).
+ */
+export function $eventCompiled(body: unknown): any {
+  const owner = getOwner();
+  if (isBlock(body)) return (event: unknown) => dispatchBlock(body, event, owner);
+  return (event: unknown) => dispatchFused(body as (event: unknown) => unknown, event, owner);
+}
+
 // --- $component ----------------------------------------------------------------
 
 const PROPS_COMPILED = 1;
@@ -427,17 +462,29 @@ export function $component<P = {}, Y extends SetupOp = never, VY extends ViewOp 
   body: (props: TypedProps<P>) => Generator<Y, () => Generator<VY, unknown, any>, any>,
   flags: number = 0
 ): Component<P, ViewOf<VY>[typeof PENDING], ViewOf<VY>[typeof FAILS]> {
-  const setup = toBlock(body);
+  return makeComponent(toBlock(body), flags, view) as any;
+}
+
+/**
+ * @internal `$component` for a setup the compiler built: a block
+ * (`syncBlock` or `$`), or the plain setup function when the compiler erased
+ * its block (every operation lowered — creations are direct primitive calls,
+ * `$cleanup` is `blockCleanup` — so nothing depends on the host or the
+ * guard). Every view it returns is a block the compiler built, so a fully
+ * compiled module does not retain the driver through here.
+ */
+export function $componentCompiled(setup: unknown, flags: number = 0): any {
+  return makeComponent(setup, flags, compiledView);
+}
+
+function makeComponent(setup: any, flags: number, toView: (body: any) => unknown): unknown {
   const component = function (props: any): unknown {
     // Called inside a running view (uncompiled `Loading({ children: X(p) })`):
     // defer to where it renders, as the compiler's prop getters do.
     if (inBlock()) return lazyView(() => component(props));
     return untrack(() => {
-      const viewBody = runBlockAs(
-        COMPONENT,
-        setup,
-        flags & PROPS_COMPILED ? props : typedProps(props)
-      );
+      const input = flags & PROPS_COMPILED ? props : typedProps(props);
+      const viewBody = isBlock(setup) ? runBlockAs(COMPONENT, setup, input) : setup(input);
       if (typeof viewBody !== "function") {
         throw new TypeError(
           __DEV__
@@ -445,11 +492,11 @@ export function $component<P = {}, Y extends SetupOp = never, VY extends ViewOp 
             : "[COMPONENT_VIEW]"
         );
       }
-      return view(viewBody as any);
+      return toView(viewBody);
     });
   };
   (component as any)[COMPONENT_MARK] = true;
-  return component as any;
+  return component;
 }
 
 /** @internal Runtime brand of `$component` functions. */
@@ -463,7 +510,11 @@ export function isComponent(value: unknown): boolean {
 
 /** A view: a JSX-host block. `yield*` on it evaluates to the view itself. */
 function view(body: () => Generator<any, unknown, any>): unknown {
-  const block = toBlock(body);
+  return compiledView(toBlock(body));
+}
+
+/** A view the compiler built: already a block. */
+function compiledView(block: any): unknown {
   block[VIEW_MARK] = true;
   block[Symbol.iterator] = viewIterator;
   return block;

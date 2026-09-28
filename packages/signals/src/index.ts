@@ -117,7 +117,9 @@ export {
   lazyView,
   renderBlock,
   dispatchBlock,
-  blockScope
+  blockScope,
+  syncBlock,
+  blockCleanup
 } from "./generator.js";
 export {
   $component,
@@ -132,7 +134,12 @@ export {
   $flush,
   effectBlock,
   isComponent,
-  setBlockPrimitives
+  setBlockPrimitives,
+  $componentCompiled,
+  $eventCompiled,
+  effectBlockCompiled,
+  settledBlockCompiled,
+  withReceipts
 } from "./block-api.js";
 export type {
   View,

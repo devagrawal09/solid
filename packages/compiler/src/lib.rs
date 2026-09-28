@@ -19,6 +19,7 @@ mod block_proofs;
 mod capabilities;
 mod block_scope;
 mod blocks_v2;
+mod blocks_v2_lower;
 mod compiler;
 #[cfg(feature = "node")]
 mod config;
