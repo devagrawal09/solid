@@ -18,6 +18,7 @@ import {
   type Owner
 } from "./core/index.js";
 import { installGeneratorHook, type SourceAccessor } from "./signals.js";
+import { installBlockRenderer } from "./block-hooks.js";
 
 /*
  * `$` blocks — typed reactive computations with host-restricted effects.
@@ -1460,6 +1461,10 @@ export function $(
   if (!generatorHookInstalled) {
     generatorHookInstalled = true;
     installGeneratorHook(generatorBody);
+    // Renderers reach blocks through block-hooks.ts (install-on-use): a
+    // block exists from here on, so its render / dispatch / deferred-view
+    // implementations do too.
+    installBlockRenderer(renderBlock, dispatchBlock, lazyView);
     // The strict guard is only ever raised by a block run, so the store's
     // path tokens are only reachable once a block exists.
     makePathToken = pathToken;

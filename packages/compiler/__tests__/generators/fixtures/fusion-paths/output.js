@@ -1,6 +1,6 @@
-import { $, createMemo, createStore, readPath1 as _$readPath1, readPath2 as _$readPath2, readPath3 as _$readPath3 } from "solid-js";
+import { $, createMemo, createStore, readPath1 as _$readPath1, readPath2 as _$readPath2, readPath3 as _$readPath3, createPlainStore as _$createPlainStore } from "solid-js";
 function Counter(props) {
-	const [store] = createStore({
+	const [store] = _$createPlainStore({
 		user: { name: "Ada" },
 		items: [{ name: "one" }],
 		"data-x": 1

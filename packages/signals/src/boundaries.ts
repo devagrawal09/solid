@@ -28,7 +28,8 @@ import type { IQueue, Signal } from "./core/index.js";
 import { emitDiagnostic, reportDiagnostic } from "./core/dev.js";
 import { attrHooks } from "./core/attribution-hooks.js";
 import { haltReactivity, schedule } from "./core/scheduler.js";
-import { isBlock, renderBlock } from "./generator.js";
+import { isBlock } from "./generator.js";
+import { renderBlock } from "./block-hooks.js";
 import { accessor, type Accessor } from "./signals.js";
 
 export interface BoundaryComputed<T> extends Computed<T> {

@@ -69,7 +69,7 @@ import {
   type SourceAccessor,
   type Setter
 } from "./signals.js";
-import { createStore, type Store, type StoreSetter } from "./store/index.js";
+import { createPlainStore, type Store, type StoreSetter } from "./store/index.js";
 
 // --- types -------------------------------------------------------------------
 
@@ -221,7 +221,7 @@ export interface EventHandler<E = unknown, Y = unknown> {
  */
 // Empty until a renderer registers its own; each constructor falls back to
 // this package's primitive at its use site, so a primitive is only retained
-// by a bundle that uses the constructor needing it (`createStore` only with
+// by a bundle that uses the constructor needing it (the plain store only with
 // `$store`).
 const primitives: {
   createSignal?: (value: any, options?: any) => any;
@@ -288,7 +288,12 @@ export function $store<T extends object>(
   value: T
 ): CreateOp<[get: TypedStore<T>, set: BlockStoreSetter<T>], "store"> {
   return new Operation("create", "store", () => {
-    const [get, set] = (primitives.createStore || createStore)(value) as [Store<T>, StoreSetter<T>];
+    // `$store(value)` is the plain form only: the plain constructor keeps the
+    // projection / reconcile machinery out of block apps that never derive.
+    const [get, set] = (primitives.createStore || createPlainStore)(value) as [
+      Store<T>,
+      StoreSetter<T>
+    ];
     return [get, blockSetter(set as any)];
   }) as any;
 }
