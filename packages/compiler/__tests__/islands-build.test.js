@@ -4,7 +4,7 @@
 // (src/island_emit/tests.rs); behavior is proven in the web package's
 // conformance islands mode and the ssr-redesign browser gate.
 const { compileIslands } = require("../index.js");
-const { islandsEntry, IslandsCompiler } = require("../islands-build.js");
+const { islandsEntry, IslandsCompiler, bundledIslandSizes } = require("../islands-build.js");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -48,15 +48,15 @@ describe("compileIslands", () => {
 
   test("a module the compiler cannot compile falls back to the hydratable outputs", () => {
     const out = compileIslands(
-      `import { $component, $store, $event } from "solid-js";
+      `import { $component, $signal, $event } from "solid-js";
 export const App = $component(function* () {
-  const [s, set] = yield* $store({ n: 0 });
-  const inc = $event(function* () { set(x => { x.n++; }); });
-  return function* () { return <button onClick={inc}>{yield* s.n}</button>; };
+  const [on, set] = yield* $signal(false);
+  const flip = $event(function* () { set(x => !x); });
+  return function* () { return <button onClick={flip}>{(yield* on) ? <b>on</b> : <i>off</i>}</button>; };
 });`,
       { filename: "app.tsx" }
     );
-    expect(out.fallback).toMatch(/tier 2: store/);
+    expect(out.fallback).toMatch(/live expression producing JSX/);
     expect(out.manifest.fallback).toBe(out.fallback);
     expect(out.client).toContain("getNextElement");
     expect(out.chunks).toEqual([]);
@@ -140,6 +140,78 @@ describe("islandsEntry", () => {
     expect(s).toContain('el.parentElement.closest("[data-i]")');
   });
 
+  test("streaming: islands activate as boundary chunks land; spanning islands wait", () => {
+    const plain = islandsEntry({ islands: [{ ...island, activation: "load", tier: 1 }] });
+    expect(plain).not.toContain('addEventListener("solid-islands"');
+    const s = islandsEntry({
+      islands: [
+        { ...island, activation: "load", tier: 1, waits: true },
+        { ...island, id: "i1", waits: true }
+      ],
+      streams: true
+    });
+    // Eager: one scan now and one per landed chunk, each anchor once.
+    expect(s).toContain('document.addEventListener("solid-islands", $act);');
+    expect(s).toContain("if (s[id] || (w && $pd(el))) continue;");
+    // Lazy: a waiting island's activation waits for its boundary.
+    expect(s).toContain('const WT = ["i1"];');
+    expect(s).toContain("Promise.all([L[id][0](), ready(el, id)])");
+    expect(s).toContain("/^l\\d/.test(n.data)");
+  });
+
+  test("prefetch budget: sizes are bundled output bytes (the Vite plugin's placeholders)", () => {
+    const s = islandsEntry({
+      islands: [island],
+      budget: 100,
+      prefetch: "idle",
+      sizeOf: i => "__SOLID_ISLAND_SIZE__" + i.id
+    });
+    expect(s).toContain('["click"], __SOLID_ISLAND_SIZE__i0]');
+    // The bundle: the entry loads the runtime chunk; i0's chunk adds itself
+    // and a helper chunk the entry does not load.
+    const bundle = {
+      "index.js": {
+        type: "chunk",
+        fileName: "index.js",
+        imports: ["rt.js"],
+        code: `const L = { i0: [f, ["click"], __SOLID_ISLAND_SIZE__i0] };`,
+        facadeModuleId: "/src/entry.ts"
+      },
+      "rt.js": { type: "chunk", fileName: "rt.js", imports: [], code: "x".repeat(500) },
+      "i0.js": {
+        type: "chunk",
+        fileName: "i0.js",
+        imports: ["rt.js", "h.js"],
+        code: "y".repeat(40),
+        facadeModuleId: "\0virtual:solid-islands/chunk/i0.ts"
+      },
+      "h.js": { type: "chunk", fileName: "h.js", imports: [], code: "z".repeat(60) }
+    };
+    const sizes = bundledIslandSizes(bundle);
+    expect(sizes.i0.bytes).toBe(100);
+    expect(bundle["index.js"].code).toBe(`const L = { i0: [f, ["click"], 100] };`);
+  });
+
+  test("the dev verifier checks every anchor against its island's chunk, and unknown ids", () => {
+    expect(islandsEntry({ islands: [island] })).not.toContain("verify");
+    const s = islandsEntry({
+      islands: [island, { ...island, id: "i1", waits: true }],
+      verify: true,
+      streams: true
+    });
+    expect(s).toContain('["i0", "Toggle", () => import("virtual:solid-islands/chunk/i0"), 0]');
+    expect(s).toContain("const e = m.verify(el);");
+    expect(s).toContain("does not match the server markup");
+    expect(s).toContain("anchor names unknown island");
+    // Streamed boundaries are verified as they land.
+    expect(s).toContain('document.addEventListener("solid-islands", check);');
+    const out = compileIslands(TOGGLE, { filename: "toggle.tsx", verify: true });
+    expect(out.chunks[0].code).toContain("export function verify($a)");
+    expect(compileIslands(TOGGLE, { filename: "toggle.tsx" }).chunks[0].code).not.toContain(
+      "verify"
+    );
+  });
+
   test("a fallback root is hydrated", () => {
     const s = islandsEntry({ islands: [], hydrate: [{ module: "/src/app.tsx", export: "App" }] });
     expect(s).toContain('import { App as $H0 } from "/src/app.tsx";');
@@ -170,6 +242,52 @@ export const App = $component(function* () {
       ["i1_0", "Toggle", 0]
     ]);
     expect([...chunks.keys()]).toEqual(["i0", "i1_0"]);
+    fs.rmSync(dir, { recursive: true });
+  });
+
+  test("cross-module: summaries name the imported factories an importer's compile inlines", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "islands-"));
+    fs.writeFileSync(
+      path.join(dir, "counter.ts"),
+      `import { createSignal } from "solid-js";
+export function createCounter(start) {
+  const [n, setN] = createSignal(start);
+  return { n, inc: () => setN(x => x + 1) };
+}
+export const label = "count";`
+    );
+    fs.writeFileSync(
+      path.join(dir, "app.tsx"),
+      `import { $component, $event } from "solid-js";
+import { createCounter, label } from "./counter";
+export const App = $component(function* () {
+  const c = createCounter(0);
+  const inc = $event(function* () { c.inc(); });
+  return function* () { return <button onClick={inc}>{label}: {yield* c.n}</button>; };
+});`
+    );
+    const compiler = new IslandsCompiler();
+    const app = path.join(dir, "app.tsx");
+    expect(compiler.summary(path.join(dir, "counter.ts")).exports).toEqual([
+      { name: "createCounter", kind: "factory" },
+      { name: "label", kind: "value" }
+    ]);
+    expect(compiler.importsFor(app, fs.readFileSync(app, "utf8")).map(i => i.specifier)).toEqual([
+      "./counter"
+    ]);
+    const out = compiler.compileFile(app);
+    expect(out.fallback).toBe(null);
+    expect(out.deps).toEqual([path.join(dir, "counter.ts")]);
+    expect(out.manifest.islands.map(i => [i.root, i.cells])).toEqual([["App", ["App.n$f1"]]]);
+    // Without the pass, the factory is opaque and the module falls back.
+    const blind = new IslandsCompiler({ crossModule: false }).compileFile(app);
+    expect(blind.fallback).toMatch(/comes from `createCounter/);
+    // The cache follows the imported module's content.
+    fs.writeFileSync(
+      path.join(dir, "counter.ts"),
+      fs.readFileSync(path.join(dir, "counter.ts"), "utf8").replace("x + 1", "x + 2")
+    );
+    expect(compiler.compileFile(app)).not.toBe(out);
     fs.rmSync(dir, { recursive: true });
   });
 });

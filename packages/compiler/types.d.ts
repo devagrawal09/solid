@@ -499,10 +499,30 @@ export interface CompileIslandsOptions {
   minTier?: 0 | 1 | 2;
   /** Instrumented output (labelled tier-0 cells, reads through `get`). */
   debug?: boolean;
+  /** Dev builds: chunks also export `verify(anchor)` (the dev verifier). */
+  verify?: boolean;
   /** Probe cell hosts (`object.method`), e.g. the conformance harness's `h.signal`. */
   probeHosts?: string[];
   moduleName?: string;
+  /**
+   * Sources of relatively imported modules whose factories, helper
+   * generators or components the module's islands are compiled with
+   * (cross-module inlining; the bundler plugin passes those its
+   * `islandExports` summaries name).
+   */
+  imports?: { specifier: string; filename: string; code: string }[];
 }
+
+export interface IslandExports {
+  exports: {
+    name: string;
+    kind: "component" | "factory" | "helper" | "function" | "value";
+  }[];
+  imports: { specifier: string; names: string[] }[];
+}
+
+/** A module's islands summary (exports by kind, relative imports). */
+export function islandExports(code: string, options?: { filename?: string }): IslandExports;
 
 export interface CompileIslandsResult {
   /** String-template server module (or the hydratable SSR compile on fallback). */
@@ -515,6 +535,8 @@ export interface CompileIslandsResult {
     version: 1;
     module: string | null;
     fallback: string | null;
+    /** A `<Loading>` over server data streams its content as a chunk. */
+    streams: boolean;
     islands: Array<{
       id: string;
       root: string;
@@ -531,6 +553,8 @@ export interface CompileIslandsResult {
       nests: boolean;
       activation: "lazy" | "load";
       preventDefault: boolean;
+      /** Its static paths cross a streamed boundary (activate once it lands). */
+      waits: boolean;
       serialized: string[];
       notes: string[];
     }>;

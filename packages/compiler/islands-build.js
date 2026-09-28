@@ -18,7 +18,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { compileIslands } = require("./index.js");
+const { compileIslands, islandExports } = require("./index.js");
 
 const PREFETCH = ["load", "idle", "visible", "intent", "interaction"];
 const ENTRY = "virtual:solid-islands";
@@ -33,7 +33,9 @@ const CHUNK = "virtual:solid-islands/chunk/";
  *       | "lazy" (all on interaction; hot islands still activate at load)
  * prefetch: app default, one of PREFETCH (default "interaction")
  * overrides: { [rootComponentOrId]: policy }
- * budget: bytes of lazy chunks prefetch may load (sizes from `island.size`)
+ * budget: bytes of lazy chunks prefetch may load (sizes from `sizeOf(island)`
+ *   — a JS expression; default `island.size`, the chunk's source bytes; the
+ *   Vite plugin passes placeholders it replaces with bundled output bytes)
  * network: downgrade prefetch to "interaction" under saveData / 2g (default true)
  * chunk: id → import specifier
  * hooks: { before, after } code run around the load-time work (timing hooks)
@@ -48,7 +50,10 @@ function islandsEntry({
   chunk = id => CHUNK + id,
   hooks = {},
   hydrate = [],
-  web = "@solidjs/web"
+  web = "@solidjs/web",
+  streams = false,
+  sizeOf = i => String(i.size || 0),
+  verify = false
 } = {}) {
   const J = JSON.stringify;
   const eager = islands.filter(i => mode === "eager" || i.activation === "load");
@@ -59,6 +64,13 @@ function islandsEntry({
   });
   if (eager.some(i => i.anchor === "comment"))
     s += `const $ca = id => { const out = [], w = document.createTreeWalker(document.body, 128); for (let n; (n = w.nextNode()); ) if (n.data.startsWith("i:") && n.data.slice(2).split(" ").includes(id)) out.push(n); return out; };\n`;
+  // Streaming (islands-stream.js): boundary chunks land after the shell.
+  // Islands they carry activate as they land (`solid-islands` on document);
+  // an island whose static paths cross a boundary (`waits`) activates once no
+  // boundary around its anchor is pending.
+  const waits = streams && islands.some(i => i.waits);
+  if (waits)
+    s += `const $pd = el => { const w = document.createTreeWalker(el.parentNode || el, 128); for (let n; (n = w.nextNode()); ) if (/^l\\d/.test(n.data)) return 1; };\n`;
   let start = "";
   if (lazy.length) {
     const policy = i => {
@@ -73,16 +85,19 @@ function islandsEntry({
       .map(i => {
         const row = [`() => import(${J(chunk(i.id))})`, J(i.events)];
         if (wins.length) row.push(J(i.windowEvents || []));
-        if (budget != null) row.push(String(i.size || 0));
+        if (budget != null) row.push(sizeOf(i));
         return `${J(i.id)}: [${row.join(", ")}]`;
       })
       .join(",\n  ");
     s += `const L = {\n  ${table}\n}, Q = [];\nlet B = 0, R = 0;\n`;
+    const lazyWaits = waits ? lazy.filter(i => i.waits).map(i => i.id) : [];
+    if (lazyWaits.length) s += `const WT = ${J(lazyWaits)};\n`;
     s += loader({
       wins: wins.length > 0,
       nest: lazy.some(i => i.nests !== false),
       pd: lazy.some(i => i.preventDefault),
-      click: types.includes("click")
+      click: types.includes("click"),
+      waits: lazyWaits.length > 0
     });
     start += `for (const t of ${J(types)}) document.addEventListener(t, E, true);\n`;
     if (wins.length) start += `for (const t of ${J(wins)}) addEventListener(t, W);\n`;
@@ -99,7 +114,7 @@ function islandsEntry({
       if (uses("idle"))
         pf += `(self.requestIdleCallback || setTimeout)(() => { for (const id of ${J(byPolicy.idle)}) pf(id); });\n`;
       if (uses("visible"))
-        pf += `{ const ids = ${J(byPolicy.visible)}, io = new IntersectionObserver(es => { for (const x of es) if (x.isIntersecting) { io.unobserve(x.target); for (const id of x.target.dataset.i.split(" ")) ids.includes(id) && pf(id); } }); for (const id of ids) for (const el of document.querySelectorAll('[data-i~="' + id + '"]')) io.observe(el); }\n`;
+        pf += `{ const ids = ${J(byPolicy.visible)}, io = new IntersectionObserver(es => { for (const x of es) if (x.isIntersecting) { io.unobserve(x.target); for (const id of x.target.dataset.i.split(" ")) ids.includes(id) && pf(id); } }), ob = () => { for (const id of ids) for (const el of document.querySelectorAll('[data-i~="' + id + '"]')) io.observe(el); }; ob();${streams ? ` document.addEventListener("solid-islands", ob);` : ""} }\n`;
       if (uses("intent"))
         pf += `{ const ids = ${J(byPolicy.intent)}; for (const t of ["pointerover", "focusin", "touchstart"]) document.addEventListener(t, e => { const el = e.target.closest && e.target.closest("[data-i]"); if (el) for (const id of el.dataset.i.split(" ")) ids.includes(id) && pf(id); }, { capture: true, passive: true }); }\n`;
       // Network downgrade: saveData or a 2G connection prefetches nothing.
@@ -121,19 +136,50 @@ function islandsEntry({
     (h, n) =>
       (s += `$hydrate(() => $cc($H${n}, {}), document.querySelector(${J(h.selector || "#root")}));\n`)
   );
-  eager.forEach((i, n) => {
-    const find =
-      i.anchor === "comment"
-        ? `$ca(${J(i.id)})`
-        : `document.querySelectorAll('[data-i~="${i.id}"]')`;
-    s += `for (const el of ${find}) a${n}(el);\n`;
-  });
-  eager.forEach((i, n) => {
-    if (i.tier) s += `f${n}();\n`;
-  });
+  if (streams && eager.length) {
+    // Activate each anchor once, now and whenever a boundary chunk lands.
+    const rows = eager.map(
+      (i, n) =>
+        `[a${n}, ${i.tier ? `f${n}` : 0}, ${J(i.id)}${i.anchor === "comment" || (waits && i.waits) ? `, ${i.anchor === "comment" ? 1 : 0}` : ""}${waits && i.waits ? ", 1" : ""}]`
+    );
+    s += `const $act = () => { for (const [a, f, id, c, w] of [${rows.join(", ")}]) for (const el of ${eager.some(i => i.anchor === "comment") ? `c ? $ca(id) : ` : ""}document.querySelectorAll('[data-i~="' + id + '"]')) { const s = (el.$i ||= {}); if (s[id]${waits ? " || (w && $pd(el))" : ""}) continue; s[id] = 1; a(el); f && f(); } };\n`;
+    s += `$act();\ndocument.addEventListener("solid-islands", $act);\n`;
+  } else {
+    eager.forEach((i, n) => {
+      const find =
+        i.anchor === "comment"
+          ? `$ca(${J(i.id)})`
+          : `document.querySelectorAll('[data-i~="${i.id}"]')`;
+      s += `for (const el of ${find}) a${n}(el);\n`;
+    });
+    eager.forEach((i, n) => {
+      if (i.tier) s += `f${n}();\n`;
+    });
+  }
   s += start;
+  if (verify) s += verifier(islands, chunk, streams);
   if (hooks.after) s += hooks.after + "\n";
   s += "}\n";
+  return s;
+}
+
+// The dev verifier (dev builds): every island's chunk (compiled with
+// `verify`) walks its static addresses on each anchor of the server markup
+// and reports every node that is not what its code expects, with the
+// component and source line; anchors naming an island this build does not
+// know are reported too (server and client built from different sources).
+// Streamed boundaries are verified as they land. Nothing is activated.
+function verifier(islands, chunk, streams) {
+  const J = JSON.stringify;
+  const rows = islands
+    .map(i => `[${J(i.id)}, ${J(i.root)}, () => import(${J(chunk(i.id))}), ${i.waits ? 1 : 0}]`)
+    .join(", ");
+  let s = `{ const V = [${rows}], known = new Set(V.map(v => v[0])), check = () => {\n`;
+  s += `for (const el of document.querySelectorAll("[data-i]")) for (const id of el.dataset.i.split(" ")) if (!known.has(id) && !(el.$vu ||= {})[id]) { el.$vu[id] = 1; console.error("[solid-islands] anchor names unknown island " + id + " (the server markup and the client build disagree)", el); }\n`;
+  // A waiting island is verified once no boundary around it is pending.
+  s += `const pend = el => { const w = document.createTreeWalker(el.parentNode || el, 128); for (let n; (n = w.nextNode()); ) if (/^l\\d/.test(n.data)) return 1; };\n`;
+  s += `for (const [id, root, load, waits] of V) load().then(m => { if (!m.verify) return; for (const el of document.querySelectorAll('[data-i~="' + id + '"]')) { if ((el.$v ||= {})[id] || (waits && pend(el))) continue; el.$v[id] = 1; const e = m.verify(el); if (e.length) console.error("[solid-islands] island " + id + " (" + root + ") does not match the server markup:\\n  " + e.join("\\n  "), el); } });\n`;
+  s += `}; check();${streams ? ` document.addEventListener("solid-islands", check);` : ""} }\n`;
   return s;
 }
 
@@ -143,7 +189,7 @@ function islandsEntry({
 // when a replayed click would toggle a checkbox again), the islands it can
 // reach are imported and activated, and every event that arrived meanwhile
 // is replayed in order: one queue per page.
-function loader({ wins, nest, pd, click }) {
+function loader({ wins, nest, pd, click, waits }) {
   const walk = nest
     ? `for (; el; el = el.parentElement && el.parentElement.closest("[data-i]"))\n    `
     : "";
@@ -151,8 +197,15 @@ function loader({ wins, nest, pd, click }) {
     pd && `t.closest("[data-pd]")`,
     click && `(e.type == "click" && (t.type == "checkbox" || t.type == "radio"))`
   ].filter(Boolean);
+  // A `waits` island whose boundary is still streaming: its chunk loads now,
+  // its activation (and the queued events) once the boundary has landed.
+  const ready = waits
+    ? `const ready = (el, id) => WT.includes(id) && $pd(el) ? new Promise(r => { const f = () => { if (!$pd(el)) { document.removeEventListener("solid-islands", f); r(); } }; document.addEventListener("solid-islands", f); }) : 0;
+`
+    : "";
+  const load = waits ? `Promise.all([L[id][0](), ready(el, id)]).then(([m]) => m)` : `L[id][0]()`;
   let s = `const has = (el, id) => el.$i && el.$i[id];
-const act = (el, id) => L[id][0]().then(m => { if (!has(el, id)) { (el.$i ||= {})[id] = 1; m.activate(el); m.flush && m.flush(); } });
+${ready}const act = (el, id) => ${load}.then(m => { if (!has(el, id)) { (el.$i ||= {})[id] = 1; m.activate(el); m.flush && m.flush(); } });
 const done = () => { if (!--B) { R = 1; for (const [t, e] of Q.splice(0)) t.dispatchEvent(new e.constructor(e.type, e)); R = 0; } };
 const wait = (t, e, p) => { Q.push([t, e]); B++; Promise.all(p).then(done, done); };
 function E(e) {
@@ -184,13 +237,43 @@ class IslandsCompiler {
     minTier = 0,
     debug = false,
     idPrefix,
-    compile = compileIslands
+    compile = compileIslands,
+    crossModule = true,
+    verify = false
   } = {}) {
-    this.options = { runtimes, tier1Core, minTier, debug };
+    this.options = { runtimes, tier1Core, minTier, debug, verify };
     this.compile = compile;
     this.cache = new Map();
+    this.summaries = new Map();
     this.prefixes = new Map();
     this.idPrefix = idPrefix;
+    this.crossModule = crossModule;
+  }
+  /** A module's `islandExports` summary, cached by content (pass one). */
+  summary(file, code = fs.readFileSync(file, "utf8")) {
+    const hit = this.summaries.get(file);
+    if (hit && hit.code === code) return hit.summary;
+    const summary = islandExports(code, { filename: file });
+    this.summaries.set(file, { code, summary });
+    return summary;
+  }
+  /**
+   * Pass two's inputs: the relatively imported modules whose factories,
+   * helper generators or components this module uses (their summaries say
+   * which), with their sources, for the compiler's cross-module inlining.
+   */
+  importsFor(file, code) {
+    if (!this.crossModule) return [];
+    const out = [];
+    for (const imp of this.summary(file, code).imports || []) {
+      const target = resolveRelative(file, imp.specifier);
+      if (!target) continue;
+      const tcode = fs.readFileSync(target, "utf8");
+      const kinds = new Map(this.summary(target, tcode).exports.map(e => [e.name, e.kind]));
+      if (imp.names.some(n => ["factory", "helper", "component"].includes(kinds.get(n))))
+        out.push({ specifier: imp.specifier, filename: target, code: tcode });
+    }
+    return out;
   }
   prefixFor(file) {
     let p = this.prefixes.get(file);
@@ -202,10 +285,19 @@ class IslandsCompiler {
     return p;
   }
   compileFile(file, code = fs.readFileSync(file, "utf8")) {
+    const imports = this.importsFor(file, code);
     const hit = this.cache.get(file);
-    if (hit && hit.code === code) return hit.out;
-    const { runtimes, tier1Core, minTier, debug } = this.options;
+    if (
+      hit &&
+      hit.code === code &&
+      hit.imports.length === imports.length &&
+      hit.imports.every((m, i) => m.filename === imports[i].filename && m.code === imports[i].code)
+    )
+      return hit.out;
+    const { runtimes, tier1Core, minTier, debug, verify } = this.options;
     const out = this.compile(code, {
+      imports,
+      verify,
       filename: file,
       idPrefix: this.prefixFor(file),
       t0Module: runtimes.t0,
@@ -216,7 +308,8 @@ class IslandsCompiler {
       debug
     });
     for (const c of out.chunks) c.size = Buffer.byteLength(c.code);
-    this.cache.set(file, { code, out });
+    out.deps = imports.map(m => m.filename);
+    this.cache.set(file, { code, imports, out });
     return out;
   }
   /** Every island reachable from `root` through relative imports of compiled modules. */
@@ -225,12 +318,14 @@ class IslandsCompiler {
     const islands = [];
     const chunks = new Map();
     const fallbacks = [];
+    let streams = false;
     const visit = file => {
       if (seen.has(file)) return;
       seen.add(file);
       const code = fs.readFileSync(file, "utf8");
       const out = this.compileFile(file, code);
       if (out.fallback) fallbacks.push({ file, reason: out.fallback });
+      if (out.manifest.streams) streams = true;
       for (const i of out.manifest.islands) {
         const c = out.chunks.find(c => c.id === i.id);
         islands.push({ ...i, file, size: c ? c.size : 0 });
@@ -242,7 +337,7 @@ class IslandsCompiler {
       }
     };
     visit(root);
-    return { islands, chunks, fallbacks, files: [...seen] };
+    return { islands, chunks, fallbacks, files: [...seen], streams };
   }
 }
 
@@ -266,6 +361,47 @@ function toBase36(n) {
  * (import it from the client entry and call `start()`, or use
  * `virtual:solid-islands/auto`), and island chunks are virtual modules.
  */
+// A lazy chunk's size in the entry, before bundling: replaced in
+// `generateBundle` with the bundled output bytes (the chunk and the static
+// imports it adds to what the entry already loads).
+const SIZE = "__SOLID_ISLAND_SIZE__";
+const sizePlaceholder = i => SIZE + i.id.replace(/\W/g, "_");
+
+/** Bytes each lazy island chunk adds to a page, from the bundle (Vite's manifest data). */
+function bundledIslandSizes(bundle) {
+  const chunks = Object.values(bundle).filter(c => c.type === "chunk");
+  const byFile = new Map(chunks.map(c => [c.fileName, c]));
+  const closure = (c, out = new Set()) => {
+    if (!c || out.has(c.fileName)) return out;
+    out.add(c.fileName);
+    for (const f of c.imports) closure(byFile.get(f), out);
+    return out;
+  };
+  const sizes = {};
+  for (const entry of chunks.filter(c => c.code.includes(SIZE))) {
+    const loaded = closure(entry);
+    for (const c of chunks) {
+      const m =
+        c.facadeModuleId && /virtual:solid-islands\/chunk\/(.+)\.ts$/.exec(c.facadeModuleId);
+      if (!m) continue;
+      let bytes = 0,
+        gzip = 0;
+      for (const f of closure(c)) {
+        if (loaded.has(f)) continue;
+        const code = byFile.get(f).code;
+        bytes += Buffer.byteLength(code);
+        gzip += require("zlib").gzipSync(code).length;
+      }
+      sizes[m[1]] = { bytes, gzip, file: c.fileName };
+    }
+    entry.code = entry.code.replace(new RegExp(SIZE + "([\\w$]+)", "g"), (_, id) => {
+      const hit = Object.entries(sizes).find(([k]) => k.replace(/\W/g, "_") === id);
+      return String(hit ? hit[1].bytes : 0);
+    });
+  }
+  return sizes;
+}
+
 function solidIslands(options = {}) {
   const {
     root,
@@ -279,8 +415,11 @@ function solidIslands(options = {}) {
     runtimes = {},
     tier1Core = "auto",
     rootExport = "App",
-    mount = "#root"
+    mount = "#root",
+    // The dev verifier: on by default in the dev server.
+    verify
   } = options;
+  const verifying = () => verify ?? config.command === "serve";
   let compiler;
   let config;
   let collected;
@@ -292,7 +431,11 @@ function solidIslands(options = {}) {
       config = c;
     },
     buildStart() {
-      compiler = new IslandsCompiler({ runtimes: resolveRuntimes(runtimes), tier1Core: false });
+      compiler = new IslandsCompiler({
+        runtimes: resolveRuntimes(runtimes),
+        tier1Core: false,
+        verify: verifying()
+      });
       // Island ids must match across the SSR and client builds: assign
       // every module's id prefix in the root's import order (a DFS), before
       // either build transforms anything in its own order.
@@ -322,6 +465,11 @@ function solidIslands(options = {}) {
           overrides,
           budget,
           network,
+          streams: collected.streams,
+          // Builds count bundled output bytes (see generateBundle); the dev
+          // server, the chunks' source bytes.
+          sizeOf: config.command === "build" ? sizePlaceholder : undefined,
+          verify: verifying(),
           hydrate: fallbackRoots(collected, rootFile, rootExport, mount)
         });
       }
@@ -330,6 +478,16 @@ function solidIslands(options = {}) {
       if (code == null) this.error(`[solid-islands] unknown island chunk ${chunkId}`);
       // Chunks are plain JavaScript (the compiler erases TypeScript).
       return code;
+    },
+    generateBundle(_, bundle) {
+      if (budget == null) return;
+      const sizes = bundledIslandSizes(bundle);
+      // Next to Vite's manifest: what each lazy island adds to the page.
+      this.emitFile({
+        type: "asset",
+        fileName: ".vite/solid-islands.json",
+        source: JSON.stringify({ budget, islands: sizes }, null, 2)
+      });
     },
     async transform(code, id, opts) {
       const file = id.split("?")[0];
@@ -407,6 +565,7 @@ function esbuildIslands({
               budget,
               network,
               hooks,
+              streams: c.streams,
               hydrate: fallbackRoots(c, root, rootExport, mount)
             }),
             loader: "js",
@@ -430,6 +589,7 @@ module.exports = {
   solidIslands,
   esbuildIslands,
   fallbackRoots,
+  bundledIslandSizes,
   PREFETCH,
   ENTRY,
   CHUNK

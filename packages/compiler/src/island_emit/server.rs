@@ -19,7 +19,7 @@ use oxc_span::{GetSpan, Span};
 use super::client::{GroupCode, Serial, first_is_element};
 use super::graph::{Analysis, SiteKind, refs_expr};
 use super::jsx::{self, AttrVal, Child, Root, Tag};
-use super::model::{CellHost, FnRef, Item, LocalDecl, Model};
+use super::model::{FnRef, Item, LocalDecl, Model};
 use super::tx::{Env, R, Tx};
 use crate::store_scalars::splice;
 
@@ -42,6 +42,11 @@ function _$for(l, f, fb) { if (!l || !l.length) return _$e(fb); let s = ""; for 
 async function _$forA(l, f, fb) { if (!l || !l.length) return _$e(fb); const r = await Promise.all(l.map((x, i) => f(x, () => i))); let s = ""; for (const x of r) s += _$e(x); return s; }
 function _$err(f, fb) { try { return _$e(f()); } catch (e) { return _$e(typeof fb === "function" ? fb(() => e, () => {}) : fb); } }
 async function _$errA(f, fb) { try { return _$e(await f()); } catch (e) { return _$e(typeof fb === "function" ? fb(() => e, () => {}) : fb); } }
+async function _$proj(f, seed) { const d = seed === undefined ? {} : structuredClone(seed); const r = await f(d); return r === undefined ? d : r; }
+function _$cv(v, n) { const ok = x => x === null || ["string", "number", "boolean"].includes(typeof x) || (Array.isArray(x) ? x.every(ok) : typeof x === "object" && Object.getPrototypeOf(x) === Object.prototype && Object.values(x).every(ok)); if (v !== undefined && !ok(v)) throw new Error("island context `" + n + "` is provided outside the island with a value that is not serializable"); return v; }
+function _$pick(o, ks) { const r = {}; for (const k of ks) if (k in o) r[k] = o[k]; return r; }
+function _$ld($c, f, fb) { const s = $c && $c.get(Symbol.for("solid.islands.stream")); return s ? s.boundary($c, f, fb, _$e) : f($c); }
+function _$errS($c, f, fb) { const s = $c && $c.get(Symbol.for("solid.islands.stream")); return s ? s.errored($c, f, fb, _$e) : _$errA(() => f($c), fb); }
 "#;
 
 struct Se<'x, 'a> {
@@ -52,6 +57,10 @@ struct Se<'x, 'a> {
     roots: HashMap<usize, Vec<(String, &'x GroupCode, usize)>>,
     /// Handler elements whose handler prevents default (by span start).
     pd: HashSet<u32>,
+    /// Components whose view has a `<Loading>` over server data (streamed).
+    streams: std::cell::RefCell<HashSet<usize>>,
+    /// Each group's effective tier (its chunk's).
+    tiers: HashMap<usize, u8>,
 }
 
 struct SEnv<'e, 'x, 'a> {
@@ -67,7 +76,7 @@ impl<'a> Env<'a> for SEnv<'_, '_, 'a> {
                 let s = self.se.m.symbol_of(id);
                 let acc = s.is_some_and(|s| {
                     self.se.m.comps[self.comp].setup.iter().any(|it| match it {
-                        Item::Cell { get, host, .. } => *get == s && *host != CellHost::Store,
+                        Item::Cell { get, .. } => *get == s && !it.store_like(),
                         Item::Memo { sym, .. } => *sym == s,
                         _ => false,
                     })
@@ -108,11 +117,22 @@ impl<'a> Env<'a> for SEnv<'_, '_, 'a> {
                 }
                 let root_text = tx.expr(self, root)?;
                 let rest = &tx.m.src[root.span().end as usize..arg.span().end as usize];
-                Ok(format!("_$r({root_text}){rest}"))
+                Ok(format!("_$r(_$r({root_text}){rest})"))
             }
             Expression::CallExpression(c) => {
                 match self.se.m.runtime_name(&c.callee) {
                     Some("$cleanup" | "$flush") => return Ok("void 0".into()),
+                    Some("readStore") => {
+                        let (Some(store), Some(sel)) = (
+                            c.arguments.first().and_then(|a| a.as_expression()),
+                            c.arguments.get(1).and_then(|a| a.as_expression()),
+                        ) else {
+                            return Err("readStore without a store and a selector".into());
+                        };
+                        let st = tx.expr(self, store)?;
+                        let f = tx.expr(self, sel)?;
+                        return Ok(format!("({f})(_$r({st}))"));
+                    }
                     Some("attempt") => {
                         let f = c
                             .arguments
@@ -161,7 +181,7 @@ impl<'a> Env<'a> for SEnv<'_, '_, 'a> {
         let mut out = String::new();
         self.se.root(self.comp, e, &mut out, None)?;
         let _ = tx;
-        Ok(format!("{{ t: `{out}` }}"))
+        Ok(format!("({{ t: `{out}` }})"))
     }
 }
 
@@ -259,6 +279,23 @@ impl<'x, 'a> Se<'x, 'a> {
             }
         }
         Ok(())
+    }
+
+    /// An `<Errored>` around live content of a tier-2 island group (its
+    /// sites, or a member it renders): the client keeps a boundary there.
+    fn live_boundary(&self, comp: usize, span: Span) -> bool {
+        let inside = |sp: Span| span.start <= sp.start && sp.end <= span.end;
+        self.a.groups.iter().enumerate().any(|(gi, g)| {
+            self.tiers.get(&gi).copied().unwrap_or(g.tier) >= 2
+                && (g
+                    .sites
+                    .iter()
+                    .any(|(c, s)| *c == comp && inside(self.a.facts[*c].sites[*s].span))
+                    || self.a.facts[comp].calls.iter().any(|call| {
+                        inside(call.span)
+                            && matches!(call.tag, Tag::Comp(k) if g.members.contains(&k))
+                    }))
+        })
     }
 
     fn subtree_async(&self, span: Span, comp: usize) -> bool {
@@ -416,18 +453,46 @@ impl<'x, 'a> Se<'x, 'a> {
                 match b.as_str() {
                     "Loading" => {
                         let kids = jsx::children(&el.children)?;
-                        self.kids(comp, &kids, out, anchor, false)
+                        if !is_async {
+                            // Nothing to wait for: the content renders in place.
+                            return self.kids(comp, &kids, out, anchor, false);
+                        }
+                        // A boundary over server data: streamed out of order
+                        // when the render has a stream (`_$ld`), its fallback
+                        // in the shell; awaited in place otherwise.
+                        self.streams.borrow_mut().insert(comp);
+                        let mut inner = String::new();
+                        self.kids(comp, &kids, &mut inner, anchor, false)?;
+                        let fb = self.fallback_raw(comp, &attrs)?;
+                        let _ = write!(
+                            out,
+                            "${{await _$ld($c, async ($c) => `{inner}`, () => {fb})}}"
+                        );
+                        Ok(())
                     }
                     "Errored" => {
                         let kids = jsx::children(&el.children)?;
                         let mut inner = String::new();
                         self.kids(comp, &kids, &mut inner, anchor, false)?;
                         let fb = self.fallback(comp, &attrs)?;
-                        let helper = if is_async { "_$errA" } else { "_$err" };
-                        let _ = write!(
-                            out,
-                            "${{{aw}{helper}({asy}() => ({{ t: `{inner}` }}), {fb})}}"
-                        );
+                        // Around a tier-2 island's live content the client
+                        // keeps an error boundary: mark its region.
+                        let live = self.live_boundary(comp, el.span);
+                        if live {
+                            out.push_str("<!--$-->");
+                        }
+                        if is_async {
+                            // Streamed boundaries inside route their failures here.
+                            let _ = write!(
+                                out,
+                                "${{await _$errS($c, async ($c) => ({{ t: `{inner}` }}), {fb})}}"
+                            );
+                        } else {
+                            let _ = write!(out, "${{_$err(() => ({{ t: `{inner}` }}), {fb})}}");
+                        }
+                        if live {
+                            out.push_str("<!--/-->");
+                        }
                         Ok(())
                     }
                     "Show" | "For" => {
@@ -480,7 +545,8 @@ impl<'x, 'a> Se<'x, 'a> {
                                 let params = self.tx().params(&SEnv { se: self, comp }, f)?;
                                 let mut inner = String::new();
                                 self.root(comp, body, &mut inner, None)?;
-                                let _ = write!(out, "${{_$forR({iv}, ({params}) => `{inner}`, {fb})}}");
+                                let _ =
+                                    write!(out, "${{_$forR({iv}, ({params}) => `{inner}`, {fb})}}");
                             } else {
                                 let ft = self.func(comp, f, is_async)?;
                                 let helper = if is_async { "_$forA" } else { "_$for" };
@@ -599,10 +665,10 @@ impl<'x, 'a> Se<'x, 'a> {
                     get,
                     set,
                     init,
-                    host,
+                    rest,
                     ..
                 } => {
-                    let init = match init {
+                    let init_text = match init {
                         Some(e) => tx.expr(&env, e)?,
                         None => "undefined".into(),
                     };
@@ -611,10 +677,28 @@ impl<'x, 'a> Se<'x, 'a> {
                         Some(s) => format!("[{g}, {}]", self.m.sym_name(*s)),
                         None => format!("[{g}]"),
                     };
-                    if *host == CellHost::Store {
-                        let _ = writeln!(body, "const {pat} = [{init}, _$noop];");
+                    if item.derived() {
+                        // A projection / derived cell: server-authoritative,
+                        // its settled value awaited (like an async memo).
+                        if item.store_like() {
+                            let seed = match rest.first() {
+                                Some(e) => tx.expr(&env, e)?,
+                                None => "undefined".into(),
+                            };
+                            let _ = writeln!(
+                                body,
+                                "const {pat} = [await _$proj({init_text}, {seed}), _$noop];"
+                            );
+                        } else {
+                            let _ = writeln!(
+                                body,
+                                "const {pat} = [_$v(await ({init_text})()), _$noop];"
+                            );
+                        }
+                    } else if item.store_like() {
+                        let _ = writeln!(body, "const {pat} = [{init_text}, _$noop];");
                     } else {
-                        let _ = writeln!(body, "const {pat} = _$cell({init});");
+                        let _ = writeln!(body, "const {pat} = _$cell({init_text});");
                     }
                 }
                 Item::Memo {
@@ -680,13 +764,43 @@ impl<'x, 'a> Se<'x, 'a> {
                             super::client_js_str(p),
                             super::client_js_str(p)
                         )),
+                        Serial::Ctx(n) => fields.push(format!(
+                            "{}: _$cv(_$ctx($c, {n}), {})",
+                            super::client_js_str(&format!("$ctx:{n}")),
+                            super::client_js_str(n)
+                        )),
                         Serial::Cell(ii) => {
-                            let Item::Cell { get, .. } = &c.setup[*ii] else {
+                            // An adopted async memo: its settled value.
+                            if let Item::Memo { sym, .. } = &c.setup[*ii] {
+                                let n = self.m.sym_name(*sym);
+                                fields.push(format!(
+                                    "{}: {n}()",
+                                    super::client_js_str(&format!("${n}"))
+                                ));
+                                continue;
+                            }
+                            let item = &c.setup[*ii];
+                            let Item::Cell { get, set, .. } = item else {
                                 continue;
                             };
                             let n = self.m.sym_name(*get);
-                            fields
-                                .push(format!("{}: {n}()", super::client_js_str(&format!("${n}"))));
+                            // A store's getter is its value on the server;
+                            // only the keys its code touches are serialized.
+                            let v = if item.store_like() {
+                                match super::store_paths::store_keys(self.m, c, *get, *set) {
+                                    Some(keys) => format!(
+                                        "_$pick({n}, [{}])",
+                                        keys.iter()
+                                            .map(|k| super::client_js_str(k))
+                                            .collect::<Vec<_>>()
+                                            .join(", ")
+                                    ),
+                                    None => n.to_string(),
+                                }
+                            } else {
+                                format!("{n}()")
+                            };
+                            fields.push(format!("{}: {v}", super::client_js_str(&format!("${n}"))));
                         }
                     }
                 }
@@ -756,11 +870,12 @@ fn declarator<'a>(
 
 /// Server module text: the source with every component replaced by its
 /// string function, plus the helpers.
+/// The server module, and per component whether its view streams a boundary.
 pub(crate) fn emit_server<'a>(
     m: &Model<'a>,
     a: &Analysis<'a>,
     codes: &[(usize, GroupCode)],
-) -> R<String> {
+) -> R<(String, Vec<bool>)> {
     let n = m.comps.len();
     // Async components: async memos, or rendering an async / opaque one.
     let mut is_async: Vec<bool> = m
@@ -769,7 +884,7 @@ pub(crate) fn emit_server<'a>(
         .map(|c| {
             c.setup
                 .iter()
-                .any(|it| matches!(it, Item::Memo { is_async: true, .. }))
+                .any(|it| matches!(it, Item::Memo { is_async: true, .. }) || it.derived())
         })
         .collect();
     loop {
@@ -782,7 +897,7 @@ pub(crate) fn emit_server<'a>(
                 Tag::Comp(k) => is_async[k],
                 Tag::Opaque(_) => true,
                 _ => false,
-            }) || m.text(m.comps[ci].replace).contains("attempt(")
+            }) || awaits_in_setup(m, ci)
             {
                 is_async[ci] = true;
                 changed = true;
@@ -815,6 +930,8 @@ pub(crate) fn emit_server<'a>(
         is_async,
         roots,
         pd,
+        streams: Default::default(),
+        tiers: codes.iter().map(|(gi, c)| (*gi, c.tier)).collect(),
     };
     let mut edits: Vec<(Span, String)> = Vec::new();
     for (ci, c) in m.comps.iter().enumerate() {
@@ -842,7 +959,23 @@ pub(crate) fn emit_server<'a>(
     out.push('\n');
     out.push_str(SERVER_HELPERS);
     let _ = refs_expr;
-    Ok(out)
+    let streams = se.streams.borrow();
+    Ok((out, (0..n).map(|c| streams.contains(&c)).collect()))
+}
+
+/// Server-side awaits in a component's setup or view statements (an
+/// `attempt` outside an event handler, which the server never runs).
+fn awaits_in_setup(m: &Model<'_>, ci: usize) -> bool {
+    let c = &m.comps[ci];
+    c.setup.iter().any(|it| {
+        !matches!(it, Item::Event { .. } | Item::Effect { .. })
+            && m.text(it.span()).contains("attempt(")
+    }) || c
+        .view_stmts
+        .iter()
+        .any(|s| m.text(s.span()).contains("attempt("))
+        || c.view
+            .is_some_and(|v| m.text(v.span()).contains("attempt("))
 }
 
 fn handler_prevents(m: &Model<'_>, site: &super::graph::Site<'_>) -> bool {

@@ -46,6 +46,11 @@ pub(crate) struct Refs {
     pub calls: Vec<String>,
     pub has_jsx: bool,
     pub prevent_default: bool,
+    /// Symbols passed to `refresh(…)`: a refresh re-runs their source (a
+    /// write, for liveness).
+    pub refreshed: Vec<SymbolId>,
+    /// Roots of `yield*` reads (`yield* x`, `yield* x.a.b`).
+    pub yielded: Vec<SymbolId>,
 }
 
 struct Walker<'m, 'a> {
@@ -114,6 +119,13 @@ impl<'a> Visit<'a> for Walker<'_, 'a> {
     }
     fn visit_call_expression(&mut self, c: &CallExpression<'a>) {
         if let Some(n) = self.m.runtime_name(&c.callee) {
+            if n == "refresh" {
+                for a in &c.arguments {
+                    if let Some(s) = a.as_expression().and_then(|e| self.m.symbol_of_expr(e)) {
+                        self.out.refreshed.push(s);
+                    }
+                }
+            }
             self.out.calls.push(n.to_string());
         }
         walk::walk_call_expression(self, c);
@@ -121,6 +133,24 @@ impl<'a> Visit<'a> for Walker<'_, 'a> {
     fn visit_jsx_element(&mut self, e: &JSXElement<'a>) {
         self.out.has_jsx = true;
         walk::walk_jsx_element(self, e);
+    }
+    fn visit_yield_expression(&mut self, y: &oxc_ast::ast::YieldExpression<'a>) {
+        if y.delegate
+            && let Some(arg) = &y.argument
+        {
+            let mut root = arg.without_parentheses();
+            loop {
+                match root {
+                    Expression::StaticMemberExpression(s) => root = &s.object,
+                    Expression::ComputedMemberExpression(c) => root = &c.object,
+                    _ => break,
+                }
+            }
+            if let Some(s) = self.m.symbol_of_expr(root) {
+                self.out.yielded.push(s);
+            }
+        }
+        walk::walk_yield_expression(self, y);
     }
 }
 
@@ -203,6 +233,8 @@ pub(crate) struct Site<'a> {
     pub refs: Refs,
     /// The live-region sites (Show/For) of this component enclosing it.
     pub regions: Vec<usize>,
+    /// `Show` / `For`: the render callback's parameter (`item => …`).
+    pub param: Option<SymbolId>,
 }
 
 pub(crate) struct Call<'a> {
@@ -250,6 +282,7 @@ impl<'a> ViewWalk<'_, 'a> {
             expr,
             refs,
             regions: self.regions.clone(),
+            param: None,
         });
         i
     }
@@ -374,7 +407,30 @@ impl<'a> ViewWalk<'_, 'a> {
                     self.root(a);
                 }
             }
-            _ => self.f.issues.push("render callback with statements".into()),
+            _ => {
+                // Statements before the markup (an error fallback that logs,
+                // a row that computes a local): the markup is every `return`'s
+                // JSX; the statements run where the callback runs (the server
+                // for inert content; client emission refuses live callbacks
+                // with statements). Handlers inside are not compiled.
+                let before = self.f.sites.len();
+                let mut v = Returns { out: Vec::new() };
+                for s in stmts {
+                    v.visit_statement(s);
+                }
+                for e in v.out {
+                    let e: &'a Expression<'a> = unsafe { &*(e as *const Expression<'a>) };
+                    self.root(e);
+                }
+                if self.f.sites[before..]
+                    .iter()
+                    .any(|s| matches!(s.kind, SiteKind::Handler(_)))
+                {
+                    self.f
+                        .issues
+                        .push("event handler inside a render callback with statements".into());
+                }
+            }
         }
     }
     fn attr_jsx(&mut self, v: &AttrVal<'a>) {
@@ -463,6 +519,15 @@ impl<'a> ViewWalk<'_, 'a> {
                     }
                     if let Some(s) = site {
                         self.regions.push(s);
+                        // The render callback's parameter carries the input.
+                        if let Ok(kids) = jsx::children(&el.children)
+                            && let [Child::Expr(e)] = kids.as_slice()
+                            && let Some(f) = FnRef::from_expr(e)
+                            && let Some(p) = f.params().items.first()
+                            && let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &p.pattern
+                        {
+                            self.f.sites[s].param = id.symbol_id.get();
+                        }
                     }
                     if let Some(fb) = jsx::attr(&attrs, "fallback") {
                         self.attr_jsx(&fb.value);
@@ -475,7 +540,16 @@ impl<'a> ViewWalk<'_, 'a> {
                 "Loading" | "Errored" => {
                     self.f.boundaries.push((name.clone(), self.regions.clone()));
                     if let Some(fb) = jsx::attr(&attrs, "fallback") {
+                        // A boundary's fallback is server HTML in islands
+                        // mode (rendered in the shell, or streamed over the
+                        // region on a failure): its holes and handlers are
+                        // not island sites. Its components and providers
+                        // still render.
+                        let before = self.f.sites.len();
                         self.attr_jsx(&fb.value);
+                        for s in self.f.sites.drain(before..) {
+                            self.f.site_at.remove(&s.span.start);
+                        }
                     }
                     self.kids(&el.children);
                 }
@@ -521,6 +595,22 @@ impl<'a> ViewWalk<'_, 'a> {
             }
         }
     }
+}
+
+/// `return` arguments of a function body (not of nested functions).
+struct Returns<'x> {
+    out: Vec<&'x Expression<'x>>,
+}
+
+impl<'a> Visit<'a> for Returns<'a> {
+    fn visit_return_statement(&mut self, r: &oxc_ast::ast::ReturnStatement<'a>) {
+        if let Some(a) = &r.argument {
+            let a: &'a Expression<'a> = unsafe { &*(a as *const Expression<'a>) };
+            self.out.push(a);
+        }
+    }
+    fn visit_function(&mut self, _: &Function<'a>, _: ScopeFlags) {}
+    fn visit_arrow_function_expression(&mut self, _: &ArrowFunctionExpression<'a>) {}
 }
 
 pub(crate) struct Group {
@@ -648,6 +738,42 @@ impl<'a> Analysis<'a> {
     }
 }
 
+/// The imported (non-runtime) function a local's initializer calls at its
+/// top level, if any.
+fn model_call_callee(m: &Model<'_>, init: &Expression<'_>) -> Option<String> {
+    let e = super::model::yield_delegate(init).unwrap_or(init);
+    let call = super::model::call_of(e)?;
+    let s = m.symbol_of_expr(&call.callee)?;
+    let t = &m.top[*m.top_of.get(&s)?];
+    (t.import && !t.runtime_import).then(|| m.sym_name(s).to_string())
+}
+
+/// Store keys among `reads`, through the memos that read them.
+fn store_keys(m: &Model<'_>, a: &Analysis<'_>, reads: &BTreeSet<Key>) -> BTreeSet<Key> {
+    let mut out = BTreeSet::new();
+    let mut seen = BTreeSet::new();
+    let mut stack: Vec<Key> = reads.iter().copied().collect();
+    while let Some(k) = stack.pop() {
+        if !seen.insert(k) {
+            continue;
+        }
+        match &m.comps[k.0].setup[k.1] {
+            Item::Cell {
+                host: CellHost::Store | CellHost::Optimistic,
+                ..
+            } => {
+                out.insert(k);
+            }
+            Item::Memo { .. } => {
+                let v = a.av_of(k.0, &a.facts[k.0].item_refs[k.1]);
+                stack.extend(v.reads);
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 fn key_is_memo(m: &Model<'_>, k: Key) -> bool {
     matches!(m.comps[k.0].setup[k.1], Item::Memo { .. })
 }
@@ -682,6 +808,7 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                 expr: None,
                 refs: rw.out,
                 regions: vec![],
+                param: None,
             });
             w.f.issues
                 .push("statements before the view's return".into());
@@ -706,6 +833,7 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                         expr: None,
                         refs: r.clone(),
                         regions: vec![],
+                param: None,
                     });
                     r
                 }
@@ -729,6 +857,53 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
         let mut f = w.f;
         f.issues.extend(c.issues.iter().cloned());
         facts.push(f);
+    }
+
+    // --- opaque values ---------------------------------------------------------------
+    // A setup local computed by a function imported from a module the
+    // compiler cannot see (not a runtime, not inlined): its reactive state is
+    // invisible, so a `yield*` read of it (strict v2 reads only reactive
+    // values that way) cannot be classified: refuse.
+    for (ci, c) in m.comps.iter().enumerate() {
+        let mut opaque: Vec<(SymbolId, String)> = Vec::new();
+        for item in &c.setup {
+            let Item::Local {
+                decl: LocalDecl::Var(d),
+                symbols,
+                ..
+            } = item
+            else {
+                continue;
+            };
+            let Some(init) = &d.init else { continue };
+            let Some(callee) = model_call_callee(m, init) else { continue };
+            for s in symbols {
+                opaque.push((*s, callee.clone()));
+            }
+        }
+        if opaque.is_empty() {
+            continue;
+        }
+        let f = &facts[ci];
+        let yielded: Vec<SymbolId> = f
+            .sites
+            .iter()
+            .map(|s| &s.refs)
+            .chain(f.item_refs.iter())
+            .flat_map(|r| r.yielded.iter().copied())
+            .collect();
+        let mut reported = HashSet::new();
+        for y in &yielded {
+            if let Some((s, callee)) = opaque.iter().find(|(s, _)| s == y)
+                && reported.insert(*s)
+            {
+                let msg = format!(
+                    "`{}` comes from `{callee}(…)`, imported from a module the compiler does not see; a `yield*` read of it cannot be classified (the bundler plugin passes relative modules' sources)",
+                    m.sym_name(*s)
+                );
+                facts[ci].issues.push(msg);
+            }
+        }
     }
 
     // --- flows: abstract values to a fixpoint ----------------------------------
@@ -800,6 +975,28 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                     };
                     changed |= a.prop_av.entry((child, name)).or_default().join(&v);
                 }
+            }
+            // Render callback parameters: a keyed `Show`'s value is its
+            // input; a `For` row over a store is the store's (a row reads
+            // its item's fields through the proxy: live when the store is).
+            // Rows over plain values (an immutable array in a signal) stay
+            // plain: the item never changes for a keyed row.
+            for si in 0..a.facts[ci].sites.len() {
+                let site = &a.facts[ci].sites[si];
+                let Some(p) = site.param else { continue };
+                let v = a.av_of(ci, &site.refs.clone());
+                let v = if site.kind == SiteKind::For {
+                    Av {
+                        reads: store_keys(m, &a, &v.reads),
+                        writes: BTreeSet::new(),
+                    }
+                } else {
+                    Av {
+                        reads: v.reads,
+                        writes: BTreeSet::new(),
+                    }
+                };
+                changed |= a.sym_av.entry(p).or_default().join(&v);
             }
             for pi in 0..a.facts[ci].providers.len() {
                 let (ctx, value) = a.facts[ci].providers[pi];
@@ -888,6 +1085,20 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                         a.written.extend(v.writes);
                     }
                 }
+            }
+        }
+    }
+    // `refresh(x)` anywhere re-runs x's source: x is written.
+    for (ci, _) in m.comps.iter().enumerate() {
+        let refreshed: Vec<SymbolId> = a.facts[ci]
+            .item_refs
+            .iter()
+            .chain(a.facts[ci].sites.iter().map(|s| &s.refs))
+            .flat_map(|r| r.refreshed.iter().copied())
+            .collect();
+        for s in refreshed {
+            if let Some(v) = a.sym_av.get(&s) {
+                a.written.extend(v.reads.iter().copied());
             }
         }
     }
@@ -1261,6 +1472,34 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                 }
             }
         }
+        // Core-only runtime (stores, actions, refresh, …) referenced by the
+        // island's code: its sites, and its members' setup items the client
+        // rebuilds (a server-authoritative async memo stays on the server).
+        let mut core_refs: BTreeSet<String> = BTreeSet::new();
+        for (c, s) in &sites {
+            for (sym, _) in &a.facts[*c].sites[*s].refs.syms {
+                if let Some(n) = m.runtime.get(sym) {
+                    core_refs.insert(n.clone());
+                }
+            }
+        }
+        for c in &members {
+            for (ii, item) in m.comps[*c].setup.iter().enumerate() {
+                if matches!(item, Item::Memo { is_async: true, .. }) && !a.live.contains(&(*c, ii)) {
+                    continue;
+                }
+                for (sym, _) in &a.facts[*c].item_refs[ii].syms {
+                    if let Some(n) = m.runtime.get(sym) {
+                        core_refs.insert(n.clone());
+                    }
+                }
+            }
+        }
+        for n in &core_refs {
+            if super::client::CORE_ONLY.contains(&n.as_str()) || n == "readStore" {
+                t2.push(format!("`{n}` (the full core)"));
+            }
+        }
         for c in &members {
             for (b, regions) in &a.facts[*c].boundaries {
                 if regions.iter().any(|r| a.site_live[*c][*r]) {
@@ -1269,6 +1508,15 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                         m.comps[*c].name
                     ));
                     bump(&mut own, *c, 2);
+                    // An `<Errored>` there is a client error boundary around
+                    // the content the client adopts or creates; a `<Loading>`
+                    // would need a client pending fallback: not compiled yet.
+                    if b == "Loading" {
+                        unsupported.push(format!(
+                            "`{}`: <Loading> inside a live region (no client pending fallback yet)",
+                            m.comps[*c].name
+                        ));
+                    }
                 }
             }
             for item in &m.comps[*c].setup {
@@ -1317,9 +1565,6 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                     .count()
             )],
         };
-        if tier == 2 {
-            unsupported.push(format!("tier 2: {}", t2.join("; ")));
-        }
         let mut own_tiers: Vec<(usize, u8)> = members.iter().map(|c| (*c, own[c])).collect();
         own_tiers.sort();
         for (c, s) in &sites {

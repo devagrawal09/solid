@@ -123,6 +123,20 @@ function compileIslands(code, options = {}) {
 }
 
 /**
+ * A module's islands summary for the bundler plugin's cross-module pass: its
+ * exports by kind (`component`, `factory` — a function creating reactive
+ * state, `helper` — a generator read with `yield*`, `function`, `value`) and
+ * its relative imports with the names they import.
+ * Returns `{ exports: [{ name, kind }], imports: [{ specifier, names }] }`.
+ */
+function islandExports(code, options = {}) {
+  if (typeof code !== "string") {
+    throw new TypeError("@solidjs/compiler islandExports() expects source code as a string");
+  }
+  return JSON.parse(native.islandExports(code, { ...options }));
+}
+
+/**
  * Stage 5 (C, pruned resumability): compile an island module into a
  * resumable server module (JSX, compile with `generate: "ssr"`) and a
  * component-free client. Returns `{ resumable, reasons, liveCells,
@@ -637,6 +651,7 @@ module.exports = {
   summarizeCompiled,
   summarizeIslands,
   compileIslands,
+  islandExports,
   compileResumable,
   transformDirectives,
   transformDirectivesAsync,

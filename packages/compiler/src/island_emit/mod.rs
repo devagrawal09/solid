@@ -21,19 +21,29 @@
 //! actions, boundaries in live regions) falls back as a whole to today's
 //! hydration: the server and client outputs are the ordinary hydratable
 //! compiles, and the manifest says why.
+mod callforms;
 mod client;
 mod graph;
+mod inline;
 mod jsx;
 mod model;
 mod server;
+mod store_paths;
 mod tx;
 
+pub use inline::{ImportedModule, island_exports};
 use oxc_allocator::Allocator;
 use oxc_semantic::SemanticBuilder;
 
 use crate::capabilities::JsonWriter;
 use crate::compiler::{CompileOptions, Generate, compile, parse_program, source_type_for_filename};
 use crate::error::CompileError;
+
+fn json_str(s: &str) -> String {
+    let mut w = JsonWriter::default();
+    w.string(s);
+    w.out
+}
 
 pub(crate) fn client_js_str(s: &str) -> String {
     let mut out = String::from("\"");
@@ -68,10 +78,16 @@ pub struct IslandOptions {
     pub min_tier: u8,
     /// Instrumented output (labels on tier-0 cells, reads through `get`).
     pub debug: bool,
+    /// Dev builds: chunks export `verify(anchor)` (the dev verifier).
+    pub verify: bool,
     /// Probe cell hosts, `object.method` (the conformance harness's `h.signal`).
     pub probe_hosts: Vec<String>,
     /// Module name for the fallback compiles.
     pub module_name: String,
+    /// Sources of relatively imported modules (cross-module inlining of
+    /// factories, helper generators and components; the bundler plugin
+    /// provides those its per-module summaries name).
+    pub imports: Vec<ImportedModule>,
 }
 
 impl Default for IslandOptions {
@@ -85,8 +101,10 @@ impl Default for IslandOptions {
             tier1_core: false,
             min_tier: 0,
             debug: false,
+            verify: false,
             probe_hosts: Vec::new(),
             module_name: crate::compiler::DEFAULT_MODULE_NAME.into(),
+            imports: Vec::new(),
         }
     }
 }
@@ -110,7 +128,64 @@ pub struct IslandsOutput {
     pub fallback: Option<String>,
 }
 
-pub fn compile_islands(source: &str, opts: &IslandOptions) -> Result<IslandsOutput, CompileError> {
+pub fn compile_islands(
+    original: &str,
+    opts: &IslandOptions,
+) -> Result<IslandsOutput, CompileError> {
+    let first = compile_pass(original, opts, false)?;
+    // Imported components the module renders with live state (or inside an
+    // island's DOM) are compiled as part of it: inline them and retry.
+    if let Some(reason) = &first.fallback
+        && !opts.imports.is_empty()
+        && [
+            "outside the module",
+            "variable-size region",
+            "no fixed path",
+        ]
+        .iter()
+        .any(|k| reason.contains(k))
+    {
+        let second = compile_pass(original, opts, true)?;
+        match &second.fallback {
+            None => return Ok(second),
+            Some(r2) if r2 != reason => {
+                let why = format!("{reason} (with its imported components inlined: {r2})");
+                return Ok(IslandsOutput {
+                    manifest: first.manifest.replacen(
+                        &format!("\"fallback\":{}", json_str(reason)),
+                        &format!("\"fallback\":{}", json_str(&why)),
+                        1,
+                    ),
+                    fallback: Some(why),
+                    ..first
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok(first)
+}
+
+/// The source the partitioner reads: imported definitions inlined (with
+/// components when `components`), call forms as JSX, factory calls in
+/// setups inlined.
+fn prepare(original: &str, opts: &IslandOptions, components: bool) -> Option<String> {
+    let f = opts.filename.as_deref();
+    let a = inline::inline_imports(original, f, &opts.imports, components);
+    let s1 = a.as_deref().unwrap_or(original);
+    let b = callforms::rewrite(s1, f);
+    let s2 = b.as_deref().unwrap_or(s1);
+    let c = inline::inline_calls(s2, f);
+    c.or(b).or(a)
+}
+
+fn compile_pass(
+    original: &str,
+    opts: &IslandOptions,
+    components: bool,
+) -> Result<IslandsOutput, CompileError> {
+    let rewritten = prepare(original, opts, components);
+    let source = rewritten.as_deref().unwrap_or(original);
     let allocator = Allocator::default();
     let source_type = source_type_for_filename(opts.filename.as_deref())?;
     let program = parse_program(&allocator, source, source_type)?;
@@ -127,7 +202,8 @@ pub fn compile_islands(source: &str, opts: &IslandOptions) -> Result<IslandsOutp
                 .map(|(a, b)| (a.to_string(), b.to_string()))
         })
         .collect();
-    let m = model::build_model(source, &program, scoping, probe_hosts);
+    let contexts = inline::imported_contexts(&program, &opts.imports);
+    let m = model::build_model_with(source, &program, scoping, probe_hosts, &contexts);
     let a = graph::analyze(&m, &opts.id_prefix);
     match emit(&m, &a, opts) {
         Ok((server, chunks, manifest)) => Ok(IslandsOutput {
@@ -137,7 +213,8 @@ pub fn compile_islands(source: &str, opts: &IslandOptions) -> Result<IslandsOutp
             manifest,
             fallback: None,
         }),
-        Err(reason) => fallback(source, opts, &m, &a, reason),
+        // The fallback compiles the module as written.
+        Err(reason) => fallback(original, opts, &m, &a, reason),
     }
 }
 
@@ -167,6 +244,7 @@ fn emit(
         core: opts.core_module.clone(),
         tier1_core: opts.tier1_core,
         debug: opts.debug,
+        verify: opts.verify,
     };
     let mut codes = Vec::new();
     let mut notes: Vec<Vec<String>> = Vec::new();
@@ -176,11 +254,11 @@ fn emit(
         }
         let want = g.tier.max(opts.min_tier);
         let mut note = Vec::new();
-        let code = match client::emit_group(m, a, gi, want.min(1), &copts) {
+        let code = match client::emit_group(m, a, gi, want.min(1), &copts, want >= 2) {
             Ok(c) => c,
             Err(e) if want == 0 => {
                 note.push(format!("tier 0 emission failed ({e}); emitted at tier 1"));
-                client::emit_group(m, a, gi, 1, &copts)
+                client::emit_group(m, a, gi, 1, &copts, want >= 2)
                     .map_err(|e| format!("island `{}`: {e}", g.id))?
             }
             Err(e) => return Err(format!("island `{}` ({}): {e}", g.id, m.comps[g.root].name)),
@@ -213,7 +291,7 @@ fn emit(
     if owners.values().any(|n| *n > 1) {
         return Err("module-level mutable state referenced by two islands".into());
     }
-    let server = server::emit_server(m, a, &codes)?;
+    let (server, streams) = server::emit_server(m, a, &codes)?;
     let chunks = codes
         .iter()
         .map(|(gi, c)| IslandChunk {
@@ -221,7 +299,7 @@ fn emit(
             code: c.code.clone(),
         })
         .collect();
-    let manifest = manifest(m, a, &codes, &notes, None, opts);
+    let manifest = manifest(m, a, &codes, &notes, None, opts, &streams);
     Ok((server, chunks, manifest))
 }
 
@@ -232,11 +310,15 @@ fn manifest(
     notes: &[Vec<String>],
     fallback: Option<&str>,
     opts: &IslandOptions,
+    streams: &[bool],
 ) -> String {
     let mut w = JsonWriter::default();
     w.begin_object();
     w.key("version");
     w.number(1);
+    // A `<Loading>` over server data streams its content as a chunk.
+    w.key("streams");
+    w.boolean(streams.iter().any(|s| *s));
     w.key("module");
     match &opts.filename {
         Some(f) => w.string(f),
@@ -320,16 +402,21 @@ fn manifest(
         w.string(if code.lazy_ok { "lazy" } else { "load" });
         w.key("preventDefault");
         w.boolean(g.prevent_default);
+        // Its static paths may cross a streamed boundary: activate once no
+        // boundary around its DOM is pending.
+        w.key("waits");
+        w.boolean(waits(a, g.root, streams));
         w.key("serialized");
         w.begin_array();
         for s in &code.serial {
             match s {
                 client::Serial::Prop(p) => w.string(&format!("props.{p}")),
-                client::Serial::Cell(ii) => {
-                    if let model::Item::Cell { name, .. } = &m.comps[g.root].setup[*ii] {
-                        w.string(&format!("cell {name}"));
-                    }
-                }
+                client::Serial::Ctx(n) => w.string(&format!("context {n}")),
+                client::Serial::Cell(ii) => match &m.comps[g.root].setup[*ii] {
+                    model::Item::Cell { name, .. } => w.string(&format!("cell {name}")),
+                    model::Item::Memo { name, .. } => w.string(&format!("memo {name}")),
+                    _ => {}
+                },
             }
         }
         w.end_array();
@@ -375,6 +462,26 @@ fn manifest(
     w.out
 }
 
+/// A streamed boundary in the island root's render tree.
+fn waits(a: &graph::Analysis<'_>, root: usize, streams: &[bool]) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = vec![root];
+    while let Some(c) = stack.pop() {
+        if !seen.insert(c) {
+            continue;
+        }
+        if streams.get(c).copied().unwrap_or(false) {
+            return true;
+        }
+        for call in &a.facts[c].calls {
+            if let jsx::Tag::Comp(k) = call.tag {
+                stack.push(k);
+            }
+        }
+    }
+    false
+}
+
 fn fallback(
     source: &str,
     opts: &IslandOptions,
@@ -402,7 +509,7 @@ fn fallback(
             ..base
         },
     )?;
-    let manifest = manifest(m, a, &[], &[], Some(&reason), opts);
+    let manifest = manifest(m, a, &[], &[], Some(&reason), opts, &[]);
     Ok(IslandsOutput {
         server: server.code,
         client: Some(client.code),

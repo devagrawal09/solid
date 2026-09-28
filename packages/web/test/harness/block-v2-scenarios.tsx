@@ -37,8 +37,10 @@ import {
   $component,
   $memo,
   $signal,
+  $cleanup,
   attempt,
   createContext,
+  onSettled,
   createSignal,
   For,
   Loading,
@@ -215,7 +217,36 @@ function V2HelpersApp() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// V5. A run-once effect block (`onSettled(function* …)`) in a component body,
+// after a `$component` sibling (todos-blocks' `createHashFilter`). The client
+// lowers the body to a plain `onSettled(fn)`; it must still run once the
+// hydrated graph settles.
+function V2SettledProbe() {
+  const [state, setState] = createSignal("pending");
+  onSettled(function* () {
+    setState("ran");
+    yield* $cleanup(() => {});
+  });
+  return <p>{state()}</p>;
+}
+function V2SettledAfterComponent() {
+  return (
+    <main>
+      <V2Header />
+      <V2SettledProbe />
+    </main>
+  );
+}
+
 export const blockV2Scenarios: Scenario[] = [
+  {
+    name: "v2-settled-after-hydration",
+    App: V2SettledAfterComponent,
+    expectedText: "todosran",
+    serverText: "todospending",
+    stableSelector: "main, header, h1, p"
+  },
   {
     name: "v2-view-then-boundary",
     App: V2ViewThenBoundary,

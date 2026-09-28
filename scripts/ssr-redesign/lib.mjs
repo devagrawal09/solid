@@ -121,7 +121,7 @@ function patchPlugin({ count = false, oracles = [] } = {}) {
 }
 
 /** Compile .tsx/.jsx through the Rust compiler; `rewrites` model compiler output a prototype would emit. */
-function compilerPlugin({ generate, hydratable, rewrites = {}, options = {}, swaps = {}, islands, compileTs = false }) {
+function compilerPlugin({ generate, hydratable, rewrites = {}, options = {}, swaps = {}, islands }) {
   return {
     name: "solid-compiler",
     setup(b) {
@@ -145,16 +145,18 @@ function compilerPlugin({ generate, hydratable, rewrites = {}, options = {}, swa
         const out = transform(src, { filename: args.path, generate, hydratable, ...options });
         return { contents: out.code, loader: "ts", resolveDir: dirname(args.path) };
       });
-      // Rewrites on plain .ts modules (no JSX) are applied without compiling;
-      // `compileTs` also runs the app's `.ts` modules through the compiler
-      // (block bodies there, as examples/todos-blocks' Vite config does).
+      // Plain .ts app modules: rewrites apply as given; a module holding a
+      // generator body (a block, e.g. todos-blocks' `onSettled(function* …)`
+      // in filter.ts) goes through the compiler, as the example's own Vite
+      // config does (`extensions: [[".ts", …]]`). Left uncompiled in an
+      // otherwise driver-free bundle, nothing installs the block driver and
+      // the production build runs the generator function as a plain callback.
       b.onLoad({ filter: /\.ts$/ }, args => {
+        if (args.path.includes("node_modules") || args.path.includes("/packages/")) return undefined;
         const rel = relative(ROOT, args.path);
-        const compile = compileTs && !/node_modules|\/packages\/|\.d\.ts$/.test(args.path);
-        if (!rewrites[rel] && !compile) return undefined;
         let src = readFileSync(args.path, "utf8");
         for (const [from, to] of rewrites[rel] || []) src = once(src, from, to, rel);
-        if (!compile) return { contents: src, loader: "ts" };
+        if (!/function\s*\*/.test(src)) return rewrites[rel] ? { contents: src, loader: "ts" } : undefined;
         const out = transform(src, { filename: args.path, generate, hydratable, ...options });
         return { contents: out.code, loader: "ts", resolveDir: dirname(args.path) };
       });
@@ -248,7 +250,7 @@ function originOf(input) {
 }
 
 /** Bundle and import a server entry (node, ESM). */
-export async function loadServer(entry, outfile, { rewrites, swaps, tildeRoot, options, islands, compileTs } = {}) {
+export async function loadServer(entry, outfile, { rewrites, swaps, tildeRoot, options, islands } = {}) {
   await build({
     entryPoints: [entry],
     bundle: true,
@@ -258,7 +260,7 @@ export async function loadServer(entry, outfile, { rewrites, swaps, tildeRoot, o
     logLevel: "error",
     loader: { ".json": "json" },
     alias: { "solid-js": DIST.solidServer, "@solidjs/web": DIST.webServer, "@solidjs/signals": DIST.signals },
-    plugins: [tildePlugin(tildeRoot), compilerPlugin({ generate: "ssr", hydratable: true, rewrites, options, swaps, islands, compileTs })]
+    plugins: [tildePlugin(tildeRoot), compilerPlugin({ generate: "ssr", hydratable: true, rewrites, options, swaps, islands })]
   });
   return import(pathToFileURL(outfile).href + `?${Date.now()}`);
 }

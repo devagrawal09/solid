@@ -132,7 +132,10 @@ export const APPS = {
       "C-T1-eager": { server: "apps/hn-blocks/server-islands.ts", client: "apps/islands-client.ts", islands: { root: "apps/hn-blocks/story.tsx", mode: "eager", minTier: 1 } },
       "C-T1-lazy": { server: "apps/hn-blocks/server-islands.ts", client: "apps/islands-client.ts", islands: { root: "apps/hn-blocks/story.tsx", mode: "auto", minTier: 1 }, splitting: true },
       "C-T2-eager": { server: "apps/hn-blocks/server-islands.ts", client: "apps/islands-client.ts", islands: { root: "apps/hn-blocks/story.tsx", mode: "eager", minTier: 2 } },
-      "C-T2-lazy": { server: "apps/hn-blocks/server-islands.ts", client: "apps/islands-client.ts", islands: { root: "apps/hn-blocks/story.tsx", mode: "auto", minTier: 2 }, splitting: true }
+      "C-T2-lazy": { server: "apps/hn-blocks/server-islands.ts", client: "apps/islands-client.ts", islands: { root: "apps/hn-blocks/story.tsx", mode: "auto", minTier: 2 }, splitting: true },
+      // Streaming: the same islands, the page's Loading streamed as a chunk
+      // after the shell (islands-stream.js; the swap runs while parsing).
+      "C-stream": { server: "apps/hn-blocks/server-islands-stream.ts", client: "apps/islands-client.ts", islands: { root: "apps/hn-blocks/story.tsx", mode: "auto" }, splitting: true }
     }
   },
   sync: {
@@ -172,7 +175,19 @@ export const APPS = {
     session: [
       () => document.querySelectorAll("input.toggle")[1].click(),
       () => document.querySelectorAll("button.destroy")[2].click(),
-      () => document.querySelector("input.toggle-all").click()
+      () => document.querySelector("input.toggle-all").click(),
+      () => {
+        location.hash = "#/active";
+      },
+      () => {
+        const input = document.querySelector("input.new-todo");
+        input.value = "a new one";
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      },
+      () => {
+        location.hash = "#/";
+      },
+      () => document.querySelector("button.clear-completed").click()
     ],
     stepWait: 1100,
     markIdentity: () => {
@@ -203,12 +218,13 @@ export const APPS = {
       CSR: { server: "apps/todos/server.tsx", client: "apps/todos/csr.tsx", hydratable: false, bytesOnly: true },
       // Runtime-only on-interaction hydration of the whole app.
       "A-lazy": { server: "apps/todos/server.tsx", client: "apps/todos/client-lazy.ts", splitting: true },
-      // Compiler emission: `compileIslands` on todos-blocks' app module. Its
-      // one island group needs tier 2 (an optimistic async store, actions,
-      // Loading / Errored), so the module falls back to hydration: the
-      // server output is the hydratable SSR compile and the generated entry
-      // hydrates the root (the manifest records why).
-      C: { server: "apps/todos/server.tsx", client: "apps/islands-client.ts", islands: { root: "../../examples/todos-blocks/src/app.tsx", mode: "auto" } }
+      // Compiler emission: `compileIslands` on todos-blocks' app module, with
+      // its imported factories inlined (cross-module): one island group at
+      // tier 2 (an optimistic async store adopted from the server's value,
+      // actions, a hash filter), lazy (the loader activates it on the first
+      // event, or on `hashchange`); `C-eager` activates it at load.
+      C: { server: "apps/todos/server-islands.ts", client: "apps/islands-client.ts", islands: { root: "../../examples/todos-blocks/src/app.tsx", mode: "auto" }, splitting: true },
+      "C-eager": { server: "apps/todos/server-islands.ts", client: "apps/islands-client.ts", islands: { root: "../../examples/todos-blocks/src/app.tsx", mode: "eager" } }
     }
   },
   "todos-local": {

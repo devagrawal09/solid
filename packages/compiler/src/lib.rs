@@ -56,7 +56,9 @@ pub use block_projection::{
 pub use capabilities::summarize_capabilities;
 pub use compiled_facts::summarize_compiled;
 pub use islands::summarize_islands;
-pub use island_emit::{IslandChunk, IslandOptions, IslandsOutput, compile_islands};
+pub use island_emit::{
+    ImportedModule, IslandChunk, IslandOptions, IslandsOutput, compile_islands, island_exports,
+};
 pub use resumable::compile_resumable;
 pub use compiler::{CompileOptions, CompileOutput, Generate, Renderer, Syntax, Wrapper, compile};
 pub use error::{CompileError, CompileErrorKind};

@@ -88,6 +88,11 @@ pub(crate) enum Item<'a> {
         set: Option<SymbolId>,
         init: Option<&'a Expression<'a>>,
         host: CellHost,
+        /// The runtime constructor (`createSignal`, `createOptimisticStore`,
+        /// `$store`, …; the probe host's method for probe cells).
+        ctor: String,
+        /// Arguments after the initializer (a projection's seed, options).
+        rest: Vec<&'a Expression<'a>>,
         /// A probe host's literal label (`h.signal("open", …)`), passed to
         /// tier-0 cells so instrumented builds can trace them.
         label: Option<String>,
@@ -139,6 +144,22 @@ pub(crate) enum LocalDecl<'a> {
 }
 
 impl<'a> Item<'a> {
+    /// A store-shaped cell: its getter is the store (a proxy), not an
+    /// accessor.
+    pub(crate) fn store_like(&self) -> bool {
+        match self {
+            Item::Cell { host: CellHost::Store, .. } => true,
+            Item::Cell { ctor, .. } => matches!(
+                ctor.as_str(),
+                "createOptimisticStore" | "createProjection" | "createStore" | "createPlainStore"
+            ),
+            _ => false,
+        }
+    }
+    /// A cell computed by a function (a projection, a derived signal).
+    pub(crate) fn derived(&self) -> bool {
+        matches!(self, Item::Cell { init: Some(e), .. } if FnRef::from_expr(e).is_some())
+    }
     #[allow(dead_code)]
     pub(crate) fn span(&self) -> Span {
         match self {
@@ -185,6 +206,9 @@ pub(crate) struct Comp<'a> {
     /// Per-island prefetch override from a `// @island-prefetch <policy>`
     /// pragma in the component's leading comments.
     pub prefetch: Option<String>,
+    /// The setup function (a `$component`'s generator, or the plain
+    /// component function): its statements are the setup.
+    pub body_fn: Option<FnRef<'a>>,
 }
 
 pub(crate) struct Top<'a> {
@@ -343,6 +367,17 @@ pub(crate) fn build_model<'a>(
     scoping: &'a Scoping,
     probe_hosts: Vec<(String, String)>,
 ) -> Model<'a> {
+    build_model_with(src, program, scoping, probe_hosts, &[])
+}
+
+/// With `contexts`: imported bindings that are contexts of other modules.
+pub(crate) fn build_model_with<'a>(
+    src: &'a str,
+    program: &'a Program<'a>,
+    scoping: &'a Scoping,
+    probe_hosts: Vec<(String, String)>,
+    contexts: &[SymbolId],
+) -> Model<'a> {
     let mut m = Model {
         src,
         scoping,
@@ -355,6 +390,9 @@ pub(crate) fn build_model<'a>(
         probe_hosts,
         issues: Vec::new(),
     };
+    for c in contexts {
+        m.contexts.insert(*c, None);
+    }
     // Imports first, so runtime names resolve while components are read.
     for stmt in &program.body {
         let Statement::ImportDeclaration(import) = stmt else {
@@ -599,6 +637,7 @@ fn read_component_expr<'a>(
         view: None,
         issues: Vec::new(),
         prefetch: None,
+        body_fn: Some(FnRef::Func(f)),
     };
     if f.params.items.len() > 1
         || f.params
@@ -683,6 +722,7 @@ fn read_plain_component<'a>(
         view: None,
         issues: Vec::new(),
         prefetch: None,
+        body_fn: Some(f),
     };
     if f.is_concise() {
         if let Some(e) = f.concise() {
@@ -702,15 +742,8 @@ fn read_plain_component<'a>(
             read_setup_statement(m, &mut comp, s);
         }
     }
-    for item in &comp.setup {
-        if !matches!(item, Item::Local { .. }) {
-            comp.issues.push(format!(
-                "`{}` is a plain function component that creates reactive state (write it as a $component)",
-                comp.name
-            ));
-            break;
-        }
-    }
+    // A plain component's body runs once, like a setup: it may create
+    // reactive state (directly, or through an inlined factory call).
     let idx = m.comps.len();
     if let Some(s) = sym {
         m.comp_of.insert(s, idx);
@@ -798,10 +831,33 @@ fn read_setup_statement<'a>(m: &Model<'a>, comp: &mut Comp<'a>, stmt: &'a Statem
                 });
             }
         }
+        // `if (!v) throw …`, loops, blocks: side-effect statements that run
+        // where the setup runs. A read in one (`yield*`) is not compiled.
+        _ if !has_yield(stmt) => comp.setup.push(Item::Stmt {
+            stmt,
+            span: stmt.span(),
+        }),
         _ => comp
             .issues
             .push(format!("setup statement `{}`", short(m.text(stmt.span())))),
     }
+}
+
+/// A `yield` of the statement's own function (not of a nested one).
+fn has_yield(s: &Statement<'_>) -> bool {
+    use oxc_ast_visit::{Visit, walk};
+    struct Y(bool);
+    impl<'a> Visit<'a> for Y {
+        fn visit_yield_expression(&mut self, y: &oxc_ast::ast::YieldExpression<'a>) {
+            self.0 = true;
+            walk::walk_yield_expression(self, y);
+        }
+        fn visit_function(&mut self, _: &Function<'a>, _: oxc_semantic::ScopeFlags) {}
+        fn visit_arrow_function_expression(&mut self, _: &ArrowFunctionExpression<'a>) {}
+    }
+    let mut y = Y(false);
+    y.visit_statement(s);
+    y.0
 }
 
 pub(crate) fn short(s: &str) -> String {
@@ -853,7 +909,9 @@ fn read_declarator<'a>(
         };
         let cell = match (host.as_deref(), yielded.is_some()) {
             (Some("$signal"), true) | (Some("createSignal"), false) => Some((CellHost::Signal, 0)),
-            (Some("$store"), true) | (Some("createStore"), false) => Some((CellHost::Store, 0)),
+            (Some("$store"), true) | (Some("createStore" | "createPlainStore"), false) => {
+                Some((CellHost::Store, 0))
+            }
             (Some("createOptimistic" | "createOptimisticStore" | "createProjection"), false) => {
                 Some((CellHost::Optimistic, 0))
             }
@@ -871,18 +929,30 @@ fn read_declarator<'a>(
             // A function initializer of createSignal is a derived signal
             // (tier 2 here: its writable-memo semantics are not compiled).
             let init_expr = arg_expr(call, init_arg);
-            let host_kind = if host_kind == CellHost::Signal
+            // A function initializer of `createStore` is a projection.
+            let host_kind = if host_kind != CellHost::Optimistic
                 && init_expr.is_some_and(|e| FnRef::from_expr(e).is_some())
             {
                 CellHost::Optimistic
             } else {
                 host_kind
             };
+            let ctor = match &host {
+                Some(h) => h.clone(),
+                None => "probe".into(),
+            };
             comp.setup.push(Item::Cell {
                 get,
                 set,
                 init: init_expr,
                 host: host_kind,
+                ctor,
+                rest: call
+                    .arguments
+                    .iter()
+                    .skip(init_arg + 1)
+                    .filter_map(|a| a.as_expression())
+                    .collect(),
                 label: probe.flatten(),
                 name: m.sym_name(get).to_string(),
                 span,

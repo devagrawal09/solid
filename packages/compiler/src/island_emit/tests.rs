@@ -144,7 +144,7 @@ export const App = $component(function* () {
 }
 
 #[test]
-fn a_store_needs_tier2_and_falls_back() {
+fn a_store_island_is_tier2_on_the_cores_plain_store() {
     let out = run(r#"
 import { $component, $event, $store } from "solid-js";
 export const App = $component(function* () {
@@ -153,10 +153,48 @@ export const App = $component(function* () {
   return function* () { return <button onClick={inc}>{yield* s.n}</button>; };
 });
 "#);
-    let reason = out.fallback.expect("falls back");
-    assert!(reason.contains("tier 2"), "{reason}");
-    assert!(out.client.is_some());
-    assert!(out.server.contains("ssr"), "{}", out.server);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains(r#""tier":2"#), "{m}");
+    assert!(m.contains("store `s` (the kernel has no stores)"), "{m}");
+    let chunk = &out.chunks[0].code;
+    assert!(chunk.contains(r#"from "@solidjs/signals""#), "{chunk}");
+    // Rebuilt from its constant: nothing serialized.
+    assert!(chunk.contains("$$createPlainStore({ n: 1 })"), "{chunk}");
+    assert!(!out.server.contains("data-s"), "{}", out.server);
+}
+
+#[test]
+fn a_store_from_server_data_serializes_only_the_keys_its_code_touches() {
+    let out = run(r#"
+import { $component, $event, $store, readStore } from "solid-js";
+export const App = $component(function* (props) {
+  const [s, setS] = yield* $store({ items: yield* props.items, label: yield* props.label, big: yield* props.big });
+  const add = $event(function* () { setS(d => { d.items.push(1); }); });
+  return function* () {
+    return <p onClick={add}>{yield* s.label}: {yield* readStore(s, x => x.items.length)}</p>;
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    assert!(
+        out.server
+            .contains(r#""$s": _$pick(s, ["items", "label"])"#),
+        "{}",
+        out.server
+    );
+    let chunk = &out.chunks[0].code;
+    assert!(chunk.contains(r#"$$createPlainStore($d["$s"])"#), "{chunk}");
+    // The same store used as a value serializes whole.
+    let out = run(r#"
+import { $component, $event, $store } from "solid-js";
+export const App = $component(function* (props) {
+  const [s, setS] = yield* $store({ a: yield* props.a, b: 1 });
+  const log = $event(function* () { console.log(s); setS(d => { d.b++; }); });
+  return function* () { return <p onClick={log}>{yield* s.b}</p>; };
+});
+"#);
+    assert!(out.server.contains(r#""$s": s }"#), "{}", out.server);
 }
 
 #[test]
@@ -437,9 +475,8 @@ export const Page = $component(function* () {
 }
 
 #[test]
-fn an_async_memo_read_by_a_live_island_needs_tier2() {
-    let reason = fallback_of(
-        r#"
+fn a_live_async_memo_is_tier2_and_adopts_the_server_value() {
+    let out = run(r#"
 import { $component, $event, $memo, $signal, attempt } from "solid-js";
 export const App = $component(function* () {
   const [id, setId] = yield* $signal(1);
@@ -447,26 +484,94 @@ export const App = $component(function* () {
   const next = $event(function* () { setId(x => x + 1); });
   return function* () { return <p onClick={next}>{(yield* user).name}</p>; };
 });
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(
+        m.contains("async memo `user`") && m.contains(r#""tier":2"#),
+        "{m}"
+    );
+    assert!(m.contains(r#""serialized":["memo user"]"#), "{m}");
+    // The server serializes the settled value; the client's first run reads
+    // `id` (subscribing) and returns it without calling `load`.
+    assert!(out.server.contains(r#""$user": user()"#), "{}", out.server);
+    let chunk = &out.chunks[0].code;
+    assert!(chunk.contains(r#"return $d["$user"];"#), "{chunk}");
+    assert!(chunk.contains("(await (() => load(i))())"), "{chunk}");
+    // A memo whose value is not its one attempt's result is refused.
+    let reason = fallback_of(
+        r#"
+import { $component, $event, $memo, $signal, attempt } from "solid-js";
+export const App = $component(function* () {
+  const [id, setId] = yield* $signal(1);
+  const user = yield* $memo(function* () { const u = yield* attempt(() => load(yield* id)); return u.name; });
+  const next = $event(function* () { setId(x => x + 1); });
+  return function* () { return <p onClick={next}>{yield* user}</p>; };
+});
 "#,
     );
+    assert!(reason.contains("not adoptable"), "{reason}");
+}
+
+#[test]
+fn an_event_that_attempts_async_work_is_an_async_handler() {
+    let out = run(r#"
+import { $component, $event, $signal, attempt } from "solid-js";
+export const App = $component(function* () {
+  const [n, setN] = yield* $signal(0);
+  const save = $event(function* () { const r = yield* attempt(() => fetch("/n")); setN(r.status); });
+  return function* () { return <p onClick={save}>{yield* n}</p>; };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let chunk = &out.chunks[0].code;
+    assert!(chunk.contains("const save = async () => {"), "{chunk}");
     assert!(
-        reason.contains("tier 2") && reason.contains("async memo"),
-        "{reason}"
+        chunk.contains(r#"(await (() => fetch("/n"))())"#),
+        "{chunk}"
     );
 }
 
 #[test]
-fn component_call_forms_and_live_jsx_expressions_fall_back() {
+fn component_call_forms_compile_as_jsx() {
+    // `Loading({ … })` / `Child({ … })` in a view are read as the elements
+    // they stand for (a source pre-pass), nested ones inside out.
+    let out = run(r#"
+import { $component, $event, $signal, Loading, Errored } from "solid-js";
+const Child = $component(function* (props) {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () { return <b onClick={inc} title={props.t}>{yield* n}</b>; };
+});
+export const App = $component(function* () {
+  return function* () {
+    return <main>{Errored({ fallback: e => <p>{String(e())}</p>, children: Loading({ fallback: "…", children: Child({ t: "x" }) }) })}</main>;
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "fallback: {:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains(r#""root":"Child""#), "{m}");
+    assert!(
+        out.server.contains(r#"Child({ "t": "x" }, $c)"#),
+        "{}",
+        out.server
+    );
+    // A call form the pre-pass cannot express as JSX (a spread) is refused.
     let reason = fallback_of(
         r#"
 import { $component, Loading } from "solid-js";
 const Child = $component(function* () { return function* () { return <b />; }; });
-export const App = $component(function* () {
-  return function* () { return <main>{Loading({ fallback: "…", children: Child({}) })}</main>; };
+export const App = $component(function* (props) {
+  return function* () { return <main>{Child({ ...props })}</main>; };
 });
 "#,
     );
     assert!(reason.contains("component call form"), "{reason}");
+}
+
+#[test]
+fn live_jsx_expressions_fall_back() {
     let reason = fallback_of(
         r#"
 import { $component, $event, $signal } from "solid-js";
@@ -478,6 +583,39 @@ export const App = $component(function* () {
 "#,
     );
     assert!(reason.contains("live expression producing JSX"), "{reason}");
+}
+
+#[test]
+fn a_loading_over_server_data_streams_and_a_spanning_island_waits() {
+    let out = run(r#"
+import { $component, $event, $memo, $signal, attempt, Loading } from "solid-js";
+const Data = $component(function* (props) {
+  const info = yield* $memo(function* () { return yield* attempt(() => fetch("/x")); });
+  return function* () { return <section><h2>{(yield* info).title}</h2><span>{yield* props.n}</span></section>; };
+});
+export const App = $component(function* () {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    return <div><button onClick={inc}>inc</button><Loading fallback={<p>…</p>}><Data n={yield* n} /></Loading></div>;
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "fallback: {:?}", out.fallback);
+    // The boundary renders through `_$ld` (streamed with a stream, awaited
+    // in place without one); its fallback is a thunk.
+    assert!(
+        out.server.contains("await _$ld($c, async ($c) =>"),
+        "{}",
+        out.server
+    );
+    let m = manifest(&out);
+    assert!(m.contains(r#""streams":true"#), "{m}");
+    // The island's member renders inside the boundary: it waits for it.
+    assert!(m.contains(r#""waits":true"#), "{m}");
+    // The member's server-authoritative async memo is not rebuilt.
+    let chunk = &out.chunks[0].code;
+    assert!(!chunk.contains("info"), "{chunk}");
 }
 
 #[test]
@@ -527,7 +665,7 @@ export const App = $component(function* (props) {
     assert!(
         out.chunks[0]
             .code
-            .contains(r#"const $d = JSON.parse($a.getAttribute("data-s"))"#),
+            .contains(r#"const $d = JSON.parse($a.getAttribute("data-s"))["i0"]"#),
         "{}",
         out.chunks[0].code
     );
@@ -638,4 +776,262 @@ export const B = $component(function* () {
 "#,
     );
     assert!(reason.contains("module-level mutable state"), "{reason}");
+}
+
+// --- cross-module: summaries and inlining ----------------------------------------------
+
+fn run_with(src: &str, imports: &[(&str, &str)]) -> IslandsOutput {
+    let opts = IslandOptions {
+        filename: Some("/app/src/app.tsx".into()),
+        imports: imports
+            .iter()
+            .map(|(spec, code)| ImportedModule {
+                specifier: spec.to_string(),
+                filename: format!("/app/src/{}.tsx", spec.trim_start_matches("./")),
+                code: code.to_string(),
+            })
+            .collect(),
+        ..IslandOptions::default()
+    };
+    compile_islands(src, &opts).expect("compiles")
+}
+
+const COUNTER: &str = r#"
+import { createMemo, createSignal } from "solid-js";
+import { log } from "./log";
+const step = 1;
+export function createCounter(start) {
+  const [n, setN] = createSignal(start);
+  const double = createMemo(() => n() * 2);
+  return { n, double, inc: () => { log("inc"); setN(x => x + step); } };
+}
+export function plain(x) { return x + 1; }
+"#;
+
+#[test]
+fn island_exports_summarize_kinds_and_relative_imports() {
+    let s = island_exports(COUNTER, Some("counter.ts"));
+    assert!(
+        s.contains(r#"{"name":"createCounter","kind":"factory"}"#),
+        "{s}"
+    );
+    assert!(s.contains(r#"{"name":"plain","kind":"function"}"#), "{s}");
+    assert!(
+        s.contains(r#""imports":[{"specifier":"./log","names":["log"]}]"#),
+        "{s}"
+    );
+    let s = island_exports(
+        r#"
+import { $component, createContext } from "solid-js";
+export const Theme = createContext("light");
+export function* useTheme() { return yield* Theme; }
+export const Badge = $component(function* () { return function* () { return <b />; }; });
+"#,
+        Some("theme.tsx"),
+    );
+    assert!(s.contains(r#"{"name":"Badge","kind":"component"}"#), "{s}");
+    assert!(s.contains(r#"{"name":"Theme","kind":"value"}"#), "{s}");
+    assert!(s.contains(r#"{"name":"useTheme","kind":"helper"}"#), "{s}");
+}
+
+#[test]
+fn an_imported_factory_is_inlined_and_its_state_is_the_islands() {
+    let src = r#"
+import { $component, $event } from "solid-js";
+import { createCounter, plain } from "./counter";
+export const App = $component(function* () {
+  const c = createCounter(plain(0));
+  const inc = $event(function* () { c.inc(); });
+  return function* () { return <button onClick={inc}>{yield* c.double}</button>; };
+});
+"#;
+    // Without the module's source the factory is opaque: a `yield*` read of
+    // what it returns cannot be classified, and the module falls back.
+    let reason = fallback_of(src);
+    assert!(reason.contains("comes from `createCounter(…)`"), "{reason}");
+    let out = run_with(src, &[("./counter", COUNTER)]);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains(r#""root":"App""#), "{m}");
+    assert!(m.contains("memo `double$f"), "{m}");
+    let chunk = &out.chunks[0].code;
+    // Its closure is copied renamed apart; its other imports are absolute;
+    // a plain export it does not need stays imported from the module.
+    assert!(chunk.contains("const step$m1 = 1;"), "{chunk}");
+    assert!(chunk.contains(r#"from "/app/src/log""#), "{chunk}");
+    assert!(chunk.contains("$S(start$f"), "{chunk}");
+    assert!(
+        out.server.contains(r#"import { plain } from "./counter";"#),
+        "{}",
+        out.server
+    );
+}
+
+#[test]
+fn an_imported_context_keeps_its_identity_and_helpers_inline() {
+    let theme = r#"
+import { $component, $event, $signal, createContext } from "solid-js";
+export const Theme = createContext("light");
+function* useTheme() { const t = yield* Theme; return t; }
+export const Badge = $component(function* (props) {
+  const theme = yield* useTheme();
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); props.onBump(); });
+  return function* () { return <b class={theme} onClick={inc}>{yield* n} {yield* props.label}</b>; };
+});
+"#;
+    let src = r#"
+import { $component, $event, $signal } from "solid-js";
+import { Badge, Theme } from "./theme";
+export const App = $component(function* () {
+  const [total, setTotal] = yield* $signal(0);
+  const bump = () => setTotal(x => x + 1);
+  return function* () {
+    return <Theme value="dark"><main><Badge label={yield* total} onBump={bump} /></main></Theme>;
+  };
+});
+"#;
+    let out = run_with(src, &[("./theme", theme)]);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    // `Badge` receives live state: it is compiled into the page's island.
+    assert!(m.contains(r#""members":["App","Badge"]"#), "{m}");
+    // The context is still the module's (imported, not copied).
+    assert!(
+        out.server.contains(r#"import { Theme } from "./theme";"#),
+        "{}",
+        out.server
+    );
+    assert!(
+        !out.server.contains("createContext(\"light\")"),
+        "{}",
+        out.server
+    );
+    assert!(out.server.contains("_$ctx($c, Theme)"), "{}", out.server);
+}
+
+#[test]
+fn factory_and_helper_calls_in_setups_are_inlined_in_one_module() {
+    let out = run(r#"
+import { $component, $event, createContext, createSignal } from "solid-js";
+const Ctx = createContext();
+function createToggle(initial) {
+  const [on, setOn] = createSignal(initial);
+  return [on, () => setOn(x => !x)];
+}
+function* useCtx() {
+  const v = yield* Ctx;
+  if (!v) throw new Error("no provider");
+  return v;
+}
+const Button = $component(function* () {
+  const [on, flip] = yield* useCtx();
+  const click = $event(function* () { flip(); });
+  return function* () { return <button onClick={click}>{(yield* on) ? "on" : "off"}</button>; };
+});
+export function App() {
+  return <Ctx value={createToggle(false)}><Button /></Ctx>;
+}
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains(r#""members":["App","Button"]"#), "{m}");
+    // The provider value was hoisted and inlined: the cell is App's.
+    assert!(m.contains("App.on$f"), "{m}");
+    assert!(out.server.contains("if (!v$f"), "{}", out.server);
+}
+
+#[test]
+fn an_errored_around_a_tier2_islands_content_is_a_client_boundary() {
+    let src = r#"
+import { $component, $event, $store, Errored } from "solid-js";
+export const App = $component(function* () {
+  const [s, setS] = yield* $store({ n: 0 });
+  const inc = $event(function* () { setS(d => { d.n++; }); });
+  return function* () {
+    return (
+      <main>
+        <Errored fallback={(err, reset) => <p onClick={reset}>{String(err())}</p>}>
+          <b onClick={inc}>{yield* s.n}</b>
+        </Errored>
+      </main>
+    );
+  };
+});
+"#;
+    let out = run(src);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    // The server marks the boundary's region; the client activates its
+    // content inside `createErrorBoundary` and builds the fallback.
+    assert!(out.server.contains("<!--$-->${_$err("), "{}", out.server);
+    let chunk = &out.chunks[0].code;
+    assert!(
+        chunk.contains("createErrorBoundary as $$createErrorBoundary"),
+        "{chunk}"
+    );
+    assert!(chunk.contains("$err($m"), "{chunk}");
+    assert!(
+        chunk.contains("addEventListener(\"click\", reset$"),
+        "{chunk}"
+    );
+    // A tier-0 island under an `<Errored>` keeps its runtime (no boundary).
+    let out = run(r#"
+import { $component, $event, $signal, Errored } from "solid-js";
+export const App = $component(function* () {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    return <main><Errored fallback={<p>x</p>}><b onClick={inc}>{yield* n}</b></Errored></main>;
+  };
+});
+"#);
+    assert!(manifest(&out).contains(r#""tier":0"#), "{}", manifest(&out));
+    assert!(!out.server.contains("<!--$-->"), "{}", out.server);
+}
+
+#[test]
+fn a_context_provided_outside_the_island_is_serialized_at_its_root() {
+    let src = r#"
+import { $component, $event, $signal, createContext } from "solid-js";
+const Api = createContext("api");
+function* useApi() { return yield* Api; }
+const Saver = $component(function* () {
+  const api = yield* useApi();
+  const [saved, setSaved] = yield* $signal("none");
+  const save = $event(function* () { setSaved(api); });
+  return function* () { return <button onClick={save}>{yield* saved}</button>; };
+});
+export function App() {
+  return <Api value="remote"><Saver /></Api>;
+}
+"#;
+    let out = run(src);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains(r#""serialized":["context Api"]"#), "{m}");
+    assert!(
+        out.server
+            .contains(r#""$ctx:Api": _$cv(_$ctx($c, Api), "Api")"#),
+        "{}",
+        out.server
+    );
+    let chunk = &out.chunks[0].code;
+    assert!(chunk.contains(r#"= $d["$ctx:Api"];"#), "{chunk}");
+    // A provider whose value holds reactive state makes it the island's: the
+    // provider joins the island (or the module falls back), never a
+    // serialized snapshot.
+    let live = src.replace(
+        r#"export function App() {
+  return <Api value="remote"><Saver /></Api>;
+}"#,
+        r#"export const App = $component(function* () {
+  const [k, setK] = yield* $signal("remote");
+  const flip = $event(function* () { setK("local"); });
+  return function* () { return <div onClick={flip}><Api value={k}><Saver /></Api></div>; };
+});"#,
+    );
+    let out = run(&live);
+    for c in &out.chunks {
+        assert!(!c.code.contains("$ctx:Api"), "{}", c.code);
+    }
 }
