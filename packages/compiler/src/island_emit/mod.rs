@@ -138,6 +138,13 @@ fn emit(m: &model::Model<'_>, a: &graph::Analysis<'_>, opts: &IslandOptions) -> 
     if m.comps.is_empty() {
         return Err("no components".into());
     }
+    // Any construct the compiler does not model, in any component (inert
+    // ones included: their server output must equal today's).
+    for (ci, f) in a.facts.iter().enumerate() {
+        if let Some(i) = f.issues.first() {
+            return Err(format!("`{}`: {i}", m.comps[ci].name));
+        }
+    }
     let copts = client::ClientOpts {
         t0: opts.t0_module.clone(),
         kernel: opts.kernel_module.clone(),
@@ -174,6 +181,17 @@ fn emit(m: &model::Model<'_>, a: &graph::Analysis<'_>, opts: &IslandOptions) -> 
         };
         notes.push(note);
         codes.push((gi, code));
+    }
+    // A module-level `let` / `var` copied into two chunks would be two
+    // variables: refuse (the state must live in one island).
+    let mut owners: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    for (_, c) in &codes {
+        for t in &c.mutable_top {
+            *owners.entry(*t).or_default() += 1;
+        }
+    }
+    if owners.values().any(|n| *n > 1) {
+        return Err("module-level mutable state referenced by two islands".into());
     }
     let server = server::emit_server(m, a, &codes)?;
     let chunks = codes.iter().map(|(gi, c)| IslandChunk { id: a.groups[*gi].id.clone(), code: c.code.clone() }).collect();

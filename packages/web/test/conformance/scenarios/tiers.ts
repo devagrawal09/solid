@@ -210,6 +210,59 @@ export function App() {
     </div>
   );
 }
+`,
+    // Blocks v2 for the compiled-islands mode (islands.spec.ts): the branch
+    // body is its own component (its setup runs when the branch opens).
+    islands: `
+import { $component, $event, $memo, Show } from "solid-js";
+import { h } from "conformance";
+const Counter = $component(function* (props) {
+  const inc = $event(function* () { props.set(c => c + 1); });
+  const reset = $event(function* () { props.set(0); });
+  return function* () {
+    return (
+      <p class="counter">
+        <button class="inc" onClick={inc} />
+        <button class="reset" onClick={reset} />
+      </p>
+    );
+  };
+});
+const Big = $component(function* () {
+  h.run("big");
+  h.cleanup("big");
+  return function* () {
+    return <b>big</b>;
+  };
+});
+const Display = $component(function* (props) {
+  const doubled = yield* $memo(function* () {
+    h.run("doubled");
+    return (yield* props.count) * 2;
+  });
+  return function* () {
+    return (
+      <p class="display">
+        <span class="count">{yield* props.count}</span>
+        <span class="doubled">{yield* doubled}</span>
+        <Show when={(yield* doubled) > 4}>
+          <Big />
+        </Show>
+      </p>
+    );
+  };
+});
+export const App = $component(function* () {
+  const [count, setCount] = h.signal("count", 1);
+  return function* () {
+    return (
+      <div>
+        <Counter set={setCount} />
+        <Display count={count} />
+      </div>
+    );
+  };
+});
 `
   },
   steps: [

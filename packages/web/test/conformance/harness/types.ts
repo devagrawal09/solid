@@ -18,7 +18,7 @@ import type { CompileOptions, LoweringStats } from "./module.js";
  *   Solid compiler and through a generic JSX transform with no Solid compiler.
  * - `strict` (reserved): the future non-generator strict frontend.
  */
-export type SourceKind = "reference" | "generator" | "blocks" | "strict";
+export type SourceKind = "reference" | "generator" | "blocks" | "strict" | "islands";
 
 /**
  * Where a mode executes. Each environment is one vitest project in this

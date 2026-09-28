@@ -52,6 +52,8 @@ pub(crate) struct GroupCode {
     pub lazy_ok: bool,
     /// The anchor element's subtree may contain other islands' anchors.
     pub nests: bool,
+    /// Module-level mutable declarations the chunk copies (by top index).
+    pub mutable_top: Vec<usize>,
     pub notes: Vec<String>,
 }
 
@@ -164,6 +166,8 @@ struct Ce<'x, 'a> {
     lazy_ok: bool,
     element_anchor: bool,
     shapes: HashMap<usize, (Option<usize>, Option<usize>)>,
+    /// Module-level `let` / `var` statements copied into the chunk.
+    mutable_top: Vec<usize>,
 }
 
 const HELPERS: &[(&str, &str)] = &[
@@ -271,6 +275,7 @@ pub(crate) fn emit_group<'a>(
         lazy_ok: true,
         element_anchor: true,
         shapes: HashMap::new(),
+        mutable_top: Vec::new(),
     };
     ce.run()
 }
@@ -472,6 +477,54 @@ impl<'a> Env<'a> for CEnv<'_, '_, 'a> {
     }
 }
 
+/// The effect half of a split `$effect`: reads become `$v[i]` (their
+/// translated text goes to the compute half), `$cleanup(f)` registers `f`.
+struct EffEnv<'e, 'c, 'x, 'a> {
+    inner: &'e CEnv<'c, 'x, 'a>,
+    reads: std::cell::RefCell<Vec<String>>,
+    body: Span,
+}
+
+impl<'a> Env<'a> for EffEnv<'_, '_, '_, 'a> {
+    fn read(&self, tx: &Tx<'_, 'a>, arg: &'a Expression<'a>) -> R<String> {
+        if let Expression::CallExpression(c) = arg.without_parentheses() {
+            if self.inner.ce.m.runtime_name(&c.callee) == Some("$cleanup") {
+                let f = c.arguments.first().and_then(|a| a.as_expression()).ok_or("$cleanup without a function")?;
+                return Ok(format!("$cl.push({})", tx.expr(self, f)?));
+            }
+            // A setter receipt: a write, not a read.
+            return tx.expr(self.inner, arg);
+        }
+        // Refuse reads of bindings the effect itself declares.
+        let mut root = arg.without_parentheses();
+        while let Expression::StaticMemberExpression(s) = root {
+            root = &s.object;
+        }
+        if let Some(s) = self.inner.ce.m.symbol_of_expr(root) {
+            let decl = self.inner.ce.m.scoping.symbol_span(s);
+            if self.body.start <= decl.start && decl.end <= self.body.end {
+                return Err("`$effect` reads a binding it declares (not split)".into());
+            }
+        }
+        let text = self.inner.read(tx, arg)?;
+        let mut reads = self.reads.borrow_mut();
+        reads.push(text);
+        Ok(format!("$v[{}]", reads.len() - 1))
+    }
+    fn ident(&self, tx: &Tx<'_, 'a>, id: &IdentifierReference<'a>) -> Option<String> {
+        self.inner.ident(tx, id)
+    }
+    fn is_props(&self, tx: &Tx<'_, 'a>, e: &Expression<'a>) -> bool {
+        self.inner.is_props(tx, e)
+    }
+    fn props_member(&self, tx: &Tx<'_, 'a>, name: &str) -> R<Option<String>> {
+        self.inner.props_member(tx, name)
+    }
+    fn call(&self, tx: &Tx<'_, 'a>, c: &'a CallExpression<'a>) -> R<Option<String>> {
+        self.inner.call(tx, c)
+    }
+}
+
 impl<'a> CEnv<'_, '_, 'a> {
     fn args(&self, tx: &Tx<'_, 'a>, c: &'a CallExpression<'a>) -> R<String> {
         let mut out = Vec::new();
@@ -593,13 +646,13 @@ impl<'x, 'a> Ce<'x, 'a> {
                 return Err("tier 0 with a cleanup / untrack".into());
             }
         } else {
-            let mut names = vec!["createRoot as $R".to_string(), "createRenderEffect as $E".to_string()];
+            let mut names = vec!["createRoot as $R".to_string(), "createRenderEffect as $E".to_string(), "flush as $F".to_string()];
             for (r, alias) in [
                 ("createSignal", "$S"),
                 ("createMemo", "$M"),
                 ("onCleanup", "$C"),
+                ("createEffect", "$Ef"),
                 ("untrack", "$U"),
-                ("flush", "$F"),
             ] {
                 if self.rt.contains(r) {
                     names.push(format!("{r} as {alias}"));
@@ -647,11 +700,7 @@ impl<'x, 'a> Ce<'x, 'a> {
                 "export function activate($a) {{\n{data}{nav}\nreturn $R($x => {{\n{body}\n{}return $x;\n}});\n}}\n",
                 settled.join("\n")
             );
-            if !self.rt.contains("flush") {
-                let _ = writeln!(out, "export {{ flush }} from {};", js_str(&runtime));
-            } else {
-                out.push_str("export { $F as flush };\n");
-            }
+            out.push_str("export const flush = $F;\n");
         }
         Ok(GroupCode {
             code: out,
@@ -660,6 +709,7 @@ impl<'x, 'a> Ce<'x, 'a> {
             serial,
             element_anchor: self.element_anchor,
             nests: anchor_nests(m, view),
+            mutable_top: self.mutable_top.clone(),
             lazy_ok: self.lazy_ok && self.element_anchor && self.g.window_events.len() + self.g.events.len() > 0 && !self.g.hot,
             notes: vec![],
         })
@@ -733,11 +783,17 @@ impl<'x, 'a> Ce<'x, 'a> {
                 }
                 continue;
             }
-            let span = match t.stmt {
-                Statement::ExportDeclaration(e) => e.declaration.span(),
-                s => s.span(),
-            };
-            out.push_str(self.m.text(span));
+            if let Statement::ExportDeclaration(e) = t.stmt
+                && let oxc_ast::ast::Declaration::VariableDeclaration(v) = &e.declaration
+                && v.kind != oxc_ast::ast::VariableDeclarationKind::Const
+            {
+                self.mutable_top.push(ti);
+            } else if let Statement::VariableDeclaration(v) = t.stmt
+                && v.kind != oxc_ast::ast::VariableDeclarationKind::Const
+            {
+                self.mutable_top.push(ti);
+            }
+            out.push_str(self.m.text(t.stmt.span()));
             out.push('\n');
         }
         Ok(out)
@@ -947,15 +1003,45 @@ impl<'x, 'a> Ce<'x, 'a> {
                     format!("const {} = {f};", self.insts[inst].names[sym].0)
                 }
                 Item::Effect { body, settled, .. } => {
-                    if !*settled {
-                        return Err("`$effect` in a compiled island (effect splitting is not compiled yet)".into());
-                    }
                     if t0 {
-                        return Err("settled body at tier 0".into());
+                        return Err("effect at tier 0".into());
                     }
-                    let b = self.translate(inst, &none, |tx, env| tx.body(env, *body))?;
-                    self.settled.push(b);
-                    continue;
+                    if *settled {
+                        let b = self.translate(inst, &none, |tx, env| tx.body(env, *body))?;
+                        self.settled.push(b);
+                        continue;
+                    }
+                    // The effect split (generator-blocks-v2.md, Effects): every
+                    // read moves into the compute half, in order; the body is
+                    // the effect half over the values; `$cleanup`s are its
+                    // returned cleanup.
+                    let body_span = body.body_span();
+                    if FnRef::is_concise(body) {
+                        return Err("concise `$effect` body".into());
+                    }
+                    let text = self.m.text(body_span);
+                    if ["for (", "for(", "while (", "while(", "do {"].iter().any(|k| text.contains(k)) && text.contains("yield*") {
+                        return Err("`$effect` reads in a loop (not split)".into());
+                    }
+                    let (code, reads) = {
+                        let tx = self.tx();
+                        let env = CEnv { ce: self, inst, extra: &none, uses: Default::default() };
+                        let eff = EffEnv { inner: &env, reads: Default::default(), body: body_span };
+                        let r = tx.body(&eff, *body);
+                        let reads = eff.reads.into_inner();
+                        let uses = env.uses.into_inner();
+                        (r.map(|c| (c, uses)), reads)
+                    };
+                    let (code, uses) = code?;
+                    self.helpers.extend(uses.helpers);
+                    self.rt.extend(uses.rt);
+                    self.top_syms.extend(uses.top);
+                    self.rt.insert("createEffect");
+                    let body_inner = code.trim().strip_prefix('{').and_then(|b| b.strip_suffix('}')).unwrap_or(&code);
+                    format!(
+                        "$Ef(() => [{}], $v => {{ const $cl = [];{body_inner}\nreturn () => {{ for (const f of $cl) f(); }}; }});",
+                        reads.join(", ")
+                    )
                 }
                 Item::Context { pattern, ctx, .. } => {
                     let Some(bind) = self.insts[inst].ctx.get(ctx).cloned() else {
@@ -973,7 +1059,7 @@ impl<'x, 'a> Ce<'x, 'a> {
                         match &d.init {
                             Some(e) => {
                                 let v = self.expr(inst, &none, e)?;
-                                format!("const {pat} = {v};")
+                                format!("let {pat} = {v};")
                             }
                             None => format!("let {pat};"),
                         }
@@ -1213,7 +1299,8 @@ impl<'x, 'a> Ce<'x, 'a> {
                 let is_member = self.g.members.contains(&k);
                 let kids = jsx::children(&el.children)?;
                 let other_root = self.a.root_of.get(&k).is_some_and(|gs| gs.iter().any(|g| *g != self.gi));
-                if (is_member || self.contains_group_sites(comp, &kids)) && !(other_root && !is_member) {
+                let fresh = self.scopes[self.cur].builder;
+                if fresh || ((is_member || self.contains_group_sites(comp, &kids)) && !(other_root && !is_member)) {
                     let child = self.instantiate(k, el, inst, kids)?;
                     let view = self.m.comps[k].view.ok_or("component without a view")?;
                     self.flatten_root(view, child, out)?;

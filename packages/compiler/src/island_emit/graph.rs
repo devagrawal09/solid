@@ -230,6 +230,19 @@ impl<'a> ViewWalk<'_, 'a> {
         }
         let refs = refs_expr(self.m, self.props, e);
         let has_jsx = refs.has_jsx;
+        // Component call forms (`User(props)`, `Loading({ … })`) render
+        // components the partitioner cannot see as JSX: not compiled.
+        for (s, _) in &refs.syms {
+            let name = self.m.runtime.get(s).map(String::as_str);
+            if self.m.comp_of.contains_key(s) || name.is_some_and(|n| jsx::BUILTINS.contains(&n)) {
+                if text_calls(self.m.text(e.span()), self.m.sym_name(*s)) {
+                    self.f.issues.push(format!(
+                        "component call form `{}(…)` in a view (write it as JSX)",
+                        self.m.sym_name(*s)
+                    ));
+                }
+            }
+        }
         self.site(SiteKind::Text, e.span(), Some(e), refs);
         if has_jsx {
             // Nested JSX inside an expression: its component calls and
@@ -492,6 +505,8 @@ pub(crate) struct Analysis<'a> {
     pub ctx_av: HashMap<SymbolId, Av>,
     pub written: BTreeSet<Key>,
     pub written_by_effect: BTreeSet<Key>,
+    /// Cells whose setter escapes to code the compiler cannot see.
+    pub escaped_writes: BTreeSet<Key>,
     pub live: BTreeSet<Key>,
     pub memo_deps: HashMap<Key, BTreeSet<Key>>,
     /// Live flags per component per site.
@@ -648,6 +663,7 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
         ctx_av: HashMap::new(),
         written: BTreeSet::new(),
         written_by_effect: BTreeSet::new(),
+        escaped_writes: BTreeSet::new(),
         live: BTreeSet::new(),
         memo_deps: HashMap::new(),
         site_live: vec![],
@@ -724,13 +740,36 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                     a.written_by_effect.extend(v.writes.iter().copied());
                     a.written.extend(v.writes);
                 }
+                // A setter reaching a setup statement, a cleanup, or a local
+                // computed by a call may be stored anywhere (a module
+                // variable, a registry): it escapes, and the cell counts as
+                // written by code the compiler cannot see.
+                Item::Stmt { .. } | Item::Cleanup { .. } => {
+                    let v = a.av_of(ci, &a.facts[ci].item_refs[ii]);
+                    a.escaped_writes.extend(v.writes.iter().copied());
+                    a.written.extend(v.writes);
+                }
+                Item::Local { decl: LocalDecl::Var(d), .. }
+                    if d.init.as_ref().is_some_and(|i| FnRef::from_expr(i).is_none() && contains_call(i)) =>
+                {
+                    let v = a.av_of(ci, &a.facts[ci].item_refs[ii]);
+                    a.escaped_writes.extend(v.writes.iter().copied());
+                    a.written.extend(v.writes);
+                }
                 _ => {}
             }
         }
         for s in &a.facts[ci].sites {
-            if matches!(s.kind, SiteKind::Handler(_)) {
-                let v = a.av_of(ci, &s.refs);
-                a.written.extend(v.writes);
+            let v = a.av_of(ci, &s.refs);
+            match s.kind {
+                SiteKind::Handler(_) => a.written.extend(v.writes),
+                // A view expression that references a setter (other than as
+                // a prop of a module component, which flows) hands it out.
+                SiteKind::Text | SiteKind::Attr(_) | SiteKind::Show | SiteKind::For => {
+                    a.escaped_writes.extend(v.writes.iter().copied());
+                    a.written.extend(v.writes);
+                }
+                SiteKind::Effect(..) => {}
             }
         }
         // Setters handed to components outside the module escape: whoever
@@ -842,6 +881,22 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
             if a.live.contains(&d) {
                 union(&mut parent, index[&k], index[&d]);
             }
+        }
+    }
+    // A component whose setup has side-effect statements must run them
+    // once: all of its live parts form one island.
+    for (ci, c) in m.comps.iter().enumerate() {
+        if !c.setup.iter().any(|it| matches!(it, Item::Stmt { .. })) {
+            continue;
+        }
+        let mine: Vec<usize> = (0..elems.len())
+            .filter(|e| match elems[*e] {
+                Elem::Key(k) => k.0 == ci,
+                Elem::Site(c2, _) => c2 == ci,
+            })
+            .collect();
+        for w in mine.windows(2) {
+            union(&mut parent, w[0], w[1]);
         }
     }
 
@@ -1002,6 +1057,10 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                 }
                 Item::Cell { name, .. } if a.written_by_effect.contains(k) => {
                     t1.push(format!("`{name}` is written by an effect"));
+                    bump(&mut own, k.0, 1);
+                }
+                Item::Cell { name, .. } if a.escaped_writes.contains(k) => {
+                    t1.push(format!("`{name}`'s setter escapes (written outside the island's handlers)"));
                     bump(&mut own, k.0, 1);
                 }
                 Item::Memo { name, is_async, .. } => {
@@ -1274,6 +1333,49 @@ fn count_jsx_roots(e: &Expression<'_>) -> usize {
     let mut c = C { depth: 0, n: 0 };
     c.visit_expression(e);
     c.n
+}
+
+/// `name(` appears as a call in `text` (a word boundary before the name).
+fn text_calls(text: &str, name: &str) -> bool {
+    let pat = format!("{name}(");
+    text.match_indices(&pat).any(|(i, _)| {
+        i == 0 || !text[..i].chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '$' || c == '.')
+    })
+}
+
+/// Does the expression call anything (outside nested functions)?
+pub(crate) fn contains_call(e: &Expression<'_>) -> bool {
+    struct C {
+        found: bool,
+        depth: u32,
+    }
+    impl<'a> Visit<'a> for C {
+        fn visit_call_expression(&mut self, c: &CallExpression<'a>) {
+            if self.depth == 0 {
+                self.found = true;
+            }
+            walk::walk_call_expression(self, c);
+        }
+        fn visit_new_expression(&mut self, n: &oxc_ast::ast::NewExpression<'a>) {
+            if self.depth == 0 {
+                self.found = true;
+            }
+            walk::walk_new_expression(self, n);
+        }
+        fn visit_function(&mut self, f: &Function<'a>, flags: ScopeFlags) {
+            self.depth += 1;
+            walk::walk_function(self, f, flags);
+            self.depth -= 1;
+        }
+        fn visit_arrow_function_expression(&mut self, a: &ArrowFunctionExpression<'a>) {
+            self.depth += 1;
+            walk::walk_arrow_function_expression(self, a);
+            self.depth -= 1;
+        }
+    }
+    let mut c = C { found: false, depth: 0 };
+    c.visit_expression(e);
+    c.found
 }
 
 pub(crate) fn base36(mut n: usize) -> String {

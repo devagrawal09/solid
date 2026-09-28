@@ -543,7 +543,7 @@ impl<'x, 'a> Se<'x, 'a> {
                 }
                 Item::Local { decl, .. } => match decl {
                     LocalDecl::Var(d) => {
-                        let _ = writeln!(body, "const {};", declarator(self, &env, d)?);
+                        let _ = writeln!(body, "let {};", declarator(self, &env, d)?);
                     }
                     LocalDecl::Func(f) => {
                         let name = f.id.as_ref().map_or(String::new(), |i| i.name.to_string());
