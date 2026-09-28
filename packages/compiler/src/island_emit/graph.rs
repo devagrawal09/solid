@@ -520,7 +520,16 @@ impl<'a> ViewWalk<'_, 'a> {
                 "Loading" | "Errored" => {
                     self.f.boundaries.push((name.clone(), self.regions.clone()));
                     if let Some(fb) = jsx::attr(&attrs, "fallback") {
+                        // A boundary's fallback is server HTML in islands
+                        // mode (rendered in the shell, or streamed over the
+                        // region on a failure): its holes and handlers are
+                        // not island sites. Its components and providers
+                        // still render.
+                        let before = self.f.sites.len();
                         self.attr_jsx(&fb.value);
+                        for s in self.f.sites.drain(before..) {
+                            self.f.site_at.remove(&s.span.start);
+                        }
                     }
                     self.kids(&el.children);
                 }

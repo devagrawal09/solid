@@ -206,6 +206,9 @@ pub(crate) struct Comp<'a> {
     /// Per-island prefetch override from a `// @island-prefetch <policy>`
     /// pragma in the component's leading comments.
     pub prefetch: Option<String>,
+    /// The setup function (a `$component`'s generator, or the plain
+    /// component function): its statements are the setup.
+    pub body_fn: Option<FnRef<'a>>,
 }
 
 pub(crate) struct Top<'a> {
@@ -620,6 +623,7 @@ fn read_component_expr<'a>(
         view: None,
         issues: Vec::new(),
         prefetch: None,
+        body_fn: Some(FnRef::Func(f)),
     };
     if f.params.items.len() > 1
         || f.params
@@ -704,6 +708,7 @@ fn read_plain_component<'a>(
         view: None,
         issues: Vec::new(),
         prefetch: None,
+        body_fn: Some(f),
     };
     if f.is_concise() {
         if let Some(e) = f.concise() {

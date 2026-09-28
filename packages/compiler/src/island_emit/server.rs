@@ -858,7 +858,7 @@ pub(crate) fn emit_server<'a>(
                 Tag::Comp(k) => is_async[k],
                 Tag::Opaque(_) => true,
                 _ => false,
-            }) || m.text(m.comps[ci].replace).contains("attempt(")
+            }) || awaits_in_setup(m, ci)
             {
                 is_async[ci] = true;
                 changed = true;
@@ -921,6 +921,16 @@ pub(crate) fn emit_server<'a>(
     let _ = refs_expr;
     let streams = se.streams.borrow();
     Ok((out, (0..n).map(|c| streams.contains(&c)).collect()))
+}
+
+/// Server-side awaits in a component's setup or view statements (an
+/// `attempt` outside an event handler, which the server never runs).
+fn awaits_in_setup(m: &Model<'_>, ci: usize) -> bool {
+    let c = &m.comps[ci];
+    c.setup.iter().any(|it| {
+        !matches!(it, Item::Event { .. } | Item::Effect { .. }) && m.text(it.span()).contains("attempt(")
+    }) || c.view_stmts.iter().any(|s| m.text(s.span()).contains("attempt("))
+        || c.view.is_some_and(|v| m.text(v.span()).contains("attempt("))
 }
 
 fn handler_prevents(m: &Model<'_>, site: &super::graph::Site<'_>) -> bool {

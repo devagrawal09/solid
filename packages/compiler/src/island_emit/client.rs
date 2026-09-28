@@ -408,7 +408,13 @@ impl<'a> Env<'a> for CEnv<'_, '_, 'a> {
                 {
                     let head = match self.prop(s.property.name.as_str())? {
                         PBind::Acc(v) | PBind::Get(v) => format!("{v}()"),
-                        PBind::Val(v) => v,
+                        // A value of unknown kind (a caller's local, a row
+                        // item): `yield*` reads an accessor by calling it.
+                        PBind::Val(v) if plain_value(&v) => v,
+                        PBind::Val(v) => {
+                            self.uses.borrow_mut().helpers.insert("$r");
+                            format!("$r({v})")
+                        }
                     };
                     let rest = &tx.m.src[s.span.end as usize..arg.span().end as usize];
                     // Translate any computed keys in the rest verbatim (rare).
@@ -614,6 +620,14 @@ impl<'a> Env<'a> for EffEnv<'_, '_, '_, 'a> {
     fn call(&self, tx: &Tx<'_, 'a>, c: &'a CallExpression<'a>) -> R<Option<String>> {
         self.inner.call(tx, c)
     }
+}
+
+/// A prop binding that is never a function: a literal or a serialized value.
+fn plain_value(v: &str) -> bool {
+    v.starts_with('"')
+        || v.starts_with("$d[")
+        || v.chars().next().is_some_and(|c| c.is_ascii_digit())
+        || matches!(v, "true" | "false" | "undefined" | "null")
 }
 
 /// An adopted async memo's first run: its `attempt` is the server's value.

@@ -47,6 +47,9 @@ const normalize = html =>
     .replace(/<!--(\$|\/|!\$)-->/g, "")
     .replace(/<\/?solid-island[^>]*>/g, "")
     .replace(/ data-i="[^"]*"/g, "")
+    .replace(/ data-s="[^"]*"/g, "")
+    .replace(/ data-pd(="")?/g, "")
+    .replace(/ checked(="")?(?=[ >])/g, "")
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, "");
 
 for (const name of appNames) {
@@ -180,14 +183,16 @@ async function runSession(pageHtml, files, app) {
   await settle(page);
   // Server nodes captured during parsing must be the live nodes after load.
   const identity = app.checkIdentity ? await page.evaluate(app.checkIdentity) : "n/a";
-  const load = await page.evaluate(() => document.getElementById("root").innerHTML);
+  // The page's markup, and form controls' live state (a \`checked\` property
+  // set by script and a server \`checked\` attribute are the same state).
+  const load = await page.evaluate(() => { const r = document.getElementById("root"); return r.innerHTML + "\n[checked " + [...r.querySelectorAll("input")].map(i => (i.checked ? 1 : 0)).join("") + "]"; });
   const counts = await page.evaluate(() => ({ ...(globalThis.__c || {}) }));
   if (counts.gatherMs !== undefined) counts.gatherMs = +counts.gatherMs.toFixed(2);
   const steps = [];
   for (const step of app.session) {
     await page.evaluate(step);
     await page.waitForTimeout(app.stepWait ?? 50);
-    steps.push(await page.evaluate(() => document.getElementById("root").innerHTML));
+    steps.push(await page.evaluate(() => { const r = document.getElementById("root"); return r.innerHTML + "\n[checked " + [...r.querySelectorAll("input")].map(i => (i.checked ? 1 : 0)).join("") + "]"; }));
   }
   const after = await page.evaluate(() => ({ ...(globalThis.__c || {}) }));
   delete after.gatherMs;

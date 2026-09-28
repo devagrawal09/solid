@@ -18,7 +18,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { compileIslands } = require("./index.js");
+const { compileIslands, islandExports } = require("./index.js");
 
 const PREFETCH = ["load", "idle", "visible", "intent", "interaction"];
 const ENTRY = "virtual:solid-islands";
@@ -212,13 +212,42 @@ class IslandsCompiler {
     minTier = 0,
     debug = false,
     idPrefix,
-    compile = compileIslands
+    compile = compileIslands,
+    crossModule = true
   } = {}) {
     this.options = { runtimes, tier1Core, minTier, debug };
     this.compile = compile;
     this.cache = new Map();
+    this.summaries = new Map();
     this.prefixes = new Map();
     this.idPrefix = idPrefix;
+    this.crossModule = crossModule;
+  }
+  /** A module's `islandExports` summary, cached by content (pass one). */
+  summary(file, code = fs.readFileSync(file, "utf8")) {
+    const hit = this.summaries.get(file);
+    if (hit && hit.code === code) return hit.summary;
+    const summary = islandExports(code, { filename: file });
+    this.summaries.set(file, { code, summary });
+    return summary;
+  }
+  /**
+   * Pass two's inputs: the relatively imported modules whose factories,
+   * helper generators or components this module uses (their summaries say
+   * which), with their sources, for the compiler's cross-module inlining.
+   */
+  importsFor(file, code) {
+    if (!this.crossModule) return [];
+    const out = [];
+    for (const imp of this.summary(file, code).imports || []) {
+      const target = resolveRelative(file, imp.specifier);
+      if (!target) continue;
+      const tcode = fs.readFileSync(target, "utf8");
+      const kinds = new Map(this.summary(target, tcode).exports.map(e => [e.name, e.kind]));
+      if (imp.names.some(n => ["factory", "helper", "component"].includes(kinds.get(n))))
+        out.push({ specifier: imp.specifier, filename: target, code: tcode });
+    }
+    return out;
   }
   prefixFor(file) {
     let p = this.prefixes.get(file);
@@ -230,10 +259,18 @@ class IslandsCompiler {
     return p;
   }
   compileFile(file, code = fs.readFileSync(file, "utf8")) {
+    const imports = this.importsFor(file, code);
     const hit = this.cache.get(file);
-    if (hit && hit.code === code) return hit.out;
+    if (
+      hit &&
+      hit.code === code &&
+      hit.imports.length === imports.length &&
+      hit.imports.every((m, i) => m.filename === imports[i].filename && m.code === imports[i].code)
+    )
+      return hit.out;
     const { runtimes, tier1Core, minTier, debug } = this.options;
     const out = this.compile(code, {
+      imports,
       filename: file,
       idPrefix: this.prefixFor(file),
       t0Module: runtimes.t0,
@@ -244,7 +281,8 @@ class IslandsCompiler {
       debug
     });
     for (const c of out.chunks) c.size = Buffer.byteLength(c.code);
-    this.cache.set(file, { code, out });
+    out.deps = imports.map(m => m.filename);
+    this.cache.set(file, { code, imports, out });
     return out;
   }
   /** Every island reachable from `root` through relative imports of compiled modules. */

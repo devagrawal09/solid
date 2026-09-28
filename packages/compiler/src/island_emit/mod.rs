@@ -24,12 +24,14 @@
 mod callforms;
 mod client;
 mod graph;
+mod inline;
 mod jsx;
 mod model;
 mod server;
 mod store_paths;
 mod tx;
 
+pub use inline::{ImportedModule, island_exports};
 use oxc_allocator::Allocator;
 use oxc_semantic::SemanticBuilder;
 
@@ -74,6 +76,10 @@ pub struct IslandOptions {
     pub probe_hosts: Vec<String>,
     /// Module name for the fallback compiles.
     pub module_name: String,
+    /// Sources of relatively imported modules (cross-module inlining of
+    /// factories, helper generators and components; the bundler plugin
+    /// provides those its per-module summaries name).
+    pub imports: Vec<ImportedModule>,
 }
 
 impl Default for IslandOptions {
@@ -89,6 +95,7 @@ impl Default for IslandOptions {
             debug: false,
             probe_hosts: Vec::new(),
             module_name: crate::compiler::DEFAULT_MODULE_NAME.into(),
+            imports: Vec::new(),
         }
     }
 }
@@ -116,8 +123,46 @@ pub fn compile_islands(
     original: &str,
     opts: &IslandOptions,
 ) -> Result<IslandsOutput, CompileError> {
-    // Component call forms are read as the JSX they stand for.
-    let rewritten = callforms::rewrite(original, opts.filename.as_deref());
+    let first = compile_pass(original, opts, false)?;
+    // Imported components the module renders with live state (or inside an
+    // island's DOM) are compiled as part of it: inline them and retry.
+    if let Some(reason) = &first.fallback
+        && !opts.imports.is_empty()
+        && [
+            "outside the module",
+            "variable-size region",
+            "no fixed path",
+        ]
+        .iter()
+        .any(|k| reason.contains(k))
+    {
+        let second = compile_pass(original, opts, true)?;
+        if second.fallback.is_none() {
+            return Ok(second);
+        }
+    }
+    Ok(first)
+}
+
+/// The source the partitioner reads: imported definitions inlined (with
+/// components when `components`), call forms as JSX, factory calls in
+/// setups inlined.
+fn prepare(original: &str, opts: &IslandOptions, components: bool) -> Option<String> {
+    let f = opts.filename.as_deref();
+    let a = inline::inline_imports(original, f, &opts.imports, components);
+    let s1 = a.as_deref().unwrap_or(original);
+    let b = callforms::rewrite(s1, f);
+    let s2 = b.as_deref().unwrap_or(s1);
+    let c = inline::inline_calls(s2, f);
+    c.or(b).or(a)
+}
+
+fn compile_pass(
+    original: &str,
+    opts: &IslandOptions,
+    components: bool,
+) -> Result<IslandsOutput, CompileError> {
+    let rewritten = prepare(original, opts, components);
     let source = rewritten.as_deref().unwrap_or(original);
     let allocator = Allocator::default();
     let source_type = source_type_for_filename(opts.filename.as_deref())?;

@@ -164,6 +164,31 @@ pub struct CompileIslandsOptions {
     /// Probe cell hosts (`object.method`).
     pub probe_hosts: Option<Vec<String>>,
     pub module_name: Option<String>,
+    /// Sources of relatively imported modules to inline (cross-module).
+    pub imports: Option<Vec<IslandImport>>,
+}
+
+#[napi(object)]
+#[derive(Clone)]
+pub struct IslandImport {
+    pub specifier: String,
+    pub filename: String,
+    pub code: String,
+}
+
+#[napi(object)]
+#[derive(Default)]
+pub struct IslandExportsOptions {
+    pub filename: Option<String>,
+}
+
+/// A module's islands summary (JSON): its exports by kind (component,
+/// factory, helper generator, function, value) and its relative imports,
+/// for the bundler plugin's cross-module pass.
+#[napi]
+pub fn island_exports(code: String, options: Option<IslandExportsOptions>) -> Result<String> {
+    let o = options.unwrap_or_default();
+    Ok(crate::island_exports(&code, o.filename.as_deref()))
 }
 
 #[napi(object)]
@@ -199,6 +224,16 @@ pub fn compile_islands(code: String, options: Option<CompileIslandsOptions>) -> 
         debug: o.debug.unwrap_or(false),
         probe_hosts: o.probe_hosts.unwrap_or_default(),
         module_name: o.module_name.unwrap_or(d.module_name),
+        imports: o
+            .imports
+            .unwrap_or_default()
+            .into_iter()
+            .map(|i| crate::ImportedModule {
+                specifier: i.specifier,
+                filename: i.filename,
+                code: i.code,
+            })
+            .collect(),
     };
     let out = crate::compile_islands(&code, &opts).map_err(|error| Error::from_reason(error.to_string()))?;
     Ok(CompileIslandsResult {
