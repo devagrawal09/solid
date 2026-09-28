@@ -90,6 +90,13 @@ export function memo(fn) {
   return createMemo(() => fn(), syncOptions);
 }
 export function delegateEvents() {}
+/** An attribute hole: the compute tracks, the apply sets (as `@solidjs/web`'s `effect`). */
+export function effect(compute, apply) {
+  createRenderEffect(compute, apply);
+}
+export function setAttribute(el, name, value) {
+  el.a = value;
+}
 export function resetListeners() {
   listeners = [];
 }
@@ -107,7 +114,7 @@ export function snapshot(value) {
   if (value === null || value === undefined) return "";
   if (Array.isArray(value)) return value.map(snapshot).join(",");
   if (typeof value !== "object") return String(value);
-  let out = "<" + snapshot(value.v);
+  let out = "<" + (value.a !== undefined ? "@" + snapshot(value.a) : "") + snapshot(value.v);
   for (let c = value.firstChild; c; c = c.nextSibling) out += "|" + snapshot(c.v);
   return out + ">";
 }

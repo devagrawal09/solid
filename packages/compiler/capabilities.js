@@ -459,6 +459,7 @@ const FEATURE_SWITCHES = [
 // the module's compiled output is known.
 const STORE_READERS = new Set([
   "readStore",
+  "readSelected",
   "readPath",
   "readPath1",
   "readPath2",

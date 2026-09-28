@@ -67,6 +67,7 @@ fn create_kind(name: &str) -> Option<&'static str> {
 
 fn is_store_reader(name: &str) -> bool {
     name == "readStore"
+        || name == "readSelected"
         || name == "readBorrowed"
         || name == "readProp"
         || name == "readHandleChild"

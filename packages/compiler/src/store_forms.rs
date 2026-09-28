@@ -99,23 +99,80 @@ pub(crate) fn transform_store_forms<'a>(allocator: &'a Allocator, program: &mut 
     if targets.is_empty() {
         return;
     }
-    let mut needed: Vec<(Span, Form)> = Vec::new();
+    // One local per (import declaration, form): an existing specifier of the
+    // form's constructor from the same source is reused (the v2 client
+    // lowering creates `$store`s with `createPlainStore as
+    // _$createPlainStore`), else the conventional local (suffixed when
+    // taken) is added to the declaration.
+    let mut locals: Vec<(Span, Form, String, bool)> = Vec::new();
     for (_, form, import) in &targets {
-        if !needed.contains(&(*import, *form)) {
-            needed.push((*import, *form));
+        if locals.iter().any(|(i, f, _, _)| i == import && f == form) {
+            continue;
         }
+        let (local, existing) = form_local(program, *import, *form);
+        locals.push((*import, *form, local, existing));
     }
+    let local_of = |import: Span, form: Form| {
+        locals
+            .iter()
+            .find(|(i, f, _, _)| *i == import && *f == form)
+            .map(|(_, _, local, _)| local.clone())
+            .expect("a local per target")
+    };
     let mut rewriter = Rewriter {
         allocator,
         targets: targets
             .iter()
-            .map(|(span, form, _)| (*span, *form))
+            .map(|(span, form, import)| (*span, local_of(*import, *form)))
             .collect(),
     };
     rewriter.visit_program(program);
-    for (import, form) in needed {
-        add_import(allocator, program, import, form);
+    for (import, form, local, existing) in locals {
+        if !existing {
+            add_import(allocator, program, import, form, &local);
+        }
     }
+}
+
+/// The local a rewritten call of `form` uses in the declaration at `import`:
+/// an existing value specifier of the form's constructor from the same
+/// source (`true`), or a fresh `_$createPlainStore` / `_$createDerivedStore`
+/// (suffixed when the name is taken).
+fn form_local(program: &Program<'_>, import_span: Span, form: Form) -> (String, bool) {
+    let (export, base) = match form {
+        Form::Plain => (PLAIN_EXPORT, PLAIN_LOCAL),
+        Form::Derived => (DERIVED_EXPORT, DERIVED_LOCAL),
+    };
+    let source = program.body.iter().find_map(|statement| match statement {
+        Statement::ImportDeclaration(import) if import.span == import_span => {
+            Some(import.source.value.as_str())
+        }
+        _ => None,
+    });
+    let mut taken = Vec::new();
+    for statement in &program.body {
+        let Statement::ImportDeclaration(import) = statement else {
+            continue;
+        };
+        for specifier in import.specifiers.iter().flatten() {
+            if let ImportDeclarationSpecifier::ImportSpecifier(specifier) = specifier
+                && Some(import.source.value.as_str()) == source
+                && import.import_kind != ImportOrExportKind::Type
+                && specifier.import_kind != ImportOrExportKind::Type
+                && specifier.imported.name() == export
+            {
+                return (specifier.local.name.to_string(), true);
+            }
+            taken.push(specifier.local().name.to_string());
+        }
+    }
+    let mut local = base.to_string();
+    let mut n = 2;
+    while taken.contains(&local) {
+        local = format!("{base}{n}");
+        n += 1;
+    }
+    (local, false)
 }
 
 fn imports_create_store(program: &Program<'_>) -> bool {
@@ -254,21 +311,18 @@ impl Collector<'_> {
 
 struct Rewriter<'a> {
     allocator: &'a Allocator,
-    targets: Vec<(Span, Form)>,
+    /// (call span, the constructor local it calls).
+    targets: Vec<(Span, String)>,
 }
 
 impl<'a> VisitMut<'a> for Rewriter<'a> {
     fn visit_call_expression(&mut self, call: &mut CallExpression<'a>) {
         walk_mut::walk_call_expression(self, call);
-        let Some(&(_, form)) = self.targets.iter().find(|(span, _)| *span == call.span) else {
+        let Some((_, local)) = self.targets.iter().find(|(span, _)| *span == call.span) else {
             return;
         };
         let ast = AstBuilder::new(self.allocator);
         let callee_span = oxc_span::GetSpan::span(&call.callee);
-        let local = match form {
-            Form::Plain => PLAIN_LOCAL,
-            Form::Derived => DERIVED_LOCAL,
-        };
         call.callee = ast.expression_identifier(callee_span, ast.ident(local));
     }
 }
@@ -278,11 +332,12 @@ fn add_import<'a>(
     program: &mut Program<'a>,
     import_span: Span,
     form: Form,
+    local: &str,
 ) {
     let ast = AstBuilder::new(allocator);
-    let (export, local) = match form {
-        Form::Plain => (PLAIN_EXPORT, PLAIN_LOCAL),
-        Form::Derived => (DERIVED_EXPORT, DERIVED_LOCAL),
+    let export = match form {
+        Form::Plain => PLAIN_EXPORT,
+        Form::Derived => DERIVED_EXPORT,
     };
     for statement in program.body.iter_mut() {
         let Statement::ImportDeclaration(import) = statement else {

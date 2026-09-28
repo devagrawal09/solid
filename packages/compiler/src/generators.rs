@@ -130,21 +130,22 @@ pub(crate) fn transform_generators<'a>(
     source: &'a str,
     proofs: Option<ProofConfig>,
     v2: &V2Bodies,
-) -> Result<(), String> {
+) -> Result<Vec<Span>, String> {
     if !imports_adapter(program) {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let plan = build_plan(program, source, proofs, v2)?;
     if plan.calls.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
+    let async_calls = plan.async_calls.iter().map(|(span, _)| *span).collect();
     let mut rewriter = Rewriter {
         allocator,
         plan,
         source,
     };
     rewriter.visit_program(program);
-    Ok(())
+    Ok(async_calls)
 }
 
 /// Cheap syntactic gate: is `$` imported by name from a runtime source?
@@ -184,6 +185,12 @@ struct Plan {
     /// Reactive host calls that receive proven host options, appended as the
     /// host's options argument.
     host_options: Vec<(Span, HostOption)>,
+    /// Async v2 bodies (see "async v2 bodies" below): `$(function* …)` call
+    /// span → whether the body declares no input parameter (one is added
+    /// before the run parameter).
+    async_calls: Vec<(Span, bool)>,
+    /// `yield* attempt(…)` expressions inside async v2 bodies.
+    awaits: Vec<Span>,
 }
 
 /// Track A (stage 1) proof configuration: the pass proves `$` blocks
@@ -237,6 +244,10 @@ pub(crate) struct RuntimeSymbols {
     pub(crate) create_signal: Vec<SymbolId>,
     pub(crate) create_memo: Vec<SymbolId>,
     pub(crate) attempt: Vec<SymbolId>,
+    pub(crate) raise: Vec<SymbolId>,
+    /// `solid-js` flow components proven to render a function (see
+    /// `ProofSymbols::plain_components`).
+    pub(crate) plain_components: Vec<SymbolId>,
 }
 
 /// The runtime import bindings of a program (after `SemanticBuilder`).
@@ -266,6 +277,9 @@ pub(crate) fn collect_runtime_symbols(program: &Program<'_>) -> RuntimeSymbols {
                     if specifier.imported.name() == "attempt" {
                         symbols.attempt.push(symbol_id);
                     }
+                    if specifier.imported.name() == "raise" {
+                        symbols.raise.push(symbol_id);
+                    }
                 }
                 "createMemo" => {
                     symbols.one_arg_hosts.push(symbol_id);
@@ -276,6 +290,11 @@ pub(crate) fn collect_runtime_symbols(program: &Program<'_>) -> RuntimeSymbols {
                     symbols.create_signal.push(symbol_id);
                 }
                 "createEffect" | "createRenderEffect" => symbols.two_arg_hosts.push(symbol_id),
+                "Show" | "For" | "Repeat" | "Switch" | "Loading" | "Errored"
+                    if import.source.value == "solid-js" =>
+                {
+                    symbols.plain_components.push(symbol_id)
+                }
                 _ => {}
             }
         }
@@ -311,6 +330,7 @@ fn build_plan(
                 create_signal: symbols.create_signal.clone(),
                 create_memo: symbols.create_memo.clone(),
                 adapter: symbols.adapter.clone(),
+                plain_components: symbols.plain_components.clone(),
             },
             config.typed,
             config.jsx_plain,
@@ -407,21 +427,70 @@ fn build_plan(
             let Some(body) = function.body.as_ref() else {
                 return Ok(());
             };
+            let kind = self.v2.kind_of(call.span);
             let mut yields = YieldCollector {
                 scoping: self.scoping,
                 symbols: self.symbols,
                 source: self.source,
-                v2: self.v2.kind_of(call.span),
+                v2: kind,
                 spans: Vec::new(),
                 paths: Vec::new(),
                 lowerable: true,
                 jsx_yield: None,
                 jsx_depth: 0,
                 error: None,
+                async_attempts: self.v2.async_lowering
+                    && kind.is_some_and(|kind| kind.attempt_may_suspend()),
+                awaits: Vec::new(),
+                async_refused: false,
+                has_jsx: false,
+                loop_depth: 0,
+                try_depth: 0,
+                reads: Vec::new(),
             };
             yields.visit_function_body(body);
             if let Some(error) = yields.error {
                 return Err(error);
+            }
+            // Async v2 bodies: a memo / event body whose only operations the
+            // call form cannot run are its `yield* attempt(…)`s.
+            let awaits = std::mem::take(&mut yields.awaits);
+            if !awaits.is_empty() {
+                let memo = kind == Some(V2Kind::Memo);
+                let first = awaits.iter().map(|span| span.start).min().unwrap_or(0);
+                let params_ok = function.params.rest.is_none()
+                    && function.params.items.len() <= 1
+                    && function
+                        .params
+                        .items
+                        .iter()
+                        .all(|param| param.initializer.is_none());
+                let ok = yields.lowerable
+                    && !yields.async_refused
+                    && !yields.has_jsx
+                    && params_ok
+                    // The driver refuses a read after a memo's first
+                    // suspension (`[READ_AFTER_WAIT]`).
+                    && !(memo && yields.reads.iter().any(|start| *start > first));
+                if ok {
+                    self.plan
+                        .async_calls
+                        .push((call.span, function.params.items.is_empty()));
+                    self.plan.awaits.extend(awaits);
+                    self.plan.calls.push(call.span);
+                    self.plan.yields.extend(yields.spans);
+                    for path in &yields.paths {
+                        self.plan.path_readers[path_reader(path.keys)] = true;
+                    }
+                    self.plan.paths.extend(yields.paths);
+                } else if let Some(span) = yields.jsx_yield {
+                    return Err(diagnostic(
+                        self.source,
+                        span,
+                        "[JSX_YIELD_IN_UNLOWERED_BLOCK] a `yield*` inside JSX only compiles when the compiler lowers the block, but this block also suspends (or yields an operand the compiler cannot lower). A block that returns JSX may only read signals; move the async work into a reactive computation the JSX reads",
+                    ));
+                }
+                return Ok(());
             }
             if let (false, Some(span)) = (yields.lowerable, yields.jsx_yield) {
                 return Err(diagnostic(
@@ -509,9 +578,57 @@ struct YieldCollector<'s> {
     jsx_yield: Option<Span>,
     jsx_depth: usize,
     error: Option<String>,
+    /// Async v2 bodies: a `yield* attempt(…)` is recorded in `awaits`
+    /// instead of refusing the lowering (memo / event kinds, client output).
+    async_attempts: bool,
+    awaits: Vec<Span>,
+    /// An `attempt` the async lowering cannot take (memo: inside a loop or
+    /// a `try`).
+    async_refused: bool,
+    /// The body contains JSX (a hydration id scope would wrap it).
+    has_jsx: bool,
+    loop_depth: usize,
+    try_depth: usize,
+    /// Start offsets of every other lowered operand except `raise` (memo:
+    /// no read may follow the first `attempt`).
+    reads: Vec<u32>,
+}
+
+impl YieldCollector<'_> {
+    fn is_call_to(&self, operand: &Expression<'_>, symbols: &[SymbolId]) -> bool {
+        matches!(operand, Expression::CallExpression(call)
+            if resolve_callee(self.scoping, call).is_some_and(|symbol| symbols.contains(&symbol)))
+    }
 }
 
 impl<'b> Visit<'b> for YieldCollector<'_> {
+    fn visit_jsx_element(&mut self, it: &oxc_ast::ast::JSXElement<'b>) {
+        self.has_jsx = true;
+        walk::walk_jsx_element(self, it);
+    }
+
+    fn visit_jsx_fragment(&mut self, it: &oxc_ast::ast::JSXFragment<'b>) {
+        self.has_jsx = true;
+        walk::walk_jsx_fragment(self, it);
+    }
+
+    fn visit_statement(&mut self, it: &Statement<'b>) {
+        let looped = matches!(
+            it,
+            Statement::ForStatement(_)
+                | Statement::ForInStatement(_)
+                | Statement::ForOfStatement(_)
+                | Statement::WhileStatement(_)
+                | Statement::DoWhileStatement(_)
+        );
+        let tried = matches!(it, Statement::TryStatement(_));
+        self.loop_depth += usize::from(looped);
+        self.try_depth += usize::from(tried);
+        walk::walk_statement(self, it);
+        self.loop_depth -= usize::from(looped);
+        self.try_depth -= usize::from(tried);
+    }
+
     fn visit_function(&mut self, _it: &Function<'b>, _flags: ScopeFlags) {}
 
     fn visit_arrow_function_expression(&mut self, _it: &oxc_ast::ast::ArrowFunctionExpression<'b>) {
@@ -541,6 +658,7 @@ impl<'b> Visit<'b> for YieldCollector<'_> {
             && let Some(operand) = it.argument.as_ref()
             && member_chain_root(operand).is_some()
         {
+            self.reads.push(it.span.start);
             self.paths.push(PathYield {
                 span: it.span,
                 keys: member_chain_keys(operand, self.source).len(),
@@ -557,6 +675,25 @@ impl<'b> Visit<'b> for YieldCollector<'_> {
                 ));
             }
             return;
+        }
+        if self.async_attempts
+            && let Some(operand) = it.argument.as_ref()
+            && self.is_call_to(operand, &self.symbols.attempt)
+        {
+            // Memo: the driver closes a superseded run (only `finally`
+            // blocks run) and the async lowering throws instead — no `try`
+            // may observe the difference; a loop would read after waiting.
+            if self.v2 == Some(V2Kind::Memo) && (self.loop_depth > 0 || self.try_depth > 0) {
+                self.async_refused = true;
+            }
+            self.awaits.push(it.span);
+            walk::walk_yield_expression(self, it);
+            return;
+        }
+        if let Some(operand) = it.argument.as_ref()
+            && !self.is_call_to(operand, &self.symbols.raise)
+        {
+            self.reads.push(it.span.start);
         }
         match it.argument.as_ref() {
             Some(operand)
@@ -818,8 +955,14 @@ impl<'a> VisitMut<'a> for Rewriter<'a> {
         let ast = AstBuilder::new(self.allocator);
         match expression {
             Expression::CallExpression(call) if self.plan.calls.contains(&call.span) => {
+                let is_async = self
+                    .plan
+                    .async_calls
+                    .iter()
+                    .any(|(span, _)| *span == call.span);
                 if let Argument::FunctionExpression(function) = &mut call.arguments[0] {
                     function.generator = false;
+                    function.r#async = is_async;
                     // `: Generator<…>` no longer describes the function.
                     function.return_type = None;
                 }
@@ -919,6 +1062,18 @@ impl<'a> VisitMut<'a> for Rewriter<'a> {
                 );
             }
             Expression::YieldExpression(yield_expression)
+                if self.plan.awaits.contains(&yield_expression.span) =>
+            {
+                // `yield* attempt(ARGS)` → `(_$a.t(ARGS) ? _$a.r(await _$a.p) : _$a.v)`.
+                let span = yield_expression.span;
+                let Some(Expression::CallExpression(attempt)) = yield_expression.argument.take()
+                else {
+                    unreachable!("planned: an attempt call");
+                };
+                let attempt = attempt.unbox();
+                *expression = async_attempt(self.allocator, span, attempt.arguments);
+            }
+            Expression::YieldExpression(yield_expression)
                 if self.plan.yields.contains(&yield_expression.span) =>
             {
                 let span = yield_expression.span;
@@ -940,6 +1095,191 @@ impl<'a> VisitMut<'a> for Rewriter<'a> {
         // Walk the (possibly new) node: a lowered body holds the yields, and
         // a lowered operand may itself contain one.
         walk_mut::walk_expression(self, expression);
+        // An async v2 body, once its yields are lowered: add the run
+        // parameter, route returns and failures through it.
+        if let Expression::CallExpression(call) = expression
+            && let Some(&(_, no_input)) = self
+                .plan
+                .async_calls
+                .iter()
+                .find(|(span, _)| *span == call.span)
+            && let Argument::FunctionExpression(function) = &mut call.arguments[0]
+        {
+            wrap_async_body(self.allocator, function, no_input);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Async v2 bodies (client output)
+// ---------------------------------------------------------------------------
+//
+// A `$memo` / `$event` body (or a generator `createMemo`) that waits —
+// `yield* attempt(() => promise)` — cannot run in call form: only the driver
+// can suspend a generator. On the client (DOM output with the v2 fusion)
+// such a body is compiled to an `async function` instead, when its only
+// operations the call form cannot run are those `attempt`s:
+//
+// ```js
+// $event(_$$(function* (e) { const id = yield* props.id; yield* attempt(() => save(id)); }))
+// // →
+// $event(_$$(async function (e, _$a) {
+//   try {
+//     const id = _$readPath1(props, "id");
+//     _$a.t(() => save(id)) ? _$a.r(await _$a.p) : _$a.v;
+//   } catch (_$e) { _$a.x(_$e); }
+// }))
+// ```
+//
+// `_$a` is the runtime's `AsyncRun` (`@solidjs/signals`, `generator.ts`,
+// "compiled async bodies"): `t` runs the attempt as the driver does and
+// awaits only a thenable, `r` refuses to continue a superseded run, `ret`
+// and `x` report a run that never waited synchronously. `blocks_v2_lower.rs`
+// then either erases the block (`asyncBody(fn)`) — when every other
+// operation is erased, the proof a synchronous body needs to lose its block
+// — or restores the generator exactly (`restore_async_generator`), so a body
+// this pass compiles never runs with its block.
+//
+// Refused (the body stays with the driver): a body with JSX (a hydration id
+// scope), more than one parameter, a parameter default or rest; in a memo,
+// an `attempt` in a loop or a `try`, or a read after the first `attempt`
+// (the driver's `[READ_AFTER_WAIT]`).
+
+/// The run parameter of an async v2 body.
+pub(crate) const ASYNC_RUN_PARAM: &str = "_$a";
+/// The input parameter added to an async v2 body that declares none.
+pub(crate) const ASYNC_INPUT_PARAM: &str = "_$i";
+/// The catch parameter of an async v2 body's wrapper.
+pub(crate) const ASYNC_ERROR_PARAM: &str = "_$e";
+
+fn run_member<'a>(allocator: &'a Allocator, name: &str) -> Expression<'a> {
+    let ast = AstBuilder::new(allocator);
+    let synth = Span::new(0, 0);
+    Expression::StaticMemberExpression(ast.alloc_static_member_expression(
+        synth,
+        ast.expression_identifier(synth, ast.ident(ASYNC_RUN_PARAM)),
+        ast.identifier_name(synth, ast.ident(name)),
+        false,
+    ))
+}
+
+fn run_call<'a>(
+    allocator: &'a Allocator,
+    span: Span,
+    name: &str,
+    arguments: oxc_allocator::Vec<'a, Argument<'a>>,
+) -> Expression<'a> {
+    let ast = AstBuilder::new(allocator);
+    ast.expression_call(span, run_member(allocator, name), None, arguments, false)
+}
+
+/// `(_$a.t(ARGS) ? _$a.r(await _$a.p) : _$a.v)`.
+fn async_attempt<'a>(
+    allocator: &'a Allocator,
+    span: Span,
+    arguments: oxc_allocator::Vec<'a, Argument<'a>>,
+) -> Expression<'a> {
+    let ast = AstBuilder::new(allocator);
+    let synth = Span::new(0, 0);
+    let builder = oxc_ast::builder::AstBuilder::new(allocator);
+    let test = run_call(allocator, synth, "t", arguments);
+    let awaited = Expression::new_await_expression(synth, run_member(allocator, "p"), &builder);
+    let resumed = run_call(
+        allocator,
+        synth,
+        "r",
+        ast.vec1(expression_to_argument(awaited)),
+    );
+    ast.expression_parenthesized(
+        span,
+        ast.expression_conditional(synth, test, resumed, run_member(allocator, "v")),
+    )
+}
+
+/// `function (input) { BODY }` → `async function (input, _$a) { try { BODY' }
+/// catch (_$e) { _$a.x(_$e); } }`, with every `return v` of BODY (at its own
+/// depth) → `return _$a.ret(v)`.
+fn wrap_async_body<'a>(allocator: &'a Allocator, function: &mut Function<'a>, no_input: bool) {
+    let ast = AstBuilder::new(allocator);
+    let builder = oxc_ast::builder::AstBuilder::new(allocator);
+    let synth = Span::new(0, 0);
+    let param = |name: &str| {
+        ast.formal_parameter(
+            synth,
+            ast.vec(),
+            ast.binding_pattern_binding_identifier(synth, ast.ident(name)),
+            None,
+            None,
+            false,
+            None,
+            false,
+            false,
+        )
+    };
+    if no_input {
+        function.params.items.push(param(ASYNC_INPUT_PARAM));
+    }
+    function.params.items.push(param(ASYNC_RUN_PARAM));
+    let Some(body) = function.body.as_mut() else {
+        return;
+    };
+    let mut returns = AsyncReturns { allocator };
+    for statement in body.statements.iter_mut() {
+        returns.visit_statement(statement);
+    }
+    let statements = std::mem::replace(&mut body.statements, ast.vec());
+    let failure = run_call(
+        allocator,
+        synth,
+        "x",
+        ast.vec1(expression_to_argument(
+            ast.expression_identifier(synth, ast.ident(ASYNC_ERROR_PARAM)),
+        )),
+    );
+    let handler = oxc_ast::ast::CatchClause::boxed(
+        synth,
+        Some(oxc_ast::ast::CatchParameter::new(
+            synth,
+            ast.binding_pattern_binding_identifier(synth, ast.ident(ASYNC_ERROR_PARAM)),
+            None,
+            &builder,
+        )),
+        ast.alloc_block_statement(synth, ast.vec1(ast.statement_expression(synth, failure))),
+        &builder,
+    );
+    let wrapper = Statement::new_try_statement(
+        synth,
+        ast.alloc_block_statement(synth, statements),
+        Some(handler),
+        None,
+        &builder,
+    );
+    body.statements.push(wrapper);
+}
+
+/// `return v` → `return _$a.ret(v)` at the body's own depth.
+struct AsyncReturns<'a> {
+    allocator: &'a Allocator,
+}
+
+impl<'a> VisitMut<'a> for AsyncReturns<'a> {
+    fn visit_function(&mut self, _it: &mut Function<'a>, _flags: ScopeFlags) {}
+    fn visit_arrow_function_expression(
+        &mut self,
+        _it: &mut oxc_ast::ast::ArrowFunctionExpression<'a>,
+    ) {
+    }
+    fn visit_class(&mut self, _it: &mut oxc_ast::ast::Class<'a>) {}
+    fn visit_return_statement(&mut self, it: &mut oxc_ast::ast::ReturnStatement<'a>) {
+        if let Some(argument) = it.argument.take() {
+            let ast = AstBuilder::new(self.allocator);
+            it.argument = Some(run_call(
+                self.allocator,
+                Span::new(0, 0),
+                "ret",
+                ast.vec1(expression_to_argument(argument)),
+            ));
+        }
     }
 }
 
@@ -2265,7 +2605,10 @@ const b = $(function* () { const u = yield* attempt(() => fetchUser(1)); return 
 "#)
         .unwrap();
         assert!(fine.contains("_$perform(count)"), "{fine}");
-        assert!(fine.contains("yield* attempt(() => fetchUser(1))"), "{fine}");
+        assert!(
+            fine.contains("yield* attempt(() => fetchUser(1))"),
+            "{fine}"
+        );
 
         // Nested functions own their throws.
         let nested = ssr(r#"import { $ } from "solid-js";

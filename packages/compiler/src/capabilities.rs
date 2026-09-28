@@ -170,6 +170,7 @@ pub fn summarize_capabilities(
             create_signal: symbols_of(&["createSignal"]),
             create_memo: symbols_of(&["createMemo"]),
             adapter: symbols_of(&["$"]),
+            plain_components: Vec::new(),
         },
         source_type.is_typescript(),
         true,

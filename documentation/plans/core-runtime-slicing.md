@@ -479,7 +479,7 @@ Notes:
 
   Their generated entries are now summarized (§7.1), so what remains is a gap in the library ecosystem, not in the linker. What these apps gain comes from coupling 2 alone.
 
-- **todos-blocks stays flat.** It keeps `ITERABLE` legitimately: two `$event` bodies wait (`yield* attempt`), and the `useTodos` helper generator stays in the output. The renderer slot costs block apps about 120 B min in the no-linker build, which `COMPILED_SEAMS` off more than pays back.
+- **todos-blocks stays flat.** It keeps `ITERABLE` legitimately: two `$event` bodies wait (`yield* attempt`), and the `useTodos` helper generator stays in the output. (Since [blocks-v2-performance.md](./blocks-v2-performance.md) §10 both compile away — async bodies, context-only helpers, and `filter.ts` compiled too — and the linker switches `ITERABLE` off: 89,888 / 32,313 sliced.) The renderer slot costs block apps about 120 B min in the no-linker build, which `COMPILED_SEAMS` off more than pays back.
 - **Not measured.** diagnostics uses Vite 8 / rolldown, and its build fails under this harness's inline config before and after this change. rendering is three SSR configurations without an app entry.
 
 ### 7.6 Behaviour

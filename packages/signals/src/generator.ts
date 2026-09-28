@@ -769,8 +769,51 @@ function readThrough(value: unknown): unknown {
   if (isOp(value) && value[OP] === "read") return readThrough(value.source());
   return typeof value === "function" &&
     ((value as any)[BLOCK] || Symbol.iterator in (value as object))
-    ? perform(value as SourceAccessor<unknown>)
+    ? readFunction(value)
     : value;
+}
+
+/**
+ * `perform` of a readable function found at a path (`readThrough`): an
+ * accessor is read, a view is a value, a block is delegated to under the
+ * current host, and any other iterable function — a context provider — is
+ * stepped, each operation it yields performed as the driver would.
+ *
+ * Deliberately not `perform` itself, so the path readers (in every compiled
+ * block app) do not retain the generic dispatch: the one difference is that
+ * an iterable that yields something other than an operation fails with
+ * `[INVALID_YIELD]` here — the driver's verdict for the same iterable —
+ * where `perform` would dispatch on the yielded value.
+ */
+function readFunction(target: any): unknown {
+  if (target[Symbol.iterator] === accessorIterator) {
+    return blockGuard ? readGuarded(target) : target();
+  }
+  if (target[VIEW]) return target;
+  if (target[BLOCK]) return delegateSync(target as AnyBlock, undefined);
+  if (ownIterator(target)) {
+    const it = target[Symbol.iterator]() as Iterator<unknown>;
+    let step = it.next();
+    while (!step.done) {
+      const op = step.value;
+      if (!isOp(op)) throw invalidYield(op);
+      step = it.next(performOp(op));
+    }
+    return step.value;
+  }
+  return readGuarded(target);
+}
+
+/**
+ * `perform(readPath(root, keys))` for a root that is a path token (`const u
+ * = store.user` in a block body, then `yield* u.name`): the token is
+ * consumed and its prefix prepended, the host admits the read, and the walk
+ * runs with the guard lowered — without `perform`'s dispatch.
+ */
+function readTokenPath(root: unknown, keys: readonly PathKey[]): unknown {
+  const op = pathRead(root, keys, "store", false) as ReadOp<() => unknown>;
+  checkHost(currentHost, "read");
+  return readGuarded(op.source);
 }
 
 function pathRead(root: unknown, path: readonly PathKey[], kind: string, delegated: boolean): Op {
@@ -856,7 +899,7 @@ function propsTarget(root: any): any {
 export function readPath1<R, const K0 extends PathKey>(root: R, k0: K0): PathResult<R, [K0]>;
 export function readPath1(root: any, k0: PathKey): any {
   if (typedPropsCreated) root = propsTarget(root);
-  if (tokensCreated && isToken(root)) return perform(readPath(root, [k0]));
+  if (tokensCreated && isToken(root)) return readTokenPath(root, [k0]);
   if (!blockGuard) return readThrough(hop(root, k0));
   const prev = setBlockGuard(false);
   try {
@@ -874,7 +917,7 @@ export function readPath2<R, const K0 extends PathKey, const K1 extends PathKey>
 ): PathResult<R, [K0, K1]>;
 export function readPath2(root: any, k0: PathKey, k1: PathKey): any {
   if (typedPropsCreated) root = propsTarget(root);
-  if (tokensCreated && isToken(root)) return perform(readPath(root, [k0, k1]));
+  if (tokensCreated && isToken(root)) return readTokenPath(root, [k0, k1]);
   if (!blockGuard) return readThrough(hop(hop(root, k0), k1));
   const prev = setBlockGuard(false);
   try {
@@ -893,7 +936,7 @@ export function readPath3<
 >(root: R, k0: K0, k1: K1, k2: K2): PathResult<R, [K0, K1, K2]>;
 export function readPath3(root: any, k0: PathKey, k1: PathKey, k2: PathKey): any {
   if (typedPropsCreated) root = propsTarget(root);
-  if (tokensCreated && isToken(root)) return perform(readPath(root, [k0, k1, k2]));
+  if (tokensCreated && isToken(root)) return readTokenPath(root, [k0, k1, k2]);
   if (!blockGuard) return readThrough(hop(hop(hop(root, k0), k1), k2));
   const prev = setBlockGuard(false);
   try {
@@ -913,7 +956,7 @@ export function readPath4<
 >(root: R, k0: K0, k1: K1, k2: K2, k3: K3): PathResult<R, [K0, K1, K2, K3]>;
 export function readPath4(root: any, k0: PathKey, k1: PathKey, k2: PathKey, k3: PathKey): any {
   if (typedPropsCreated) root = propsTarget(root);
-  if (tokensCreated && isToken(root)) return perform(readPath(root, [k0, k1, k2, k3]));
+  if (tokensCreated && isToken(root)) return readTokenPath(root, [k0, k1, k2, k3]);
   if (!blockGuard) return readThrough(hop(hop(hop(hop(root, k0), k1), k2), k3));
   const prev = setBlockGuard(false);
   try {
@@ -930,7 +973,7 @@ export function readPathN<R, const P extends readonly PathKey[]>(
 ): PathResult<R, P>;
 export function readPathN(root: any, keys: readonly PathKey[]): any {
   if (typedPropsCreated) root = propsTarget(root);
-  if (tokensCreated && isToken(root)) return perform(readPath(root, keys));
+  if (tokensCreated && isToken(root)) return readTokenPath(root, keys);
   if (!blockGuard) return readThrough(walkProxies(root, keys));
   const prev = setBlockGuard(false);
   try {
@@ -1380,11 +1423,178 @@ export function dispatchBlock<B extends AnyBlock>(
  * and a failure routed to the nearest error boundary above `owner`.
  */
 export function dispatchFused<E>(fn: (event: E) => unknown, event: E, owner: Owner | null): void {
+  let result: unknown;
   try {
-    if (getOwner() === null) fn(event);
-    else runWithOwner(null, () => fn(event));
+    result = getOwner() === null ? fn(event) : runWithOwner(null, () => fn(event));
   } catch (error) {
     if (!reportBlockError(owner, error)) throw error;
+    return;
+  }
+  // As `dispatchBlock`: a handler that waits (a compiled async body, see
+  // `asyncBody`) routes its rejection to the same boundary.
+  if (isThenableValue(result)) {
+    (result as PromiseLike<unknown>).then(undefined, error => {
+      if (!reportBlockError(owner, error)) throw error;
+    });
+  }
+}
+
+// --- compiled async bodies ----------------------------------------------------------
+//
+// The client lowering compiles a memo or event body that waits (`yield*
+// attempt(() => promise)`) to an `async function` instead of leaving the
+// generator to the driver, when the body has no other operation left (every
+// read is a direct accessor call or a path read, every write a setter call —
+// the conditions under which a synchronous body loses its block):
+//
+//   $event(function* (e) { const id = yield* props.id; yield* attempt(() => save(id)); })
+//   // →
+//   $eventCompiled(asyncBody(async function (e, _$a) {
+//     try {
+//       const id = readValue(props.id);
+//       _$a.t(() => save(id)) ? _$a.r(await _$a.p) : _$a.v;
+//     } catch (_$e) { _$a.x(_$e); }
+//   }));
+//
+// Each `yield* attempt(run, ...errors)` becomes `(_$a.t(run, ...errors) ?
+// _$a.r(await _$a.p) : _$a.v)`: `t` runs `run` as the driver does (a
+// synchronous throw is the typed error at the `yield*`) and awaits only a
+// thenable, so a body whose attempts all return plain values completes
+// synchronously — exactly as the driver steps it. `asyncBody` runs the body
+// and hands back the driver's result: the returned value (or the thrown
+// error) when the body never waited, else the body's promise.
+//
+// Driver parity, point by point:
+// - the first suspension registers the run's staleness on the running owner
+//   (a memo recompute or disposal supersedes the run); a stale run is never
+//   resumed (`r` throws `[BLOCK_SUPERSEDED]` instead of continuing, as the
+//   driver closes the generator) and a stale rejection is reported as
+//   superseded. The compiler lowers a memo only when no `attempt` sits in a
+//   `try` (so no user `catch` / `finally` could observe the difference
+//   between closing and throwing), none sits in a loop, and no read follows
+//   the first `attempt` (the driver's `[READ_AFTER_WAIT]`);
+// - a continuation runs in the settled promise's reaction, as the driver's
+//   `then` callback does: side effects happen at the same microtask. The one
+//   difference: with more than one suspension the driver's result promise
+//   adopts the next step's promise (two extra microtasks per suspension);
+//   the async function's promise settles as soon as the body returns;
+// - host and strict guard: the body is only compiled when no operation is
+//   left to check (the same erasure proof as a synchronous body), so the
+//   host the driver re-enters per step is not observable.
+//
+// `_$a.ret(v)` wraps every `return v` so a body that never waited reports its
+// value synchronously (the async function's own promise is then dropped; it
+// never rejects: `x` records a synchronous failure instead of rethrowing).
+
+/** @internal One run of a compiled async block body (see above). */
+export class AsyncRun {
+  /** Still in the synchronous first segment (no suspension yet). */
+  s = true;
+  /** Superseded (set by the owner's cleanup after the first suspension). */
+  stale = false;
+  /** The pending thenable of the last `t`, awaited by the body. */
+  p: unknown = undefined;
+  /** The plain value of the last `t`. */
+  v: unknown = undefined;
+  /** Synchronous outcome: the returned value, or the thrown error. */
+  value: unknown = undefined;
+  threw = false;
+  error: unknown = undefined;
+  /** `attempt(run)`: true when the result is a thenable to await (`p`). */
+  t(run: () => unknown): boolean {
+    let value: unknown;
+    try {
+      value = readGuarded(run);
+    } catch (error) {
+      throw unwrapStatusError(error);
+    }
+    if (isThenableValue(value)) {
+      if (this.s) {
+        this.s = false;
+        if (getOwner()) cleanup(() => (this.stale = true));
+      }
+      this.p = value;
+      return true;
+    }
+    this.v = value;
+    return false;
+  }
+  /** Resume after an await: a superseded run does not continue. */
+  r<T>(value: T): T {
+    if (this.stale) throw supersededError();
+    return value;
+  }
+  /** `return value`: recorded while synchronous (the promise is dropped). */
+  ret<T>(value: T): T | undefined {
+    if (!this.s) return value;
+    this.value = value;
+    return undefined;
+  }
+  /** The body's `catch`: a synchronous failure is recorded, a later one rejects. */
+  x(error: unknown): void {
+    if (this.s) {
+      this.threw = true;
+      this.error = error;
+      return;
+    }
+    throw this.stale ? supersededError() : error;
+  }
+}
+
+function supersededError(): Error {
+  return new Error(
+    __DEV__
+      ? "[BLOCK_SUPERSEDED] This block run was superseded before its wait settled"
+      : "[BLOCK_SUPERSEDED]"
+  );
+}
+
+/**
+ * @internal A compiled async memo / event body (see above) as the function
+ * its host calls: `(input) => result`, where `result` is what the driver
+ * would have returned for the same run.
+ */
+export function asyncBody<I, R>(
+  body: (input: I, run: AsyncRun) => Promise<unknown>
+): (input: I) => R | Promise<R> {
+  return (input: I) => {
+    const run = new AsyncRun();
+    const promise = body(input, run);
+    if (!run.s) return promise as Promise<R>;
+    if (run.threw) throw run.error;
+    return run.value as R;
+  };
+}
+
+// --- compiled reads -------------------------------------------------------------------
+
+/**
+ * @internal Compiled `yield* acc` for a binding the compiler proved to be a
+ * signal / memo accessor, where the read may run with the strict guard up
+ * (a prop getter, an attribute evaluated in the view body): exactly what
+ * `perform(acc)` does with an accessor, without its dispatch. Inside a
+ * computation the compiler emits the call itself.
+ */
+export function readAccessor<T>(accessor: () => T): T {
+  return blockGuard ? readGuarded(accessor) : accessor();
+}
+
+/**
+ * @internal Compiled `yield* readStore(store, selector)` outside a fused
+ * computation: `perform(readStore(store, selector))` without the operation
+ * object — a path-token argument (`readStore(store.user, …)` in a block
+ * body) is consumed and walked, the host admits the read, and the selector
+ * runs with the guard lowered.
+ */
+export function readSelected<S, R>(store: S, selector: (state: S) => R): R {
+  const token = tokenOf(store);
+  if (token) consume(token);
+  checkHost(currentHost, "read");
+  const prev = setBlockGuard(false);
+  try {
+    return selector(token ? (walk(token.root, token.path) as S) : store);
+  } finally {
+    setBlockGuard(prev);
   }
 }
 
@@ -1739,48 +1949,53 @@ function performValue(target: unknown): unknown {
   }
   // A v2 setter's receipt (`yield* set(v)`): the written value.
   if (target instanceof Receipt) return target.value;
-  if (isOp(target)) {
-    checkHost(currentHost, target[OP]);
-    switch (target[OP]) {
-      case "read":
-        return readGuarded(target.source);
-      case "attempt": {
-        const value = readGuarded(target.run);
-        if (isThenableValue(value)) {
-          throw new TypeError(
-            __DEV__
-              ? "[ASYNC_OP_OUTSIDE_DRIVER] An async `attempt` can only be performed by the generator driver. Keep `yield* attempt(...)` inline in the block so the compiler leaves it to the runtime"
-              : "[ASYNC_OP_OUTSIDE_DRIVER]"
-          );
-        }
-        return value;
-      }
-      case "create":
-        return readGuarded(target.make);
-      case "cleanup":
-        return void registerCleanup(target.fn);
-      case "context":
-        return readGuarded(target.read);
-      case "flush":
-        return void flush();
-      case "write":
-        return readGuarded(() => target.target(target.value));
-      case "call":
-        return delegateSync(target.block, target.input);
-      case "raise":
-        throw target.error;
-      case "wait":
-        throw new TypeError(
-          __DEV__
-            ? "[ASYNC_OP_OUTSIDE_DRIVER] A suspension can only be performed by the generator driver. Keep `yield* attempt(...)` inline in the block so the compiler leaves it to the runtime"
-            : "[ASYNC_OP_OUTSIDE_DRIVER]"
-        );
-    }
-  }
+  if (isOp(target)) return performOp(target);
   // Setter receipts, context objects and helper generators (`yield*
   // useTodos()`): step their iterator here.
   if (ownIterator(target) || isGeneratorObject(target)) return stepSync(target as any);
   throw invalidYield(target);
+}
+
+/** One operation, performed in call form under the current host (the
+ * host check, then the operation). */
+function performOp(op: Op): unknown {
+  checkHost(currentHost, op[OP]);
+  switch (op[OP]) {
+    case "read":
+      return readGuarded(op.source);
+    case "attempt": {
+      const value = readGuarded(op.run);
+      if (isThenableValue(value)) {
+        throw new TypeError(
+          __DEV__
+            ? "[ASYNC_OP_OUTSIDE_DRIVER] An async `attempt` can only be performed by the generator driver. Keep `yield* attempt(...)` inline in the block so the compiler leaves it to the runtime"
+            : "[ASYNC_OP_OUTSIDE_DRIVER]"
+        );
+      }
+      return value;
+    }
+    case "create":
+      return readGuarded(op.make);
+    case "cleanup":
+      return void registerCleanup(op.fn);
+    case "context":
+      return readGuarded(op.read);
+    case "flush":
+      return void flush();
+    case "write":
+      return readGuarded(() => op.target(op.value));
+    case "call":
+      return delegateSync(op.block, op.input);
+    case "raise":
+      throw op.error;
+    case "wait":
+      throw new TypeError(
+        __DEV__
+          ? "[ASYNC_OP_OUTSIDE_DRIVER] A suspension can only be performed by the generator driver. Keep `yield* attempt(...)` inline in the block so the compiler leaves it to the runtime"
+          : "[ASYNC_OP_OUTSIDE_DRIVER]"
+      );
+  }
+  return undefined;
 }
 
 function isGeneratorObject(target: unknown): boolean {

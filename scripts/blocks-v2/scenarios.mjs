@@ -181,6 +181,52 @@ export const SCENARIOS = [
     }
   ),
   scenario(
+    "attrs",
+    "n views with an attribute reading a shared signal and a hole; update: write it (n attribute effects + n hole updates)",
+    ["update"],
+    {
+      state: `const [src, setSrc] = createSignal(0);`,
+      update: `setSrc(++r); flush();`,
+      handwritten: `function Item() {
+    return <p title={src()}>{src()}</p>;
+  }`,
+      v2: `const Item = $component(function* () {
+    return function* () { return <p title={yield* src}>{yield* src}</p>; };
+  });`
+    }
+  ),
+  scenario(
+    "asyncEvent",
+    "n components with a click handler that reads its own signal, waits for a resolved promise, then writes the signal (shown in a hole); update: dispatch to all n handlers, let them settle, flush",
+    ["update"],
+    {
+      update: `dispatchAll(); flush(); return new Promise(res => setTimeout(res, 0)).then(() => flush());`,
+      handwritten: `function Item() {
+    const [c, setC] = createSignal(0);
+    const inc = async () => { const n = c(); const v = await Promise.resolve(n + 1); setC(v); };
+    return <p onClick={inc}>{c()}</p>;
+  }`,
+      v2: `const Item = $component(function* () {
+    const [c, setC] = yield* $signal(0);
+    const inc = $event(function* () {
+      const n = yield* c;
+      const v = yield* attempt(() => Promise.resolve(n + 1));
+      yield* setC(v);
+    });
+    return function* () { return <p onClick={inc}>{yield* c}</p>; };
+  });`,
+      uncompiled: `const Item = $component(function* () {
+    const [c, setC] = yield* $signal(0);
+    const inc = $event(function* () {
+      const n = yield* c;
+      const v = yield* attempt(() => Promise.resolve(n + 1));
+      yield* setC(v);
+    });
+    return function* () { return <p onClick={inc}>{c}</p>; };
+  });`
+    }
+  ),
+  scenario(
     "effect",
     "n components each with an effect reading a shared signal and a prop, writing a sink and registering a cleanup; update: write the signal (n effect runs + n cleanups)",
     ["update"],

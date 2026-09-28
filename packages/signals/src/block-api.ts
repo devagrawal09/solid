@@ -29,6 +29,7 @@ import {
   registerTypedProps,
   runEffectHalf,
   isBlock,
+  outsideBlock,
   dispatchBlock,
   dispatchFused,
   readProp,
@@ -427,6 +428,19 @@ function contextOp(context: Context<any>): ContextOp<any, any> {
 setContextIterator(function* (context) {
   return yield* contextOp(context);
 });
+
+/**
+ * @internal Compiled `yield* Ctx` in a `$component` setup, for a binding the
+ * compiler proved to be a context (`const Ctx = createContext(…)`): what
+ * `perform(Ctx)` does — step the context's iterator and perform its one
+ * context operation — without the iterator, the operation object and the
+ * host check (the compile-time host rules already admitted it: only a setup
+ * reads context).
+ */
+export function readContext<T>(context: Context<T>): T {
+  const reader = (context as any)[CONTEXT_READ] as (() => T) | undefined;
+  return outsideBlock(reader || (() => getContext(context)));
+}
 
 // --- $event ------------------------------------------------------------------
 

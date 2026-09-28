@@ -21,7 +21,12 @@ const hostFusion =
 const blockProofs = process.env.SOLID_BLOCK_PROOFS === "1";
 
 export default defineConfig({
-  plugins: [solid({ solid: { hostFusion, blockProofs } })],
+  // `.ts` modules go through the compiler too: `filter.ts` holds a block
+  // (`onSettled(function* …)`). Compiled, every block in the app is lowered
+  // and the bundle ships no generator driver; left to the runtime, that one
+  // body would need it (the driver is installed only by the uncompiled
+  // block constructor).
+  plugins: [solid({ solid: { hostFusion, blockProofs }, extensions: [[".ts", { typescript: true }]] })],
   server: { port: 3012 },
   preview: { port: 3012 },
   test: {

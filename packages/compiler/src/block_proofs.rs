@@ -121,6 +121,12 @@ pub(crate) struct ProofSymbols {
     pub(crate) create_signal: Vec<SymbolId>,
     pub(crate) create_memo: Vec<SymbolId>,
     pub(crate) adapter: Vec<SymbolId>,
+    /// `solid-js` flow components whose element evaluates to a function
+    /// (`Show`, `For`, `Repeat`, `Switch`: a memo / list accessor;
+    /// `Loading`, `Errored`: a boundary accessor, or a deferred view thunk
+    /// inside a running block) — never a thenable, iterator or async
+    /// iterable.
+    pub(crate) plain_components: Vec<SymbolId>,
 }
 
 pub(crate) struct Prover<'s> {
@@ -520,6 +526,9 @@ impl<'s> Prover<'s> {
                         .next()
                         .is_some_and(|c| c.is_ascii_lowercase()),
                     JSXElementName::NamespacedName(_) => true,
+                    JSXElementName::IdentifierReference(reference) => self
+                        .reference_symbol(reference)
+                        .is_some_and(|symbol| self.symbols.plain_components.contains(&symbol)),
                     _ => false,
                 };
                 Fact {

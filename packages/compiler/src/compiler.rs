@@ -350,10 +350,14 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
         // Generator blocks v2: rewrite `$component` / `$memo` / `$effect` /
         // `$event` bodies (and generator `createMemo` / `createEffect`) into
         // `$` blocks the generator pass lowers.
-        let v2 = crate::blocks_v2::transform_blocks_v2(&allocator, &mut program, source)
+        let mut v2 = crate::blocks_v2::transform_blocks_v2(&allocator, &mut program, source)
             .map_err(CompileError::transform)?;
-        crate::generators::transform_generators(&allocator, &mut program, source, proofs, &v2)
-            .map_err(CompileError::transform)?;
+        // The client lowering compiles memo / event bodies that wait to
+        // `async function`s (DOM output only: the server keeps the driver).
+        v2.async_lowering = options.v2_fusion && matches!(options.generate, Generate::Dom);
+        v2.async_bodies =
+            crate::generators::transform_generators(&allocator, &mut program, source, proofs, &v2)
+                .map_err(CompileError::transform)?;
         v2_bodies = v2;
     }
 
@@ -447,6 +451,16 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
             transform
                 .prepend_helpers(&mut program)
                 .map_err(|error| CompileError::transform(error.to_string()))?;
+            // Generator blocks v2: a view read left as `readAccessor` /
+            // `readSelected` inside a computation the JSX transform created
+            // is a plain read (see `blocks_v2_lower.rs`).
+            if options.v2_fusion && options.generators && !v2_bodies.kinds.is_empty() {
+                crate::blocks_v2_lower::fuse_computation_reads(
+                    &allocator,
+                    &mut program,
+                    &options.module_name,
+                );
+            }
         }
         Generate::Dynamic => {
             if let Some(renderer) = dom_renderer(&options.renderers) {
