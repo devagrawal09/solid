@@ -915,3 +915,48 @@ export function App() {
     assert!(m.contains("App.on$f"), "{m}");
     assert!(out.server.contains("if (!v$f"), "{}", out.server);
 }
+
+#[test]
+fn an_errored_around_a_tier2_islands_content_is_a_client_boundary() {
+    let src = r#"
+import { $component, $event, $store, Errored } from "solid-js";
+export const App = $component(function* () {
+  const [s, setS] = yield* $store({ n: 0 });
+  const inc = $event(function* () { setS(d => { d.n++; }); });
+  return function* () {
+    return (
+      <main>
+        <Errored fallback={(err, reset) => <p onClick={reset}>{String(err())}</p>}>
+          <b onClick={inc}>{yield* s.n}</b>
+        </Errored>
+      </main>
+    );
+  };
+});
+"#;
+    let out = run(src);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    // The server marks the boundary's region; the client activates its
+    // content inside `createErrorBoundary` and builds the fallback.
+    assert!(out.server.contains("<!--$-->${_$err("), "{}", out.server);
+    let chunk = &out.chunks[0].code;
+    assert!(
+        chunk.contains("createErrorBoundary as $$createErrorBoundary"),
+        "{chunk}"
+    );
+    assert!(chunk.contains("$err($m"), "{chunk}");
+    assert!(chunk.contains("addEventListener(\"click\", reset$"), "{chunk}");
+    // A tier-0 island under an `<Errored>` keeps its runtime (no boundary).
+    let out = run(r#"
+import { $component, $event, $signal, Errored } from "solid-js";
+export const App = $component(function* () {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    return <main><Errored fallback={<p>x</p>}><b onClick={inc}>{yield* n}</b></Errored></main>;
+  };
+});
+"#);
+    assert!(manifest(&out).contains(r#""tier":0"#), "{}", manifest(&out));
+    assert!(!out.server.contains("<!--$-->"), "{}", out.server);
+}

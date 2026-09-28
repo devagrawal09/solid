@@ -254,11 +254,11 @@ fn emit(
         }
         let want = g.tier.max(opts.min_tier);
         let mut note = Vec::new();
-        let code = match client::emit_group(m, a, gi, want.min(1), &copts) {
+        let code = match client::emit_group(m, a, gi, want.min(1), &copts, want >= 2) {
             Ok(c) => c,
             Err(e) if want == 0 => {
                 note.push(format!("tier 0 emission failed ({e}); emitted at tier 1"));
-                client::emit_group(m, a, gi, 1, &copts)
+                client::emit_group(m, a, gi, 1, &copts, want >= 2)
                     .map_err(|e| format!("island `{}`: {e}", g.id))?
             }
             Err(e) => return Err(format!("island `{}` ({}): {e}", g.id, m.comps[g.root].name)),

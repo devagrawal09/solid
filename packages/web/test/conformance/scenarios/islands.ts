@@ -686,11 +686,99 @@ export const Row = $component(function* (props) {
   ]
 };
 
+/**
+ * An `<Errored>` around a tier-2 island's live content keeps a client error
+ * boundary: a memo that throws after a write shows the fallback (built on the
+ * client, with the error and `reset`); the content is kept, still bound, and
+ * a reset that recovers puts it back.
+ */
+export const islandsErrored: Scenario = {
+  name: "islands-errored",
+  covers: [
+    "client error boundary around adopted live content",
+    "the fallback built on the client with err / reset",
+    "reset recovers the same content"
+  ],
+  entry: { component: "App" },
+  sources: {
+    reference: `
+import { createMemo, createStore, Errored } from "solid-js";
+function Child(props) {
+  const v = createMemo(() => {
+    if (props.n > 1) throw new Error("too big");
+    return props.n;
+  });
+  return <span class="v">{v()}</span>;
+}
+export function App() {
+  const [s, setS] = createStore({ n: 0 });
+  return (
+    <main>
+      <button class="inc" onClick={() => setS(d => { d.n++; })}>inc</button>
+      <Errored
+        fallback={(err, reset) => (
+          <p class="err">
+            {String(err())}
+            <button class="reset" onClick={() => { setS(d => { d.n = 0; }); reset(); }}>reset</button>
+          </p>
+        )}
+      >
+        <Child n={s.n} />
+      </Errored>
+    </main>
+  );
+}
+`,
+    islands: `
+import { $component, $event, $memo, $store, Errored } from "solid-js";
+const Child = $component(function* (props) {
+  const v = yield* $memo(function* () {
+    const n = yield* props.n;
+    if (n > 1) throw new Error("too big");
+    return n;
+  });
+  return function* () {
+    return <span class="v">{yield* v}</span>;
+  };
+});
+export const App = $component(function* () {
+  const [s, setS] = yield* $store({ n: 0 });
+  const inc = $event(function* () { setS(d => { d.n++; }); });
+  return function* () {
+    return (
+      <main>
+        <button class="inc" onClick={inc}>inc</button>
+        <Errored
+          fallback={(err, reset) => (
+            <p class="err">
+              {String(err())}
+              <button class="reset" onClick={() => { setS(d => { d.n = 0; }); reset(); }}>reset</button>
+            </p>
+          )}
+        >
+          <Child n={yield* s.n} />
+        </Errored>
+      </main>
+    );
+  };
+});
+`
+  },
+  steps: [
+    { name: "initial", run: ({ html }) => html() },
+    step("inc (1)", ctx => ctx.click(".inc")),
+    step("inc (2: the memo throws, the fallback shows)", ctx => ctx.click(".inc")),
+    step("reset (the content comes back)", ctx => ctx.click(".reset")),
+    step("inc (the content is live again)", ctx => ctx.click(".inc"))
+  ]
+};
+
 export const islandsScenarios = [
   islandsList,
   islandsStream,
   islandsStore,
   islandsAsync,
   islandsOptimistic,
-  islandsModules
+  islandsModules,
+  islandsErrored
 ];

@@ -132,7 +132,10 @@ export const APPS = {
       "C-T1-eager": { server: "apps/hn-blocks/server-islands.ts", client: "apps/islands-client.ts", islands: { root: "apps/hn-blocks/story.tsx", mode: "eager", minTier: 1 } },
       "C-T1-lazy": { server: "apps/hn-blocks/server-islands.ts", client: "apps/islands-client.ts", islands: { root: "apps/hn-blocks/story.tsx", mode: "auto", minTier: 1 }, splitting: true },
       "C-T2-eager": { server: "apps/hn-blocks/server-islands.ts", client: "apps/islands-client.ts", islands: { root: "apps/hn-blocks/story.tsx", mode: "eager", minTier: 2 } },
-      "C-T2-lazy": { server: "apps/hn-blocks/server-islands.ts", client: "apps/islands-client.ts", islands: { root: "apps/hn-blocks/story.tsx", mode: "auto", minTier: 2 }, splitting: true }
+      "C-T2-lazy": { server: "apps/hn-blocks/server-islands.ts", client: "apps/islands-client.ts", islands: { root: "apps/hn-blocks/story.tsx", mode: "auto", minTier: 2 }, splitting: true },
+      // Streaming: the same islands, the page's Loading streamed as a chunk
+      // after the shell (islands-stream.js; the swap runs while parsing).
+      "C-stream": { server: "apps/hn-blocks/server-islands-stream.ts", client: "apps/islands-client.ts", islands: { root: "apps/hn-blocks/story.tsx", mode: "auto" }, splitting: true }
     }
   },
   sync: {

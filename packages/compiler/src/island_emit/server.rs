@@ -58,6 +58,8 @@ struct Se<'x, 'a> {
     pd: HashSet<u32>,
     /// Components whose view has a `<Loading>` over server data (streamed).
     streams: std::cell::RefCell<HashSet<usize>>,
+    /// Each group's effective tier (its chunk's).
+    tiers: HashMap<usize, u8>,
 }
 
 struct SEnv<'e, 'x, 'a> {
@@ -278,6 +280,22 @@ impl<'x, 'a> Se<'x, 'a> {
         Ok(())
     }
 
+    /// An `<Errored>` around live content of a tier-2 island group (its
+    /// sites, or a member it renders): the client keeps a boundary there.
+    fn live_boundary(&self, comp: usize, span: Span) -> bool {
+        let inside = |sp: Span| span.start <= sp.start && sp.end <= span.end;
+        self.a.groups.iter().enumerate().any(|(gi, g)| {
+            self.tiers.get(&gi).copied().unwrap_or(g.tier) >= 2
+                && (g
+                    .sites
+                    .iter()
+                    .any(|(c, s)| *c == comp && inside(self.a.facts[*c].sites[*s].span))
+                    || self.a.facts[comp].calls.iter().any(|call| {
+                        inside(call.span) && matches!(call.tag, Tag::Comp(k) if g.members.contains(&k))
+                    }))
+        })
+    }
+
     fn subtree_async(&self, span: Span, comp: usize) -> bool {
         self.a.facts[comp].calls.iter().any(|c| {
             span.start <= c.span.start
@@ -455,6 +473,12 @@ impl<'x, 'a> Se<'x, 'a> {
                         let mut inner = String::new();
                         self.kids(comp, &kids, &mut inner, anchor, false)?;
                         let fb = self.fallback(comp, &attrs)?;
+                        // Around a tier-2 island's live content the client
+                        // keeps an error boundary: mark its region.
+                        let live = self.live_boundary(comp, el.span);
+                        if live {
+                            out.push_str("<!--$-->");
+                        }
                         if is_async {
                             // Streamed boundaries inside route their failures here.
                             let _ = write!(
@@ -463,6 +487,9 @@ impl<'x, 'a> Se<'x, 'a> {
                             );
                         } else {
                             let _ = write!(out, "${{_$err(() => ({{ t: `{inner}` }}), {fb})}}");
+                        }
+                        if live {
+                            out.push_str("<!--/-->");
                         }
                         Ok(())
                     }
@@ -892,6 +919,7 @@ pub(crate) fn emit_server<'a>(
         roots,
         pd,
         streams: Default::default(),
+        tiers: codes.iter().map(|(gi, c)| (*gi, c.tier)).collect(),
     };
     let mut edits: Vec<(Span, String)> = Vec::new();
     for (ci, c) in m.comps.iter().enumerate() {

@@ -147,6 +147,10 @@ enum Slot<'a> {
     Hole(&'a Expression<'a>, usize, bool),
     Region(&'a JSXElement<'a>, usize, bool),
     Opaque(Option<usize>, Option<usize>),
+    /// An `<Errored>` around the island's live content (tier 2): its content
+    /// slots (`Ce::bounds[i]`), laid out in place between a marker pair,
+    /// activated inside a client error boundary.
+    Boundary(&'a JSXElement<'a>, usize, usize),
 }
 
 struct Ce<'x, 'a> {
@@ -181,6 +185,8 @@ struct Ce<'x, 'a> {
     /// Dev verifier: (node variable, expected node, where it comes from) for
     /// the activation scope's addresses.
     checks: Vec<(String, String, String)>,
+    /// Client error boundaries: (scope of their content, content slots).
+    bounds: Vec<(usize, Vec<Slot<'a>>)>,
 }
 
 const HELPERS: &[(&str, &str)] = &[
@@ -194,6 +200,11 @@ const HELPERS: &[(&str, &str)] = &[
         // The k-th top-level `<!--$-->…<!--/-->` pair's end marker under
         // `p` (or among the siblings after `a`).
         "const $mk = (p, k, a) => { let d = 0, n = a ? a.nextSibling : p.firstChild; for (; n; n = n.nextSibling) if (n.nodeType === 8) { if (n.data === \"$\") d++; else if (n.data === \"/\" && !--d && !k--) return n; } };",
+    ),
+    (
+        "$mke",
+        // The end marker of the pair enclosing `a` (the first unbalanced one after it).
+        "const $mke = a => { let d = 0; for (let n = a.nextSibling; n; n = n.nextSibling) if (n.nodeType === 8) { if (n.data === \"$\") d++; else if (n.data === \"/\" && !d--) return n; } };",
     ),
     (
         "$pk",
@@ -220,6 +231,14 @@ const HELPERS: &[(&str, &str)] = &[
         // Keyed rows; `plain` rows create no reactive work, so they get no root.
         // The input is copied in the compute (a store array tracks its items).
         "const $list = (e, each, row, plain) => { let rows = new Map(); const mk = plain ? (it, n) => ({ n: row(it, n) }) : (it, n) => $R(d => ({ n: row(it, n), d })); $E(() => { const l = each(); return l ? Array.from(l) : []; }, (items, p) => { if (p === undefined) { let n = $start(e).nextSibling; for (const it of items) { while (n.nodeType !== 1) n = n.nextSibling; const r = mk(it, n); rows.set(it, r); n = r.n.nextSibling; } return; } const next = new Map(); for (const it of items) next.set(it, rows.get(it) || mk(it, null)); for (const [it, r] of rows) if (!next.has(it)) { r.d && r.d(); r.n.remove(); } let c = $start(e).nextSibling; for (const r of next.values()) { if (r.n === c) c = c.nextSibling; else e.parentNode.insertBefore(r.n, c); } rows = next; }); };",
+    ),
+    (
+        "$err",
+        // A client error boundary around adopted content: the content's
+        // activation runs inside it; a failure detaches the content (kept,
+        // still bound) and shows the fallback; a reset that recovers puts the
+        // same content back.
+        "const $err = (e, content, fb) => { let kept, shown; const acc = $$createErrorBoundary(() => ($U(content), 1), (err, reset) => [err, reset]); $E(acc, v => { if (v === 1) { if (kept) { shown.remove(); for (const n of kept) e.before(n); kept = shown = undefined; } return; } if (!kept) { kept = []; for (let n = $start(e).nextSibling; n !== e; n = n.nextSibling) kept.push(n); for (const n of kept) n.remove(); } else shown.remove(); shown = fb(v[0], v[1]); e.before(shown); }); };",
     ),
     (
         "$cls",
@@ -250,6 +269,7 @@ fn helper_deps(h: &str) -> &'static [&'static str] {
         "$tx" => &["$s"],
         "$show" => &["$start"],
         "$list" => &["$start"],
+        "$err" => &["$start"],
         _ => &[],
     }
 }
@@ -283,12 +303,15 @@ fn is_prop_attr(tag: &str, name: &str) -> bool {
     )
 }
 
+/// `core`: the group runs on the full core (its analysis tier, or raised by
+/// `minTier`): core-only features (stores, client error boundaries) compile.
 pub(crate) fn emit_group<'a>(
     m: &Model<'a>,
     a: &Analysis<'a>,
     gi: usize,
     tier: u8,
     opts: &ClientOpts,
+    core: bool,
 ) -> R<GroupCode> {
     let g = &a.groups[gi];
     let ce = Ce {
@@ -305,7 +328,7 @@ pub(crate) fn emit_group<'a>(
         helpers: BTreeSet::new(),
         rt: BTreeSet::new(),
         core: BTreeSet::new(),
-        t2: g.tier >= 2,
+        t2: g.tier >= 2 || core,
         top_syms: BTreeSet::new(),
         templates: Vec::new(),
         settled: Vec::new(),
@@ -316,6 +339,7 @@ pub(crate) fn emit_group<'a>(
         mutable_top: Vec::new(),
         stmt_in_region: false,
         checks: Vec::new(),
+        bounds: Vec::new(),
     };
     ce.run()
 }
@@ -963,7 +987,12 @@ impl<'x, 'a> Ce<'x, 'a> {
                 out
             };
             let mut checked: BTreeSet<&str> = BTreeSet::new();
-            for line in &self.scopes[0].nav {
+            let boundary_navs: Vec<&String> = self
+                .bounds
+                .iter()
+                .flat_map(|(sc, _)| self.scopes[*sc].nav.iter())
+                .collect();
+            for line in self.scopes[0].nav.iter().chain(boundary_navs) {
                 v.push_str(line);
                 v.push('\n');
                 if let Some(rest) = line.strip_prefix("const ")
@@ -1912,6 +1941,32 @@ impl<'x, 'a> Ce<'x, 'a> {
                     out.push(Slot::Opaque(sh.0, sh.1));
                 }
             }
+            Tag::Builtin(b)
+                if b == "Errored"
+                    && self.t2
+                    && !self.scopes[self.cur].builder
+                    && self.boundary_live(comp, el) =>
+            {
+                // Its content activates inside a client error boundary: a
+                // scope of its own (the members it renders set up there).
+                let kids = jsx::children(&el.children)?;
+                let saved = self.cur;
+                self.scopes.push(Scope {
+                    nav: vec![],
+                    buckets: HashMap::new(),
+                    order: vec![],
+                    builder: false,
+                });
+                let bscope = self.scopes.len() - 1;
+                self.cur = bscope;
+                let mut inner = Vec::new();
+                let r = self.flatten(&kids, inst, &mut inner);
+                self.cur = saved;
+                r?;
+                let bi = self.bounds.len();
+                self.bounds.push((bscope, inner));
+                out.push(Slot::Boundary(el, inst, bi));
+            }
             Tag::Builtin(b) if b == "Loading" || b == "Errored" => {
                 let kids = jsx::children(&el.children)?;
                 self.flatten(&kids, inst, out)?;
@@ -2230,25 +2285,58 @@ impl<'x, 'a> Ce<'x, 'a> {
     }
 
     // --- emission over containers ----------------------------------------------------------
+    /// (elements, top-level marker pairs) a slot adds to its container.
+    fn contrib(&self, s: &Slot<'a>) -> (Option<usize>, Option<usize>) {
+        match s {
+            Slot::Elem(..) => (Some(1), Some(0)),
+            Slot::Text => (Some(0), Some(0)),
+            Slot::Hole(_, _, live) => (Some(0), Some(usize::from(*live))),
+            Slot::Region(_, _, live) => (None, Some(usize::from(*live))),
+            Slot::Opaque(e, p) => (*e, *p),
+            // Its content's elements, in place; one marker pair around it.
+            Slot::Boundary(_, _, bi) => (
+                self.bounds[*bi]
+                    .1
+                    .iter()
+                    .try_fold(0usize, |acc, x| self.contrib(x).0.map(|e| acc + e)),
+                Some(1),
+            ),
+        }
+    }
+
     /// `parent`: the container element's var (None = the island root level).
     fn container(&mut self, parent: Option<String>, slots: &[Slot<'a>]) -> R<()> {
+        self.container_at(parent, slots, 0, None)
+    }
+
+    /// Slots laid out in `parent` after `base` elements; marker pairs counted
+    /// after the node `after` (a boundary's start marker) when given.
+    fn container_at(
+        &mut self,
+        parent: Option<String>,
+        slots: &[Slot<'a>],
+        base: usize,
+        after_node: Option<String>,
+    ) -> R<()> {
         // Element indexes and pair indexes, from the start where possible.
         let n = slots.len();
-        let contrib = |s: &Slot<'a>| -> (Option<usize>, Option<usize>) {
-            match s {
-                Slot::Elem(..) => (Some(1), Some(0)),
-                Slot::Text => (Some(0), Some(0)),
-                Slot::Hole(_, _, live) => (Some(0), Some(usize::from(*live))),
-                Slot::Region(_, _, live) => (None, Some(usize::from(*live))),
-                Slot::Opaque(e, p) => (*e, *p),
-            }
-        };
-        let sum = |range: &[Slot<'a>], f: &dyn Fn(&Slot<'a>) -> Option<usize>| -> Option<usize> {
-            range
+        let contribs: Vec<(Option<usize>, Option<usize>)> =
+            slots.iter().map(|s| self.contrib(s)).collect();
+        let elems_in = |a: usize, b: usize| -> Option<usize> {
+            contribs[a..b]
                 .iter()
-                .try_fold(0usize, |acc, s| f(s).map(|x| acc + x))
+                .try_fold(0usize, |acc, c| c.0.map(|x| acc + x))
         };
-        let sole = parent.is_some() && slots.len() == 1 && matches!(slots[0], Slot::Hole(..));
+        let pairs_in = |a: usize, b: usize| -> Option<usize> {
+            contribs[a..b]
+                .iter()
+                .try_fold(0usize, |acc, c| c.1.map(|x| acc + x))
+        };
+        let nested = base > 0 || after_node.is_some();
+        let sole = parent.is_some()
+            && !nested
+            && slots.len() == 1
+            && matches!(slots[0], Slot::Hole(..));
         // The last element variable at a known index: the next one chains
         // from it (`prev.nextElementSibling`) instead of walking from the parent.
         let mut last: Option<(usize, String)> = None;
@@ -2260,8 +2348,9 @@ impl<'x, 'a> Ce<'x, 'a> {
                     if !self.elem_needed(el, inst) {
                         continue;
                     }
-                    let before = sum(&slots[..i], &|s| contrib(s).0);
-                    let after = sum(&slots[i + 1..], &|s| contrib(s).0);
+                    let before = elems_in(0, i).map(|b| b + base);
+                    // Inside a boundary the container's end is not known here.
+                    let after = if nested { None } else { elems_in(i + 1, n) };
                     let var = self.fresh("$n");
                     let nav = match (&parent, before, after) {
                         (None, Some(b), _) => {
@@ -2305,7 +2394,7 @@ impl<'x, 'a> Ce<'x, 'a> {
                             self.lazy_ok = false;
                         }
                     }
-                    if self.cur == 0 {
+                    if !self.scopes[self.cur].builder {
                         let what = self.describe(el, inst);
                         let target = if nav == "$a" { "$a".to_string() } else { var.clone() };
                         self.checks.push((target, what, nav.clone()));
@@ -2327,9 +2416,8 @@ impl<'x, 'a> Ce<'x, 'a> {
                         let el_var = parent.clone().unwrap();
                         self.text_hole(e, inst, live, TextTarget::Sole(el_var))?;
                     } else if live {
-                        let k = sum(&slots[..i], &|s| contrib(s).1)
-                            .ok_or("a live hole after a variable region")?;
-                        let end = self.marker(&parent, k);
+                        let k = pairs_in(0, i).ok_or("a live hole after a variable region")?;
+                        let end = self.marker_at(&parent, k, &after_node);
                         self.text_hole(e, inst, true, TextTarget::Pair(end))?;
                     } else if self.scopes[self.cur].builder {
                         // Inert hole in fresh content: a placeholder.
@@ -2345,10 +2433,42 @@ impl<'x, 'a> Ce<'x, 'a> {
                     }
                 }
                 Slot::Region(el, inst, _) => {
-                    let k = sum(&slots[..i], &|s| contrib(s).1)
-                        .ok_or("a region after a variable region")?;
-                    let end = self.marker(&parent, k);
+                    let k = pairs_in(0, i).ok_or("a region after a variable region")?;
+                    let end = self.marker_at(&parent, k, &after_node);
                     self.region(el, inst, end)?;
+                }
+                Slot::Boundary(el, inst, bi) => {
+                    let k = pairs_in(0, i).ok_or("a boundary after a variable region")?;
+                    let before = elems_in(0, i)
+                        .ok_or("a boundary after a variable-size region")?
+                        + base;
+                    let end = if parent.is_none() && after_node.is_none() && before == 0 && self.element_anchor {
+                        // The boundary encloses the anchor element: its end is
+                        // the first unbalanced end marker after the anchor.
+                        self.helpers.insert("$mke");
+                        let var = self.fresh("$m");
+                        self.scope_nav(format!("const {var} = $mke($a);"));
+                        if !self.scopes[self.cur].builder {
+                            self.checks.push((
+                                var.clone(),
+                                "<!--/--> (the <Errored> region's end)".into(),
+                                "$mke($a)".into(),
+                            ));
+                        }
+                        var
+                    } else {
+                        self.marker_at(&parent, k, &after_node)
+                    };
+                    let (bscope, inner) = self.bounds[bi].clone();
+                    let saved = self.cur;
+                    self.cur = bscope;
+                    let start = self.fresh("$bs");
+                    self.helpers.insert("$start");
+                    self.scope_nav(format!("const {start} = $start({end});"));
+                    let r = self.container_at(parent.clone(), &inner, before, Some(start));
+                    self.cur = saved;
+                    r?;
+                    self.boundary(el, inst, bscope, end)?;
                 }
                 Slot::Text | Slot::Opaque(..) => {}
             }
@@ -2356,18 +2476,117 @@ impl<'x, 'a> Ce<'x, 'a> {
         Ok(())
     }
 
+    /// An `<Errored>` over live content whose sites belong to this group
+    /// (the server marks its region with a marker pair for it).
+    fn boundary_live(&self, comp: usize, el: &'a JSXElement<'a>) -> bool {
+        self.span_has_group_sites(comp, el.span)
+            || jsx::children(&el.children).is_ok_and(|ks| self.kids_render_members(&ks))
+    }
+
+    /// Emit a client error boundary: its content's activation (the scope's
+    /// code) runs inside it; the fallback is built on the client.
+    fn boundary(&mut self, el: &'a JSXElement<'a>, inst: usize, bscope: usize, end: String) -> R<()> {
+        let nav = self.scopes[bscope].nav.join("\n");
+        let body = self.assemble(bscope, inst);
+        // Code that landed in other instances' buckets of this scope.
+        let order = self.scopes[bscope].order.clone();
+        let mut rest = String::new();
+        for i in order {
+            rest.push_str(&self.assemble(bscope, i));
+        }
+        let fb = self.error_fallback(el, inst)?;
+        self.helpers.insert("$err");
+        self.core.insert("createErrorBoundary".into());
+        self.rt.insert("untrack");
+        self.bucket(inst).seq.push(Seq::Line(format!(
+            "$err({end}, () => {{\n{nav}\n{body}{rest}}}, {fb});"
+        )));
+        Ok(())
+    }
+
+    /// The `<Errored>` fallback as a client builder `(err, reset) => node`.
+    fn error_fallback(&mut self, el: &'a JSXElement<'a>, inst: usize) -> R<String> {
+        let attrs = jsx::attrs(el)?;
+        let (root, params): (&'a JSXElement<'a>, Vec<(SymbolId, Kind)>) =
+            match jsx::attr(&attrs, "fallback").map(|a| &a.value) {
+                None => return Ok("() => document.createTextNode(\"\")".into()),
+                Some(AttrVal::Element(e)) => (*e, Vec::new()),
+                Some(AttrVal::Str(s)) => {
+                    return Ok(format!("() => document.createTextNode({})", js_str(s)));
+                }
+                Some(AttrVal::Expr(e)) => {
+                    let Some(f) = FnRef::from_expr(e) else {
+                        return Err("an <Errored> fallback that is not JSX or a render callback".into());
+                    };
+                    let Some(Root::Element(r)) = fn_root(f) else {
+                        return Err("an <Errored> fallback callback must return one element".into());
+                    };
+                    let mut ps = Vec::new();
+                    for (i, p) in f.params().items.iter().enumerate() {
+                        let BindingPattern::BindingIdentifier(id) = &p.pattern else {
+                            return Err("an <Errored> fallback with a destructured parameter".into());
+                        };
+                        let Some(sym) = id.symbol_id.get() else { continue };
+                        ps.push((sym, if i == 0 { Kind::Acc } else { Kind::Val }));
+                    }
+                    (r, ps)
+                }
+                _ => return Err("an <Errored> fallback that is not JSX or a render callback".into()),
+            };
+        if !matches!(jsx::tag_of(self.m, &root.opening_element.name), Tag::Intrinsic(_)) {
+            return Err("an <Errored> fallback whose root is not an element".into());
+        }
+        let mut names = Vec::new();
+        for (sym, kind) in &params {
+            let n = format!("{}{}", self.m.sym_name(*sym), self.fresh("$"));
+            self.insts[inst].names.insert(*sym, (n.clone(), kind.clone()));
+            names.push(n);
+        }
+        while names.len() < 2 {
+            names.push(format!("$_{}", names.len()));
+        }
+        let saved = self.cur;
+        self.scopes.push(Scope {
+            nav: vec![],
+            buckets: HashMap::new(),
+            order: vec![],
+            builder: true,
+        });
+        self.cur = self.scopes.len() - 1;
+        let comp = self.insts[inst].comp;
+        let r = (|| -> R<(usize, String, String)> {
+            let tpl = self.template_html(root, comp)?;
+            let ti = self.templates.len();
+            self.templates.push(tpl);
+            self.helpers.insert("$tpl");
+            self.element(root, inst, "$x")?;
+            let body = self.assemble(self.cur, inst);
+            let nav = self.scopes[self.cur].nav.join("\n");
+            Ok((ti, nav, body))
+        })();
+        self.cur = saved;
+        let (ti, nav, body) = r?;
+        Ok(format!(
+            "({}, {}) => {{ const $f = 1, $x = $t{ti}();\n{nav}\n{body}\nreturn $x; }}",
+            names[0], names[1]
+        ))
+    }
+
     fn scope_nav(&mut self, line: String) {
         self.scopes[self.cur].nav.push(line);
     }
 
-    fn marker(&mut self, parent: &Option<String>, k: usize) -> String {
+    /// The k-th top-level pair's end marker in `parent`, or among the
+    /// siblings after `after` (a boundary's start marker).
+    fn marker_at(&mut self, parent: &Option<String>, k: usize, after: &Option<String>) -> String {
         self.helpers.insert("$mk");
         let var = self.fresh("$m");
-        let nav = match parent {
-            Some(p) => format!("$mk({p}, {k})"),
-            None => format!("$mk(null, {k}, $a)"),
+        let nav = match (parent, after) {
+            (_, Some(a)) => format!("$mk(null, {k}, {a})"),
+            (Some(p), None) => format!("$mk({p}, {k})"),
+            (None, None) => format!("$mk(null, {k}, $a)"),
         };
-        if self.cur == 0 {
+        if !self.scopes[self.cur].builder {
             self.checks.push((
                 var.clone(),
                 format!("<!--/--> (live region or hole #{k})"),
