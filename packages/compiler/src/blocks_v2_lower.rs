@@ -58,9 +58,11 @@
 //!    not retain the generator driver (`drive`, `step`, `settle`, `resume`).
 //!
 //! Only SYNC-flagged blocks are erased, and only in DOM output: a flagged
-//! `$` call is never wrapped in a hydration id scope (`block_scope.rs`), so
-//! erasing it on the client alone keeps hydration ids aligned with the
-//! server, and every primitive is still created in the same order.
+//! `$` call passed to `$component` / `$event` is never wrapped in a
+//! hydration id scope (`block_scope.rs`; flagged views are, on both sides,
+//! as `$` or `syncBlock`), so erasing it on the client alone keeps hydration
+//! ids aligned with the server, and every primitive is still created in the
+//! same order.
 use std::collections::{HashMap, HashSet};
 
 use oxc_allocator::Allocator;

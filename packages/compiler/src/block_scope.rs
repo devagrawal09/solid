@@ -42,6 +42,14 @@ use crate::shared::ast_builder::AstBuilder;
 
 /// Modules whose named `$` export is the block adapter.
 const RUNTIME_SOURCES: &[&str] = &["solid-js", "@solidjs/signals"];
+/// Imported names of the block adapter: `$`, and `syncBlock` — what the v2
+/// client lowering imports `_$$` as when every block in a module is proven
+/// `BLOCK_SYNC` (`blocks_v2_lower.rs`).
+const ADAPTER_NAMES: &[&str] = &["$", "syncBlock"];
+/// Constructors whose flagged block argument the v2 client lowering may
+/// erase on the DOM side only (`$componentCompiled(fn)`, `$eventCompiled(fn)`):
+/// never scoped, so both sides reserve the same slots.
+const ERASABLE_HOSTS: &[&str] = &["$component", "$event"];
 /// The local name of the scope helper.
 pub(crate) const BLOCK_SCOPE_LOCAL: &str = "_$blockScope";
 
@@ -61,6 +69,7 @@ pub(crate) fn scope_jsx_blocks<'a>(allocator: &'a Allocator, program: &mut Progr
             scoping,
             adapters: &adapters,
             targets: Vec::new(),
+            excluded: Vec::new(),
         };
         collector.visit_program(program);
         collector.targets
@@ -85,7 +94,7 @@ fn adapter_import_span(program: &Program<'_>) -> Option<Span> {
                 matches!(
                     specifier,
                     ImportDeclarationSpecifier::ImportSpecifier(specifier)
-                        if specifier.imported.name() == "$"
+                        if ADAPTER_NAMES.contains(&specifier.imported.name().as_str())
                             && specifier.import_kind != ImportOrExportKind::Type
                 )
             });
@@ -106,7 +115,7 @@ fn adapter_symbols(program: &Program<'_>) -> Vec<SymbolId> {
         }
         for specifier in import.specifiers.iter().flatten() {
             if let ImportDeclarationSpecifier::ImportSpecifier(specifier) = specifier
-                && specifier.imported.name() == "$"
+                && ADAPTER_NAMES.contains(&specifier.imported.name().as_str())
                 && let Some(symbol) = specifier.local.symbol_id.get()
             {
                 symbols.push(symbol);
@@ -121,15 +130,26 @@ struct Collector<'s> {
     adapters: &'s [SymbolId],
     /// Spans of the `$` calls whose argument gets wrapped.
     targets: Vec<Span>,
+    /// Flagged blocks passed straight to an erasable host (`ERASABLE_HOSTS`).
+    excluded: Vec<Span>,
 }
 
 impl<'b> Visit<'b> for Collector<'_> {
     fn visit_call_expression(&mut self, call: &CallExpression<'b>) {
+        if let Expression::Identifier(callee) = &call.callee
+            && ERASABLE_HOSTS.contains(&callee.name.as_str())
+            && let Some(Argument::CallExpression(inner)) = call.arguments.first()
+            && inner.arguments.len() == 2
+        {
+            self.excluded.push(inner.span);
+        }
         // `$(fn)` or `$(fn, flags)`: a `$component`'s view is lowered to
-        // `$(function () { … }, BLOCK_SYNC)` and is the block that most
-        // often carries JSX.
+        // `$(function () { … }, BLOCK_SYNC)` (`syncBlock(…)` on the client)
+        // and is the block that most often carries JSX. A flagged setup or
+        // event is left alone: the client may erase it.
         if self.is_adapter_call(call)
             && matches!(call.arguments.len(), 1 | 2)
+            && !self.excluded.contains(&call.span)
             && body_has_jsx(&call.arguments[0])
         {
             self.targets.push(call.span);
@@ -343,9 +363,10 @@ const Header = $component(function* () {
 "#;
         for generate in [Generate::Dom, Generate::Ssr] {
             let out = compile_with(source, generate, true);
-            // The setup and the view (`$(_$blockScope(…), 1)`).
-            assert_eq!(out.matches("_$blockScope(function").count(), 2, "{out}");
-            assert!(out.contains("}), 1);\n})), 1);"), "{out}");
+            // The view only (`$(_$blockScope(…), 1)`, `syncBlock` on the
+            // client); the flagged setup is left for the client to erase.
+            assert_eq!(out.matches("_$blockScope(function").count(), 1, "{out}");
+            assert!(out.contains("\treturn _$$(_$blockScope(function"), "{out}");
         }
     }
 
