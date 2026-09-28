@@ -1790,6 +1790,50 @@ export function hydrate(
 ): () => void;
 
 export function hydrate(code, element, options = {}) {
+  // A document root must not be walked before its shell has been parsed.
+  // The client entry usually loads as an `async` module so hydration can
+  // start while a stream is still open, and an async script runs as soon as
+  // it arrives — for a large shell (or a slow CPU) that is mid-parse, when
+  // the document holds elements whose opening tag is parsed but whose
+  // children are not yet. The gather then registers those half-built
+  // elements and the compiled walk reads `firstChild`/`nextSibling` of null
+  // partway through the tree: hydration throws, and every handler after the
+  // failure point stays dead. Wait for the parser: DOMContentLoaded, or the
+  // shell-parsed marker a stream writes right after its shell when fragments
+  // are still pending (`_$HY.sh`: 1 once the shell is parsed, else the
+  // callbacks waiting for it). Events arriving meanwhile are captured by the
+  // hydration bootstrap and replayed as usual.
+  const hy = globalThis._$HY;
+  if (element.nodeType === 9 && element.readyState === "loading" && hy && !hy.done && hy.sh !== 1) {
+    // Enable now, not on start: the fragment policy and the truncation sweep
+    // arm only while the document is still streaming.
+    enableHydration();
+    let disposer,
+      state = 0; // 0 waiting, 1 started, 2 disposed
+    const start = () => {
+      if (state) return;
+      state = 1;
+      element.removeEventListener("DOMContentLoaded", start);
+      disposer = hydrateParsed(code, element, options);
+    };
+    const prev = hy.sh;
+    hy.sh = prev
+      ? () => {
+          prev();
+          start();
+        }
+      : start;
+    element.addEventListener("DOMContentLoaded", start);
+    return () => {
+      if (!state) element.removeEventListener("DOMContentLoaded", start);
+      state = 2;
+      disposer && disposer();
+    };
+  }
+  return hydrateParsed(code, element, options);
+}
+
+function hydrateParsed(code, element, options) {
   enableHydration();
   installHydrationRuntime();
   if (globalThis._$HY.done) {
