@@ -1116,8 +1116,8 @@ impl<'a> VisitMut<'a> for Rewriter<'a> {
 //
 // A `$memo` / `$event` body (or a generator `createMemo`) that waits —
 // `yield* attempt(() => promise)` — cannot run in call form: only the driver
-// can suspend a generator. On the client (DOM output with the v2 fusion)
-// such a body is compiled to an `async function` instead, when its only
+// can suspend a generator. With the v2 fusion (DOM and SSR output) such a
+// body is compiled to an `async function` instead, when its only
 // operations the call form cannot run are those `attempt`s:
 //
 // ```js
@@ -1127,7 +1127,7 @@ impl<'a> VisitMut<'a> for Rewriter<'a> {
 //   try {
 //     const id = _$readPath1(props, "id");
 //     _$a.t(() => save(id)) ? _$a.r(await _$a.p) : _$a.v;
-//   } catch (_$e) { _$a.x(_$e); }
+//   } catch (_$e) { _$a.x(_$e); } finally { _$a.f(); }
 // }))
 // ```
 //
@@ -1197,8 +1197,11 @@ fn async_attempt<'a>(
 }
 
 /// `function (input) { BODY }` → `async function (input, _$a) { try { BODY' }
-/// catch (_$e) { _$a.x(_$e); } }`, with every `return v` of BODY (at its own
-/// depth) → `return _$a.ret(v)`.
+/// catch (_$e) { _$a.x(_$e); } finally { _$a.f(); } }`, with every `return v`
+/// of BODY (at its own depth) → `return _$a.ret(v)` (`return;` →
+/// `return _$a.ret(void 0)`): the run records the outcome and the `finally`
+/// settles the result promise in the job the body returns in (see
+/// `AsyncRun` in `@solidjs/signals`).
 fn wrap_async_body<'a>(allocator: &'a Allocator, function: &mut Function<'a>, no_input: bool) {
     let ast = AstBuilder::new(allocator);
     let builder = oxc_ast::builder::AstBuilder::new(allocator);
@@ -1247,11 +1250,15 @@ fn wrap_async_body<'a>(allocator: &'a Allocator, function: &mut Function<'a>, no
         ast.alloc_block_statement(synth, ast.vec1(ast.statement_expression(synth, failure))),
         &builder,
     );
+    let settle = run_call(allocator, synth, "f", ast.vec());
     let wrapper = Statement::new_try_statement(
         synth,
         ast.alloc_block_statement(synth, statements),
         Some(handler),
-        None,
+        Some(ast.alloc_block_statement(
+            synth,
+            ast.vec1(ast.statement_expression(synth, settle)),
+        )),
         &builder,
     );
     body.statements.push(wrapper);
@@ -1271,15 +1278,23 @@ impl<'a> VisitMut<'a> for AsyncReturns<'a> {
     }
     fn visit_class(&mut self, _it: &mut oxc_ast::ast::Class<'a>) {}
     fn visit_return_statement(&mut self, it: &mut oxc_ast::ast::ReturnStatement<'a>) {
-        if let Some(argument) = it.argument.take() {
-            let ast = AstBuilder::new(self.allocator);
-            it.argument = Some(run_call(
-                self.allocator,
-                Span::new(0, 0),
-                "ret",
-                ast.vec1(expression_to_argument(argument)),
-            ));
-        }
+        let ast = AstBuilder::new(self.allocator);
+        let synth = Span::new(0, 0);
+        // `return;` records `undefined` too (a `finally` may override an
+        // earlier `return v`).
+        let argument = it.argument.take().unwrap_or_else(|| {
+            ast.expression_unary(
+                synth,
+                oxc_syntax::operator::UnaryOperator::Void,
+                ast.expression_numeric_literal(synth, 0.0, None, oxc_syntax::number::NumberBase::Decimal),
+            )
+        });
+        it.argument = Some(run_call(
+            self.allocator,
+            synth,
+            "ret",
+            ast.vec1(expression_to_argument(argument)),
+        ));
     }
 }
 

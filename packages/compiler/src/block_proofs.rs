@@ -519,20 +519,31 @@ impl<'s> Prover<'s> {
                 // An intrinsic element is a DOM node / SSR template. Its
                 // dynamic parts become nested computations whose creation can
                 // throw through the host, so JSX never proves NOTHROW.
-                let intrinsic = match &element.opening_element.name {
-                    JSXElementName::Identifier(identifier) => identifier
-                        .name
-                        .chars()
-                        .next()
-                        .is_some_and(|c| c.is_ascii_lowercase()),
-                    JSXElementName::NamespacedName(_) => true,
-                    JSXElementName::IdentifierReference(reference) => self
-                        .reference_symbol(reference)
-                        .is_some_and(|symbol| self.symbols.plain_components.contains(&symbol)),
-                    _ => false,
-                };
                 Fact {
-                    domain: if intrinsic {
+                    domain: if self.plain_element(element) {
+                        Domain::Plain
+                    } else {
+                        Domain::Unknown
+                    },
+                    throws: true,
+                }
+            }
+            // A fragment of intrinsic elements (and text) is one node, a
+            // string or an array of them (DOM and SSR output alike): never a
+            // thenable, iterator or async iterable. As for an element, its
+            // dynamic parts are nested computations: never NOTHROW.
+            Expression::JSXFragment(fragment) if self.jsx_plain => {
+                let mut elements = 0;
+                let plain = fragment.children.iter().all(|child| match child {
+                    oxc_ast::ast::JSXChild::Text(_) => true,
+                    oxc_ast::ast::JSXChild::Element(element) => {
+                        elements += 1;
+                        self.plain_element(element)
+                    }
+                    _ => false,
+                });
+                Fact {
+                    domain: if plain && elements > 0 {
                         Domain::Plain
                     } else {
                         Domain::Unknown
@@ -560,6 +571,23 @@ impl<'s> Prover<'s> {
             // Calls, member access, `new`, assignment, update, `await`,
             // tagged templates, classes, fragments, components, …
             _ => Fact::UNKNOWN,
+        }
+    }
+
+    /// An intrinsic element, or a `solid-js` flow component proven to render
+    /// a function (`plain_components`): evaluates to a plain value.
+    fn plain_element(&self, element: &oxc_ast::ast::JSXElement<'_>) -> bool {
+        match &element.opening_element.name {
+            JSXElementName::Identifier(identifier) => identifier
+                .name
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_lowercase()),
+            JSXElementName::NamespacedName(_) => true,
+            JSXElementName::IdentifierReference(reference) => self
+                .reference_symbol(reference)
+                .is_some_and(|symbol| self.symbols.plain_components.contains(&symbol)),
+            _ => false,
         }
     }
 

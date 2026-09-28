@@ -1453,7 +1453,7 @@ export function dispatchFused<E>(fn: (event: E) => unknown, event: E, owner: Own
 //     try {
 //       const id = readValue(props.id);
 //       _$a.t(() => save(id)) ? _$a.r(await _$a.p) : _$a.v;
-//     } catch (_$e) { _$a.x(_$e); }
+//     } catch (_$e) { _$a.x(_$e); } finally { _$a.f(); }
 //   }));
 //
 // Each `yield* attempt(run, ...errors)` becomes `(_$a.t(run, ...errors) ?
@@ -1462,7 +1462,7 @@ export function dispatchFused<E>(fn: (event: E) => unknown, event: E, owner: Own
 // thenable, so a body whose attempts all return plain values completes
 // synchronously — exactly as the driver steps it. `asyncBody` runs the body
 // and hands back the driver's result: the returned value (or the thrown
-// error) when the body never waited, else the body's promise.
+// error) when the body never waited, else the run's result promise.
 //
 // Driver parity, point by point:
 // - the first suspension registers the run's staleness on the running owner
@@ -1474,17 +1474,29 @@ export function dispatchFused<E>(fn: (event: E) => unknown, event: E, owner: Own
 //   between closing and throwing), none sits in a loop, and no read follows
 //   the first `attempt` (the driver's `[READ_AFTER_WAIT]`);
 // - a continuation runs in the settled promise's reaction, as the driver's
-//   `then` callback does: side effects happen at the same microtask. The one
-//   difference: with more than one suspension the driver's result promise
-//   adopts the next step's promise (two extra microtasks per suspension);
-//   the async function's promise settles as soon as the body returns;
+//   `then` callback does: side effects happen at the same microtask;
+// - the result promise has the driver's shape, microtask for microtask. The
+//   driver returns `P0 = Promise.resolve(w0).then(cb0)`; a callback that
+//   suspends again returns the next step's promise, which its own `then`
+//   promise adopts, so with n suspensions `P0` settles n − 1 reactions after
+//   the body returns (one per level), and a returned thenable is adopted by
+//   the innermost level. The async function's own promise settles as soon as
+//   the body returns, so it is never handed out: each suspension opens a
+//   level (a promise whose settle functions the run keeps) — the first is
+//   the result, each later one resolves the previous level with its own
+//   promise (as the callback's return value would) — and the wrapper's
+//   `finally` settles the innermost level with the body's outcome (`f`), in
+//   the job the body returns in. The adoption job of a level is queued when
+//   the next suspension starts rather than when the callback returns, a
+//   difference no code can observe: that job only subscribes to a native
+//   promise that is still pending (it settles in a later continuation);
 // - host and strict guard: the body is only compiled when no operation is
 //   left to check (the same erasure proof as a synchronous body), so the
 //   host the driver re-enters per step is not observable.
 //
-// `_$a.ret(v)` wraps every `return v` so a body that never waited reports its
-// value synchronously (the async function's own promise is then dropped; it
-// never rejects: `x` records a synchronous failure instead of rethrowing).
+// `_$a.ret(v)` wraps every `return v` (and `return;`), recording the outcome
+// the `finally` reports; `x` records a failure instead of rethrowing, so the
+// async function's own promise never rejects (nothing observes it).
 
 /** @internal One run of a compiled async block body (see above). */
 export class AsyncRun {
@@ -1496,10 +1508,15 @@ export class AsyncRun {
   p: unknown = undefined;
   /** The plain value of the last `t`. */
   v: unknown = undefined;
-  /** Synchronous outcome: the returned value, or the thrown error. */
+  /** The body's outcome: the returned value, or the thrown error. */
   value: unknown = undefined;
   threw = false;
   error: unknown = undefined;
+  /** The result promise (the first level), once the body suspends. */
+  head: Promise<unknown> | undefined = undefined;
+  /** The innermost level's settle functions. */
+  private ok: ((value: unknown) => void) | undefined = undefined;
+  private fail: ((error: unknown) => void) | undefined = undefined;
   /** `attempt(run)`: true when the result is a thenable to await (`p`). */
   t(run: () => unknown): boolean {
     let value: unknown;
@@ -1512,6 +1529,10 @@ export class AsyncRun {
       if (this.s) {
         this.s = false;
         if (getOwner()) cleanup(() => (this.stale = true));
+        this.head = this.level();
+      } else {
+        const outer = this.ok!;
+        outer(this.level());
       }
       this.p = value;
       return true;
@@ -1519,25 +1540,33 @@ export class AsyncRun {
     this.v = value;
     return false;
   }
+  /** Open the next level of the result promise. */
+  private level(): Promise<unknown> {
+    return new Promise((ok, fail) => {
+      this.ok = ok;
+      this.fail = fail;
+    });
+  }
   /** Resume after an await: a superseded run does not continue. */
   r<T>(value: T): T {
     if (this.stale) throw supersededError();
     return value;
   }
-  /** `return value`: recorded while synchronous (the promise is dropped). */
-  ret<T>(value: T): T | undefined {
-    if (!this.s) return value;
+  /** `return value`: the outcome (reported by `f`). */
+  ret(value: unknown): undefined {
     this.value = value;
     return undefined;
   }
-  /** The body's `catch`: a synchronous failure is recorded, a later one rejects. */
+  /** The body's `catch`: the outcome is a failure. */
   x(error: unknown): void {
-    if (this.s) {
-      this.threw = true;
-      this.error = error;
-      return;
-    }
-    throw this.stale ? supersededError() : error;
+    this.threw = true;
+    this.error = this.stale ? supersededError() : error;
+  }
+  /** The body's `finally`: settle the innermost level with the outcome. */
+  f(): void {
+    if (this.s) return;
+    if (this.threw) this.fail!(this.error);
+    else this.ok!(this.value);
   }
 }
 
@@ -1559,8 +1588,8 @@ export function asyncBody<I, R>(
 ): (input: I) => R | Promise<R> {
   return (input: I) => {
     const run = new AsyncRun();
-    const promise = body(input, run);
-    if (!run.s) return promise as Promise<R>;
+    body(input, run);
+    if (!run.s) return run.head as Promise<R>;
     if (run.threw) throw run.error;
     return run.value as R;
   };

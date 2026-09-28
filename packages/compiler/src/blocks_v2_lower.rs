@@ -391,7 +391,6 @@ fn lower_operations<'a>(allocator: &'a Allocator, program: &mut Program<'a>, v2:
             imports: &mut imports,
             plan: OpsPlan::default(),
             stack: Vec::new(),
-            async_stack: Vec::new(),
             contexts: &contexts,
             helpers: helpers.iter().map(|(symbol, _)| *symbol).collect(),
         };
@@ -432,8 +431,6 @@ struct OpsCollector<'s, 'x> {
     /// The lowered v2 bodies around the current position, innermost last:
     /// their kind and the depth of nested functions inside them.
     stack: Vec<(V2Kind, usize)>,
-    /// Parallel to `stack`: the body is an async v2 body.
-    async_stack: Vec<bool>,
     /// Proven contexts (`const Ctx = createContext(…)`).
     contexts: &'s HashSet<SymbolId>,
     /// Lowered helper generators.
@@ -441,11 +438,6 @@ struct OpsCollector<'s, 'x> {
 }
 
 impl<'s> OpsCollector<'s, '_> {
-    /// The current position is directly in an async v2 body.
-    fn in_async(&self) -> bool {
-        self.async_stack.last().copied().unwrap_or(false)
-    }
-
     /// The kind of the lowered v2 body the current position is directly in.
     fn body_kind(&self) -> Option<V2Kind> {
         match self.stack.last() {
@@ -517,11 +509,10 @@ impl<'s> OpsCollector<'s, '_> {
             ("$effect", V2Kind::Setup) if prebuilt => ("effectBlock", false),
             ("$settled", V2Kind::Setup) if prebuilt => ("settledBlock", false),
             ("$cleanup", V2Kind::Setup | V2Kind::Effect) => ("blockCleanup", false),
-            // (Not in an async body: restored to a generator, the driver
-            // runs `flush` with the guard lowered.)
-            ("$flush", V2Kind::Event)
-                if statement && op.arguments.is_empty() && !self.in_async() =>
-            {
+            // (In an async body too: a body whose block is not erased is
+            // restored to its generator, `_$flush()` back to `yield*
+            // $flush()`, see `restore_async_generators`.)
+            ("$flush", V2Kind::Event) if statement && op.arguments.is_empty() => {
                 ("flush", false)
             }
             // `perform` throws a raised error (the host rules admit `raise`
@@ -663,11 +654,9 @@ impl<'b> Visit<'b> for OpsCollector<'_, '_> {
             self.visit_expression(&call.callee);
             if let Some(Argument::FunctionExpression(function)) = call.arguments.first() {
                 self.stack.push((kind, 0));
-                self.async_stack.push(function.r#async);
                 if let Some(body) = function.body.as_ref() {
                     self.visit_function_body(body);
                 }
-                self.async_stack.pop();
                 self.stack.pop();
             }
             return;
@@ -1585,17 +1574,25 @@ fn restore_async_generators<'a>(
     program: &mut Program<'a>,
     v2: &V2Bodies,
 ) {
-    let Some(attempt) = runtime_imports(program)
-        .into_iter()
+    let imports = runtime_imports(program);
+    let Some(attempt) = imports
+        .iter()
         .find(|i| i.imported == "attempt")
-        .map(|i| i.local)
+        .map(|i| i.local.clone())
     else {
         return;
     };
+    // `_$flush()` (the lowered `yield* $flush()`) and the author's `$flush`.
+    let flush = imports
+        .iter()
+        .find(|i| i.imported == "flush" && i.local.starts_with("_$"))
+        .zip(imports.iter().find(|i| i.imported == "$flush"))
+        .map(|(lowered, op)| (lowered.local.clone(), op.local.clone()));
     struct Finder<'a, 'x> {
         allocator: &'a Allocator,
         v2: &'x V2Bodies,
         attempt: &'x str,
+        flush: Option<&'x (String, String)>,
     }
     impl<'a> VisitMut<'a> for Finder<'a, '_> {
         fn visit_call_expression(&mut self, call: &mut CallExpression<'a>) {
@@ -1605,7 +1602,7 @@ fn restore_async_generators<'a>(
                 && let Some(Argument::FunctionExpression(function)) = call.arguments.first_mut()
                 && function.r#async
             {
-                restore_generator(self.allocator, function, self.attempt);
+                restore_generator(self.allocator, function, self.attempt, self.flush);
             }
             walk_mut::walk_call_expression(self, call);
         }
@@ -1614,11 +1611,17 @@ fn restore_async_generators<'a>(
         allocator,
         v2,
         attempt: &attempt,
+        flush: flush.as_ref(),
     }
     .visit_program(program);
 }
 
-fn restore_generator<'a>(allocator: &'a Allocator, function: &mut Function<'a>, attempt: &str) {
+fn restore_generator<'a>(
+    allocator: &'a Allocator,
+    function: &mut Function<'a>,
+    attempt: &str,
+    flush: Option<&(String, String)>,
+) {
     use crate::generators::{ASYNC_INPUT_PARAM, ASYNC_RUN_PARAM};
     let param_name = |param: &oxc_ast::ast::FormalParameter<'_>| match &param.pattern {
         BindingPattern::BindingIdentifier(id) => Some(id.name.to_string()),
@@ -1643,7 +1646,7 @@ fn restore_generator<'a>(allocator: &'a Allocator, function: &mut Function<'a>, 
     let Some(body) = function.body.as_mut() else {
         return;
     };
-    // The wrapper: `try { BODY } catch (_$e) { _$a.x(_$e); }`.
+    // The wrapper: `try { BODY } catch (_$e) { _$a.x(_$e); } finally { _$a.f(); }`.
     if body.statements.len() == 1
         && let Some(Statement::TryStatement(wrapper)) = body.statements.first_mut()
     {
@@ -1651,7 +1654,11 @@ fn restore_generator<'a>(allocator: &'a Allocator, function: &mut Function<'a>, 
         let statements = std::mem::replace(&mut wrapper.block.body, ast.vec());
         body.statements = statements;
     }
-    let mut restorer = Restorer { allocator, attempt };
+    let mut restorer = Restorer {
+        allocator,
+        attempt,
+        flush,
+    };
     for statement in body.statements.iter_mut() {
         restorer.visit_statement(statement);
     }
@@ -1660,6 +1667,8 @@ fn restore_generator<'a>(allocator: &'a Allocator, function: &mut Function<'a>, 
 struct Restorer<'a, 'x> {
     allocator: &'a Allocator,
     attempt: &'x str,
+    /// The lowered `flush` local and the author's `$flush` local.
+    flush: Option<&'x (String, String)>,
 }
 
 impl Restorer<'_, '_> {
@@ -1713,6 +1722,29 @@ impl<'a> VisitMut<'a> for Restorer<'a, '_> {
                     span,
                     true,
                     Some(call),
+                    &builder,
+                ))
+            }
+            // `_$flush()` → `yield* $flush()` (the lowering's statement
+            // `$flush`, at the body's own depth like every restored form).
+            Expression::CallExpression(call)
+                if call.arguments.is_empty()
+                    && self.flush.is_some_and(|(lowered, _)| matches!(&call.callee,
+                        Expression::Identifier(callee) if callee.name == lowered.as_str())) =>
+            {
+                let (_, op) = self.flush.expect("matched above");
+                let span = call.span;
+                let operation = ast.expression_call(
+                    synth,
+                    ast.expression_identifier(synth, ast.ident(op)),
+                    None,
+                    ast.vec(),
+                    false,
+                );
+                Some(Expression::new_yield_expression(
+                    span,
+                    true,
+                    Some(operation),
                     &builder,
                 ))
             }

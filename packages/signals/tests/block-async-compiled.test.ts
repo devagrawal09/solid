@@ -87,6 +87,8 @@ describe("asyncBody: events", () => {
               log.push(`resumed ${v}`);
             } catch (_$e) {
               _$a.x(_$e);
+            } finally {
+              _$a.f();
             }
           })
         )
@@ -125,6 +127,8 @@ describe("asyncBody: events", () => {
               log.push(`value ${v}`);
             } catch (_$e) {
               _$a.x(_$e);
+            } finally {
+              _$a.f();
             }
           })
         )
@@ -152,6 +156,8 @@ describe("asyncBody: events", () => {
                         _$a.t(() => d.promise) ? _$a.r(await _$a.p) : _$a.v;
                       } catch (_$e) {
                         _$a.x(_$e);
+                      } finally {
+                        _$a.f();
                       }
                     })
                   )
@@ -192,6 +198,8 @@ describe("asyncBody: memos", () => {
                 return _$a.ret(`${key}:${_$a.t(() => d.promise) ? _$a.r(await _$a.p) : _$a.v}`);
               } catch (_$e) {
                 _$a.x(_$e);
+              } finally {
+                _$a.f();
               }
             }) as any
           )
@@ -247,6 +255,8 @@ describe("asyncBody: memos", () => {
                   return _$a.ret(_$a.t(() => v * 2) ? _$a.r(await _$a.p) : _$a.v);
                 } catch (_$e) {
                   _$a.x(_$e);
+                } finally {
+                  _$a.f();
                 }
               }) as any
             )
@@ -296,5 +306,269 @@ describe("compiled reads", () => {
     const props = { count: n, plain: 1 };
     expect(readPath1(props, "count")).toBe(9);
     expect(readPath1(props, "plain")).toBe(1);
+  });
+});
+
+/**
+ * Several suspensions: the result promise of a compiled body settles in the
+ * same microtask as the driver's (the driver's `then` promise adopts each
+ * later step's promise, one reaction per level; `AsyncRun` rebuilds that
+ * chain). Each program logs its continuations and the result's settlement
+ * against a microtask clock started just before the last wait settles.
+ */
+describe("asyncBody: several suspensions, microtask for microtask", () => {
+  type Waits = ReturnType<typeof deferred<unknown>>[];
+  type Program = (log: (e: string) => void, w: Waits) => (input: unknown) => unknown;
+
+  async function trace(make: Program, waits: number, settle: (w: Waits, i: number) => void) {
+    const events: string[] = [];
+    let clock = -1;
+    let stopped = false;
+    const loop = () => {
+      if (stopped) return;
+      clock++;
+      queueMicrotask(loop);
+    };
+    const log = (e: string) => events.push(`${e}@${clock}`);
+    const w: Waits = Array.from({ length: waits }, () => deferred<unknown>());
+    let result: unknown;
+    try {
+      result = make(log, w)(undefined);
+    } catch (error) {
+      log(`threw ${(error as Error).message}`);
+    }
+    if (result && typeof (result as any).then === "function") {
+      (result as Promise<unknown>).then(
+        v => {
+          log(`fulfilled ${String(v)}`);
+          stopped = true;
+        },
+        e => {
+          log(`rejected ${(e as Error).message}`);
+          stopped = true;
+        }
+      );
+    } else log(`sync ${String(result)}`);
+    for (let i = 0; i < waits; i++) {
+      if (i === waits - 1) {
+        clock = 0;
+        queueMicrotask(loop);
+      }
+      settle(w, i);
+      await tick();
+    }
+    stopped = true;
+    return events;
+  }
+
+  function both(driver: Program, compiled: Program) {
+    return async (
+      waits: number,
+      settle: (w: Waits, i: number) => void = (w, i) => w[i].resolve(i)
+    ) => {
+      const a = await createRoot(() => trace(driver, waits, settle));
+      const b = await createRoot(() => trace(compiled, waits, settle));
+      expect(b).toEqual(a);
+      return a;
+    };
+  }
+
+  it("two and three suspensions settle the result in the driver's microtask", async () => {
+    for (const waits of [2, 3]) {
+      const run = both(
+        (log, w) =>
+          $(function* () {
+            let sum = 0;
+            for (let i = 0; i < waits; i++) {
+              sum += (yield* attempt(() => w[i].promise)) as number;
+              log(`resumed ${i}`);
+            }
+            return sum;
+          }) as any,
+        (log, w) =>
+          asyncBody(async function (_$i, _$a) {
+            try {
+              let sum = 0;
+              for (let i = 0; i < waits; i++) {
+                sum += (_$a.t(() => w[i].promise) ? _$a.r(await _$a.p) : _$a.v) as number;
+                log(`resumed ${i}`);
+              }
+              return _$a.ret(sum);
+            } catch (_$e) {
+              _$a.x(_$e);
+            } finally {
+              _$a.f();
+            }
+          })
+      );
+      const events = await run(waits);
+      // The driver's shape itself: one reaction per extra level.
+      expect(events.at(-1)).toBe(`fulfilled ${waits === 2 ? 1 : 3}@${waits + 1}`);
+    }
+  });
+
+  it("a rejection after the second suspension, and a body that falls off its end", async () => {
+    await both(
+      (log, w) =>
+        $(function* () {
+          yield* attempt(() => w[0].promise);
+          log("first");
+          yield* attempt(() => w[1].promise);
+          log("never");
+        }) as any,
+      (log, w) =>
+        asyncBody(async function (_$i, _$a) {
+          try {
+            _$a.t(() => w[0].promise) ? _$a.r(await _$a.p) : _$a.v;
+            log("first");
+            _$a.t(() => w[1].promise) ? _$a.r(await _$a.p) : _$a.v;
+            log("never");
+          } catch (_$e) {
+            _$a.x(_$e);
+          } finally {
+            _$a.f();
+          }
+        })
+    )(2, (w, i) => (i === 0 ? w[0].resolve(0) : w[1].reject(new Bad("second"))));
+    const events = await both(
+      (log, w) =>
+        $(function* () {
+          yield* attempt(() => w[0].promise);
+          yield* attempt(() => w[1].promise);
+          log("done");
+        }) as any,
+      (log, w) =>
+        asyncBody(async function (_$i, _$a) {
+          try {
+            _$a.t(() => w[0].promise) ? _$a.r(await _$a.p) : _$a.v;
+            _$a.t(() => w[1].promise) ? _$a.r(await _$a.p) : _$a.v;
+            log("done");
+          } catch (_$e) {
+            _$a.x(_$e);
+          } finally {
+            _$a.f();
+          }
+        })
+    )(2);
+    expect(events).toEqual(["done@1", "fulfilled undefined@3"]);
+  });
+
+  it("a returned thenable is adopted by the innermost level; a user `finally` runs before the result settles", async () => {
+    let late!: ReturnType<typeof deferred<string>>;
+    await both(
+      (log, w) =>
+        $(function* () {
+          yield* attempt(() => w[0].promise);
+          yield* attempt(() => w[1].promise);
+          late = deferred<string>();
+          queueMicrotask(() => late.resolve("late"));
+          return late.promise;
+        }) as any,
+      (log, w) =>
+        asyncBody(async function (_$i, _$a) {
+          try {
+            _$a.t(() => w[0].promise) ? _$a.r(await _$a.p) : _$a.v;
+            _$a.t(() => w[1].promise) ? _$a.r(await _$a.p) : _$a.v;
+            late = deferred<string>();
+            queueMicrotask(() => late.resolve("late"));
+            return _$a.ret(late.promise);
+          } catch (_$e) {
+            _$a.x(_$e);
+          } finally {
+            _$a.f();
+          }
+        })
+    )(2);
+    const events = await both(
+      (log, w) =>
+        $(function* () {
+          try {
+            const a = (yield* attempt(() => w[0].promise)) as number;
+            const b = (yield* attempt(() => w[1].promise)) as number;
+            return a + b;
+          } finally {
+            log("finally");
+          }
+        }) as any,
+      (log, w) =>
+        asyncBody(async function (_$i, _$a) {
+          try {
+            try {
+              const a = (_$a.t(() => w[0].promise) ? _$a.r(await _$a.p) : _$a.v) as number;
+              const b = (_$a.t(() => w[1].promise) ? _$a.r(await _$a.p) : _$a.v) as number;
+              return _$a.ret(a + b);
+            } finally {
+              log("finally");
+            }
+          } catch (_$e) {
+            _$a.x(_$e);
+          } finally {
+            _$a.f();
+          }
+        })
+    )(2);
+    expect(events).toEqual(["finally@1", "fulfilled 1@3"]);
+  });
+
+  it("a memo superseded at its second suspension rejects as the driver's does", async () => {
+    const traces = await Promise.all(
+      [false, true].map(async compiledForm => {
+        const [key, setKey] = createSignal("a");
+        const log: string[] = [];
+        const waits: ReturnType<typeof deferred<string>>[] = [];
+        const wait = () => {
+          const d = deferred<string>();
+          waits.push(d);
+          return d.promise;
+        };
+        let m!: () => unknown;
+        createRoot(() => {
+          m = compiledForm
+            ? createMemo(
+                asyncBody(async function (_$i: unknown, _$a) {
+                  try {
+                    const k = key();
+                    const a = _$a.t(wait) ? _$a.r(await _$a.p) : _$a.v;
+                    log.push(`${k} first`);
+                    const b = _$a.t(wait) ? _$a.r(await _$a.p) : _$a.v;
+                    return _$a.ret(`${k}:${a}${b}`);
+                  } catch (_$e) {
+                    _$a.x(_$e);
+                  } finally {
+                    _$a.f();
+                  }
+                }) as any
+              )
+            : createMemo(
+                $(function* () {
+                  const k = yield* key;
+                  const a = yield* attempt(wait);
+                  log.push(`${k} first`);
+                  const b = yield* attempt(wait);
+                  return `${k}:${a}${b}`;
+                }) as any
+              );
+          createRenderEffect(
+            () => m(),
+            v => void log.push(`value ${String(v)}`)
+          );
+        });
+        flush();
+        waits[0].resolve("1");
+        await tick();
+        setKey("b");
+        flush();
+        waits[1].resolve("2");
+        await tick();
+        waits[2].resolve("3");
+        await tick();
+        waits[3].resolve("4");
+        await tick();
+        flush();
+        return log;
+      })
+    );
+    expect(traces[1]).toEqual(traces[0]);
+    expect(traces[0].at(-1)).toBe("value b:34");
   });
 });

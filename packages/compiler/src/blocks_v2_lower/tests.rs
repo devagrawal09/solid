@@ -218,7 +218,7 @@ export const C = $component(function* () {
     // no block, no driver.
     assert!(
         flat.contains(
-            "const save = _$$eventCompiled(_$asyncBody(async function(_$i, _$a) { try { const r = _$a.t(() => fetch(\"/x\")) ? _$a.r(await _$a.p) : _$a.v; setN(r); } catch (_$e) { _$a.x(_$e); } }));"
+            "const save = _$$eventCompiled(_$asyncBody(async function(_$i, _$a) { try { const r = _$a.t(() => fetch(\"/x\")) ? _$a.r(await _$a.p) : _$a.v; setN(r); } catch (_$e) { _$a.x(_$e); } finally { _$a.f(); } }));"
         ),
         "{out}"
     );
@@ -364,6 +364,13 @@ export const C = $component(function* (props) {
     }
     return v;
   });
+  const flushed = $event(function* () {
+    setN(1);
+    yield* $flush();
+    const r = yield* attempt(() => save(1));
+    setN(r);
+    yield* $flush();
+  });
   const restored = $event(function* () {
     const v = yield* imported;
     yield* attempt(() => save(v));
@@ -382,7 +389,7 @@ fn async_bodies_are_async_functions_or_stay_with_the_driver() {
     // A memo that reads, then waits: its host calls the async body.
     assert!(
         flat.contains(
-            "const user = _$createMemo(_$asyncBody(async function(_$i, _$a) { try { const id = _$readPath1(props, \"id\"); return _$a.ret(_$a.t(() => load(id, ctx), NotFound) ? _$a.r(await _$a.p) : _$a.v); } catch (_$e) { _$a.x(_$e); } }));"
+            "const user = _$createMemo(_$asyncBody(async function(_$i, _$a) { try { const id = _$readPath1(props, \"id\"); return _$a.ret(_$a.t(() => load(id, ctx), NotFound) ? _$a.r(await _$a.p) : _$a.v); } catch (_$e) { _$a.x(_$e); } finally { _$a.f(); } }));"
         ),
         "{out}"
     );
@@ -404,12 +411,21 @@ fn async_bodies_are_async_functions_or_stay_with_the_driver() {
     // `raise` is a `throw`, `return v` reports through the run.
     assert!(
         flat.contains(
-            "const erased = _$$eventCompiled(_$asyncBody(async function(e, _$a) { try { const v = n(); try { const r = _$a.t(() => save(v, e)) ? _$a.r(await _$a.p) : _$a.v; setN(r); } catch (err) { throw err; } return _$a.ret(v); } catch (_$e) { _$a.x(_$e); } }));"
+            "const erased = _$$eventCompiled(_$asyncBody(async function(e, _$a) { try { const v = n(); try { const r = _$a.t(() => save(v, e)) ? _$a.r(await _$a.p) : _$a.v; setN(r); } catch (err) { throw err; } return _$a.ret(v); } catch (_$e) { _$a.x(_$e); } finally { _$a.f(); } }));"
         ),
         "{out}"
     );
-    // An operation the erasure cannot prove (an imported source, `$flush`
-    // in an async body): the generator is restored exactly as authored.
+    // `$flush()` statements in an async event: `flush()` like a
+    // synchronous event's, before and after the wait.
+    assert!(
+        flat.contains(
+            "const flushed = _$$eventCompiled(_$asyncBody(async function(_$i, _$a) { try { setN(1); _$flush(); const r = _$a.t(() => save(1)) ? _$a.r(await _$a.p) : _$a.v; setN(r); _$flush(); } catch (_$e) { _$a.x(_$e); } finally { _$a.f(); } }));"
+        ),
+        "{out}"
+    );
+    // An operation the erasure cannot prove (an imported source): the
+    // generator is restored exactly as authored, its lowered `$flush()`
+    // included.
     assert!(
         flat.contains(
             "const restored = _$$eventCompiled(_$$(function* () { const v = yield* imported; yield* attempt(() => save(v)); yield* $flush(); }));"
@@ -504,4 +520,49 @@ export const C = $component(function* (props) {
     assert!(!getters.contains("_$perform"), "{getters}");
     // A view returning a `solid-js` flow component is proven SYNC.
     assert!(g.contains("syncBlock as _$$"), "{getters}");
+}
+
+#[test]
+fn fragment_views_are_sync_on_both_sides() {
+    // A view returning a fragment of intrinsic elements (an array of nodes /
+    // SSR strings) is proven `BLOCK_SYNC`: the module drops the driver, and
+    // the flagged view is scoped the same way on both generates.
+    let source = r#"import { $component, $signal, $event } from "solid-js";
+export const Toggle = $component(function* (props) {
+  const [open, setOpen] = yield* $signal(true);
+  const toggle = $event(function* () { setOpen(o => !o); });
+  return function* () {
+    return (
+      <>
+        <a onClick={toggle}>{(yield* open) ? "-" : "+"}</a>
+        <ul style={{ display: (yield* open) ? "block" : "none" }}>{props.children}</ul>
+      </>
+    );
+  };
+});
+"#;
+    for generate in [Generate::Dom, Generate::Ssr] {
+        let out = compile_with(
+            source,
+            CompileOptions {
+                generate,
+                hydratable: true,
+                ..CompileOptions::default()
+            },
+        );
+        let flat = self::flat(&out);
+        assert!(flat.contains("syncBlock as _$$"), "{out}");
+        assert!(flat.contains("return _$$(_$blockScope(function() {"), "{out}");
+        assert!(!out.contains("_$perform"), "{out}");
+    }
+    // Not a fragment of plain elements (a component child): not proven.
+    let unproven = dom(
+        r#"import { $component } from "solid-js";
+import { Child } from "./child";
+export const C = $component(function* () {
+  return function* () { return <><Child /><b /></>; };
+});
+"#,
+    );
+    assert!(self::flat(&unproven).contains(" $ as _$$"), "{unproven}");
 }
