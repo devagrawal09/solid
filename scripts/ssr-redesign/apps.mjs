@@ -118,7 +118,20 @@ export const APPS = {
         serverSwaps: { [TOGGLE_SWAP]: "scripts/ssr-redesign/apps/hn/islands-static/toggle.server.tsx" },
         client: "apps/hn/islands-static/client-lazy-t0.ts",
         splitting: true
-      }
+      },
+      // Compiler emission (ssr-hydration-redesign.md, "Compiler emission"):
+      // the same page written with generator blocks v2 (apps/hn-blocks).
+      // A-blocks is that source through today's pipeline (hydrate); C-* are
+      // `compileIslands` output — the string-template server module and the
+      // generated entry/chunks — at the tier the compiler chose (tier 0 for
+      // Toggle), or raised with minTier to compare with T1/P1 above.
+      "A-blocks": { server: "apps/hn-blocks/server.tsx", client: "apps/hn-blocks/client.tsx" },
+      "C-eager": { server: "apps/hn-blocks/server-islands.ts", client: "apps/islands-client.ts", islands: { root: "apps/hn-blocks/story.tsx", mode: "eager" } },
+      "C-lazy": { server: "apps/hn-blocks/server-islands.ts", client: "apps/islands-client.ts", islands: { root: "apps/hn-blocks/story.tsx", mode: "auto" }, splitting: true },
+      "C-T1-eager": { server: "apps/hn-blocks/server-islands.ts", client: "apps/islands-client.ts", islands: { root: "apps/hn-blocks/story.tsx", mode: "eager", minTier: 1 } },
+      "C-T1-lazy": { server: "apps/hn-blocks/server-islands.ts", client: "apps/islands-client.ts", islands: { root: "apps/hn-blocks/story.tsx", mode: "auto", minTier: 1 }, splitting: true },
+      "C-T2-eager": { server: "apps/hn-blocks/server-islands.ts", client: "apps/islands-client.ts", islands: { root: "apps/hn-blocks/story.tsx", mode: "eager", minTier: 2 } },
+      "C-T2-lazy": { server: "apps/hn-blocks/server-islands.ts", client: "apps/islands-client.ts", islands: { root: "apps/hn-blocks/story.tsx", mode: "auto", minTier: 2 }, splitting: true }
     }
   },
   sync: {
@@ -239,7 +252,14 @@ export const APPS = {
       "T1-lazy": { server: "apps/todos-local/server-islands.tsx", client: "apps/todos-local/client-lazy.ts", splitting: true, aliases: { "@solidjs/signals": KERNEL } },
       // Outside the tier-0 rule (a keyed list, branches, memos): direct
       // updates written by hand, as the floor a list-aware tier 0 could reach.
-      "T0*-eager": { server: "apps/todos-local/server-islands.tsx", client: "apps/todos-local/client-eager-t0.ts" }
+      "T0*-eager": { server: "apps/todos-local/server-islands.tsx", client: "apps/todos-local/client-eager-t0.ts" },
+      // Compiler emission: the same app written with generator blocks v2
+      // (apps/todos-local-blocks), compiled by `compileIslands` — one island
+      // group at tier 1 (kernel); T2 binds the same chunk to the core.
+      "C-eager": { server: "apps/todos-local-blocks/server-islands.ts", client: "apps/islands-client.ts", islands: { root: "apps/todos-local-blocks/app.tsx", mode: "eager" } },
+      "C-lazy": { server: "apps/todos-local-blocks/server-islands.ts", client: "apps/islands-client.ts", islands: { root: "apps/todos-local-blocks/app.tsx", mode: "lazy" }, splitting: true },
+      "C-T2-eager": { server: "apps/todos-local-blocks/server-islands.ts", client: "apps/islands-client.ts", islands: { root: "apps/todos-local-blocks/app.tsx", mode: "eager", minTier: 2 } },
+      "C-T2-lazy": { server: "apps/todos-local-blocks/server-islands.ts", client: "apps/islands-client.ts", islands: { root: "apps/todos-local-blocks/app.tsx", mode: "lazy", minTier: 2 }, splitting: true }
     }
   }
 };

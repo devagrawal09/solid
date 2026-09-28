@@ -17,7 +17,7 @@
 //   node scripts/ssr-redesign/measure.mjs [--apps hn,todos] [--only A,P1-lazy] [--reps 7] [--cpu 1,4] [--out file] [--check]
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { anatomy, bundleClient, HERE, kb, launchChromium, loadServer, median, ROOT } from "./lib.mjs";
+import { anatomy, bundleClient, HERE, islandsCompiler, kb, launchChromium, loadServer, median, ROOT } from "./lib.mjs";
 import { APPS } from "./apps.mjs";
 
 const args = Object.fromEntries(
@@ -56,10 +56,21 @@ for (const name of appNames) {
   let reference = null;
   for (const [vname, v] of Object.entries(app.variants)) {
     if (only && !only.has(vname) && vname !== "A") continue;
+    // Compiled islands (`v.islands`): one compiler shared by both builds.
+    let islands;
+    if (v.islands) {
+      const compiler = islandsCompiler({ minTier: v.islands.minTier, tier1Core: v.islands.tier1Core });
+      const root = join(HERE, v.islands.root);
+      const collected = compiler.collect(root);
+      islands = { compiler, root, mode: v.islands.mode, prefetch: v.islands.prefetch, files: new Set(collected.files) };
+      const tiers = collected.islands.map(i => `${i.id}:${i.root}@t${i.tier}`).join(" ");
+      console.log(`  islands: ${tiers || "(none)"}${collected.fallbacks.length ? " FALLBACK " + collected.fallbacks.map(f => f.reason).join("; ") : ""}`);
+    }
     const srv = await loadServer(join(HERE, v.server), join(cache, `${name}-${vname}-server.mjs`), {
       swaps: v.serverSwaps,
       tildeRoot: app.tildeRoot,
-      rewrites: v.serverRewrites
+      rewrites: v.serverRewrites,
+      islands
     });
     // Server render: one warm-up, then the median of 5 (wall and CPU; the
     // todos mock API sleeps 400 ms, so CPU is the comparable number there).
@@ -77,7 +88,7 @@ for (const name of appNames) {
     const ssrMs = median(wall),
       ssrCpuMs = median(cpu);
     const head = srv.hydrationScript ? srv.hydrationScript() : "";
-    const opts = { swaps: v.clientSwaps, tildeRoot: app.tildeRoot, rewrites: v.rewrites, oracles: v.oracles || [], splitting: !!v.splitting, hydratable: v.hydratable ?? true, aliases: v.aliases };
+    const opts = { swaps: v.clientSwaps, tildeRoot: app.tildeRoot, rewrites: v.rewrites, oracles: v.oracles || [], splitting: !!v.splitting, hydratable: v.hydratable ?? true, aliases: v.aliases, islands };
     const client = await bundleClient(join(HERE, v.client), opts);
     const counted = await bundleClient(join(HERE, v.client), { ...opts, count: true });
     // The identity probe is a classic script: it runs while the page parses,

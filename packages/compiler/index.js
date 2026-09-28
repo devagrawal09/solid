@@ -84,6 +84,28 @@ function summarizeIslands(code, options) {
 }
 
 /**
+ * Compiled islands over the v2 block graph: one pass produces the module's
+ * string-template server output, one activation chunk per island group at
+ * the smallest runtime tier its graph allows, and the manifest. A module
+ * that cannot be compiled to islands falls back to the hydratable compiles
+ * (`fallback` says why; `client` is then the DOM output).
+ * Returns `{ server, client, chunks: [{ id, code }], manifest, fallback }`.
+ */
+function compileIslands(code, options = {}) {
+  if (typeof code !== "string") {
+    throw new TypeError("@solidjs/compiler compileIslands() expects source code as a string");
+  }
+  const result = native.compileIslands(code, { ...options });
+  return {
+    server: result.server,
+    client: result.client ?? null,
+    chunks: result.chunks,
+    manifest: JSON.parse(result.manifest),
+    fallback: result.fallback ?? null
+  };
+}
+
+/**
  * Stage 5 (C, pruned resumability): compile an island module into a
  * resumable server module (JSX, compile with `generate: "ssr"`) and a
  * component-free client. Returns `{ resumable, reasons, liveCells,
@@ -568,6 +590,7 @@ module.exports = {
   analyzeStrictBlocks,
   summarizeCapabilities,
   summarizeIslands,
+  compileIslands,
   compileResumable,
   transformDirectives,
   transformDirectivesAsync,

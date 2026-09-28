@@ -19,6 +19,19 @@ import { gzipSync, brotliCompressSync, constants } from "node:zlib";
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 export const HERE = dirname(fileURLToPath(import.meta.url));
 const { transform } = await import(pathToFileURL(join(ROOT, "packages/compiler/index.js")).href);
+const islandsBuild = await import(pathToFileURL(join(ROOT, "packages/compiler/islands-build.js")).href);
+// Compiled islands: chunk runtimes by tier (the tier-0 helper and the
+// kernel from source, as the tier prototypes bundle them; the core from its
+// prod dist through the "@solidjs/signals" alias).
+export const ISLAND_RUNTIMES = {
+  t0: join(ROOT, "packages/signals/src/kernel/t0.ts"),
+  kernel: join(ROOT, "packages/signals/src/kernel/index.ts"),
+  core: "@solidjs/signals"
+};
+/** One islands compiler per variant: the server and client builds share its module ids. */
+export function islandsCompiler({ minTier = 0, tier1Core = false } = {}) {
+  return new islandsBuild.IslandsCompiler({ runtimes: ISLAND_RUNTIMES, minTier, tier1Core });
+}
 
 export const DIST = {
   signals: join(ROOT, "packages/signals/dist/prod/index.js"),
@@ -108,12 +121,17 @@ function patchPlugin({ count = false, oracles = [] } = {}) {
 }
 
 /** Compile .tsx/.jsx through the Rust compiler; `rewrites` model compiler output a prototype would emit. */
-function compilerPlugin({ generate, hydratable, rewrites = {}, options = {}, swaps = {} }) {
+function compilerPlugin({ generate, hydratable, rewrites = {}, options = {}, swaps = {}, islands }) {
   return {
     name: "solid-compiler",
     setup(b) {
       b.onLoad({ filter: /\.(tsx|jsx)$/ }, args => {
         if (args.path.includes("node_modules")) return undefined;
+        // Compiled islands (server builds): the module's string-template output.
+        if (islands && islands.files.has(args.path)) {
+          const out = islands.compiler.compileFile(args.path);
+          return { contents: out.server, loader: "ts", resolveDir: dirname(args.path) };
+        }
         const rel0 = relative(ROOT, args.path);
         // A swap stands in the prototype's compiled output for one module.
         const path = swaps[rel0] ? join(ROOT, swaps[rel0]) : args.path;
@@ -157,7 +175,7 @@ function tildePlugin(tildeRoot) {
  * Bundle a client entry. Returns { code, bytes, gzip, groups } where groups
  * split the minified output by origin (signals / solid / web / app / other).
  */
-export async function bundleClient(entry, { hydratable = true, count = false, oracles = [], rewrites, swaps, tildeRoot, options, minify = true, splitting = false, dev = false, aliases = {} } = {}) {
+export async function bundleClient(entry, { hydratable = true, count = false, oracles = [], rewrites, swaps, tildeRoot, options, minify = true, splitting = false, dev = false, aliases = {}, islands } = {}) {
   const res = await build({
     entryPoints: [entry],
     bundle: true,
@@ -177,7 +195,12 @@ export async function bundleClient(entry, { hydratable = true, count = false, or
     alias: dev
       ? { "solid-js": DIST.solid.replace("solid.js", "solid.dev.js"), "@solidjs/web": DIST.web.replace("web.js", "web.dev.js"), "@solidjs/signals": DIST.signals.replace("prod/index.js", "dev.js"), ...aliases }
       : { "solid-js": DIST.solid, "@solidjs/web": DIST.web, "@solidjs/signals": DIST.signals, ...aliases },
-    plugins: [tildePlugin(tildeRoot), patchPlugin({ count, oracles }), compilerPlugin({ generate: "dom", hydratable, rewrites, options, swaps })]
+    plugins: [
+      ...(islands ? [islandsBuild.esbuildIslands({ root: islands.root, compiler: islands.compiler, mode: islands.mode, prefetch: islands.prefetch })] : []),
+      tildePlugin(tildeRoot),
+      patchPlugin({ count, oracles }),
+      compilerPlugin({ generate: "dom", hydratable, rewrites, options, swaps })
+    ]
   });
   // Output files by published name; `initial` = the entry and its static
   // imports (what a page loads eagerly), `lazy` = dynamic-import chunks.
@@ -220,7 +243,7 @@ function originOf(input) {
 }
 
 /** Bundle and import a server entry (node, ESM). */
-export async function loadServer(entry, outfile, { rewrites, swaps, tildeRoot, options } = {}) {
+export async function loadServer(entry, outfile, { rewrites, swaps, tildeRoot, options, islands } = {}) {
   await build({
     entryPoints: [entry],
     bundle: true,
@@ -230,7 +253,7 @@ export async function loadServer(entry, outfile, { rewrites, swaps, tildeRoot, o
     logLevel: "error",
     loader: { ".json": "json" },
     alias: { "solid-js": DIST.solidServer, "@solidjs/web": DIST.webServer, "@solidjs/signals": DIST.signals },
-    plugins: [tildePlugin(tildeRoot), compilerPlugin({ generate: "ssr", hydratable: true, rewrites, options, swaps })]
+    plugins: [tildePlugin(tildeRoot), compilerPlugin({ generate: "ssr", hydratable: true, rewrites, options, swaps, islands })]
   });
   return import(pathToFileURL(outfile).href + `?${Date.now()}`);
 }

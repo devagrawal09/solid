@@ -133,6 +133,71 @@ pub fn summarize_islands(
         .map_err(|error| Error::from_reason(error.to_string()))
 }
 
+#[napi(object)]
+#[derive(Default)]
+pub struct CompileIslandsOptions {
+    pub filename: Option<String>,
+    /// Prefix of the module's island ids (unique per app).
+    pub id_prefix: Option<String>,
+    /// Module specifiers of the tier runtimes the chunks import.
+    pub t0_module: Option<String>,
+    pub kernel_module: Option<String>,
+    pub core_module: Option<String>,
+    /// Bind tier-1 groups to the core (a page that already loads it).
+    pub tier1_core: Option<bool>,
+    /// Raise every group to at least this tier.
+    pub min_tier: Option<u32>,
+    /// Instrumented output (the conformance harness).
+    pub debug: Option<bool>,
+    /// Probe cell hosts (`object.method`).
+    pub probe_hosts: Option<Vec<String>>,
+    pub module_name: Option<String>,
+}
+
+#[napi(object)]
+pub struct IslandChunkResult {
+    pub id: String,
+    pub code: String,
+}
+
+#[napi(object)]
+pub struct CompileIslandsResult {
+    pub server: String,
+    pub client: Option<String>,
+    pub chunks: Vec<IslandChunkResult>,
+    pub manifest: String,
+    pub fallback: Option<String>,
+}
+
+/// Compiled islands (documentation/plans/ssr-hydration-redesign.md,
+/// "Compiler emission"): a module's string-template server output, one
+/// activation chunk per island group at its runtime tier, and the manifest.
+#[napi]
+pub fn compile_islands(code: String, options: Option<CompileIslandsOptions>) -> Result<CompileIslandsResult> {
+    let o = options.unwrap_or_default();
+    let d = crate::IslandOptions::default();
+    let opts = crate::IslandOptions {
+        filename: o.filename,
+        id_prefix: o.id_prefix.unwrap_or(d.id_prefix),
+        t0_module: o.t0_module.unwrap_or(d.t0_module),
+        kernel_module: o.kernel_module.unwrap_or(d.kernel_module),
+        core_module: o.core_module.unwrap_or(d.core_module),
+        tier1_core: o.tier1_core.unwrap_or(false),
+        min_tier: o.min_tier.unwrap_or(0) as u8,
+        debug: o.debug.unwrap_or(false),
+        probe_hosts: o.probe_hosts.unwrap_or_default(),
+        module_name: o.module_name.unwrap_or(d.module_name),
+    };
+    let out = crate::compile_islands(&code, &opts).map_err(|error| Error::from_reason(error.to_string()))?;
+    Ok(CompileIslandsResult {
+        server: out.server,
+        client: out.client,
+        chunks: out.chunks.into_iter().map(|c| IslandChunkResult { id: c.id, code: c.code }).collect(),
+        manifest: out.manifest,
+        fallback: out.fallback,
+    })
+}
+
 #[cfg(feature = "tsrx")]
 #[napi(object)]
 pub struct TsrxTypecheckEmbeddedRegion {

@@ -42,6 +42,7 @@ mod memo_fusion;
 mod store_scalars;
 mod resumable;
 mod islands;
+mod island_emit;
 #[cfg(feature = "tsrx")]
 mod tsrx;
 mod universal;
@@ -51,6 +52,7 @@ pub use block_projection::{
 };
 pub use capabilities::summarize_capabilities;
 pub use islands::summarize_islands;
+pub use island_emit::{IslandChunk, IslandOptions, IslandsOutput, compile_islands};
 pub use resumable::compile_resumable;
 pub use compiler::{CompileOptions, CompileOutput, Generate, Renderer, Syntax, Wrapper, compile};
 pub use error::{CompileError, CompileErrorKind};
