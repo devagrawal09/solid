@@ -293,7 +293,10 @@ function solidIslands(options = {}) {
     },
     buildStart() {
       compiler = new IslandsCompiler({ runtimes: resolveRuntimes(runtimes), tier1Core: false });
-      collected = null;
+      // Island ids must match across the SSR and client builds: assign
+      // every module's id prefix in the root's import order (a DFS), before
+      // either build transforms anything in its own order.
+      collected = collectWithDedupe(compiler, path.resolve(config.root, root), tier1Core);
     },
     resolveId(id) {
       if (id === ENTRY || id === ENTRY + "/auto") return "\0" + id;

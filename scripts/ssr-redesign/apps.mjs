@@ -120,12 +120,13 @@ export const APPS = {
         splitting: true
       },
       // Compiler emission (ssr-hydration-redesign.md, "Compiler emission"):
-      // the same page written with generator blocks v2 (apps/hn-blocks).
-      // A-blocks is that source through today's pipeline (hydrate); C-* are
-      // `compileIslands` output — the string-template server module and the
-      // generated entry/chunks — at the tier the compiler chose (tier 0 for
-      // Toggle), or raised with minTier to compare with T1/P1 above.
-      "A-blocks": { server: "apps/hn-blocks/server.tsx", client: "apps/hn-blocks/client.tsx" },
+      // the same page written with generator blocks v2 (apps/hn-blocks),
+      // gated against A (the markup is identical). C-* are `compileIslands`
+      // output — the string-template server module and the generated
+      // entry/chunks — at the tier the compiler chose (tier 0 for Toggle), or
+      // raised with minTier to compare with T1/P1 above. (The v2 source
+      // through today's pipeline cannot serve as A: its async `$memo` does
+      // not server-render under `Loading`; see "Defects found".)
       "C-eager": { server: "apps/hn-blocks/server-islands.ts", client: "apps/islands-client.ts", islands: { root: "apps/hn-blocks/story.tsx", mode: "eager" } },
       "C-lazy": { server: "apps/hn-blocks/server-islands.ts", client: "apps/islands-client.ts", islands: { root: "apps/hn-blocks/story.tsx", mode: "auto" }, splitting: true },
       "C-T1-eager": { server: "apps/hn-blocks/server-islands.ts", client: "apps/islands-client.ts", islands: { root: "apps/hn-blocks/story.tsx", mode: "eager", minTier: 1 } },

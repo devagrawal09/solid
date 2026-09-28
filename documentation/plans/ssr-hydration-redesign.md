@@ -2,6 +2,8 @@
 
 Status: 2026-09-27. A design with measured prototypes. The only production changes are two bug fixes that the measurements needed (see [Defects found](#defects-found)). The harness is in `scripts/ssr-redesign/` and the raw data is in `documentation/plans/ssr-hydration-redesign/`.
 
+Update 2026-09-28: the compiler emits compiled islands (phases 3–4 for the constructs listed there): `compileIslands` output reproduces the P1 and tier prototypes at byte and time parity, behind the same gate. See [Compiler emission](#compiler-emission).
+
 This builds on, and does not redo:
 - [resumability.md](./resumability.md): hydration vs pruned resumability, and the hydrate-before-write rule;
 - [compiler-heuristics-build.md](./compiler-heuristics-build.md): per-island hydration F, the handler → island map, and compiled resumability C;
@@ -389,6 +391,85 @@ Follow-up study: [island-runtime-tiers.md](./island-runtime-tiers.md). The compi
 
 Every tier is proven trace-equivalent to the core (a differential suite over random graphs, conformance runs of real compiler output on the kernel, activation stand-ins, and this document's browser gate), and measured with this harness (`measure.mjs` variants `T0-*`, `T1-*`, `T2-*` and the `todos-local` app).
 
+## Compiler emission
+
+Status: 2026-09-28. The compiler now **emits** compiled islands: the hand-written stand-ins of §5 and of the tier study are reproduced by `compileIslands` output, measured with the same harness and gated against today's hydrated page. Code: `packages/compiler/src/island_emit/` (Rust), `packages/compiler/islands-build.js` (entry/loader generator, Vite and esbuild plugins), `@solidjs/signals/kernel` and `@solidjs/signals/t0` (the tier runtimes, now published). Example: `examples/islands` (Vite client + SSR build, prerendered, driven in Chromium by `check.mjs`).
+
+### What one compile produces
+
+`compileIslands(code, { filename, idPrefix, t0Module, kernelModule, coreModule, tier1Core, minTier })` reads one v2-blocks module and returns, from one pass (so both halves agree on every address):
+
+- **`server`**: the module with every component replaced by a string-template function `(props, $c) => string` (async only when it awaits a server-authoritative memo). No owner, no hydration keys, no hole thunks, no serializer. The only additions to the markup are what the islands need: the anchor (`data-i="<ids>"` on the island root's first element, or `<!--i:<ids>-->`), `data-s` with the island's serialized values (only when its client code reads them), `<!--$-->…<!--/-->` around live text holes that share their element and around live `Show` / `For` regions, and `data-pd` on elements whose lazily loaded handler calls `preventDefault()`. Context travels as a `Map` argument.
+- **`chunks`**: one activation module per island group, `export function activate(anchor)`, plain JavaScript (the compiler erases TypeScript), importing only its tier's runtime.
+- **`manifest`**: per island `{ id, root, members, tier, analysisTier, ownTiers, why, runtime, cells, events, windowEvents, anchor, nests, activation: "lazy" | "load", prefetch, preventDefault, serialized }`, per component `inert | island-root | island-member`, and `fallback` (why the module falls back, when it does).
+
+HN's Toggle island, as emitted (tier 0; compare `apps/hn/islands-static/toggle.t0.ts`):
+
+```js
+import { cell as $cell, hole as $hole, set as $set } from "@solidjs/signals/t0";
+export function activate($a) {
+const $n2 = $a.firstElementChild;
+const $n3 = $a.nextElementSibling;
+const open = $cell(true);
+const toggle = () => { $set(open, o => !o); };
+$n2.addEventListener("click", toggle);
+$hole([open], () => (open.v) ? "[-]" : "[+] comments collapsed", v => { $n2.textContent = v; });
+$hole([open], () => ({ _0: !!(open.v), _1: (open.v) ? "block" : "none" }), (o, q) => { if (o._0 !== q?._0) { const v = o._0; $a.classList.toggle("open", v); } if (o._1 !== q?._1) { const v = o._1; $n3.style.setProperty("display", v); } });
+}
+```
+
+### Partition and tier selection (`graph.rs`)
+
+1. **Facts.** Each view hole, attribute, handler, `Show` / `For` input, effect and settled body is a site with the symbols and `props.*` members it references (reads in ternary branches, logical right operands, `if` branches and callbacks are marked conditional).
+2. **Flows.** Every binding carries an abstract value — the cells and memos it may read and write when evaluated or called. Props join over every call site, context values over every provider, setup locals over their initializers; a fixpoint closes them. Any reference counts (over-approximation).
+3. **Liveness.** A cell is live when an `$event` body, an inline handler, an effect or a settled body may write it, or when its setter **escapes** (a setup statement or a call-computed local stores it, a view hands it out, a component outside the module receives it). A memo is live when it reads a live key; a hole when it reads one. Everything else is server-authoritative, and its readers are inert HTML.
+4. **Islands.** Live sites and the live cells / memos they touch are joined by union-find. Two unrelated cells in one component are two islands; one island spans a parent and its children when state flows down through props or context. The island's root is the component that creates its state and renders every member (dominance over the render graph). Two merges keep this sound: a component whose setup has side-effect statements keeps all its live parts in one island (so they run once), and an island rendered inside another island's live region joins it (the outer island creates its DOM).
+5. **Tiers** (island-runtime-tiers.md §1): tier 2 for a store, an optimistic / projection / derived signal, a live async memo, `attempt` / `action` / `refresh` / `startTransition` in island code, or `Loading` / `Errored` inside a live region; tier 1 for memos, effects and settled bodies, cleanups, cells written by effects or escaped setters, conditional reads in live holes, live `Show` / `For`, and state shared across components; tier 0 otherwise. The group takes the highest tier of its members (`ownTiers` lists each member's own), and the group shares one runtime instance. The bundler plugin binds a page's tier-1 groups to the core when the page loads it anyway (`tier1Core: "auto"`, recommendation 3 of the tier study); `minTier` raises groups for measurement.
+
+### Client emission (`client.rs`)
+
+- **Addresses.** Nodes are reached by element index from the anchor (`firstElementChild` / `nextElementSibling` / `children[k]`, or from the end past a variable-size region) and by the k-th top-level marker pair (`$mk`); an element whose only child is a live hole is written with `textContent` (no markers). Component boundaries disappear: every member's view is inlined into the island's activation with its props bound to the caller's expressions (accessor, value, or getter for a reactive expression) and context bound to the provider's value (destructured names of a literal provider value keep their kinds, so `yield* todos` is `todos()`, not a dynamic read).
+- **State.** Cells are rebuilt from their initializers when the client can evaluate them (literals, module functions, browser globals — as hydration re-evaluates them) and from `data-s` when they depend on props or server data; props the client code reads are serialized by name.
+- **Holes.** Only live holes are bound. At tiers 1/2 each is a render effect whose first run writes nothing (the server DOM already shows it), with the DOM compiler's order: handlers, text inserts, then one combined attribute effect. At tier 0 each becomes `hole([cells], compute, apply)` on the t0 helper — activation reads and computes nothing. Class literals become per-token `classList.toggle`, style literals per-property `setProperty`, `checked` / `value` / `selected` / `innerHTML` / `textContent` DOM properties.
+- **Structure.** A live `Show` / `For` becomes an adopt-or-create builder: at activation it adopts the server's node(s) (rows in order, keyed by item identity as `For` is), later it clones a client template (static markup with live-hole markers and `<!--!-->` placeholders for holes computed once per row) and binds the same holes. Rows over immutable items bind no effects at all (the item never changes for a keyed row).
+- **Effects.** `$effect` is split as the block lowering splits it (every read hoisted, in order, into the compute half; `$cleanup` returned from the effect half). `$settled` bodies run once after activation; a settled body that only registers `window` listeners for `$event`s is a **lazy stub**: the loader listens instead, activates the island on the first such event and replays it (todos' `hashchange`).
+
+### Loader, prefetch and entry (`islandsEntry`)
+
+The page's only script. Hot islands (a load-time effect other than a listener stub; handlers outside the anchor element; comment anchors) are imported statically and activated at load. Lazy ones get the loader: one capturing listener per event type, `closest("[data-i]")` (walking up through nested anchors only when some island's anchor can contain another), the island's chunk imported and activated, and **every event that arrived meanwhile replayed in order — one queue per page** (the Track C fix). `data-pd` elements are prevented synchronously; a replayed click on a checkbox or radio is prevented at capture so it toggles once. Prefetch is configurable at the three levels of Decision 2: app default (`load | idle | visible | intent | interaction`), per island (`// @island-prefetch <policy>` on the component, or `overrides` by root component in the plugin), and budget / network (`budget` bytes of chunks; `saveData` or a 2G connection prefetches nothing). The generated loader only contains the features the page uses.
+
+### Build integration
+
+- **Vite** (`solidIslands({ root, prefetch, overrides, budget, mode, runtimes, tier1Core })`, `@solidjs/compiler/islands-build`): in the SSR build every matching module compiles to its server module; in the client build `virtual:solid-islands` is the entry and each island group a virtual chunk (code-split, lazily imported). `examples/islands` builds end to end (`vite build && vite build --ssr … && node prerender.mjs`) and `check.mjs` drives all three kinds of island in Chromium: a Toggle (tier 0, loaded on intent), a counter cut from the page component (tier 0), and a todo list (tier 1, the kernel), with no page errors. Client output: 1.45 KB gz entry (loader + visible/intent prefetch + budget), Toggle 0.38 KB, counter 0.41 KB, t0 helper 0.34 KB, todo list 3.05 KB (kernel included).
+- **esbuild** (`esbuildIslands`) drives the measurement harness (`scripts/ssr-redesign/lib.mjs`, variants with `islands: { root, mode, minTier }`).
+- **Fallback.** A module the compiler does not compile keeps today's pipeline: the plugin serves its hydratable SSR and DOM compiles, and the entry hydrates its root component (`rootExport`, `mount`). todos-blocks takes this path (its state is an optimistic async store behind a factory, with actions and boundaries: tier 2 by the rules, and read through a helper generator the partitioner does not follow).
+
+MEASUREMENTS_PLACEHOLDER
+
+### Behaviour evidence
+
+- **Browser gate** (`measure.mjs --check`): every compiler variant — HN at tiers 0/1/2 eager and lazy, todos-local at tiers 1/2 eager and lazy, todos-blocks through the fallback — equals today's hydrated page after load and after every session step, and server nodes survive.
+- **Conformance islands mode** (`packages/web/test/conformance/islands.spec.ts`): every component scenario with a blocks-v2 source is compiled by `compileIslands`; the server module renders the page (its markup must equal the oracle's initial DOM), the chunks activate it at the compiler's tier (tier 0 on an instrumented t0 helper that traces labelled cells like `h.signal`, tier 1 on the kernel) and at tier 2 on the core, and everything after mount must equal the oracle's trace, read for read. 25 pass: `tier-toggle` and `tier-two-cells` at tiers 0/1/2 (including the hole order the tier study's self-test plants), `tier-shared` (a new blocks source: props, a memo, a `Show` whose content is a component with setup side effects and a cleanup) and `blocks-counter` at tiers 1/2, `blocks-effect` (the effect split; against `client/blocks-compiled`, whose pinned difference from the reference is the v1 split itself), `blocks-props-child` (escaped setters), `blocks-context` (no island: inert), and `islands-list` (new: a keyed `For` adopting, creating and removing rows, a `Show` opening from a later write, memos, a marker-pair text hole, row handlers reaching the parent's actions through props). A self-test runs the Toggle chunk on a t0 helper without batching and must diverge. The async scenarios fall back (call-form `Errored(…)` / `Loading(…)` views), and are listed as skipped with the compiler's reason.
+- **Rust unit tests** (`src/island_emit/tests.rs`, 23): the partitioner (inert components, two islands in one component, props / context flows, escaped setters, side-effecting setups, members rendered outside their root, islands inside live regions, recursion), the tier selector (tier 0 conditions, conditional reads, memos, effects and settled bodies, lazy listener stubs, stores and live async memos at tier 2, `minTier`), and both emitters (anchors, marker pairs, serialization, `data-pd`, awaited server-authoritative memos, TypeScript erasure, module state shared by two islands). JS tests (`__tests__/islands-build.test.js`, 11) cover the manifest surface, the loader's feature selection, the prefetch levels and the fallback entry.
+
+### Supported constructs
+
+- **Components:** `$component(function* (props) { setup; return function* () { return <jsx/> } })` (and `$component<P>()(…)`), and plain function components that compute locals and return JSX.
+- **Setup:** `$signal` / `createSignal` (and probe hosts), `$memo` / `createMemo` (sync; async ones only as server-authoritative data), `$event`, `$effect` (split; not with reads in loops or of its own bindings), `$settled` / `onSettled`, `yield* Ctx` (a provider in the module, inside the island when an island reads it), `$cleanup` / `onCleanup`, local values and functions, side-effect statements.
+- **Views:** intrinsic elements, static and dynamic attributes, `on*` / `on:*` handlers (`$event`s or inline functions), text holes, fragments, components of the module, `props.children` slots (pass-through), context providers, `Show` and keyed `For` over live or server data, `Loading` / `Errored` in inert regions (the server awaits the data).
+
+### What falls back (whole module → today's hydration, reason in the manifest)
+
+- **Tier 2 by the rules:** `$store` / `createStore`, `createOptimistic*` / `createProjection` / a derived `createSignal(fn)`, an async memo read by an island, `attempt` / `action` / `refresh` / `startTransition` in island code, `Loading` / `Errored` inside a live region. Compiling stores and async at tier 2 (P2 adoption, store paths as cells) is the next step; until then these islands hydrate.
+- **Not modeled yet:** component call forms in views (`X(props)`, `Loading({…})`); helper generators and reads in setups (`yield* useX()`); view statements before the return; JSX produced by a live expression (use `Show` / `For`); a live `Show` with a fallback or a render callback; a live `For` with an index or a fallback, or rows that are not one element; SVG / MathML inside live regions; `ref`, spreads, `Index` / `Switch` / `Match` / `Dynamic` / `Portal`, member-expression tags; island sites under a `Show` / `For` over server data; recursion inside an island; a member component also rendered outside its island's root; a context an island reads with no provider inside it; reactive state passed to a component of another module (islands do not span modules); module-level reactive state, or module-level mutable state two islands share; an element address that needs a path past two variable-size regions; serialized values on a comment anchor.
+- **Semantics to know:** side-effect statements in the setup of an *inert* component run on the server only (hydration would re-run them on the client); a setter stored in a module binding is reachable through the island chunk's exports, not through the module's own (empty) client export.
+
+### Not done
+
+- Streaming: the server awaits every server-authoritative memo before the page (no boundary chunks yet); P2 adoption; stateful islands over stores (Phase 5); islands spanning modules (the per-module compile has no cross-module flows); a dev verifier; navigation (§3.7).
+- Lazy chunks are per island group, not clustered per route; the prefetch budget counts chunk source bytes, not the bundler's output.
+- The lazy loader is 0.5 KB gz against the prototype's 0.3 KB: it keeps one ordered queue across islands (events on active islands wait behind a loading chunk), nested anchors, `data-pd`, checkbox replay and window-event stubs, each only when a page uses it.
+
 ## Defects found
 
 | Defect | Status | Evidence |
@@ -397,6 +478,8 @@ Every tier is proven trace-equivalent to the core (a differential suite over ran
 | **v2 `yield* Ctx` could not server-render.** The context op read through the client core's `getContext`, which has no owner on the server (NoOwnerError; todos-blocks SSR rendered its `<Errored>` fallback) | **Fixed** (`@solidjs/signals`, `solid-js`; the server provider installs a reader under `Symbol.for("solid.contextRead")`) | `packages/web/test/server/block-api.spec.tsx` |
 | **`hackernews-spa` production build: toggles never become interactive** under CPU throttling, although `_$HY.done` is set and the server nodes are in place | open | `probe-twin-toggle.mjs`: 3–4/6 loads at 4×, 0/6 at 1× in one series, 1/7 at 1× in another |
 | **`hackernews` (server components): a load renders "Uncaught Client Exception"** instead of the thread | open | 1/7 loads at 1× in `measure-twins.mjs` |
+| **The v2 HN page does not hydrate through today's pipeline.** The blocks version of the story page (`apps/hn-blocks/story.tsx`: an async `$memo` with `attempt` under `Loading`) server-renders, but a boundary hands off to the client (`client-only content (bare ssrSource: "client")` reaches the page) and the client fetches the story again, so it could not serve as its own baseline (the compiler variants are gated against the compat page A instead, whose markup is identical). Its compiled-islands output is unaffected: the string template awaits the memo | open (found here; for the v2 SSR work) | `renderToStream(() => <Page />)` then `hydrate` of `apps/hn-blocks/story.tsx` (the former `A-blocks` variant) |
+| **todos-blocks today (A) on this branch: 104 hydration key misses, and the first-interaction probe times out** (8 s; the row never shows `pending`). Pre-existing on the base branch; the compiler's fallback reproduces A exactly (C = A), so the tier-2 todos numbers are A's | open | `measure.mjs --apps todos --only A`: `keyMiss: 104` in the counts |
 
 ## Decisions (after review)
 
@@ -453,6 +536,17 @@ node scripts/ssr-redesign/measure-twins.mjs --reps 7 --cpu 1,4 --out documentati
 node scripts/ssr-redesign/ssr-bench.mjs --out documentation/plans/ssr-hydration-redesign/ssr-bench-1.json   # and -2
 node scripts/ssr-redesign/probe-twin-toggle.mjs hackernews-spa 4 6
 node scripts/ssr-redesign/report.mjs                           # the tables above
+# Compiler emission (section "Compiler emission")
+node scripts/ssr-redesign/measure.mjs --apps hn --only A,P1-eager,P1-lazy,T1-eager,T1-lazy,T0-eager,T0-lazy,C-eager,C-lazy,C-T1-eager,C-T1-lazy,C-T2-eager,C-T2-lazy --reps 7 --cpu 1,4 --out documentation/plans/ssr-hydration-redesign/compiler-hn-1.json   # and -2
+node scripts/ssr-redesign/measure.mjs --apps todos-local --only A,T1-eager,T1-lazy,T2-eager,T2-lazy,T0*-eager,C-eager,C-lazy,C-T2-eager,C-T2-lazy --reps 7 --cpu 1,4 --out documentation/plans/ssr-hydration-redesign/compiler-todos-local-1.json   # and -2
+node scripts/ssr-redesign/measure.mjs --apps todos --only A,C --reps 7 --cpu 1,4 --out documentation/plans/ssr-hydration-redesign/compiler-todos-1.json   # and -2
+node scripts/ssr-redesign/ssr-bench.mjs --out documentation/plans/ssr-hydration-redesign/compiler-ssr-bench-1.json   # and -2 (adds C-string)
+node scripts/ssr-redesign/compiler-report.mjs                  # the compiler-vs-hand-written tables
+node scripts/ssr-redesign/islands-inspect.mjs hn C-lazy        # print a variant's minified entry and chunks
+node scripts/ssr-redesign/islands-debug.mjs todos-local C-eager  # unminified, in Chromium, with page errors
+(cd packages/compiler && cargo test --lib island_emit && pnpm exec vitest run __tests__/islands-build.test.js)
+(cd packages/web && pnpm exec vitest run test/conformance/islands.spec.ts)
+(cd examples/islands && pnpm build && pnpm check)
 ```
 
 Harness notes:

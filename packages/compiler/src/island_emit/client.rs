@@ -167,6 +167,8 @@ struct Ce<'x, 'a> {
     shapes: HashMap<usize, (Option<usize>, Option<usize>)>,
     /// Module-level `let` / `var` statements copied into the chunk.
     mutable_top: Vec<usize>,
+    /// A setup side-effect statement was emitted inside the current region.
+    stmt_in_region: bool,
 }
 
 const HELPERS: &[(&str, &str)] = &[
@@ -203,7 +205,8 @@ const HELPERS: &[(&str, &str)] = &[
     ),
     (
         "$list",
-        "const $list = (e, each, row) => { let rows = new Map(); $E(each, (items, p) => { if (p === undefined) { let n = $start(e).nextSibling; for (const it of items) { while (n.nodeType !== 1) n = n.nextSibling; const cur = n; rows.set(it, $R(d => ({ n: row(it, cur), d }))); n = cur.nextSibling; } return; } const next = new Map(); for (const it of items) next.set(it, rows.get(it) || $R(d => ({ n: row(it, null), d }))); for (const [it, r] of rows) if (!next.has(it)) { r.d(); r.n.remove(); } let c = $start(e).nextSibling; for (const r of next.values()) { if (r.n === c) c = c.nextSibling; else e.parentNode.insertBefore(r.n, c); } rows = next; }); };",
+        // Keyed rows; `plain` rows create no reactive work, so they get no root.
+        "const $list = (e, each, row, plain) => { let rows = new Map(); const mk = plain ? (it, n) => ({ n: row(it, n) }) : (it, n) => $R(d => ({ n: row(it, n), d })); $E(each, (items, p) => { if (p === undefined) { let n = $start(e).nextSibling; for (const it of items) { while (n.nodeType !== 1) n = n.nextSibling; const r = mk(it, n); rows.set(it, r); n = r.n.nextSibling; } return; } const next = new Map(); for (const it of items) next.set(it, rows.get(it) || mk(it, null)); for (const [it, r] of rows) if (!next.has(it)) { r.d && r.d(); r.n.remove(); } let c = $start(e).nextSibling; for (const r of next.values()) { if (r.n === c) c = c.nextSibling; else e.parentNode.insertBefore(r.n, c); } rows = next; }); };",
     ),
     (
         "$cls",
@@ -278,6 +281,7 @@ pub(crate) fn emit_group<'a>(
         element_anchor: true,
         shapes: HashMap::new(),
         mutable_top: Vec::new(),
+        stmt_in_region: false,
     };
     ce.run()
 }
@@ -913,8 +917,14 @@ impl<'x, 'a> Ce<'x, 'a> {
         // Everything any client-rendered expression of the view may touch
         // (inert holes inside fresh regions, props of inlined children,
         // provider values): the view's sites and calls.
+        // A member component may be inlined into fresh region content (a
+        // row), where all its holes are computed; the root's inert holes
+        // matter only inside its own live regions.
+        let all = comp != self.g.root;
         for s in &f.sites {
-            syms.extend(s.refs.syms.iter().map(|x| x.0));
+            if all || s.regions.iter().any(|r| self.a.site_live[comp][*r]) {
+                syms.extend(s.refs.syms.iter().map(|x| x.0));
+            }
         }
         for call in &f.calls {
             for (_, e) in &call.props {
@@ -1848,6 +1858,9 @@ impl<'x, 'a> Ce<'x, 'a> {
                 .try_fold(0usize, |acc, s| f(s).map(|x| acc + x))
         };
         let sole = parent.is_some() && slots.len() == 1 && matches!(slots[0], Slot::Hole(..));
+        // The last element variable at a known index: the next one chains
+        // from it (`prev.nextElementSibling`) instead of walking from the parent.
+        let mut last: Option<(usize, String)> = None;
         for i in 0..n {
             let slot = slots[i];
             match slot {
@@ -1873,6 +1886,8 @@ impl<'x, 'a> Ce<'x, 'a> {
                         (Some(p), Some(b), _) => {
                             if b == 0 {
                                 format!("{p}.firstElementChild")
+                            } else if let Some((lb, lv)) = last.as_ref().filter(|(lb, _)| *lb < b && b - lb < 3) {
+                                format!("{lv}{}", ".nextElementSibling".repeat(b - lb))
                             } else if b < 3 {
                                 format!("{p}.firstElementChild{}", ".nextElementSibling".repeat(b))
                             } else {
@@ -1906,6 +1921,9 @@ impl<'x, 'a> Ce<'x, 'a> {
                     }
                     let decl = format!("const {var} = {nav};");
                     self.scope_nav(decl);
+                    if let (Some(_), Some(b)) = (&parent, before) {
+                        last = Some((b, var.clone()));
+                    }
                     self.element(el, inst, &var)?;
                 }
                 Slot::Hole(e, inst, live) => {
@@ -2286,6 +2304,7 @@ impl<'x, 'a> Ce<'x, 'a> {
             self.insts[inst].names.insert(*p, (n.clone(), Kind::Val));
         }
         let saved = self.cur;
+        let saved_stmt = std::mem::replace(&mut self.stmt_in_region, false);
         self.scopes.push(Scope {
             nav: vec![],
             buckets: HashMap::new(),
@@ -2317,12 +2336,24 @@ impl<'x, 'a> Ce<'x, 'a> {
                 "($e) => {{ const $f = !$e, $x = $e || $t{ti}();\n{nav}\n{body}\nreturn $x; }}"
             ),
         };
+        let stmt_here = self.stmt_in_region;
+        self.stmt_in_region = saved_stmt || stmt_here;
         let line = if is_show {
             self.helpers.insert("$show");
             format!("$show({end}, () => {input_text}, {builder});")
         } else {
             self.helpers.insert("$list");
-            format!("$list({end}, () => {input_text}, {builder});")
+            // A row whose code creates no computation, cleanup or nested
+            // region needs no owner of its own.
+            let reactive = ["$E(", "$M(", "$C(", "$Ef(", "$S(", "$show(", "$list(", "$R("]
+                .iter()
+                .any(|k| builder.contains(k))
+                || stmt_here;
+            if reactive {
+                format!("$list({end}, () => {input_text}, {builder});")
+            } else {
+                format!("$list({end}, () => {input_text}, {builder}, 1);")
+            }
         };
         self.bucket(inst).seq.push(Seq::Line(line));
         Ok(())
