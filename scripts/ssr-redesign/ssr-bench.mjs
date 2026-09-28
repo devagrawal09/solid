@@ -6,14 +6,17 @@
 //              anchored island (what P1-static serves)
 //   P1-string  a compiler-style string template for the inert region
 //              (apps/hn/string-template.ts) — no owners, thunks or markers
-// Gate: P1-string's HTML equals P1-zone's with hole markers removed.
+//   C-string   the compiler's own string-template output (`compileIslands`
+//              on apps/hn-blocks/story.tsx, the same page as blocks v2)
+// Gate: P1-string's and C-string's HTML equal P1-zone's with hole markers
+// (and island ids) removed.
 //
 //   node scripts/ssr-redesign/ssr-bench.mjs [--iters 30] [--out file]
 import { build } from "esbuild";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { gz, HERE, kb, loadServer, median, ROOT } from "./lib.mjs";
+import { gz, HERE, islandsCompiler, kb, loadServer, median, ROOT } from "./lib.mjs";
 
 const args = process.argv.slice(2);
 const ITERS = Number(args.includes("--iters") ? args[args.indexOf("--iters") + 1] : 30);
@@ -28,7 +31,13 @@ const Z = await loadServer(join(HERE, "apps/hn/islands-static/server.tsx"), join
 await build({ entryPoints: [join(HERE, "apps/hn/string-template.ts")], bundle: true, format: "esm", platform: "node", outfile: join(cache, "bench-S.mjs"), logLevel: "error" });
 const S = await import(pathToFileURL(join(cache, "bench-S.mjs")).href);
 
+const compiler = islandsCompiler();
+const cRoot = join(HERE, "apps/hn-blocks/story.tsx");
+const C = await loadServer(join(HERE, "apps/hn-blocks/server-islands.ts"), join(cache, "bench-C.mjs"), {
+  islands: { compiler, root: cRoot, files: new Set(compiler.collect(cRoot).files) }
+});
 const strip = h => h.replace(/<!--(\$|\/|!\$)-->/g, "");
+const ids = h => h.replace(/ data-i="[^"]*"/g, ' data-i=""');
 const zHtml = await Z.render();
 const sHtml = S.storyHTML(story);
 if (strip(zHtml) !== sHtml) {
@@ -37,6 +46,9 @@ if (strip(zHtml) !== sHtml) {
   throw new Error(`P1-string differs from P1-zone at ${i}:\n${strip(zHtml).slice(i - 80, i + 80)}\n${sHtml.slice(i - 80, i + 80)}`);
 }
 console.log("gate: P1-string HTML equals P1-zone HTML without hole markers");
+const cHtml = await C.render();
+if (ids(strip(zHtml)) !== ids(cHtml)) throw new Error("C-string differs from P1-zone");
+console.log("gate: C-string HTML equals P1-zone HTML without hole markers");
 
 async function time(fn) {
   for (let i = 0; i < 5; i++) await fn();
@@ -52,7 +64,8 @@ const res = {};
 for (const [name, fn, html] of [
   ["A", () => A.render(), await A.render()],
   ["P1-zone", () => Z.render(), zHtml],
-  ["P1-string", async () => S.storyHTML(story), sHtml]
+  ["P1-string", async () => S.storyHTML(story), sHtml],
+  ["C-string", () => C.render(), cHtml]
 ]) {
   const ms = await time(fn);
   res[name] = { ms, bytes: Buffer.byteLength(html), gzip: gz(html) };

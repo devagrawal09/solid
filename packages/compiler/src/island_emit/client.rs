@@ -86,6 +86,9 @@ enum PBind {
 #[derive(Clone)]
 struct CtxBind {
     var: String,
+    /// Kinds of the provider value's array elements / object properties
+    /// (a literal `[a, b]` / `{ a, b }` of names), for static reads.
+    kinds: Vec<(Option<String>, Kind)>,
 }
 
 struct Inst<'a> {
@@ -1197,6 +1200,7 @@ impl<'x, 'a> Ce<'x, 'a> {
                         ));
                     };
                     let pat = self.pattern(inst, pattern)?;
+                    self.bind_context_kinds(inst, pattern, &bind.kinds);
                     format!("const {pat} = {};", bind.var)
                 }
                 Item::Local { decl, .. } => match decl {
@@ -1236,6 +1240,72 @@ impl<'x, 'a> Ce<'x, 'a> {
             self.bucket(inst).setup.push(line);
         }
         Ok(())
+    }
+
+    /// Element / property kinds of a literal provider value.
+    fn literal_kinds(&self, inst: usize, v: &Expression<'a>) -> Vec<(Option<String>, Kind)> {
+        let kind_of = |e: &Expression<'a>| -> Kind {
+            self.m
+                .symbol_of_expr(e)
+                .and_then(|s| self.insts[inst].names.get(&s))
+                .map_or(Kind::Unknown, |(_, k)| match k {
+                    Kind::Acc => Kind::Acc,
+                    Kind::Val => Kind::Val,
+                    _ => Kind::Unknown,
+                })
+        };
+        match v.without_parentheses() {
+            Expression::ArrayExpression(a) => a
+                .elements
+                .iter()
+                .map(|el| (None, el.as_expression().map_or(Kind::Unknown, kind_of)))
+                .collect(),
+            Expression::ObjectExpression(o) => o
+                .properties
+                .iter()
+                .filter_map(|p| match p {
+                    ObjectPropertyKind::ObjectProperty(p) => match &p.key {
+                        PropertyKey::StaticIdentifier(k) => Some((Some(k.name.to_string()), kind_of(&p.value))),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Accessors destructured from a literal provider value read statically.
+    fn bind_context_kinds(&mut self, inst: usize, p: &BindingPattern<'a>, kinds: &[(Option<String>, Kind)]) {
+        let mut set = |id: &oxc_ast::ast::BindingIdentifier<'a>, k: &Kind| {
+            if let Some(s) = id.symbol_id.get()
+                && let Some(entry) = self.insts[inst].names.get_mut(&s)
+                && matches!(k, Kind::Acc | Kind::Val)
+            {
+                entry.1 = k.clone();
+            }
+        };
+        match p {
+            BindingPattern::ArrayPattern(a) => {
+                for (i, el) in a.elements.iter().enumerate() {
+                    if let Some(BindingPattern::BindingIdentifier(id)) = el
+                        && let Some((None, k)) = kinds.get(i)
+                    {
+                        set(id, k);
+                    }
+                }
+            }
+            BindingPattern::ObjectPattern(o) => {
+                for prop in &o.properties {
+                    if let (PropertyKey::StaticIdentifier(key), BindingPattern::BindingIdentifier(id)) = (&prop.key, &prop.value)
+                        && let Some((_, k)) = kinds.iter().find(|(n, _)| n.as_deref() == Some(key.name.as_str()))
+                    {
+                        set(id, k);
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     fn probe_callee(&self, item: usize, comp: usize) -> R<(String, Vec<SymbolId>)> {
@@ -1464,7 +1534,8 @@ impl<'x, 'a> Ce<'x, 'a> {
                         .push(Seq::Line(format!("const {var} = {value};")));
                     // The binding stays for the whole instance: its subtree is
                     // laid out lazily (one provider per context per component).
-                    if self.insts[inst].ctx.insert(ctx, CtxBind { var }).is_some() {
+                    let kinds = self.literal_kinds(inst, v);
+                    if self.insts[inst].ctx.insert(ctx, CtxBind { var, kinds }).is_some() {
                         return Err("a context provided twice in one island component".into());
                     }
                     self.flatten(&kids, inst, out)?;
@@ -2269,6 +2340,10 @@ impl<'x, 'a> Ce<'x, 'a> {
         let Tag::Intrinsic(tag) = jsx::tag_of(self.m, &el.opening_element.name) else {
             return Err("template root".into());
         };
+        if crate::shared::constants::svg_elements(&tag) || crate::shared::constants::mathml_elements(&tag) {
+            // An HTML <template> would create them in the HTML namespace.
+            return Err(format!("<{tag}> (SVG / MathML) inside a live region"));
+        }
         out.push('<');
         out.push_str(&tag);
         let attrs = jsx::attrs(el)?;

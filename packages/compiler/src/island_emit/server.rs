@@ -37,6 +37,7 @@ function _$v(x) { return () => x; }
 function _$cell(x) { return [() => x, y => y]; }
 function _$noop() {}
 function _$ctx(c, k) { return c && c.has(k) ? c.get(k) : k.defaultValue; }
+function _$forR(l, f, fb) { if (!l || !l.length) return _$e(fb); let s = ""; for (let i = 0; i < l.length; i++) s += f(l[i], () => i); return s; }
 function _$for(l, f, fb) { if (!l || !l.length) return _$e(fb); let s = ""; for (let i = 0; i < l.length; i++) s += _$e(f(l[i], () => i)); return s; }
 async function _$forA(l, f, fb) { if (!l || !l.length) return _$e(fb); const r = await Promise.all(l.map((x, i) => f(x, () => i))); let s = ""; for (const x of r) s += _$e(x); return s; }
 function _$err(f, fb) { try { return _$e(f()); } catch (e) { return _$e(typeof fb === "function" ? fb(() => e, () => {}) : fb); } }
@@ -446,7 +447,13 @@ impl<'x, 'a> Se<'x, 'a> {
                         if live {
                             out.push_str("<!--$-->");
                         }
-                        if b == "Show" {
+                        if b == "Show" && func.is_none() && !is_async {
+                            // Markup children: a plain conditional of templates.
+                            let mut inner = String::new();
+                            self.kids(comp, &kids, &mut inner, None, false)?;
+                            let fb = self.fallback_raw(comp, &attrs)?;
+                            let _ = write!(out, "${{({iv}) ? `{inner}` : {fb}}}");
+                        } else if b == "Show" {
                             let keyed = jsx::attr(&attrs, "keyed").is_some();
                             let child = match func {
                                 Some(f) => {
@@ -468,9 +475,17 @@ impl<'x, 'a> Se<'x, 'a> {
                             let Some(f) = func else {
                                 return Err("<For> children must be a callback".into());
                             };
-                            let ft = self.func(comp, f, is_async)?;
-                            let helper = if is_async { "_$forA" } else { "_$for" };
-                            let _ = write!(out, "${{{aw}{helper}({iv}, {ft}, {fb})}}");
+                            if let (Some(body), false) = (jsx_body(f), is_async) {
+                                // A row template: the callback returns markup, joined raw.
+                                let params = self.tx().params(&SEnv { se: self, comp }, f)?;
+                                let mut inner = String::new();
+                                self.root(comp, body, &mut inner, None)?;
+                                let _ = write!(out, "${{_$forR({iv}, ({params}) => `{inner}`, {fb})}}");
+                            } else {
+                                let ft = self.func(comp, f, is_async)?;
+                                let helper = if is_async { "_$forA" } else { "_$for" };
+                                let _ = write!(out, "${{{aw}{helper}({iv}, {ft}, {fb})}}");
+                            }
                         }
                         if live {
                             out.push_str("<!--/-->");
@@ -481,6 +496,25 @@ impl<'x, 'a> Se<'x, 'a> {
                 }
             }
         }
+    }
+
+    /// A fallback as a raw-markup string expression.
+    fn fallback_raw(&self, comp: usize, attrs: &[jsx::Attr<'a>]) -> R<String> {
+        Ok(match jsx::attr(attrs, "fallback").map(|a| &a.value) {
+            None => "\"\"".into(),
+            Some(AttrVal::Element(e)) => {
+                let mut inner = String::new();
+                self.element(comp, e, &mut inner, None)?;
+                format!("`{inner}`")
+            }
+            Some(AttrVal::Fragment(f)) => {
+                let mut inner = String::new();
+                let ks = jsx::children(&f.children)?;
+                self.kids(comp, &ks, &mut inner, None, false)?;
+                format!("`{inner}`")
+            }
+            _ => format!("_$e({})", self.fallback(comp, attrs)?),
+        })
     }
 
     fn fallback(&self, comp: usize, attrs: &[jsx::Attr<'a>]) -> R<String> {
@@ -692,6 +726,18 @@ impl<'x, 'a> Se<'x, 'a> {
             "{asy}function ({props} = {{}}, $c) {{\n{body}return `{tpl}`;\n}}"
         ))
     }
+}
+
+/// The JSX a render callback returns (concise, or a single `return`).
+fn jsx_body<'a>(f: FnRef<'a>) -> Option<&'a Expression<'a>> {
+    let e = match f.concise() {
+        Some(e) => e,
+        None => match f.statements() {
+            [Statement::ReturnStatement(r)] => r.argument.as_ref()?,
+            _ => return None,
+        },
+    };
+    jsx::root_of(e).map(|_| e)
 }
 
 fn declarator<'a>(
