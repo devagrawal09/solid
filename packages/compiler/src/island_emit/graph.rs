@@ -26,8 +26,8 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use oxc_ast::ast::{
-    ArrowFunctionExpression, CallExpression, ConditionalExpression, Expression, Function, IdentifierReference,
-    IfStatement, JSXElement, LogicalExpression, StaticMemberExpression,
+    ArrowFunctionExpression, CallExpression, ConditionalExpression, Expression, Function,
+    IdentifierReference, IfStatement, JSXElement, LogicalExpression, StaticMemberExpression,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_semantic::{ScopeFlags, SymbolId};
@@ -73,7 +73,9 @@ impl<'a> Visit<'a> for Walker<'_, 'a> {
             && self.props.is_some()
             && self.m.symbol_of(id) == self.props
         {
-            self.out.props.push((e.property.name.to_string(), self.cond > 0));
+            self.out
+                .props
+                .push((e.property.name.to_string(), self.cond > 0));
             return;
         }
         walk::walk_static_member_expression(self, e);
@@ -123,13 +125,23 @@ impl<'a> Visit<'a> for Walker<'_, 'a> {
 }
 
 pub(crate) fn refs_expr<'a>(m: &Model<'a>, props: Option<SymbolId>, e: &Expression<'a>) -> Refs {
-    let mut w = Walker { m, props, out: Refs::default(), cond: 0 };
+    let mut w = Walker {
+        m,
+        props,
+        out: Refs::default(),
+        cond: 0,
+    };
     w.visit_expression(e);
     w.out
 }
 
 pub(crate) fn refs_fn<'a>(m: &Model<'a>, props: Option<SymbolId>, f: FnRef<'a>) -> Refs {
-    let mut w = Walker { m, props, out: Refs::default(), cond: 0 };
+    let mut w = Walker {
+        m,
+        props,
+        out: Refs::default(),
+        cond: 0,
+    };
     match f {
         FnRef::Func(func) => walk::walk_function(&mut w, func, ScopeFlags::Function),
         FnRef::Arrow(a) => walk::walk_arrow_function_expression(&mut w, a),
@@ -138,13 +150,23 @@ pub(crate) fn refs_fn<'a>(m: &Model<'a>, props: Option<SymbolId>, f: FnRef<'a>) 
 }
 
 pub(crate) fn refs_stmt<'a>(m: &Model<'a>, s: &oxc_ast::ast::Statement<'a>) -> Refs {
-    let mut w = Walker { m, props: None, out: Refs::default(), cond: 0 };
+    let mut w = Walker {
+        m,
+        props: None,
+        out: Refs::default(),
+        cond: 0,
+    };
     w.visit_statement(s);
     w.out
 }
 
 fn refs_local<'a>(m: &Model<'a>, props: Option<SymbolId>, d: &LocalDecl<'a>) -> Refs {
-    let mut w = Walker { m, props, out: Refs::default(), cond: 0 };
+    let mut w = Walker {
+        m,
+        props,
+        out: Refs::default(),
+        cond: 0,
+    };
     match d {
         LocalDecl::Var(v) => {
             if let Some(i) = &v.init {
@@ -172,6 +194,8 @@ pub(crate) enum SiteKind {
     Effect(usize, bool),
 }
 
+// `expr` / `regions` complete the site record for consumers of the analysis.
+#[allow(dead_code)]
 pub(crate) struct Site<'a> {
     pub kind: SiteKind,
     pub span: Span,
@@ -211,10 +235,22 @@ struct ViewWalk<'m, 'a> {
 }
 
 impl<'a> ViewWalk<'_, 'a> {
-    fn site(&mut self, kind: SiteKind, span: Span, expr: Option<&'a Expression<'a>>, refs: Refs) -> usize {
+    fn site(
+        &mut self,
+        kind: SiteKind,
+        span: Span,
+        expr: Option<&'a Expression<'a>>,
+        refs: Refs,
+    ) -> usize {
         let i = self.f.sites.len();
         self.f.site_at.insert(span.start, i);
-        self.f.sites.push(Site { kind, span, expr, refs, regions: self.regions.clone() });
+        self.f.sites.push(Site {
+            kind,
+            span,
+            expr,
+            refs,
+            regions: self.regions.clone(),
+        });
         i
     }
     fn expr_hole(&mut self, e: &'a Expression<'a>) {
@@ -234,13 +270,13 @@ impl<'a> ViewWalk<'_, 'a> {
         // components the partitioner cannot see as JSX: not compiled.
         for (s, _) in &refs.syms {
             let name = self.m.runtime.get(s).map(String::as_str);
-            if self.m.comp_of.contains_key(s) || name.is_some_and(|n| jsx::BUILTINS.contains(&n)) {
-                if text_calls(self.m.text(e.span()), self.m.sym_name(*s)) {
-                    self.f.issues.push(format!(
-                        "component call form `{}(…)` in a view (write it as JSX)",
-                        self.m.sym_name(*s)
-                    ));
-                }
+            if (self.m.comp_of.contains_key(s) || name.is_some_and(|n| jsx::BUILTINS.contains(&n)))
+                && text_calls(self.m.text(e.span()), self.m.sym_name(*s))
+            {
+                self.f.issues.push(format!(
+                    "component call form `{}(…)` in a view (write it as JSX)",
+                    self.m.sym_name(*s)
+                ));
             }
         }
         self.site(SiteKind::Text, e.span(), Some(e), refs);
@@ -249,8 +285,13 @@ impl<'a> ViewWalk<'_, 'a> {
             // providers are real edges; handlers there are not compiled.
             let before = self.f.sites.len();
             self.nested_jsx(e);
-            if self.f.sites[before..].iter().any(|s| matches!(s.kind, SiteKind::Handler(_))) {
-                self.f.issues.push("event handler inside JSX nested in an expression".into());
+            if self.f.sites[before..]
+                .iter()
+                .any(|s| matches!(s.kind, SiteKind::Handler(_)))
+            {
+                self.f
+                    .issues
+                    .push("event handler inside JSX nested in an expression".into());
             }
         }
     }
@@ -321,8 +362,7 @@ impl<'a> ViewWalk<'_, 'a> {
     }
     fn fn_body(&mut self, f: FnRef<'a>) {
         if f.is_concise() {
-            if let Some(s) = f.concise()
-            {
+            if let Some(s) = f.concise() {
                 self.root(s);
             }
             return;
@@ -372,18 +412,25 @@ impl<'a> ViewWalk<'_, 'a> {
                     match &a.value {
                         AttrVal::Expr(e) if jsx::is_event_attr(&a.name) => {
                             let refs = refs_expr(self.m, self.props, e);
-                            self.site(SiteKind::Handler(jsx::event_name(&a.name)), e.span(), Some(e), refs);
+                            self.site(
+                                SiteKind::Handler(jsx::event_name(&a.name)),
+                                e.span(),
+                                Some(e),
+                                refs,
+                            );
                         }
-                        AttrVal::Expr(_) if a.name == "ref" => self.f.issues.push("`ref` attribute".into()),
-                        AttrVal::Expr(e) => {
-                            if jsx::static_child(e).is_none() {
-                                let refs = refs_expr(self.m, self.props, e);
-                                self.site(SiteKind::Attr(a.name.clone()), e.span(), Some(e), refs);
-                            }
+                        AttrVal::Expr(_) if a.name == "ref" => {
+                            self.f.issues.push("`ref` attribute".into())
                         }
-                        AttrVal::Element(_) | AttrVal::Fragment(_) => {
-                            self.f.issues.push(format!("JSX as the value of attribute `{}`", a.name))
+                        AttrVal::Expr(e) if jsx::static_child(e).is_none() => {
+                            let refs = refs_expr(self.m, self.props, e);
+                            self.site(SiteKind::Attr(a.name.clone()), e.span(), Some(e), refs);
                         }
+                        AttrVal::Expr(_) => {}
+                        AttrVal::Element(_) | AttrVal::Fragment(_) => self
+                            .f
+                            .issues
+                            .push(format!("JSX as the value of attribute `{}`", a.name)),
                         _ => {}
                     }
                 }
@@ -395,11 +442,17 @@ impl<'a> ViewWalk<'_, 'a> {
                     let site = match jsx::attr(&attrs, input).map(|a| &a.value) {
                         Some(AttrVal::Expr(e)) => {
                             let refs = refs_expr(self.m, self.props, e);
-                            let kind = if name == "Show" { SiteKind::Show } else { SiteKind::For };
+                            let kind = if name == "Show" {
+                                SiteKind::Show
+                            } else {
+                                SiteKind::For
+                            };
                             Some(self.site(kind, e.span(), Some(e), refs))
                         }
                         _ => {
-                            self.f.issues.push(format!("<{name}> without an expression `{input}`"));
+                            self.f
+                                .issues
+                                .push(format!("<{name}> without an expression `{input}`"));
                             None
                         }
                     };
@@ -427,7 +480,9 @@ impl<'a> ViewWalk<'_, 'a> {
                     self.kids(&el.children);
                 }
                 other => {
-                    self.f.issues.push(format!("<{other}> (not compiled to islands yet)"));
+                    self.f
+                        .issues
+                        .push(format!("<{other}> (not compiled to islands yet)"));
                 }
             },
             Tag::Provider(ctx) => {
@@ -455,7 +510,12 @@ impl<'a> ViewWalk<'_, 'a> {
                 {
                     self.f.issues.push("member-expression JSX tag".into());
                 }
-                self.f.calls.push(Call { tag, props, regions: self.regions.clone(), span: el.span });
+                self.f.calls.push(Call {
+                    tag,
+                    props,
+                    regions: self.regions.clone(),
+                    span: el.span,
+                });
                 // Children are rendered in this component's scope.
                 self.render_children(el);
             }
@@ -569,17 +629,22 @@ impl<'a> Analysis<'a> {
             }
         }
         if r.props_bare {
-            let av = self.av_of(comp, &Refs { props_bare: true, ..Refs::default() });
+            let av = self.av_of(
+                comp,
+                &Refs {
+                    props_bare: true,
+                    ..Refs::default()
+                },
+            );
             out.extend(av.reads.into_iter().filter(|k| self.live.contains(k)));
         }
         (out, cond)
     }
     pub(crate) fn is_live_site(&self, comp: usize, span_start: u32) -> bool {
-        self.facts[comp].site_at.get(&span_start).is_some_and(|i| self.site_live[comp][*i])
-    }
-    pub(crate) fn site_group(&self, comp: usize, span_start: u32) -> Option<usize> {
-        let i = self.facts[comp].site_at.get(&span_start)?;
-        self.group_of_site.get(&(comp, *i)).copied()
+        self.facts[comp]
+            .site_at
+            .get(&span_start)
+            .is_some_and(|i| self.site_live[comp][*i])
     }
 }
 
@@ -591,25 +656,48 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
     let n = m.comps.len();
     let mut facts: Vec<CompFacts<'a>> = Vec::with_capacity(n);
     for c in &m.comps {
-        let mut w = ViewWalk { m, props: c.props, f: CompFacts::default(), regions: vec![] };
+        let mut w = ViewWalk {
+            m,
+            props: c.props,
+            f: CompFacts::default(),
+            regions: vec![],
+        };
         if let Some(v) = c.view {
             w.root(v);
         }
         for s in &c.view_stmts {
-            let mut rw = Walker { m, props: c.props, out: Refs::default(), cond: 0 };
+            let mut rw = Walker {
+                m,
+                props: c.props,
+                out: Refs::default(),
+                cond: 0,
+            };
             rw.visit_statement(s);
             // A view statement's reads are reads of the whole view.
             let span = s.span();
             w.f.site_at.insert(span.start, w.f.sites.len());
-            w.f.sites.push(Site { kind: SiteKind::Text, span, expr: None, refs: rw.out, regions: vec![] });
-            w.f.issues.push("statements before the view's return".into());
+            w.f.sites.push(Site {
+                kind: SiteKind::Text,
+                span,
+                expr: None,
+                refs: rw.out,
+                regions: vec![],
+            });
+            w.f.issues
+                .push("statements before the view's return".into());
         }
         let mut item_refs = Vec::new();
         for (ii, item) in c.setup.iter().enumerate() {
             let r = match item {
-                Item::Cell { init, .. } => init.map(|e| refs_expr(m, c.props, e)).unwrap_or_default(),
+                Item::Cell { init, .. } => {
+                    init.map(|e| refs_expr(m, c.props, e)).unwrap_or_default()
+                }
                 Item::Memo { body, .. } | Item::Event { body, .. } => refs_fn(m, c.props, *body),
-                Item::Effect { body, settled, span } => {
+                Item::Effect {
+                    body,
+                    settled,
+                    span,
+                } => {
                     let r = refs_fn(m, c.props, *body);
                     w.f.site_at.insert(span.start, w.f.sites.len());
                     w.f.sites.push(Site {
@@ -625,7 +713,12 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                 Item::Local { decl, .. } => refs_local(m, c.props, decl),
                 Item::Cleanup { arg, .. } => refs_expr(m, c.props, arg),
                 Item::Stmt { stmt, .. } => {
-                    let mut w = Walker { m, props: c.props, out: Refs::default(), cond: 0 };
+                    let mut w = Walker {
+                        m,
+                        props: c.props,
+                        out: Refs::default(),
+                        cond: 0,
+                    };
                     w.visit_statement(stmt);
                     w.out
                 }
@@ -696,7 +789,9 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                 }
             }
             for call in 0..a.facts[ci].calls.len() {
-                let Tag::Comp(child) = a.facts[ci].calls[call].tag else { continue };
+                let Tag::Comp(child) = a.facts[ci].calls[call].tag else {
+                    continue;
+                };
                 for pi in 0..a.facts[ci].calls[call].props.len() {
                     let (name, expr) = a.facts[ci].calls[call].props[pi].clone();
                     let v = match expr {
@@ -749,8 +844,13 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                     a.escaped_writes.extend(v.writes.iter().copied());
                     a.written.extend(v.writes);
                 }
-                Item::Local { decl: LocalDecl::Var(d), .. }
-                    if d.init.as_ref().is_some_and(|i| FnRef::from_expr(i).is_none() && contains_call(i)) =>
+                Item::Local {
+                    decl: LocalDecl::Var(d),
+                    ..
+                } if d
+                    .init
+                    .as_ref()
+                    .is_some_and(|i| FnRef::from_expr(i).is_none() && contains_call(i)) =>
                 {
                     let v = a.av_of(ci, &a.facts[ci].item_refs[ii]);
                     a.escaped_writes.extend(v.writes.iter().copied());
@@ -828,7 +928,7 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
     }
     let mut site_index: HashMap<(usize, usize), usize> = HashMap::new();
     let mut parent: Vec<usize> = (0..elems.len()).collect();
-    fn find(p: &mut Vec<usize>, x: usize) -> usize {
+    fn find(p: &mut [usize], x: usize) -> usize {
         let mut r = x;
         while p[r] != r {
             r = p[r];
@@ -841,7 +941,7 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
         }
         r
     }
-    fn union(p: &mut Vec<usize>, x: usize, y: usize) {
+    fn union(p: &mut [usize], x: usize, y: usize) {
         let (a, b) = (find(p, x), find(p, y));
         if a != b {
             p[b] = a;
@@ -855,7 +955,11 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
             let touches: BTreeSet<Key> = match s.kind {
                 SiteKind::Handler(_) | SiteKind::Effect(..) => {
                     let v = a.av_of(ci, &s.refs);
-                    v.reads.union(&v.writes).filter(|k| a.live.contains(k)).copied().collect()
+                    v.reads
+                        .union(&v.writes)
+                        .filter(|k| a.live.contains(k))
+                        .copied()
+                        .collect()
                 }
                 _ => reads,
             };
@@ -963,7 +1067,9 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
         let mut merged = false;
         'outer: for (gi, g) in groups_raw.iter().enumerate() {
             for e in g {
-                let Elem::Site(ci, si) = elems[*e] else { continue };
+                let Elem::Site(ci, si) = elems[*e] else {
+                    continue;
+                };
                 if !matches!(a.facts[ci].sites[si].kind, SiteKind::Show | SiteKind::For) {
                     continue;
                 }
@@ -1010,7 +1116,11 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
         sites.sort();
         let mut unsupported = Vec::new();
         // Root: the component that renders every member.
-        let owners: BTreeSet<usize> = if keys.is_empty() { comps.clone() } else { keys.iter().map(|k| k.0).collect() };
+        let owners: BTreeSet<usize> = if keys.is_empty() {
+            comps.clone()
+        } else {
+            keys.iter().map(|k| k.0).collect()
+        };
         let mut root = None;
         for c in &owners {
             let d = dominated(*c, &a.callers);
@@ -1022,7 +1132,11 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
         let root = root.unwrap_or_else(|| {
             unsupported.push(format!(
                 "no single component renders every member ({})",
-                comps.iter().map(|c| m.comps[*c].name.as_str()).collect::<Vec<_>>().join(", ")
+                comps
+                    .iter()
+                    .map(|c| m.comps[*c].name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
             *comps.iter().next().unwrap()
         });
@@ -1030,7 +1144,10 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
         members.extend(comps.iter().copied().filter(|c| *c != root));
         for c in &members {
             if reach(*c, &a.facts).contains(c) {
-                unsupported.push(format!("`{}` renders itself (recursion inside an island)", m.comps[*c].name));
+                unsupported.push(format!(
+                    "`{}` renders itself (recursion inside an island)",
+                    m.comps[*c].name
+                ));
             }
             for issue in &a.facts[*c].issues {
                 unsupported.push(format!("`{}`: {issue}", m.comps[*c].name));
@@ -1047,11 +1164,19 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
         };
         for k in &keys {
             match &m.comps[k.0].setup[k.1] {
-                Item::Cell { host: CellHost::Store, name, .. } => {
+                Item::Cell {
+                    host: CellHost::Store,
+                    name,
+                    ..
+                } => {
                     t2.push(format!("store `{name}` (the kernel has no stores)"));
                     bump(&mut own, k.0, 2);
                 }
-                Item::Cell { host: CellHost::Optimistic, name, .. } => {
+                Item::Cell {
+                    host: CellHost::Optimistic,
+                    name,
+                    ..
+                } => {
                     t2.push(format!("async / optimistic cell `{name}`"));
                     bump(&mut own, k.0, 2);
                 }
@@ -1060,7 +1185,9 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                     bump(&mut own, k.0, 1);
                 }
                 Item::Cell { name, .. } if a.escaped_writes.contains(k) => {
-                    t1.push(format!("`{name}`'s setter escapes (written outside the island's handlers)"));
+                    t1.push(format!(
+                        "`{name}`'s setter escapes (written outside the island's handlers)"
+                    ));
                     bump(&mut own, k.0, 1);
                 }
                 Item::Memo { name, is_async, .. } => {
@@ -1083,7 +1210,10 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
             let site = &a.facts[*c].sites[*s];
             let calls: Vec<&String> = site.refs.calls.iter().collect();
             for name in &calls {
-                if matches!(name.as_str(), "attempt" | "action" | "refresh" | "startTransition" | "createAsync") {
+                if matches!(
+                    name.as_str(),
+                    "attempt" | "action" | "refresh" | "startTransition" | "createAsync"
+                ) {
                     t2.push(format!("`{}` calls `{name}`", m.comps[*c].name));
                     bump(&mut own, *c, 2);
                 }
@@ -1091,13 +1221,18 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
             match &site.kind {
                 SiteKind::Handler(ev) => {
                     events.insert(ev.clone());
-                    prevent_default |= site.refs.prevent_default || handler_prevents(m, a.sym_av_event(*c, &site.refs));
+                    prevent_default |= site.refs.prevent_default
+                        || handler_prevents(m, a.sym_av_event(*c, &site.refs));
                 }
                 SiteKind::Show | SiteKind::For => {
                     t1.push(format!(
                         "`{}`: <{}> over a live input (dynamic structure)",
                         m.comps[*c].name,
-                        if site.kind == SiteKind::Show { "Show" } else { "For" }
+                        if site.kind == SiteKind::Show {
+                            "Show"
+                        } else {
+                            "For"
+                        }
                     ));
                     bump(&mut own, *c, 1);
                 }
@@ -1129,7 +1264,10 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
         for c in &members {
             for (b, regions) in &a.facts[*c].boundaries {
                 if regions.iter().any(|r| a.site_live[*c][*r]) {
-                    t2.push(format!("`{}`: <{b}> inside a live region", m.comps[*c].name));
+                    t2.push(format!(
+                        "`{}`: <{b}> inside a live region",
+                        m.comps[*c].name
+                    ));
                     bump(&mut own, *c, 2);
                 }
             }
@@ -1143,7 +1281,11 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
         if members.len() > 1 {
             t1.push(format!(
                 "state shared across components: {}",
-                members.iter().map(|c| m.comps[*c].name.as_str()).collect::<Vec<_>>().join(", ")
+                members
+                    .iter()
+                    .map(|c| m.comps[*c].name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
         // Cells written by something other than the island's own handlers.
@@ -1166,7 +1308,13 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                     })
                     .collect::<Vec<_>>()
                     .join(", "),
-                sites.iter().filter(|(c, s)| matches!(a.facts[*c].sites[*s].kind, SiteKind::Text | SiteKind::Attr(_))).count()
+                sites
+                    .iter()
+                    .filter(|(c, s)| matches!(
+                        a.facts[*c].sites[*s].kind,
+                        SiteKind::Text | SiteKind::Attr(_)
+                    ))
+                    .count()
             )],
         };
         if tier == 2 {
@@ -1226,7 +1374,9 @@ fn handler_prevents(m: &Model<'_>, syms: Vec<SymbolId>) -> bool {
 /// removes them in `$cleanup` is a lazy stub: the loader listens instead
 /// and activates the island on the first such event.
 fn settled_listener(m: &Model<'_>, comp: usize, item: usize) -> Option<Vec<String>> {
-    let Item::Effect { body, .. } = &m.comps[comp].setup[item] else { return None };
+    let Item::Effect { body, .. } = &m.comps[comp].setup[item] else {
+        return None;
+    };
     let mut events = Vec::new();
     for s in body.statements() {
         let text = m.text(s.span());
@@ -1244,7 +1394,11 @@ fn settled_listener(m: &Model<'_>, comp: usize, item: usize) -> Option<Vec<Strin
         }
         return None;
     }
-    if events.is_empty() { None } else { Some(events) }
+    if events.is_empty() {
+        None
+    } else {
+        Some(events)
+    }
 }
 
 /// JSX roots reachable through the expression forms a view uses to choose
@@ -1339,7 +1493,11 @@ fn count_jsx_roots(e: &Expression<'_>) -> usize {
 fn text_calls(text: &str, name: &str) -> bool {
     let pat = format!("{name}(");
     text.match_indices(&pat).any(|(i, _)| {
-        i == 0 || !text[..i].chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '$' || c == '.')
+        i == 0
+            || !text[..i]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '$' || c == '.')
     })
 }
 
@@ -1373,7 +1531,10 @@ pub(crate) fn contains_call(e: &Expression<'_>) -> bool {
             self.depth -= 1;
         }
     }
-    let mut c = C { found: false, depth: 0 };
+    let mut c = C {
+        found: false,
+        depth: 0,
+    };
     c.visit_expression(e);
     c.found
 }

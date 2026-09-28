@@ -13,7 +13,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
 use oxc_ast::ast::{Expression, JSXElement, Statement, VariableDeclarator};
-use oxc_ast_visit::{Visit, walk};
 use oxc_semantic::SymbolId;
 use oxc_span::{GetSpan, Span};
 
@@ -44,11 +43,6 @@ function _$err(f, fb) { try { return _$e(f()); } catch (e) { return _$e(typeof f
 async function _$errA(f, fb) { try { return _$e(await f()); } catch (e) { return _$e(typeof fb === "function" ? fb(() => e, () => {}) : fb); } }
 "#;
 
-pub(crate) struct ServerIsland<'g> {
-    pub ids: Vec<String>,
-    pub codes: Vec<&'g GroupCode>,
-}
-
 struct Se<'x, 'a> {
     m: &'x Model<'a>,
     a: &'x Analysis<'a>,
@@ -77,7 +71,11 @@ impl<'a> Env<'a> for SEnv<'_, '_, 'a> {
                         _ => false,
                     })
                 });
-                Ok(if acc { format!("{}()", id.name) } else { format!("_$r({})", id.name) })
+                Ok(if acc {
+                    format!("{}()", id.name)
+                } else {
+                    format!("_$r({})", id.name)
+                })
             }
             Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_) => {
                 let mut root = arg;
@@ -101,7 +99,11 @@ impl<'a> Env<'a> for SEnv<'_, '_, 'a> {
                     && let Some(Expression::StaticMemberExpression(f)) = first
                 {
                     let rest = &tx.m.src[f.span.end as usize..arg.span().end as usize];
-                    return Ok(format!("_$r({}.{}){rest}", tx.m.text(root.span()), f.property.name));
+                    return Ok(format!(
+                        "_$r({}.{}){rest}",
+                        tx.m.text(root.span()),
+                        f.property.name
+                    ));
                 }
                 let root_text = tx.expr(self, root)?;
                 let rest = &tx.m.src[root.span().end as usize..arg.span().end as usize];
@@ -111,11 +113,17 @@ impl<'a> Env<'a> for SEnv<'_, '_, 'a> {
                 match self.se.m.runtime_name(&c.callee) {
                     Some("$cleanup" | "$flush") => return Ok("void 0".into()),
                     Some("attempt") => {
-                        let f = c.arguments.first().and_then(|a| a.as_expression()).ok_or("attempt without a function")?;
+                        let f = c
+                            .arguments
+                            .first()
+                            .and_then(|a| a.as_expression())
+                            .ok_or("attempt without a function")?;
                         let f = tx.expr(self, f)?;
                         return Ok(format!("(await ({f})())"));
                     }
-                    Some(other) if other.starts_with('$') => return Err(format!("`yield* {other}` on the server")),
+                    Some(other) if other.starts_with('$') => {
+                        return Err(format!("`yield* {other}` on the server"));
+                    }
                     _ => {}
                 }
                 if let Some(s) = self.se.m.symbol_of_expr(&c.callee)
@@ -128,7 +136,10 @@ impl<'a> Env<'a> for SEnv<'_, '_, 'a> {
                         None => "{}".into(),
                     };
                     let aw = if self.se.is_async[*k] { "await " } else { "" };
-                    return Ok(format!("{{ t: {aw}{}({p}, $c) }}", self.se.m.comps[*k].name));
+                    return Ok(format!(
+                        "{{ t: {aw}{}({p}, $c) }}",
+                        self.se.m.comps[*k].name
+                    ));
                 }
                 let inner = tx.expr(self, arg)?;
                 Ok(inner)
@@ -154,7 +165,9 @@ impl<'a> Env<'a> for SEnv<'_, '_, 'a> {
 }
 
 fn tl(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('`', "\\`").replace("${", "\\${")
+    s.replace('\\', "\\\\")
+        .replace('`', "\\`")
+        .replace("${", "\\${")
 }
 
 impl<'x, 'a> Se<'x, 'a> {
@@ -167,7 +180,13 @@ impl<'x, 'a> Se<'x, 'a> {
     }
 
     /// A JSX root (element / fragment / expression) into template text.
-    fn root(&self, comp: usize, e: &'a Expression<'a>, out: &mut String, anchor: Option<&str>) -> R<()> {
+    fn root(
+        &self,
+        comp: usize,
+        e: &'a Expression<'a>,
+        out: &mut String,
+        anchor: Option<&str>,
+    ) -> R<()> {
         match jsx::root_of(e) {
             Some(Root::Element(el)) => self.element(comp, el, out, anchor),
             Some(Root::Fragment(f)) => {
@@ -189,7 +208,14 @@ impl<'x, 'a> Se<'x, 'a> {
         }
     }
 
-    fn kids(&self, comp: usize, kids: &[Child<'a>], out: &mut String, mut anchor: Option<&str>, sole: bool) -> R<()> {
+    fn kids(
+        &self,
+        comp: usize,
+        kids: &[Child<'a>],
+        out: &mut String,
+        mut anchor: Option<&str>,
+        sole: bool,
+    ) -> R<()> {
         for k in kids {
             match *k {
                 Child::Text(sp) => out.push_str(&tl(&jsx::esc_text(&jsx::jsx_text(self.m, sp)))),
@@ -246,7 +272,13 @@ impl<'x, 'a> Se<'x, 'a> {
         })
     }
 
-    fn element(&self, comp: usize, el: &'a JSXElement<'a>, out: &mut String, anchor: Option<&str>) -> R<()> {
+    fn element(
+        &self,
+        comp: usize,
+        el: &'a JSXElement<'a>,
+        out: &mut String,
+        anchor: Option<&str>,
+    ) -> R<()> {
         let attrs = jsx::attrs(el)?;
         match jsx::tag_of(self.m, &el.opening_element.name) {
             Tag::Intrinsic(tag) => {
@@ -299,7 +331,8 @@ impl<'x, 'a> Se<'x, 'a> {
                                 "textContent" => content = Some(format!("${{_$e({v})}}")),
                                 n => {
                                     let n = n.strip_prefix("attr:").unwrap_or(n);
-                                    let _ = write!(out, "${{_$a({}, {v})}}", super::client_js_str(n));
+                                    let _ =
+                                        write!(out, "${{_$a({}, {v})}}", super::client_js_str(n));
                                 }
                             }
                         }
@@ -319,7 +352,8 @@ impl<'x, 'a> Se<'x, 'a> {
                     out.push_str(&c);
                 } else {
                     let kids = jsx::children(&el.children)?;
-                    let sole = kids.len() == 1 && matches!(kids[0], Child::Expr(e) if jsx::static_child(e).is_none());
+                    let sole = kids.len() == 1
+                        && matches!(kids[0], Child::Expr(e) if jsx::static_child(e).is_none());
                     self.kids(comp, &kids, out, None, sole)?;
                 }
                 let _ = write!(out, "</{tag}>");
@@ -333,7 +367,9 @@ impl<'x, 'a> Se<'x, 'a> {
                 let aw = if self.is_async[k] { "await " } else { "" };
                 let name = &self.m.comps[k].name;
                 if self.m.comps[k].sym.is_none() {
-                    return Err(format!("a default-exported $component rendered in its module (`{name}`)"));
+                    return Err(format!(
+                        "a default-exported $component rendered in its module (`{name}`)"
+                    ));
                 }
                 let _ = write!(out, "${{{aw}{name}({props}, $c)}}");
                 Ok(())
@@ -360,9 +396,15 @@ impl<'x, 'a> Se<'x, 'a> {
                 let is_async = self.subtree_async(el.span, comp);
                 let ctx_name = self.m.sym_name(ctx);
                 if is_async {
-                    let _ = write!(out, "${{await (async ($c) => `{inner}`)(new Map($c).set({ctx_name}, {value}))}}");
+                    let _ = write!(
+                        out,
+                        "${{await (async ($c) => `{inner}`)(new Map($c).set({ctx_name}, {value}))}}"
+                    );
                 } else {
-                    let _ = write!(out, "${{(($c) => `{inner}`)(new Map($c).set({ctx_name}, {value}))}}");
+                    let _ = write!(
+                        out,
+                        "${{(($c) => `{inner}`)(new Map($c).set({ctx_name}, {value}))}}"
+                    );
                 }
                 Ok(())
             }
@@ -381,12 +423,16 @@ impl<'x, 'a> Se<'x, 'a> {
                         self.kids(comp, &kids, &mut inner, anchor, false)?;
                         let fb = self.fallback(comp, &attrs)?;
                         let helper = if is_async { "_$errA" } else { "_$err" };
-                        let _ = write!(out, "${{{aw}{helper}({asy}() => ({{ t: `{inner}` }}), {fb})}}");
+                        let _ = write!(
+                            out,
+                            "${{{aw}{helper}({asy}() => ({{ t: `{inner}` }}), {fb})}}"
+                        );
                         Ok(())
                     }
                     "Show" | "For" => {
                         let input = if b == "Show" { "when" } else { "each" };
-                        let Some(AttrVal::Expr(ie)) = jsx::attr(&attrs, input).map(|a| &a.value) else {
+                        let Some(AttrVal::Expr(ie)) = jsx::attr(&attrs, input).map(|a| &a.value)
+                        else {
                             return Err(format!("<{b}> without `{input}`"));
                         };
                         let live = self.a.is_live_site(comp, ie.span().start);
@@ -414,9 +460,14 @@ impl<'x, 'a> Se<'x, 'a> {
                                     format!("{{ t: `{inner}` }}")
                                 }
                             };
-                            let _ = write!(out, "${{_$e({aw}({asy}($w) => $w ? {child} : {fb})({iv}))}}");
+                            let _ = write!(
+                                out,
+                                "${{_$e({aw}({asy}($w) => $w ? {child} : {fb})({iv}))}}"
+                            );
                         } else {
-                            let Some(f) = func else { return Err("<For> children must be a callback".into()) };
+                            let Some(f) = func else {
+                                return Err("<For> children must be a callback".into());
+                            };
                             let ft = self.func(comp, f, is_async)?;
                             let helper = if is_async { "_$forA" } else { "_$for" };
                             let _ = write!(out, "${{{aw}{helper}({iv}, {ft}, {fb})}}");
@@ -457,7 +508,12 @@ impl<'x, 'a> Se<'x, 'a> {
         self.tx().func(&env, f, is_async)
     }
 
-    fn props_object(&self, comp: usize, el: &'a JSXElement<'a>, attrs: &[jsx::Attr<'a>]) -> R<String> {
+    fn props_object(
+        &self,
+        comp: usize,
+        el: &'a JSXElement<'a>,
+        attrs: &[jsx::Attr<'a>],
+    ) -> R<String> {
         let mut parts = Vec::new();
         for at in attrs {
             let key = super::client_js_str(&at.name);
@@ -497,13 +553,21 @@ impl<'x, 'a> Se<'x, 'a> {
     /// The component's string function.
     fn component(&self, ci: usize) -> R<String> {
         let c = &self.m.comps[ci];
-        let props = c.props.map_or("_$p".to_string(), |p| self.m.sym_name(p).to_string());
+        let props = c
+            .props
+            .map_or("_$p".to_string(), |p| self.m.sym_name(p).to_string());
         let mut body = String::new();
         let env = SEnv { se: self, comp: ci };
         let tx = self.tx();
         for item in &c.setup {
             match item {
-                Item::Cell { get, set, init, host, .. } => {
+                Item::Cell {
+                    get,
+                    set,
+                    init,
+                    host,
+                    ..
+                } => {
                     let init = match init {
                         Some(e) => tx.expr(&env, e)?,
                         None => "undefined".into(),
@@ -519,7 +583,12 @@ impl<'x, 'a> Se<'x, 'a> {
                         let _ = writeln!(body, "const {pat} = _$cell({init});");
                     }
                 }
-                Item::Memo { sym, body: f, is_async, .. } => {
+                Item::Memo {
+                    sym,
+                    body: f,
+                    is_async,
+                    ..
+                } => {
                     let name = self.m.sym_name(*sym);
                     if *is_async {
                         let fb = tx.func(&env, *f, true)?;
@@ -572,21 +641,36 @@ impl<'x, 'a> Se<'x, 'a> {
                 let mut fields = Vec::new();
                 for s in &code.serial {
                     match s {
-                        Serial::Prop(p) => fields.push(format!("{}: _$r({props}[{}])", super::client_js_str(p), super::client_js_str(p))),
+                        Serial::Prop(p) => fields.push(format!(
+                            "{}: _$r({props}[{}])",
+                            super::client_js_str(p),
+                            super::client_js_str(p)
+                        )),
                         Serial::Cell(ii) => {
-                            let Item::Cell { get, .. } = &c.setup[*ii] else { continue };
+                            let Item::Cell { get, .. } = &c.setup[*ii] else {
+                                continue;
+                            };
                             let n = self.m.sym_name(*get);
-                            fields.push(format!("{}: {n}()", super::client_js_str(&format!("${n}"))));
+                            fields
+                                .push(format!("{}: {n}()", super::client_js_str(&format!("${n}"))));
                         }
                     }
                 }
-                data.push(format!("{}: {{ {} }}", super::client_js_str(id), fields.join(", ")));
+                data.push(format!(
+                    "{}: {{ {} }}",
+                    super::client_js_str(id),
+                    fields.join(", ")
+                ));
             }
             let view = c.view.ok_or("island root without a view")?;
             if first_is_element(self.m, view) {
                 let mut a = format!(" data-i=\"{}\"", ids.join(" "));
                 if !data.is_empty() {
-                    let _ = write!(a, " data-s=\"${{_$ea(JSON.stringify({{ {} }}))}}\"", data.join(", "));
+                    let _ = write!(
+                        a,
+                        " data-s=\"${{_$ea(JSON.stringify({{ {} }}))}}\"",
+                        data.join(", ")
+                    );
                 }
                 anchor = Some(a);
             } else {
@@ -604,11 +688,17 @@ impl<'x, 'a> Se<'x, 'a> {
             self.root(ci, v, &mut tpl, anchor.as_deref())?;
         }
         let asy = if self.is_async[ci] { "async " } else { "" };
-        Ok(format!("{asy}function ({props} = {{}}, $c) {{\n{body}return `{tpl}`;\n}}"))
+        Ok(format!(
+            "{asy}function ({props} = {{}}, $c) {{\n{body}return `{tpl}`;\n}}"
+        ))
     }
 }
 
-fn declarator<'a>(se: &Se<'_, 'a>, env: &SEnv<'_, '_, 'a>, d: &'a VariableDeclarator<'a>) -> R<String> {
+fn declarator<'a>(
+    se: &Se<'_, 'a>,
+    env: &SEnv<'_, '_, 'a>,
+    d: &'a VariableDeclarator<'a>,
+) -> R<String> {
     let tx = se.tx();
     // The declarator's span, with its initializer translated.
     let id = se.m.text(d.id.span());
@@ -630,7 +720,11 @@ pub(crate) fn emit_server<'a>(
     let mut is_async: Vec<bool> = m
         .comps
         .iter()
-        .map(|c| c.setup.iter().any(|it| matches!(it, Item::Memo { is_async: true, .. })))
+        .map(|c| {
+            c.setup
+                .iter()
+                .any(|it| matches!(it, Item::Memo { is_async: true, .. }))
+        })
         .collect();
     loop {
         let mut changed = false;
@@ -656,7 +750,10 @@ pub(crate) fn emit_server<'a>(
     let mut pd = HashSet::new();
     for (gi, code) in codes {
         let g = &a.groups[*gi];
-        roots.entry(g.root).or_default().push((g.id.clone(), code, *gi));
+        roots
+            .entry(g.root)
+            .or_default()
+            .push((g.id.clone(), code, *gi));
         if code.lazy_ok {
             for (c, s) in &g.sites {
                 let site = &a.facts[*c].sites[*s];
@@ -666,7 +763,13 @@ pub(crate) fn emit_server<'a>(
             }
         }
     }
-    let se = Se { m, a, is_async, roots, pd };
+    let se = Se {
+        m,
+        a,
+        is_async,
+        roots,
+        pd,
+    };
     let mut edits: Vec<(Span, String)> = Vec::new();
     for (ci, c) in m.comps.iter().enumerate() {
         let f = se.component(ci)?;
@@ -675,8 +778,11 @@ pub(crate) fn emit_server<'a>(
         } else {
             // Plain function components keep their declaration form.
             match m.top.iter().find(|t| t.comp == Some(ci)).map(|t| t.stmt) {
-                Some(Statement::FunctionDeclaration(_)) | Some(Statement::ExportDeclaration(_)) | Some(Statement::ExportDefaultDeclaration(_))
-                    if m.text(c.replace).starts_with("function") || m.text(c.replace).starts_with("async") =>
+                Some(Statement::FunctionDeclaration(_))
+                | Some(Statement::ExportDeclaration(_))
+                | Some(Statement::ExportDefaultDeclaration(_))
+                    if m.text(c.replace).starts_with("function")
+                        || m.text(c.replace).starts_with("async") =>
                 {
                     f.replacen("function (", &format!("function {}(", c.name), 1)
                 }
@@ -701,11 +807,4 @@ fn handler_prevents(m: &Model<'_>, site: &super::graph::Site<'_>) -> bool {
     m.comps.iter().any(|c| {
         c.setup.iter().any(|it| matches!(it, Item::Event { sym, body, .. } if syms.contains(sym) && m.text(body.body_span()).contains("preventDefault")))
     })
-}
-
-#[allow(dead_code)]
-
-#[allow(dead_code)]
-fn _w<'a, V: Visit<'a>>(v: &mut V, e: &Expression<'a>) {
-    walk::walk_expression(v, e)
 }

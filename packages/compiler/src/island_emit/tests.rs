@@ -2,7 +2,10 @@
 use super::*;
 
 fn opts() -> IslandOptions {
-    IslandOptions { filename: Some("app.tsx".into()), ..IslandOptions::default() }
+    IslandOptions {
+        filename: Some("app.tsx".into()),
+        ..IslandOptions::default()
+    }
 }
 
 fn run(src: &str) -> IslandsOutput {
@@ -59,8 +62,14 @@ fn toggle_is_a_tier0_island_and_comment_is_inert() {
     let m = manifest(&out);
     assert!(m.contains(r#""root":"Toggle""#), "{m}");
     assert!(m.contains(r#""tier":0"#), "{m}");
-    assert!(m.contains(r#"{"name":"Comment","class":"inert","islands":[]}"#), "{m}");
-    assert!(m.contains(r#"{"name":"Page","class":"inert","islands":[]}"#), "{m}");
+    assert!(
+        m.contains(r#"{"name":"Comment","class":"inert","islands":[]}"#),
+        "{m}"
+    );
+    assert!(
+        m.contains(r#"{"name":"Page","class":"inert","islands":[]}"#),
+        "{m}"
+    );
     assert_eq!(out.chunks.len(), 1);
     let chunk = &out.chunks[0].code;
     assert!(chunk.contains("@solidjs/signals/t0"), "{chunk}");
@@ -69,7 +78,11 @@ fn toggle_is_a_tier0_island_and_comment_is_inert() {
     // No reactive runtime.
     assert!(!chunk.contains("createRenderEffect"), "{chunk}");
     // Server: the anchor on the first element, no markers on inert holes.
-    assert!(out.server.contains("data-i=\\\"i0\\\"") || out.server.contains("data-i=\"i0\""), "{}", out.server);
+    assert!(
+        out.server.contains("data-i=\\\"i0\\\"") || out.server.contains("data-i=\"i0\""),
+        "{}",
+        out.server
+    );
     assert!(!out.server.contains("_hk"), "{}", out.server);
 }
 
@@ -119,7 +132,11 @@ export const App = $component(function* () {
     let m = manifest(&out);
     assert_eq!(out.chunks.len(), 1, "{m}");
     assert!(m.contains(r#""tier":1"#), "{m}");
-    assert!(m.contains(r#""members":["App","Counter","Display"]"#) || m.contains(r#""members":["App","#), "{m}");
+    assert!(
+        m.contains(r#""members":["App","Counter","Display"]"#)
+            || m.contains(r#""members":["App","#),
+        "{m}"
+    );
     assert!(m.contains(r#""ownTiers":{"#), "{m}");
     let chunk = &out.chunks[0].code;
     assert!(chunk.contains("@solidjs/signals/kernel"), "{chunk}");
@@ -174,7 +191,10 @@ export const App = $component(function* () {
 }
 
 fn fallback_of(src: &str) -> String {
-    compile_islands(src, &opts()).expect("compiles").fallback.expect("falls back")
+    compile_islands(src, &opts())
+        .expect("compiles")
+        .fallback
+        .expect("falls back")
 }
 
 #[test]
@@ -196,7 +216,10 @@ export const App = $component(function* () {
     assert!(out.fallback.is_none(), "{:?}", out.fallback);
     let m = manifest(&out);
     assert_eq!(out.chunks.len(), 1, "{m}");
-    assert!(m.contains(r#""root":"App""#) && m.contains(r#""members":["App","Child"]"#), "{m}");
+    assert!(
+        m.contains(r#""root":"App""#) && m.contains(r#""members":["App","Child"]"#),
+        "{m}"
+    );
     // The provider value is bound once; the consumer destructures it.
     let chunk = &out.chunks[0].code;
     assert!(chunk.contains("const $c1 = [count, inc];"), "{chunk}");
@@ -257,7 +280,10 @@ export const App = $component(function* () {
     assert!(chunk.contains("const v = $v[0];"), "{chunk}");
     assert!(chunk.contains("$cl.push("), "{chunk}");
     let m = manifest(&out);
-    assert!(m.contains(r#""tier":1"#) && m.contains("`b` is written by an effect"), "{m}");
+    assert!(
+        m.contains(r#""tier":1"#) && m.contains("`b` is written by an effect"),
+        "{m}"
+    );
     assert!(m.contains(r#""activation":"load""#), "{m}");
 }
 
@@ -277,7 +303,11 @@ export const App = $component(function* () {
     assert_eq!(out.chunks.len(), 1, "{m}");
     assert!(m.contains("setter escapes"), "{m}");
     // The module binding is reachable through the chunk.
-    assert!(out.chunks[0].code.contains("export let setLabel;"), "{}", out.chunks[0].code);
+    assert!(
+        out.chunks[0].code.contains("export let setLabel;"),
+        "{}",
+        out.chunks[0].code
+    );
 }
 
 #[test]
@@ -297,12 +327,16 @@ export const App = $component(function* () {
 "#);
     assert!(out.fallback.is_none(), "{:?}", out.fallback);
     assert_eq!(out.chunks.len(), 1, "{}", manifest(&out));
-    assert_eq!(out.chunks[0].code.matches("console.log(\"setup\")").count(), 1);
+    assert_eq!(
+        out.chunks[0].code.matches("console.log(\"setup\")").count(),
+        1
+    );
 }
 
 #[test]
 fn a_member_rendered_outside_its_island_root_is_refused() {
-    let reason = fallback_of(r#"
+    let reason = fallback_of(
+        r#"
 import { $component, $event, $signal } from "solid-js";
 const Button = $component(function* (props) {
   const click = $event(function* () { props.set(1); });
@@ -315,13 +349,18 @@ export const App = $component(function* () {
   const [a, setA] = yield* $signal(0);
   return function* () { return <div>{yield* a}<Button set={setA} /></div>; };
 });
-"#);
-    assert!(reason.contains("no single component renders every member"), "{reason}");
+"#,
+    );
+    assert!(
+        reason.contains("no single component renders every member"),
+        "{reason}"
+    );
 }
 
 #[test]
 fn live_sites_under_server_driven_structure_are_refused() {
-    let reason = fallback_of(r#"
+    let reason = fallback_of(
+        r#"
 import { $component, $event, $signal, For } from "solid-js";
 const Node = $component(function* (props) {
   const click = $event(function* () { props.set(x => x + 1); });
@@ -333,9 +372,12 @@ export const App = $component(function* (props) {
   const [n, setN] = yield* $signal(0);
   return function* () { return <ul><b>{yield* n}</b><Node kids={yield* props.kids} set={setN} /></ul>; };
 });
-"#);
+"#,
+    );
     assert!(
-        reason.contains("renders itself") || reason.contains("server values") || reason.contains("no single component"),
+        reason.contains("renders itself")
+            || reason.contains("server values")
+            || reason.contains("no single component"),
         "{reason}"
     );
 }
@@ -361,7 +403,11 @@ export const App = $component(function* () {
     let m = manifest(&out);
     assert_eq!(out.chunks.len(), 1, "{m}");
     assert!(m.contains(r#""members":["App","Inner"]"#), "{m}");
-    assert!(out.chunks[0].code.contains("$show("), "{}", out.chunks[0].code);
+    assert!(
+        out.chunks[0].code.contains("$show("),
+        "{}",
+        out.chunks[0].code
+    );
 }
 
 #[test]
@@ -378,13 +424,22 @@ export const Page = $component(function* () {
 "#);
     assert!(out.fallback.is_none(), "{:?}", out.fallback);
     assert!(out.chunks.is_empty());
-    assert!(out.server.contains("const story = _$v(await (async () =>"), "{}", out.server);
-    assert!(out.server.contains("export const Page = async function"), "{}", out.server);
+    assert!(
+        out.server.contains("const story = _$v(await (async () =>"),
+        "{}",
+        out.server
+    );
+    assert!(
+        out.server.contains("export const Page = async function"),
+        "{}",
+        out.server
+    );
 }
 
 #[test]
 fn an_async_memo_read_by_a_live_island_needs_tier2() {
-    let reason = fallback_of(r#"
+    let reason = fallback_of(
+        r#"
 import { $component, $event, $memo, $signal, attempt } from "solid-js";
 export const App = $component(function* () {
   const [id, setId] = yield* $signal(1);
@@ -392,28 +447,36 @@ export const App = $component(function* () {
   const next = $event(function* () { setId(x => x + 1); });
   return function* () { return <p onClick={next}>{(yield* user).name}</p>; };
 });
-"#);
-    assert!(reason.contains("tier 2") && reason.contains("async memo"), "{reason}");
+"#,
+    );
+    assert!(
+        reason.contains("tier 2") && reason.contains("async memo"),
+        "{reason}"
+    );
 }
 
 #[test]
 fn component_call_forms_and_live_jsx_expressions_fall_back() {
-    let reason = fallback_of(r#"
+    let reason = fallback_of(
+        r#"
 import { $component, Loading } from "solid-js";
 const Child = $component(function* () { return function* () { return <b />; }; });
 export const App = $component(function* () {
   return function* () { return <main>{Loading({ fallback: "…", children: Child({}) })}</main>; };
 });
-"#);
+"#,
+    );
     assert!(reason.contains("component call form"), "{reason}");
-    let reason = fallback_of(r#"
+    let reason = fallback_of(
+        r#"
 import { $component, $event, $signal } from "solid-js";
 export const App = $component(function* () {
   const [on, setOn] = yield* $signal(false);
   const flip = $event(function* () { setOn(x => !x); });
   return function* () { return <div onClick={flip}>{(yield* on) ? <b>on</b> : <i>off</i>}</div>; };
 });
-"#);
+"#,
+    );
     assert!(reason.contains("live expression producing JSX"), "{reason}");
 }
 
@@ -432,7 +495,9 @@ export const App = $component(function* (props) {
     assert!(out.fallback.is_none(), "{:?}", out.fallback);
     // Sole child: no markers; shared element: a pair; inert: none.
     assert!(
-        out.server.contains("<b>${_$e(n())}</b> <!--$-->${_$e(n())}<!--/--> of ${_$e(_$r(props.total))}</p>"),
+        out.server.contains(
+            "<b>${_$e(n())}</b> <!--$-->${_$e(n())}<!--/--> of ${_$e(_$r(props.total))}</p>"
+        ),
         "{}",
         out.server
     );
@@ -453,16 +518,24 @@ export const App = $component(function* (props) {
 "#);
     assert!(out.fallback.is_none(), "{:?}", out.fallback);
     assert!(
-        out.server.contains(r#"data-s="${_$ea(JSON.stringify({ "i0": { "step": _$r(props["step"]) } }))}""#),
+        out.server.contains(
+            r#"data-s="${_$ea(JSON.stringify({ "i0": { "step": _$r(props["step"]) } }))}""#
+        ),
         "{}",
         out.server
     );
     assert!(
-        out.chunks[0].code.contains(r#"const $d = JSON.parse($a.getAttribute("data-s"))"#),
+        out.chunks[0]
+            .code
+            .contains(r#"const $d = JSON.parse($a.getAttribute("data-s"))"#),
         "{}",
         out.chunks[0].code
     );
-    assert!(out.manifest.contains(r#""serialized":["props.step"]"#), "{}", out.manifest);
+    assert!(
+        out.manifest.contains(r#""serialized":["props.step"]"#),
+        "{}",
+        out.manifest
+    );
 }
 
 #[test]
@@ -475,17 +548,48 @@ export const App = $component(function* () {
   return function* () { return <div><a href="/x" onClick={go}>go {yield* n}</a></div>; };
 });
 "#);
-    assert!(out.server.contains("<a href=\"/x\" data-pd>"), "{}", out.server);
+    assert!(
+        out.server.contains("<a href=\"/x\" data-pd>"),
+        "{}",
+        out.server
+    );
     assert!(out.manifest.contains(r#""preventDefault":true"#));
 }
 
 #[test]
 fn min_tier_binds_the_same_chunk_to_the_core() {
-    let t1 = compile_islands(TOGGLE, &IslandOptions { min_tier: 1, ..opts() }).unwrap();
-    assert!(t1.chunks[0].code.contains("\"@solidjs/signals/kernel\""), "{}", t1.chunks[0].code);
-    let t2 = compile_islands(TOGGLE, &IslandOptions { min_tier: 2, ..opts() }).unwrap();
-    assert!(t2.chunks[0].code.contains("from \"@solidjs/signals\""), "{}", t2.chunks[0].code);
-    assert_eq!(t1.chunks[0].code.replace("@solidjs/signals/kernel", "@solidjs/signals"), t2.chunks[0].code);
+    let t1 = compile_islands(
+        TOGGLE,
+        &IslandOptions {
+            min_tier: 1,
+            ..opts()
+        },
+    )
+    .unwrap();
+    assert!(
+        t1.chunks[0].code.contains("\"@solidjs/signals/kernel\""),
+        "{}",
+        t1.chunks[0].code
+    );
+    let t2 = compile_islands(
+        TOGGLE,
+        &IslandOptions {
+            min_tier: 2,
+            ..opts()
+        },
+    )
+    .unwrap();
+    assert!(
+        t2.chunks[0].code.contains("from \"@solidjs/signals\""),
+        "{}",
+        t2.chunks[0].code
+    );
+    assert_eq!(
+        t1.chunks[0]
+            .code
+            .replace("@solidjs/signals/kernel", "@solidjs/signals"),
+        t2.chunks[0].code
+    );
     assert!(t2.manifest.contains(r#""tier":2"#) && t2.manifest.contains(r#""analysisTier":0"#));
 }
 
@@ -503,7 +607,13 @@ export const App = $component(function* () {
 "#);
     assert!(out.fallback.is_none(), "{:?}", out.fallback);
     let chunk = &out.chunks[0].code;
-    for ts in ["interface", ": Item", "as Item", "<Item[]>", "(e: MouseEvent)"] {
+    for ts in [
+        "interface",
+        ": Item",
+        "as Item",
+        "<Item[]>",
+        "(e: MouseEvent)",
+    ] {
         assert!(!chunk.contains(ts), "`{ts}` left in {chunk}");
     }
     assert!(chunk.contains("function first(list) {"), "{chunk}");
@@ -511,7 +621,8 @@ export const App = $component(function* () {
 
 #[test]
 fn module_state_shared_by_two_islands_is_refused() {
-    let reason = fallback_of(r#"
+    let reason = fallback_of(
+        r#"
 import { $component, $event, $signal } from "solid-js";
 let clicks = 0;
 export const A = $component(function* () {
@@ -524,6 +635,7 @@ export const B = $component(function* () {
   const f = $event(function* () { clicks++; setB(clicks); });
   return function* () { return <p onClick={f}>{yield* b}</p>; };
 });
-"#);
+"#,
+    );
     assert!(reason.contains("module-level mutable state"), "{reason}");
 }

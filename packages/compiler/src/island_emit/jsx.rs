@@ -1,7 +1,7 @@
 //! JSX shape helpers shared by the analysis and both emitters.
 use oxc_ast::ast::{
-    Expression, JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXChild, JSXElement, JSXElementName,
-    JSXExpression, JSXFragment,
+    Expression, JSXAttributeItem, JSXAttributeName, JSXAttributeValue, JSXChild, JSXElement,
+    JSXElementName, JSXExpression, JSXFragment,
 };
 use oxc_semantic::SymbolId;
 use oxc_span::{GetSpan, Span};
@@ -9,7 +9,10 @@ use oxc_span::{GetSpan, Span};
 use super::model::Model;
 use crate::shared::utils::{decode_html_entities, trim_jsx_text};
 
-pub(crate) const BUILTINS: &[&str] = &["Show", "For", "Loading", "Errored", "Index", "Switch", "Match", "Dynamic", "Portal", "Repeat", "Reveal"];
+pub(crate) const BUILTINS: &[&str] = &[
+    "Show", "For", "Loading", "Errored", "Index", "Switch", "Match", "Dynamic", "Portal", "Repeat",
+    "Reveal",
+];
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Tag {
@@ -26,7 +29,9 @@ pub(crate) enum Tag {
 pub(crate) fn tag_of(m: &Model<'_>, name: &JSXElementName<'_>) -> Tag {
     match name {
         JSXElementName::Identifier(id) => Tag::Intrinsic(id.name.to_string()),
-        JSXElementName::NamespacedName(n) => Tag::Intrinsic(format!("{}:{}", n.namespace.name, n.name.name)),
+        JSXElementName::NamespacedName(n) => {
+            Tag::Intrinsic(format!("{}:{}", n.namespace.name, n.name.name))
+        }
         JSXElementName::IdentifierReference(id) => {
             let sym = m.symbol_of(id);
             if let Some(s) = sym {
@@ -44,7 +49,9 @@ pub(crate) fn tag_of(m: &Model<'_>, name: &JSXElementName<'_>) -> Tag {
             }
             Tag::Opaque(id.name.to_string())
         }
-        JSXElementName::MemberExpression(_) | JSXElementName::ThisExpression(_) => Tag::Opaque("<member>".into()),
+        JSXElementName::MemberExpression(_) | JSXElementName::ThisExpression(_) => {
+            Tag::Opaque("<member>".into())
+        }
     }
 }
 
@@ -60,7 +67,6 @@ pub(crate) enum AttrVal<'a> {
 pub(crate) struct Attr<'a> {
     pub name: String,
     pub value: AttrVal<'a>,
-    pub span: Span,
 }
 
 /// Attributes of an opening element; `Err` on a spread.
@@ -72,7 +78,9 @@ pub(crate) fn attrs<'a>(el: &'a JSXElement<'a>) -> Result<Vec<Attr<'a>>, String>
             JSXAttributeItem::Attribute(a) => {
                 let name = match &a.name {
                     JSXAttributeName::Identifier(id) => id.name.to_string(),
-                    JSXAttributeName::NamespacedName(n) => format!("{}:{}", n.namespace.name, n.name.name),
+                    JSXAttributeName::NamespacedName(n) => {
+                        format!("{}:{}", n.namespace.name, n.name.name)
+                    }
                 };
                 let value = match &a.value {
                     None => AttrVal::True,
@@ -88,7 +96,7 @@ pub(crate) fn attrs<'a>(el: &'a JSXElement<'a>) -> Result<Vec<Attr<'a>>, String>
                     Some(JSXAttributeValue::Element(e)) => AttrVal::Element(e),
                     Some(JSXAttributeValue::Fragment(f)) => AttrVal::Fragment(f),
                 };
-                out.push(Attr { name, value, span: a.span });
+                out.push(Attr { name, value });
             }
         }
     }
@@ -100,7 +108,8 @@ pub(crate) fn attr<'b, 'a>(attrs: &'b [Attr<'a>], name: &str) -> Option<&'b Attr
 }
 
 pub(crate) fn is_event_attr(name: &str) -> bool {
-    (name.starts_with("on") && name.len() > 2 && name.as_bytes()[2].is_ascii_uppercase()) || name.starts_with("on:")
+    (name.starts_with("on") && name.len() > 2 && name.as_bytes()[2].is_ascii_uppercase())
+        || name.starts_with("on:")
 }
 
 /// `onClick` → `click`, `on:custom` → `custom`.
@@ -163,7 +172,9 @@ pub(crate) fn esc_text(s: &str) -> String {
 }
 
 pub(crate) fn esc_attr(s: &str) -> String {
-    s.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;")
+    s.replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
 }
 
 /// Expression as a view child: a literal string/number renders statically.
@@ -171,9 +182,12 @@ pub(crate) fn static_child(e: &Expression<'_>) -> Option<String> {
     match e.without_parentheses() {
         Expression::StringLiteral(s) => Some(s.value.to_string()),
         Expression::NumericLiteral(n) => Some(crate::shared::utils::format_number(n.value)),
-        Expression::TemplateLiteral(t) if t.expressions.is_empty() => {
-            t.quasis.first().map(|q| q.value.cooked.as_ref().map_or_else(|| q.value.raw.to_string(), |c| c.to_string()))
-        }
+        Expression::TemplateLiteral(t) if t.expressions.is_empty() => t.quasis.first().map(|q| {
+            q.value
+                .cooked
+                .as_ref()
+                .map_or_else(|| q.value.raw.to_string(), |c| c.to_string())
+        }),
         _ => None,
     }
 }

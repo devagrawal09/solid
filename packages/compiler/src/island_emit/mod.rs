@@ -114,24 +114,40 @@ pub fn compile_islands(source: &str, opts: &IslandOptions) -> Result<IslandsOutp
     let allocator = Allocator::default();
     let source_type = source_type_for_filename(opts.filename.as_deref())?;
     let program = parse_program(&allocator, source, source_type)?;
-    let semantic = SemanticBuilder::new().with_build_nodes(true).build(&program).semantic;
+    let semantic = SemanticBuilder::new()
+        .with_build_nodes(true)
+        .build(&program)
+        .semantic;
     let scoping = semantic.scoping();
     let probe_hosts = opts
         .probe_hosts
         .iter()
-        .filter_map(|h| h.split_once('.').map(|(a, b)| (a.to_string(), b.to_string())))
+        .filter_map(|h| {
+            h.split_once('.')
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+        })
         .collect();
     let m = model::build_model(source, &program, scoping, probe_hosts);
     let a = graph::analyze(&m, &opts.id_prefix);
     match emit(&m, &a, opts) {
-        Ok((server, chunks, manifest)) => Ok(IslandsOutput { server, client: None, chunks, manifest, fallback: None }),
+        Ok((server, chunks, manifest)) => Ok(IslandsOutput {
+            server,
+            client: None,
+            chunks,
+            manifest,
+            fallback: None,
+        }),
         Err(reason) => fallback(source, opts, &m, &a, reason),
     }
 }
 
 type Emitted = (String, Vec<IslandChunk>, String);
 
-fn emit(m: &model::Model<'_>, a: &graph::Analysis<'_>, opts: &IslandOptions) -> Result<Emitted, String> {
+fn emit(
+    m: &model::Model<'_>,
+    a: &graph::Analysis<'_>,
+    opts: &IslandOptions,
+) -> Result<Emitted, String> {
     if let Some(i) = a.issues.first() {
         return Err(i.clone());
     }
@@ -164,14 +180,18 @@ fn emit(m: &model::Model<'_>, a: &graph::Analysis<'_>, opts: &IslandOptions) -> 
             Ok(c) => c,
             Err(e) if want == 0 => {
                 note.push(format!("tier 0 emission failed ({e}); emitted at tier 1"));
-                client::emit_group(m, a, gi, 1, &copts).map_err(|e| format!("island `{}`: {e}", g.id))?
+                client::emit_group(m, a, gi, 1, &copts)
+                    .map_err(|e| format!("island `{}`: {e}", g.id))?
             }
             Err(e) => return Err(format!("island `{}` ({}): {e}", g.id, m.comps[g.root].name)),
         };
         // Tier 2 (min_tier / dedupe): the same code bound to the core.
         let code = if want >= 2 && code.tier == 1 {
             client::GroupCode {
-                code: code.code.replace(&client_js_str(&opts.kernel_module), &client_js_str(&opts.core_module)),
+                code: code.code.replace(
+                    &client_js_str(&opts.kernel_module),
+                    &client_js_str(&opts.core_module),
+                ),
                 tier: 2,
                 runtime: opts.core_module.clone(),
                 ..code
@@ -194,7 +214,13 @@ fn emit(m: &model::Model<'_>, a: &graph::Analysis<'_>, opts: &IslandOptions) -> 
         return Err("module-level mutable state referenced by two islands".into());
     }
     let server = server::emit_server(m, a, &codes)?;
-    let chunks = codes.iter().map(|(gi, c)| IslandChunk { id: a.groups[*gi].id.clone(), code: c.code.clone() }).collect();
+    let chunks = codes
+        .iter()
+        .map(|(gi, c)| IslandChunk {
+            id: a.groups[*gi].id.clone(),
+            code: c.code.clone(),
+        })
+        .collect();
     let manifest = manifest(m, a, &codes, &notes, None, opts);
     Ok((server, chunks, manifest))
 }
@@ -258,7 +284,9 @@ fn manifest(
         w.key("cells");
         w.begin_array();
         for k in &g.keys {
-            if let model::Item::Cell { name, .. } | model::Item::Memo { name, .. } = &m.comps[k.0].setup[k.1] {
+            if let model::Item::Cell { name, .. } | model::Item::Memo { name, .. } =
+                &m.comps[k.0].setup[k.1]
+            {
                 w.string(&format!("{}.{name}", m.comps[k.0].name));
             }
         }
@@ -276,7 +304,11 @@ fn manifest(
         }
         w.end_array();
         w.key("anchor");
-        w.string(if code.element_anchor { "element" } else { "comment" });
+        w.string(if code.element_anchor {
+            "element"
+        } else {
+            "comment"
+        });
         w.key("nests");
         w.boolean(code.nests);
         w.key("prefetch");
@@ -323,7 +355,13 @@ fn manifest(
             .map(|g| g.id.as_str())
             .collect();
         w.key("class");
-        w.string(if groups.is_empty() { "inert" } else if a.root_of.contains_key(&ci) { "island-root" } else { "island-member" });
+        w.string(if groups.is_empty() {
+            "inert"
+        } else if a.root_of.contains_key(&ci) {
+            "island-root"
+        } else {
+            "island-member"
+        });
         w.key("islands");
         w.begin_array();
         for g in groups {
@@ -350,10 +388,28 @@ fn fallback(
         hydratable: true,
         ..CompileOptions::default()
     };
-    let server = compile(source, &CompileOptions { generate: Generate::Ssr, ..base.clone() })?;
-    let client = compile(source, &CompileOptions { generate: Generate::Dom, ..base })?;
+    let server = compile(
+        source,
+        &CompileOptions {
+            generate: Generate::Ssr,
+            ..base.clone()
+        },
+    )?;
+    let client = compile(
+        source,
+        &CompileOptions {
+            generate: Generate::Dom,
+            ..base
+        },
+    )?;
     let manifest = manifest(m, a, &[], &[], Some(&reason), opts);
-    Ok(IslandsOutput { server: server.code, client: Some(client.code), chunks: vec![], manifest, fallback: Some(reason) })
+    Ok(IslandsOutput {
+        server: server.code,
+        client: Some(client.code),
+        chunks: vec![],
+        manifest,
+        fallback: Some(reason),
+    })
 }
 
 #[cfg(test)]

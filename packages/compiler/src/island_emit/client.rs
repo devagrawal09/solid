@@ -18,8 +18,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as _;
 
 use oxc_ast::ast::{
-    BindingPattern, CallExpression, Expression, IdentifierReference, ImportDeclarationSpecifier, JSXElement,
-    ObjectPropertyKind, PropertyKey, Statement,
+    BindingPattern, CallExpression, Expression, IdentifierReference, ImportDeclarationSpecifier,
+    JSXElement, ObjectPropertyKind, PropertyKey, Statement,
 };
 use oxc_semantic::SymbolId;
 use oxc_span::{GetSpan, Span};
@@ -54,7 +54,6 @@ pub(crate) struct GroupCode {
     pub nests: bool,
     /// Module-level mutable declarations the chunk copies (by top index).
     pub mutable_top: Vec<usize>,
-    pub notes: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -127,14 +126,11 @@ struct AttrPart {
 /// One emission scope: the activation function or a region builder.
 struct Scope {
     nav: Vec<String>,
-    fresh_nav: Vec<String>,
-    vars: HashMap<(usize, u32), String>,
     buckets: HashMap<usize, Bucket>,
     order: Vec<usize>,
     /// Builder scope: a fresh-or-adopt region content (`$x` is the element,
     /// `$f` true when freshly created).
     builder: bool,
-    root_var: String,
 }
 
 #[derive(Clone, Copy)]
@@ -172,7 +168,10 @@ struct Ce<'x, 'a> {
 
 const HELPERS: &[(&str, &str)] = &[
     ("$r", "const $r = v => typeof v === \"function\" ? v() : v;"),
-    ("$s", "const $s = v => v == null || typeof v === \"boolean\" ? \"\" : \"\" + v;"),
+    (
+        "$s",
+        "const $s = v => v == null || typeof v === \"boolean\" ? \"\" : \"\" + v;",
+    ),
     (
         "$mk",
         // The k-th top-level `<!--$-->…<!--/-->` pair's end marker under
@@ -255,7 +254,7 @@ pub(crate) fn emit_group<'a>(
     opts: &ClientOpts,
 ) -> R<GroupCode> {
     let g = &a.groups[gi];
-    let mut ce = Ce {
+    let ce = Ce {
         m,
         a,
         g,
@@ -298,7 +297,10 @@ struct Uses {
 
 impl<'e, 'x, 'a> CEnv<'e, 'x, 'a> {
     fn lookup(&self, s: SymbolId) -> Option<(String, Kind)> {
-        self.extra.get(&s).cloned().or_else(|| self.ce.insts[self.inst].names.get(&s).cloned())
+        self.extra
+            .get(&s)
+            .cloned()
+            .or_else(|| self.ce.insts[self.inst].names.get(&s).cloned())
     }
     fn prop(&self, name: &str) -> R<PBind> {
         let inst = &self.ce.insts[self.inst];
@@ -346,7 +348,10 @@ impl<'a> Env<'a> for CEnv<'_, '_, 'a> {
                             self.uses.borrow_mut().helpers.insert("$r");
                             return Ok(format!("$r({})", id.name));
                         }
-                        Err(format!("yield* of `{}` (not in the island's scope)", id.name))
+                        Err(format!(
+                            "yield* of `{}` (not in the island's scope)",
+                            id.name
+                        ))
                     }
                 }
             }
@@ -398,7 +403,10 @@ impl<'a> Env<'a> for CEnv<'_, '_, 'a> {
                 // A setter call's receipt: the call returns the new value.
                 tx.expr(self, arg)
             }
-            _ => Err(format!("yield* of `{}`", super::model::short(tx.m.text(arg.span())))),
+            _ => Err(format!(
+                "yield* of `{}`",
+                super::model::short(tx.m.text(arg.span()))
+            )),
         }
     }
     fn ident(&self, _tx: &Tx<'_, 'a>, id: &IdentifierReference<'a>) -> Option<String> {
@@ -447,7 +455,12 @@ impl<'a> Env<'a> for CEnv<'_, '_, 'a> {
     fn call(&self, tx: &Tx<'_, 'a>, c: &'a CallExpression<'a>) -> R<Option<String>> {
         if let Some(n) = self.ce.m.runtime_name(&c.callee) {
             if n == "$event" {
-                let Some(f) = c.arguments.first().and_then(|a| a.as_expression()).and_then(FnRef::from_expr) else {
+                let Some(f) = c
+                    .arguments
+                    .first()
+                    .and_then(|a| a.as_expression())
+                    .and_then(FnRef::from_expr)
+                else {
                     return Err("$event without a function".into());
                 };
                 return Ok(Some(tx.func(self, f, false)?));
@@ -482,7 +495,10 @@ struct PlainEnv;
 
 impl<'a> Env<'a> for PlainEnv {
     fn read(&self, tx: &Tx<'_, 'a>, arg: &'a Expression<'a>) -> R<String> {
-        Err(format!("`yield*` in module-level code: `{}`", super::model::short(tx.m.text(arg.span()))))
+        Err(format!(
+            "`yield*` in module-level code: `{}`",
+            super::model::short(tx.m.text(arg.span()))
+        ))
     }
 }
 
@@ -498,7 +514,11 @@ impl<'a> Env<'a> for EffEnv<'_, '_, '_, 'a> {
     fn read(&self, tx: &Tx<'_, 'a>, arg: &'a Expression<'a>) -> R<String> {
         if let Expression::CallExpression(c) = arg.without_parentheses() {
             if self.inner.ce.m.runtime_name(&c.callee) == Some("$cleanup") {
-                let f = c.arguments.first().and_then(|a| a.as_expression()).ok_or("$cleanup without a function")?;
+                let f = c
+                    .arguments
+                    .first()
+                    .and_then(|a| a.as_expression())
+                    .ok_or("$cleanup without a function")?;
                 return Ok(format!("$cl.push({})", tx.expr(self, f)?));
             }
             // A setter receipt: a write, not a read.
@@ -557,16 +577,32 @@ impl<'x, 'a> Ce<'x, 'a> {
         format!("{base}{}", self.uid)
     }
 
-    fn translate(&mut self, inst: usize, extra: &HashMap<SymbolId, (String, Kind)>, f: impl FnOnce(&Tx<'x, 'a>, &CEnv<'_, 'x, 'a>) -> R<String>) -> R<String> {
+    fn translate(
+        &mut self,
+        inst: usize,
+        extra: &HashMap<SymbolId, (String, Kind)>,
+        f: impl FnOnce(&Tx<'x, 'a>, &CEnv<'_, 'x, 'a>) -> R<String>,
+    ) -> R<String> {
         let tx = self.tx();
         let (res, uses) = {
-            let env = CEnv { ce: self, inst, extra, uses: Default::default() };
+            let env = CEnv {
+                ce: self,
+                inst,
+                extra,
+                uses: Default::default(),
+            };
             let r = f(&tx, &env);
             (r, env.uses.into_inner())
         };
         let out = res?;
         if out.contains("__UNSUPPORTED_RUNTIME_") {
-            let name = out.split("__UNSUPPORTED_RUNTIME_").nth(1).unwrap_or("").split(|c: char| !c.is_alphanumeric() && c != '$' && c != '_').next().unwrap_or("");
+            let name = out
+                .split("__UNSUPPORTED_RUNTIME_")
+                .nth(1)
+                .unwrap_or("")
+                .split(|c: char| !c.is_alphanumeric() && c != '$' && c != '_')
+                .next()
+                .unwrap_or("");
             return Err(format!("runtime `{name}` in client code"));
         }
         self.helpers.extend(uses.helpers);
@@ -580,7 +616,12 @@ impl<'x, 'a> Ce<'x, 'a> {
         Ok(out)
     }
 
-    fn expr(&mut self, inst: usize, extra: &HashMap<SymbolId, (String, Kind)>, e: &'a Expression<'a>) -> R<String> {
+    fn expr(
+        &mut self,
+        inst: usize,
+        extra: &HashMap<SymbolId, (String, Kind)>,
+        e: &'a Expression<'a>,
+    ) -> R<String> {
         self.translate(inst, extra, |tx, env| tx.expr(env, e))
     }
 
@@ -609,12 +650,9 @@ impl<'x, 'a> Ce<'x, 'a> {
         });
         self.scopes.push(Scope {
             nav: vec![],
-            fresh_nav: vec![],
-            vars: HashMap::new(),
             buckets: HashMap::new(),
             order: vec![],
             builder: false,
-            root_var: "$a".into(),
         });
         self.cur = 0;
         // Anchor: an element anchor when the view's first node is an
@@ -638,7 +676,7 @@ impl<'x, 'a> Ce<'x, 'a> {
         let mut out = String::new();
         let mut imports: Vec<String> = Vec::new();
         if tier == 0 {
-            if !self.rt.is_empty() || true {
+            {
                 let mut names = vec!["cell as $cell".to_string(), "hole as $hole".to_string()];
                 if self.rt.contains("set") {
                     names.push("set as $set".into());
@@ -649,13 +687,25 @@ impl<'x, 'a> Ce<'x, 'a> {
                 if self.rt.contains("flush") {
                     names.push("flush as $F".into());
                 }
-                imports.push(format!("import {{ {} }} from {};", names.join(", "), js_str(&runtime)));
+                imports.push(format!(
+                    "import {{ {} }} from {};",
+                    names.join(", "),
+                    js_str(&runtime)
+                ));
             }
-            if self.rt.iter().any(|r| matches!(*r, "onCleanup" | "untrack")) {
+            if self
+                .rt
+                .iter()
+                .any(|r| matches!(*r, "onCleanup" | "untrack"))
+            {
                 return Err("tier 0 with a cleanup / untrack".into());
             }
         } else {
-            let mut names = vec!["createRoot as $R".to_string(), "createRenderEffect as $E".to_string(), "flush as $F".to_string()];
+            let mut names = vec![
+                "createRoot as $R".to_string(),
+                "createRenderEffect as $E".to_string(),
+                "flush as $F".to_string(),
+            ];
             for (r, alias) in [
                 ("createSignal", "$S"),
                 ("createMemo", "$M"),
@@ -667,7 +717,11 @@ impl<'x, 'a> Ce<'x, 'a> {
                     names.push(format!("{r} as {alias}"));
                 }
             }
-            imports.push(format!("import {{ {} }} from {};", names.join(", "), js_str(&runtime)));
+            imports.push(format!(
+                "import {{ {} }} from {};",
+                names.join(", "),
+                js_str(&runtime)
+            ));
         }
         for i in imports {
             out.push_str(&i);
@@ -702,7 +756,11 @@ impl<'x, 'a> Ce<'x, 'a> {
         };
         let nav = self.scopes[0].nav.join("\n");
         if tier == 0 {
-            let _ = write!(out, "export function activate($a) {{\n{data}{nav}\n{body}\n{}}}\n", settled.join("\n"));
+            let _ = write!(
+                out,
+                "export function activate($a) {{\n{data}{nav}\n{body}\n{}}}\n",
+                settled.join("\n")
+            );
         } else {
             let _ = write!(
                 out,
@@ -719,8 +777,10 @@ impl<'x, 'a> Ce<'x, 'a> {
             element_anchor: self.element_anchor,
             nests: anchor_nests(m, view),
             mutable_top: self.mutable_top.clone(),
-            lazy_ok: self.lazy_ok && self.element_anchor && self.g.window_events.len() + self.g.events.len() > 0 && !self.g.hot,
-            notes: vec![],
+            lazy_ok: self.lazy_ok
+                && self.element_anchor
+                && self.g.window_events.len() + self.g.events.len() > 0
+                && !self.g.hot,
         })
     }
 
@@ -734,13 +794,21 @@ impl<'x, 'a> Ce<'x, 'a> {
             if !seen.insert(s) {
                 continue;
             }
-            let Some(&ti) = self.m.top_of.get(&s) else { continue };
+            let Some(&ti) = self.m.top_of.get(&s) else {
+                continue;
+            };
             let t = &self.m.top[ti];
             if t.comp.is_some() {
-                return Err(format!("client code references component `{}` as a value", self.m.sym_name(s)));
+                return Err(format!(
+                    "client code references component `{}` as a value",
+                    self.m.sym_name(s)
+                ));
             }
             if t.runtime_import {
-                return Err(format!("client code references runtime `{}`", self.m.sym_name(s)));
+                return Err(format!(
+                    "client code references runtime `{}`",
+                    self.m.sym_name(s)
+                ));
             }
             if need.insert(ti) && !t.import {
                 let r = super::graph::refs_stmt(self.m, t.stmt);
@@ -848,13 +916,23 @@ impl<'x, 'a> Ce<'x, 'a> {
         for call in &f.calls {
             for (_, e) in &call.props {
                 if let Some(e) = e {
-                    syms.extend(super::graph::refs_expr(self.m, c.props, e).syms.iter().map(|x| x.0));
+                    syms.extend(
+                        super::graph::refs_expr(self.m, c.props, e)
+                            .syms
+                            .iter()
+                            .map(|x| x.0),
+                    );
                 }
             }
         }
         for (_, v) in &f.providers {
             if let Some(e) = v {
-                syms.extend(super::graph::refs_expr(self.m, c.props, e).syms.iter().map(|x| x.0));
+                syms.extend(
+                    super::graph::refs_expr(self.m, c.props, e)
+                        .syms
+                        .iter()
+                        .map(|x| x.0),
+                );
             }
         }
         for (ii, item) in c.setup.iter().enumerate() {
@@ -905,11 +983,12 @@ impl<'x, 'a> Ce<'x, 'a> {
             }
             let item = c.setup.iter().position(|it| it.declares().contains(s));
             match item.map(|i| (&c.setup[i], i)) {
-                Some((Item::Local { .. }, i)) => {
-                    if !self.evaluable(comp, &self.a.facts[comp].item_refs[i], depth + 1) {
-                        return false;
-                    }
+                Some((Item::Local { .. }, i))
+                    if !self.evaluable(comp, &self.a.facts[comp].item_refs[i], depth + 1) =>
+                {
+                    return false;
                 }
+                Some((Item::Local { .. }, _)) => {}
                 Some((Item::Cell { .. } | Item::Memo { .. } | Item::Event { .. }, _)) => {}
                 Some(_) => return false,
                 // Locals of nested functions (parameters…) are fine.
@@ -930,10 +1009,14 @@ impl<'x, 'a> Ce<'x, 'a> {
             match item {
                 Item::Cell { get, set, .. } => {
                     let gn = self.name_for(inst, *get);
-                    self.insts[inst].names.insert(*get, (gn.clone(), if t0 { Kind::Cell0 } else { Kind::Acc }));
+                    self.insts[inst]
+                        .names
+                        .insert(*get, (gn.clone(), if t0 { Kind::Cell0 } else { Kind::Acc }));
                     if let Some(s) = set {
                         let sn = self.name_for(inst, *s);
-                        self.insts[inst].names.insert(*s, (sn, if t0 { Kind::Set0(gn) } else { Kind::Val }));
+                        self.insts[inst]
+                            .names
+                            .insert(*s, (sn, if t0 { Kind::Set0(gn) } else { Kind::Val }));
                     }
                 }
                 Item::Memo { sym, .. } => {
@@ -945,7 +1028,15 @@ impl<'x, 'a> Ce<'x, 'a> {
                     self.insts[inst].names.insert(*sym, (n, Kind::Val));
                 }
                 Item::Context { symbols, .. } | Item::Local { symbols, .. } => {
-                    let kind = if let Item::Local { decl: LocalDecl::Func(_), .. } = item { Kind::Val } else { Kind::Unknown };
+                    let kind = if let Item::Local {
+                        decl: LocalDecl::Func(_),
+                        ..
+                    } = item
+                    {
+                        Kind::Val
+                    } else {
+                        Kind::Unknown
+                    };
                     for s in symbols {
                         let n = self.name_for(inst, *s);
                         self.insts[inst].names.insert(*s, (n, kind.clone()));
@@ -961,7 +1052,14 @@ impl<'x, 'a> Ce<'x, 'a> {
                 continue;
             }
             let line = match item {
-                Item::Cell { get, set, init, host, label, .. } => {
+                Item::Cell {
+                    get,
+                    set,
+                    init,
+                    host,
+                    label,
+                    ..
+                } => {
                     if *host != CellHost::Signal {
                         return Err("store / optimistic cell in a compiled island".into());
                     }
@@ -988,8 +1086,13 @@ impl<'x, 'a> Ce<'x, 'a> {
                     };
                     if t0 {
                         match (self.opts.debug, label) {
-                            (true, Some(l)) => format!("const {gn} = $cell({init_text}, {});", js_str(l)),
-                            (true, None) => format!("const {gn} = $cell({init_text}, {});", js_str(self.m.sym_name(*get))),
+                            (true, Some(l)) => {
+                                format!("const {gn} = $cell({init_text}, {});", js_str(l))
+                            }
+                            (true, None) => format!(
+                                "const {gn} = $cell({init_text}, {});",
+                                js_str(self.m.sym_name(*get))
+                            ),
                             _ => format!("const {gn} = $cell({init_text});"),
                         }
                     } else {
@@ -1008,7 +1111,12 @@ impl<'x, 'a> Ce<'x, 'a> {
                         }
                     }
                 }
-                Item::Memo { sym, body, is_async, .. } => {
+                Item::Memo {
+                    sym,
+                    body,
+                    is_async,
+                    ..
+                } => {
                     if *is_async {
                         return Err("async memo in a compiled island".into());
                     }
@@ -1041,13 +1149,26 @@ impl<'x, 'a> Ce<'x, 'a> {
                         return Err("concise `$effect` body".into());
                     }
                     let text = self.m.text(body_span);
-                    if ["for (", "for(", "while (", "while(", "do {"].iter().any(|k| text.contains(k)) && text.contains("yield*") {
+                    if ["for (", "for(", "while (", "while(", "do {"]
+                        .iter()
+                        .any(|k| text.contains(k))
+                        && text.contains("yield*")
+                    {
                         return Err("`$effect` reads in a loop (not split)".into());
                     }
                     let (code, reads) = {
                         let tx = self.tx();
-                        let env = CEnv { ce: self, inst, extra: &none, uses: Default::default() };
-                        let eff = EffEnv { inner: &env, reads: Default::default(), body: body_span };
+                        let env = CEnv {
+                            ce: self,
+                            inst,
+                            extra: &none,
+                            uses: Default::default(),
+                        };
+                        let eff = EffEnv {
+                            inner: &env,
+                            reads: Default::default(),
+                            body: body_span,
+                        };
                         let r = tx.body(&eff, *body);
                         let reads = eff.reads.into_inner();
                         let uses = env.uses.into_inner();
@@ -1058,7 +1179,11 @@ impl<'x, 'a> Ce<'x, 'a> {
                     self.rt.extend(uses.rt);
                     self.top_syms.extend(uses.top);
                     self.rt.insert("createEffect");
-                    let body_inner = code.trim().strip_prefix('{').and_then(|b| b.strip_suffix('}')).unwrap_or(&code);
+                    let body_inner = code
+                        .trim()
+                        .strip_prefix('{')
+                        .and_then(|b| b.strip_suffix('}'))
+                        .unwrap_or(&code);
                     format!(
                         "$Ef(() => [{}], $v => {{ const $cl = [];{body_inner}\nreturn () => {{ for (const f of $cl) f(); }}; }});",
                         reads.join(", ")
@@ -1086,12 +1211,19 @@ impl<'x, 'a> Ce<'x, 'a> {
                         }
                     }
                     LocalDecl::Func(f) => {
-                        let name = f.id.as_ref().and_then(|i| i.symbol_id.get()).map(|s| self.insts[inst].names[&s].0.clone());
-                        let func = self.translate(inst, &none, |tx, env| tx.func(env, FnRef::Func(f), f.r#async))?;
+                        let name =
+                            f.id.as_ref()
+                                .and_then(|i| i.symbol_id.get())
+                                .map(|s| self.insts[inst].names[&s].0.clone());
+                        let func = self.translate(inst, &none, |tx, env| {
+                            tx.func(env, FnRef::Func(f), f.r#async)
+                        })?;
                         format!("const {} = {func};", name.unwrap_or_default())
                     }
                 },
-                Item::Stmt { stmt, .. } => self.translate(inst, &none, |tx, env| tx.stmt(env, stmt))?,
+                Item::Stmt { stmt, .. } => {
+                    self.translate(inst, &none, |tx, env| tx.stmt(env, stmt))?
+                }
                 Item::Cleanup { arg, .. } => {
                     if t0 {
                         return Err("cleanup at tier 0".into());
@@ -1107,7 +1239,9 @@ impl<'x, 'a> Ce<'x, 'a> {
     }
 
     fn probe_callee(&self, item: usize, comp: usize) -> R<(String, Vec<SymbolId>)> {
-        let Item::Cell { span, .. } = &self.m.comps[comp].setup[item] else { unreachable!() };
+        let Item::Cell { span, .. } = &self.m.comps[comp].setup[item] else {
+            unreachable!()
+        };
         // Find the call in the declaration text: `obj.method(`.
         let text = self.m.text(*span);
         for (o, p) in &self.m.probe_hosts {
@@ -1129,7 +1263,12 @@ impl<'x, 'a> Ce<'x, 'a> {
     /// A binding pattern with this instance's names.
     fn pattern(&self, inst: usize, p: &BindingPattern<'a>) -> R<String> {
         let mut edits: Vec<(Span, String)> = Vec::new();
-        fn walk(ce: &Ce<'_, '_>, inst: usize, p: &BindingPattern<'_>, edits: &mut Vec<(Span, String)>) -> R<()> {
+        fn walk(
+            ce: &Ce<'_, '_>,
+            inst: usize,
+            p: &BindingPattern<'_>,
+            edits: &mut Vec<(Span, String)>,
+        ) -> R<()> {
             match p {
                 BindingPattern::BindingIdentifier(id) => {
                     if let Some(s) = id.symbol_id.get()
@@ -1168,7 +1307,9 @@ impl<'x, 'a> Ce<'x, 'a> {
                         walk(ce, inst, &r.argument, edits)?;
                     }
                 }
-                BindingPattern::AssignmentPattern(_) => return Err("default values in a context / local pattern".into()),
+                BindingPattern::AssignmentPattern(_) => {
+                    return Err("default values in a context / local pattern".into());
+                }
             }
             Ok(())
         }
@@ -1178,7 +1319,12 @@ impl<'x, 'a> Ce<'x, 'a> {
     }
 
     // --- layout -----------------------------------------------------------------
-    fn flatten_root(&mut self, e: &'a Expression<'a>, inst: usize, out: &mut Vec<Slot<'a>>) -> R<()> {
+    fn flatten_root(
+        &mut self,
+        e: &'a Expression<'a>,
+        inst: usize,
+        out: &mut Vec<Slot<'a>>,
+    ) -> R<()> {
         match jsx::root_of(e) {
             Some(Root::Element(el)) => self.flatten_el(el, inst, out),
             Some(Root::Fragment(f)) => {
@@ -1221,7 +1367,9 @@ impl<'x, 'a> Ce<'x, 'a> {
                     let refs = super::graph::refs_expr(self.m, self.m.comps[comp].props, e);
                     if refs.has_jsx {
                         if live {
-                            return Err("a live expression producing JSX (use <Show> / <For>)".into());
+                            return Err(
+                                "a live expression producing JSX (use <Show> / <For>)".into()
+                            );
                         }
                         out.push(Slot::Opaque(None, Some(0)));
                         continue;
@@ -1269,7 +1417,12 @@ impl<'x, 'a> Ce<'x, 'a> {
         })
     }
 
-    fn flatten_el(&mut self, el: &'a JSXElement<'a>, inst: usize, out: &mut Vec<Slot<'a>>) -> R<()> {
+    fn flatten_el(
+        &mut self,
+        el: &'a JSXElement<'a>,
+        inst: usize,
+        out: &mut Vec<Slot<'a>>,
+    ) -> R<()> {
         let comp = self.insts[inst].comp;
         match jsx::tag_of(self.m, &el.opening_element.name) {
             Tag::Intrinsic(_) => out.push(Slot::Elem(el, inst)),
@@ -1299,13 +1452,16 @@ impl<'x, 'a> Ce<'x, 'a> {
                 let attrs = jsx::attrs(el)?;
                 let kids = jsx::children(&el.children)?;
                 if self.contains_group_sites(comp, &kids) || self.kids_render_members(&kids) {
-                    let Some(AttrVal::Expr(v)) = jsx::attr(&attrs, "value").map(|a| &a.value) else {
+                    let Some(AttrVal::Expr(v)) = jsx::attr(&attrs, "value").map(|a| &a.value)
+                    else {
                         return Err("context provider without a value expression".into());
                     };
                     let var = self.fresh("$c");
                     let none = HashMap::new();
                     let value = self.expr(inst, &none, v)?;
-                    self.bucket(inst).seq.push(Seq::Line(format!("const {var} = {value};")));
+                    self.bucket(inst)
+                        .seq
+                        .push(Seq::Line(format!("const {var} = {value};")));
                     // The binding stays for the whole instance: its subtree is
                     // laid out lazily (one provider per context per component).
                     if self.insts[inst].ctx.insert(ctx, CtxBind { var }).is_some() {
@@ -1319,9 +1475,13 @@ impl<'x, 'a> Ce<'x, 'a> {
             Tag::Comp(k) => {
                 let is_member = self.g.members.contains(&k);
                 let kids = jsx::children(&el.children)?;
-                let other_root = self.a.root_of.get(&k).is_some_and(|gs| gs.iter().any(|g| *g != self.gi));
+                let other_root = self
+                    .a
+                    .root_of
+                    .get(&k)
+                    .is_some_and(|gs| gs.iter().any(|g| *g != self.gi));
                 let fresh = self.scopes[self.cur].builder;
-                if fresh || ((is_member || self.contains_group_sites(comp, &kids)) && !(other_root && !is_member)) {
+                if fresh || is_member || (self.contains_group_sites(comp, &kids) && !other_root) {
                     let child = self.instantiate(k, el, inst, kids)?;
                     let view = self.m.comps[k].view.ok_or("component without a view")?;
                     self.flatten_root(view, child, out)?;
@@ -1343,16 +1503,27 @@ impl<'x, 'a> Ce<'x, 'a> {
     fn kids_render_members(&self, kids: &[Child<'a>]) -> bool {
         kids.iter().any(|k| match k {
             Child::Element(el) => match jsx::tag_of(self.m, &el.opening_element.name) {
-                Tag::Comp(c) => self.g.members.contains(&c) || jsx::children(&el.children).is_ok_and(|ks| self.kids_render_members(&ks)),
+                Tag::Comp(c) => {
+                    self.g.members.contains(&c)
+                        || jsx::children(&el.children).is_ok_and(|ks| self.kids_render_members(&ks))
+                }
                 _ => jsx::children(&el.children).is_ok_and(|ks| self.kids_render_members(&ks)),
             },
-            Child::Fragment(f) => jsx::children(&f.children).is_ok_and(|ks| self.kids_render_members(&ks)),
+            Child::Fragment(f) => {
+                jsx::children(&f.children).is_ok_and(|ks| self.kids_render_members(&ks))
+            }
             _ => false,
         })
     }
 
     /// Inline a component instance: bind its props to the caller's expressions.
-    fn instantiate(&mut self, k: usize, el: &'a JSXElement<'a>, caller: usize, kids: Vec<Child<'a>>) -> R<usize> {
+    fn instantiate(
+        &mut self,
+        k: usize,
+        el: &'a JSXElement<'a>,
+        caller: usize,
+        kids: Vec<Child<'a>>,
+    ) -> R<usize> {
         let attrs = jsx::attrs(el)?;
         let id = self.insts.len();
         let suffix = format!("${id}");
@@ -1363,7 +1534,9 @@ impl<'x, 'a> Ce<'x, 'a> {
                 AttrVal::True => PBind::Val("true".into()),
                 AttrVal::Str(s) => PBind::Val(js_str(s)),
                 AttrVal::Expr(e) => self.bind_prop(caller, e, &none)?,
-                AttrVal::Element(_) | AttrVal::Fragment(_) => return Err("JSX-valued prop of an island component".into()),
+                AttrVal::Element(_) | AttrVal::Fragment(_) => {
+                    return Err("JSX-valued prop of an island component".into());
+                }
             };
             props.insert(at.name.clone(), b);
         }
@@ -1383,14 +1556,24 @@ impl<'x, 'a> Ce<'x, 'a> {
         Ok(id)
     }
 
-    fn bind_prop(&mut self, caller: usize, e: &'a Expression<'a>, extra: &HashMap<SymbolId, (String, Kind)>) -> R<PBind> {
+    fn bind_prop(
+        &mut self,
+        caller: usize,
+        e: &'a Expression<'a>,
+        extra: &HashMap<SymbolId, (String, Kind)>,
+    ) -> R<PBind> {
         let e = e.without_parentheses();
         if let Some(s) = self.m.symbol_of_expr(e) {
-            let found = extra.get(&s).cloned().or_else(|| self.insts[caller].names.get(&s).cloned());
+            let found = extra
+                .get(&s)
+                .cloned()
+                .or_else(|| self.insts[caller].names.get(&s).cloned());
             if let Some((n, k)) = found {
                 return Ok(match k {
                     Kind::Acc => PBind::Acc(n),
-                    Kind::Cell0 | Kind::Set0(_) => return Err("tier-0 cell passed as a prop".into()),
+                    Kind::Cell0 | Kind::Set0(_) => {
+                        return Err("tier-0 cell passed as a prop".into());
+                    }
                     _ => PBind::Val(n),
                 });
             }
@@ -1400,7 +1583,12 @@ impl<'x, 'a> Ce<'x, 'a> {
             && self.m.symbol_of_expr(&me.object) == self.m.comps[self.insts[caller].comp].props
         {
             let env_prop = {
-                let env = CEnv { ce: self, inst: caller, extra, uses: Default::default() };
+                let env = CEnv {
+                    ce: self,
+                    inst: caller,
+                    extra,
+                    uses: Default::default(),
+                };
                 let r = env.prop(me.property.name.as_str());
                 let u = env.uses.into_inner();
                 (r, u)
@@ -1416,9 +1604,17 @@ impl<'x, 'a> Ce<'x, 'a> {
         let reads = super::graph::refs_expr(self.m, self.m.comps[self.insts[caller].comp].props, e);
         let var = self.fresh("$p");
         let has_read = self.m.text(e.span()).contains("yield*") || !reads.props.is_empty();
-        let line = if has_read { format!("const {var} = () => {text};") } else { format!("const {var} = {text};") };
+        let line = if has_read {
+            format!("const {var} = () => {text};")
+        } else {
+            format!("const {var} = {text};")
+        };
         self.push_line(caller, line);
-        Ok(if has_read { PBind::Get(var) } else { PBind::Val(var) })
+        Ok(if has_read {
+            PBind::Get(var)
+        } else {
+            PBind::Val(var)
+        })
     }
 
     fn push_line(&mut self, inst: usize, line: String) {
@@ -1441,7 +1637,14 @@ impl<'x, 'a> Ce<'x, 'a> {
                     Ok(ks) => self.shape_kids(&ks, k, depth + 1),
                     Err(_) => (None, None),
                 },
-                None => (Some(0), if self.a.is_live_site(k, v.span().start) { Some(1) } else { Some(0) }),
+                None => (
+                    Some(0),
+                    if self.a.is_live_site(k, v.span().start) {
+                        Some(1)
+                    } else {
+                        Some(0)
+                    },
+                ),
             },
             None => (None, None),
         };
@@ -1449,7 +1652,12 @@ impl<'x, 'a> Ce<'x, 'a> {
         s
     }
 
-    fn shape_el(&mut self, el: &'a JSXElement<'a>, comp: usize, depth: u32) -> (Option<usize>, Option<usize>) {
+    fn shape_el(
+        &mut self,
+        el: &'a JSXElement<'a>,
+        comp: usize,
+        depth: u32,
+    ) -> (Option<usize>, Option<usize>) {
         match jsx::tag_of(self.m, &el.opening_element.name) {
             Tag::Intrinsic(_) => (Some(1), Some(0)),
             Tag::Comp(k) => self.shape_comp(k, depth),
@@ -1496,10 +1704,12 @@ impl<'x, 'a> Ce<'x, 'a> {
                     (None, inner)
                 }
             }
-            Tag::Builtin(b) if b == "Loading" || b == "Errored" || b == "Show" => match jsx::children(&el.children) {
-                Ok(ks) => self.shape_kids(&ks, comp, depth),
-                Err(_) => (None, None),
-            },
+            Tag::Builtin(b) if b == "Loading" || b == "Errored" || b == "Show" => {
+                match jsx::children(&el.children) {
+                    Ok(ks) => self.shape_kids(&ks, comp, depth),
+                    Err(_) => (None, None),
+                }
+            }
             Tag::Provider(_) => match jsx::children(&el.children) {
                 Ok(ks) => self.shape_kids(&ks, comp, depth),
                 Err(_) => (None, None),
@@ -1508,7 +1718,12 @@ impl<'x, 'a> Ce<'x, 'a> {
         }
     }
 
-    fn shape_kids(&mut self, kids: &[Child<'a>], comp: usize, depth: u32) -> (Option<usize>, Option<usize>) {
+    fn shape_kids(
+        &mut self,
+        kids: &[Child<'a>],
+        comp: usize,
+        depth: u32,
+    ) -> (Option<usize>, Option<usize>) {
         let (mut e, mut p) = (Some(0usize), Some(0usize));
         let add = |a: Option<usize>, b: Option<usize>| a.zip(b).map(|(x, y)| x + y);
         for k in kids {
@@ -1524,7 +1739,10 @@ impl<'x, 'a> Ce<'x, 'a> {
                     } else if super::graph::refs_expr(self.m, self.m.comps[comp].props, x).has_jsx {
                         (None, None)
                     } else {
-                        (Some(0), Some(usize::from(self.a.is_live_site(comp, x.span().start) && !false)))
+                        (
+                            Some(0),
+                            Some(usize::from(self.a.is_live_site(comp, x.span().start))),
+                        )
                     }
                 }
                 Child::Element(el) => self.shape_el(el, comp, depth),
@@ -1554,7 +1772,9 @@ impl<'x, 'a> Ce<'x, 'a> {
             }
         };
         let sum = |range: &[Slot<'a>], f: &dyn Fn(&Slot<'a>) -> Option<usize>| -> Option<usize> {
-            range.iter().try_fold(0usize, |acc, s| f(s).map(|x| acc + x))
+            range
+                .iter()
+                .try_fold(0usize, |acc, s| f(s).map(|x| acc + x))
         };
         let sole = parent.is_some() && slots.len() == 1 && matches!(slots[0], Slot::Hole(..));
         for i in 0..n {
@@ -1589,9 +1809,17 @@ impl<'x, 'a> Ce<'x, 'a> {
                             }
                         }
                         (Some(p), None, Some(af)) => {
-                            format!("{p}.lastElementChild{}", ".previousElementSibling".repeat(af))
+                            format!(
+                                "{p}.lastElementChild{}",
+                                ".previousElementSibling".repeat(af)
+                            )
                         }
-                        _ => return Err("an island element after a variable-size region with no fixed path".into()),
+                        _ => {
+                            return Err(
+                                "an island element after a variable-size region with no fixed path"
+                                    .into(),
+                            );
+                        }
                     };
                     if parent.is_none() && before != Some(0) {
                         // Handlers outside the anchor element cannot be found
@@ -1614,7 +1842,8 @@ impl<'x, 'a> Ce<'x, 'a> {
                         let el_var = parent.clone().unwrap();
                         self.text_hole(e, inst, live, TextTarget::Sole(el_var))?;
                     } else if live {
-                        let k = sum(&slots[..i], &|s| contrib(s).1).ok_or("a live hole after a variable region")?;
+                        let k = sum(&slots[..i], &|s| contrib(s).1)
+                            .ok_or("a live hole after a variable region")?;
                         let end = self.marker(&parent, k);
                         self.text_hole(e, inst, true, TextTarget::Pair(end))?;
                     } else if self.scopes[self.cur].builder {
@@ -1623,13 +1852,16 @@ impl<'x, 'a> Ce<'x, 'a> {
                             .iter()
                             .filter(|s| matches!(s, Slot::Hole(_, _, false)))
                             .count();
-                        let p = parent.clone().ok_or("inert hole at a builder's root level")?;
+                        let p = parent
+                            .clone()
+                            .ok_or("inert hole at a builder's root level")?;
                         self.helpers.insert("$pk");
                         self.text_hole(e, inst, false, TextTarget::Placeholder(p, k))?;
                     }
                 }
                 Slot::Region(el, inst, _) => {
-                    let k = sum(&slots[..i], &|s| contrib(s).1).ok_or("a region after a variable region")?;
+                    let k = sum(&slots[..i], &|s| contrib(s).1)
+                        .ok_or("a region after a variable region")?;
                     let end = self.marker(&parent, k);
                     self.region(el, inst, end)?;
                 }
@@ -1682,7 +1914,10 @@ impl<'x, 'a> Ce<'x, 'a> {
     fn kids_have_member_slot(&self, inst: usize, kids: &[Child<'a>]) -> bool {
         kids.iter().any(|k| match k {
             Child::Expr(e) if self.is_slot(inst, e) => match &self.insts[inst].slot {
-                Some((ck, ci)) => self.contains_group_sites(self.insts[*ci].comp, ck) || self.kids_render_members(ck),
+                Some((ck, ci)) => {
+                    self.contains_group_sites(self.insts[*ci].comp, ck)
+                        || self.kids_render_members(ck)
+                }
                 None => false,
             },
             Child::Element(el) => match jsx::children(&el.children) {
@@ -1703,11 +1938,15 @@ impl<'x, 'a> Ce<'x, 'a> {
         let fresh = self.scopes[self.cur].builder;
         let none = HashMap::new();
         for at in &attrs {
-            let AttrVal::Expr(e) = &at.value else { continue };
+            let AttrVal::Expr(e) = &at.value else {
+                continue;
+            };
             if jsx::is_event_attr(&at.name) {
                 let h = self.expr(inst, &none, e)?;
                 let ev = jsx::event_name(&at.name);
-                self.bucket(inst).handlers.push(format!("{var}.addEventListener({}, {h});", js_str(&ev)));
+                self.bucket(inst)
+                    .handlers
+                    .push(format!("{var}.addEventListener({}, {h});", js_str(&ev)));
                 continue;
             }
             if jsx::static_child(e).is_some() || at.name == "ref" {
@@ -1732,26 +1971,48 @@ impl<'x, 'a> Ce<'x, 'a> {
         let (keys, _) = self.a.live_reads(comp, &r);
         keys.iter()
             .filter_map(|k| match &self.m.comps[k.0].setup[k.1] {
-                Item::Cell { get, .. } => self.insts.iter().find(|i| i.comp == k.0).and_then(|i| i.names.get(get)).map(|x| x.0.clone()),
+                Item::Cell { get, .. } => self
+                    .insts
+                    .iter()
+                    .find(|i| i.comp == k.0)
+                    .and_then(|i| i.names.get(get))
+                    .map(|x| x.0.clone()),
                 _ => None,
             })
             .collect()
     }
 
-    fn attr_parts(&mut self, tag: &str, name: &str, e: &'a Expression<'a>, inst: usize, var: &str, live: bool) -> R<()> {
+    fn attr_parts(
+        &mut self,
+        tag: &str,
+        name: &str,
+        e: &'a Expression<'a>,
+        inst: usize,
+        var: &str,
+        live: bool,
+    ) -> R<()> {
         let none = HashMap::new();
         let cells = self.cells_of(inst, e);
-        let mut push = |ce: &mut Self, compute: String, apply: String| {
-            ce.bucket(inst).attrs.push(AttrPart { compute, apply, cells: cells.clone(), live });
+        let push = |ce: &mut Self, compute: String, apply: String| {
+            ce.bucket(inst).attrs.push(AttrPart {
+                compute,
+                apply,
+                cells: cells.clone(),
+                live,
+            });
         };
         if name == "class" {
             // Literal arrays / objects: per-key toggles (static tokens are in
             // the markup already).
             let mut keyed: Vec<(String, &'a Expression<'a>)> = Vec::new();
             let mut ok = true;
-            let mut collect = |o: &'a oxc_ast::ast::ObjectExpression<'a>, keyed: &mut Vec<(String, &'a Expression<'a>)>| -> bool {
+            let collect = |o: &'a oxc_ast::ast::ObjectExpression<'a>,
+                           keyed: &mut Vec<(String, &'a Expression<'a>)>|
+             -> bool {
                 for p in &o.properties {
-                    let ObjectPropertyKind::ObjectProperty(p) = p else { return false };
+                    let ObjectPropertyKind::ObjectProperty(p) = p else {
+                        return false;
+                    };
                     let key = match &p.key {
                         PropertyKey::StaticIdentifier(k) => k.name.to_string(),
                         PropertyKey::StringLiteral(s) => s.value.to_string(),
@@ -1781,7 +2042,11 @@ impl<'x, 'a> Ce<'x, 'a> {
                 for (key, v) in keyed {
                     let c = self.expr(inst, &none, v)?;
                     for token in key.split_whitespace() {
-                        push(self, format!("!!({c})"), format!("{var}.classList.toggle({}, v)", js_str(token)));
+                        push(
+                            self,
+                            format!("!!({c})"),
+                            format!("{var}.classList.toggle({}, v)", js_str(token)),
+                        );
                     }
                 }
                 return Ok(());
@@ -1816,7 +2081,10 @@ impl<'x, 'a> Ce<'x, 'a> {
                         let apply = if is_stringy(v) {
                             format!("{var}.style.setProperty({k}, v)", k = js_str(&key))
                         } else {
-                            format!("v != null ? {var}.style.setProperty({k}, v) : {var}.style.removeProperty({k})", k = js_str(&key))
+                            format!(
+                                "v != null ? {var}.style.setProperty({k}, v) : {var}.style.removeProperty({k})",
+                                k = js_str(&key)
+                            )
                         };
                         push(self, c, apply);
                     }
@@ -1833,13 +2101,21 @@ impl<'x, 'a> Ce<'x, 'a> {
             push(
                 self,
                 c,
-                format!("v == null || v === false ? {var}.removeAttribute({n}) : {var}.setAttribute({n}, v === true ? \"\" : v)"),
+                format!(
+                    "v == null || v === false ? {var}.removeAttribute({n}) : {var}.setAttribute({n}, v === true ? \"\" : v)"
+                ),
             );
         }
         Ok(())
     }
 
-    fn text_hole(&mut self, e: &'a Expression<'a>, inst: usize, live: bool, target: TextTarget) -> R<()> {
+    fn text_hole(
+        &mut self,
+        e: &'a Expression<'a>,
+        inst: usize,
+        live: bool,
+        target: TextTarget,
+    ) -> R<()> {
         let none = HashMap::new();
         let c = self.expr(inst, &none, e)?;
         // A value that is always a string needs no text coercion.
@@ -1875,7 +2151,9 @@ impl<'x, 'a> Ce<'x, 'a> {
             self.bucket(inst).seq.push(Seq::Line(line));
         } else {
             let skip = if fresh { "$f ? 0 : 1" } else { "1" };
-            let line = format!("{{ let $k = {skip}; $E(() => {c}, v => {{ if ($k) {{ $k = 0; return; }} {apply}; }}); }}");
+            let line = format!(
+                "{{ let $k = {skip}; $E(() => {c}, v => {{ if ($k) {{ $k = 0; return; }} {apply}; }}); }}"
+            );
             self.bucket(inst).seq.push(Seq::Line(line));
         }
         Ok(())
@@ -1898,13 +2176,20 @@ impl<'x, 'a> Ce<'x, 'a> {
         let input_text = self.expr(inst, &none, input_expr)?;
         let kids = jsx::children(&el.children)?;
         let (content, param): (Vec<Child<'a>>, Option<SymbolId>) = if is_show {
-            if kids.iter().any(|k| matches!(k, Child::Expr(e) if FnRef::from_expr(e).is_some())) {
+            if kids
+                .iter()
+                .any(|k| matches!(k, Child::Expr(e) if FnRef::from_expr(e).is_some()))
+            {
                 return Err("a live <Show> with a render callback".into());
             }
             (kids, None)
         } else {
-            let [Child::Expr(f)] = kids.as_slice() else { return Err("<For> children must be one callback".into()) };
-            let Some(f) = FnRef::from_expr(f) else { return Err("<For> children must be a callback".into()) };
+            let [Child::Expr(f)] = kids.as_slice() else {
+                return Err("<For> children must be one callback".into());
+            };
+            let Some(f) = FnRef::from_expr(f) else {
+                return Err("<For> children must be a callback".into());
+            };
             if f.params().items.len() > 1 {
                 return Err("<For> callback with an index".into());
             }
@@ -1912,7 +2197,9 @@ impl<'x, 'a> Ce<'x, 'a> {
                 BindingPattern::BindingIdentifier(id) => id.symbol_id.get(),
                 _ => None,
             });
-            let Some(root) = fn_root(f) else { return Err("<For> callback must return JSX".into()) };
+            let Some(root) = fn_root(f) else {
+                return Err("<For> callback must return JSX".into());
+            };
             let child = match root {
                 Root::Element(e) => Child::Element(e),
                 Root::Fragment(fr) => Child::Fragment(fr),
@@ -1930,12 +2217,9 @@ impl<'x, 'a> Ce<'x, 'a> {
         let saved = self.cur;
         self.scopes.push(Scope {
             nav: vec![],
-            fresh_nav: vec![],
-            vars: HashMap::new(),
             buckets: HashMap::new(),
             order: vec![],
             builder: true,
-            root_var: "$x".into(),
         });
         self.cur = self.scopes.len() - 1;
         let mut slots = Vec::new();
@@ -1955,8 +2239,12 @@ impl<'x, 'a> Ce<'x, 'a> {
         let nav = self.scopes[self.cur].nav.join("\n");
         self.cur = saved;
         let builder = match &param_name {
-            Some((_, n)) => format!("({n}, $e) => {{ const $f = !$e, $x = $e || $t{ti}();\n{nav}\n{body}\nreturn $x; }}"),
-            None => format!("($e) => {{ const $f = !$e, $x = $e || $t{ti}();\n{nav}\n{body}\nreturn $x; }}"),
+            Some((_, n)) => format!(
+                "({n}, $e) => {{ const $f = !$e, $x = $e || $t{ti}();\n{nav}\n{body}\nreturn $x; }}"
+            ),
+            None => format!(
+                "($e) => {{ const $f = !$e, $x = $e || $t{ti}();\n{nav}\n{body}\nreturn $x; }}"
+            ),
         };
         let line = if is_show {
             self.helpers.insert("$show");
@@ -2001,7 +2289,9 @@ impl<'x, 'a> Ce<'x, 'a> {
                         let mut tokens = Vec::new();
                         if let Expression::ArrayExpression(arr) = e.without_parentheses() {
                             for x in &arr.elements {
-                                if let Some(Expression::StringLiteral(s)) = x.as_expression().map(|x| x.without_parentheses()) {
+                                if let Some(Expression::StringLiteral(s)) =
+                                    x.as_expression().map(|x| x.without_parentheses())
+                                {
                                     tokens.push(s.value.to_string());
                                 }
                             }
@@ -2021,10 +2311,14 @@ impl<'x, 'a> Ce<'x, 'a> {
         let kids = jsx::children(&el.children)?;
         let props = self.m.comps[comp].props;
         let is_slot = |e: &Expression<'_>| matches!(e.without_parentheses(), Expression::StaticMemberExpression(me) if me.property.name == "children" && props.is_some() && self.m.symbol_of_expr(&me.object) == props);
-        if kids.iter().any(|k| matches!(k, Child::Expr(e) if is_slot(e))) {
+        if kids
+            .iter()
+            .any(|k| matches!(k, Child::Expr(e) if is_slot(e)))
+        {
             return Err("`props.children` inside fresh island content".into());
         }
-        let sole = kids.len() == 1 && matches!(kids[0], Child::Expr(e) if jsx::static_child(e).is_none());
+        let sole =
+            kids.len() == 1 && matches!(kids[0], Child::Expr(e) if jsx::static_child(e).is_none());
         for k in &kids {
             match *k {
                 Child::Text(sp) => out.push_str(&jsx::esc_text(&jsx::jsx_text(self.m, sp))),
@@ -2040,13 +2334,19 @@ impl<'x, 'a> Ce<'x, 'a> {
                 }
                 Child::Element(c) => match jsx::tag_of(self.m, &c.opening_element.name) {
                     Tag::Intrinsic(_) => self.tpl_el(c, comp, out)?,
-                    Tag::Builtin(b) if b == "Show" || b == "For" => out.push_str("<!--$--><!--/-->"),
+                    Tag::Builtin(b) if b == "Show" || b == "For" => {
+                        out.push_str("<!--$--><!--/-->")
+                    }
                     Tag::Comp(k) => {
                         // Inlined in fresh content: its view's static markup.
                         let view = self.m.comps[k].view.ok_or("component without a view")?;
                         match jsx::root_of(view) {
                             Some(Root::Element(e)) => self.tpl_el(e, k, out)?,
-                            _ => return Err("fresh component content must be a single element".into()),
+                            _ => {
+                                return Err(
+                                    "fresh component content must be a single element".into()
+                                );
+                            }
                         }
                     }
                     _ => return Err("unsupported element in fresh island content".into()),
@@ -2067,7 +2367,9 @@ impl<'x, 'a> Ce<'x, 'a> {
     }
 
     fn assemble_into(&mut self, scope: usize, inst: usize, out: &mut String) {
-        let Some(b) = self.scopes[scope].buckets.remove(&inst) else { return };
+        let Some(b) = self.scopes[scope].buckets.remove(&inst) else {
+            return;
+        };
         for l in &b.setup {
             out.push_str(l);
             out.push('\n');
@@ -2102,7 +2404,8 @@ impl<'x, 'a> Ce<'x, 'a> {
         }
         if !live.is_empty() {
             if self.tier == 0 {
-                let cells: BTreeSet<String> = live.iter().flat_map(|p| p.cells.iter().cloned()).collect();
+                let cells: BTreeSet<String> =
+                    live.iter().flat_map(|p| p.cells.iter().cloned()).collect();
                 if live.len() == 1 {
                     let p = live[0];
                     let _ = writeln!(
@@ -2113,11 +2416,20 @@ impl<'x, 'a> Ce<'x, 'a> {
                         p.apply
                     );
                 } else {
-                    let fields: Vec<String> = live.iter().enumerate().map(|(i, p)| format!("_{i}: {}", p.compute)).collect();
+                    let fields: Vec<String> = live
+                        .iter()
+                        .enumerate()
+                        .map(|(i, p)| format!("_{i}: {}", p.compute))
+                        .collect();
                     let applies: Vec<String> = live
                         .iter()
                         .enumerate()
-                        .map(|(i, p)| format!("if (o._{i} !== q?._{i}) {{ const v = o._{i}; {}; }}", p.apply))
+                        .map(|(i, p)| {
+                            format!(
+                                "if (o._{i} !== q?._{i}) {{ const v = o._{i}; {}; }}",
+                                p.apply
+                            )
+                        })
                         .collect();
                     let _ = writeln!(
                         out,
@@ -2130,14 +2442,27 @@ impl<'x, 'a> Ce<'x, 'a> {
             } else if live.len() == 1 {
                 let p = live[0];
                 let skip = if fresh { "$f ? 0 : 1" } else { "1" };
-                let _ = writeln!(out, "{{ let $k = {skip}; $E(() => {}, v => {{ if ($k) {{ $k = 0; return; }} {}; }}); }}", p.compute, p.apply);
+                let _ = writeln!(
+                    out,
+                    "{{ let $k = {skip}; $E(() => {}, v => {{ if ($k) {{ $k = 0; return; }} {}; }}); }}",
+                    p.compute, p.apply
+                );
             } else {
                 let skip = if fresh { "$f ? 0 : 1" } else { "1" };
-                let fields: Vec<String> = live.iter().enumerate().map(|(i, p)| format!("_{i}: {}", p.compute)).collect();
+                let fields: Vec<String> = live
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| format!("_{i}: {}", p.compute))
+                    .collect();
                 let applies: Vec<String> = live
                     .iter()
                     .enumerate()
-                    .map(|(i, p)| format!("if (o._{i} !== q?._{i}) {{ const v = o._{i}; {}; }}", p.apply))
+                    .map(|(i, p)| {
+                        format!(
+                            "if (o._{i} !== q?._{i}) {{ const v = o._{i}; {}; }}",
+                            p.apply
+                        )
+                    })
                     .collect();
                 let _ = writeln!(
                     out,
@@ -2158,8 +2483,7 @@ enum TextTarget {
 
 fn fn_root<'a>(f: FnRef<'a>) -> Option<Root<'a>> {
     if f.is_concise() {
-        if let Some(s) = f.concise()
-        {
+        if let Some(s) = f.concise() {
             return jsx::root_of(s);
         }
         return None;
@@ -2176,9 +2500,12 @@ fn fn_root<'a>(f: FnRef<'a>) -> Option<Root<'a>> {
 fn is_stringy(e: &Expression<'_>) -> bool {
     match e.without_parentheses() {
         Expression::StringLiteral(_) | Expression::TemplateLiteral(_) => true,
-        Expression::ConditionalExpression(c) => is_stringy(&c.consequent) && is_stringy(&c.alternate),
+        Expression::ConditionalExpression(c) => {
+            is_stringy(&c.consequent) && is_stringy(&c.alternate)
+        }
         Expression::BinaryExpression(b) => {
-            b.operator == oxc_ast::ast::BinaryOperator::Addition && (is_stringy(&b.left) || is_stringy(&b.right))
+            b.operator == oxc_ast::ast::BinaryOperator::Addition
+                && (is_stringy(&b.left) || is_stringy(&b.right))
         }
         _ => false,
     }
@@ -2189,7 +2516,9 @@ fn is_stringy(e: &Expression<'_>) -> bool {
 /// component, a slot, or markup built by an expression inside it)?
 fn anchor_nests<'a>(m: &Model<'_>, view: &'a Expression<'a>) -> bool {
     fn el_nests(m: &Model<'_>, el: &JSXElement<'_>) -> bool {
-        let Ok(kids) = jsx::children(&el.children) else { return true };
+        let Ok(kids) = jsx::children(&el.children) else {
+            return true;
+        };
         kids.iter().any(|k| match k {
             Child::Text(_) => false,
             Child::Expr(e) => jsx::static_child(e).is_none() && (matches!(e.without_parentheses(), Expression::StaticMemberExpression(me) if me.property.name == "children") || contains_jsx(e)),
@@ -2200,7 +2529,11 @@ fn anchor_nests<'a>(m: &Model<'_>, view: &'a Expression<'a>) -> bool {
     fn contains_jsx(e: &Expression<'_>) -> bool {
         let mut roots = Vec::new();
         let mut complete = true;
-        super::graph::find_jsx(unsafe { &*(e as *const Expression<'_>) }, &mut roots, &mut complete);
+        super::graph::find_jsx(
+            unsafe { &*(e as *const Expression<'_>) },
+            &mut roots,
+            &mut complete,
+        );
         !roots.is_empty() || !complete
     }
     let first = anchor_element(m, view);
@@ -2214,8 +2547,14 @@ pub(crate) fn first_is_element(m: &Model<'_>, view: &Expression<'_>) -> bool {
 /// The island root's first rendered node when it is an intrinsic element of
 /// the root's own JSX, looking through fragments, context providers and
 /// `Loading` / `Errored` wrappers (they render their children in place).
-pub(crate) fn anchor_element<'a>(m: &Model<'_>, view: &'a Expression<'a>) -> Option<&'a JSXElement<'a>> {
-    fn first<'a>(m: &Model<'_>, kids: &'a [oxc_ast::ast::JSXChild<'a>]) -> Option<&'a JSXElement<'a>> {
+pub(crate) fn anchor_element<'a>(
+    m: &Model<'_>,
+    view: &'a Expression<'a>,
+) -> Option<&'a JSXElement<'a>> {
+    fn first<'a>(
+        m: &Model<'_>,
+        kids: &'a [oxc_ast::ast::JSXChild<'a>],
+    ) -> Option<&'a JSXElement<'a>> {
         match jsx::children(kids).ok()?.first().copied()? {
             Child::Element(el) => from_el(m, el),
             Child::Fragment(f) => first(m, &f.children),

@@ -5,8 +5,9 @@
 //! `satisfies` / `!`, type parameters and arguments, optional-parameter
 //! marks), so island chunks are plain JavaScript.
 use oxc_ast::ast::{
-    CallExpression, Expression, FormalParameter, IdentifierReference, ObjectProperty, PropertyKey, Statement,
-    StaticMemberExpression, TSTypeAnnotation, TSTypeParameterDeclaration, TSTypeParameterInstantiation,
+    CallExpression, Expression, FormalParameter, IdentifierReference, ObjectProperty, PropertyKey,
+    Statement, StaticMemberExpression, TSTypeAnnotation, TSTypeParameterDeclaration,
+    TSTypeParameterInstantiation,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_span::{GetSpan, Span};
@@ -38,7 +39,10 @@ pub(crate) trait Env<'a> {
     }
     /// A JSX element or fragment in expression position.
     fn jsx(&self, tx: &Tx<'_, 'a>, e: &'a Expression<'a>) -> R<String> {
-        Err(format!("JSX in client code: `{}`", super::model::short(tx.m.text(e.span()))))
+        Err(format!(
+            "JSX in client code: `{}`",
+            super::model::short(tx.m.text(e.span()))
+        ))
     }
 }
 
@@ -60,11 +64,8 @@ impl<'m, 'a> Tx<'m, 'a> {
 
     /// A function's body as text: `{ … }` or a concise expression.
     pub(crate) fn body(&self, env: &dyn Env<'a>, f: FnRef<'a>) -> R<String> {
-        if f.is_concise() {
-            if let Some(s) = f.concise()
-            {
-                return self.expr(env, s);
-            }
+        if let Some(s) = f.concise() {
+            return self.expr(env, s);
         }
         let span = f.body_span();
         match f {
@@ -86,7 +87,10 @@ impl<'m, 'a> Tx<'m, 'a> {
         let p = f.params();
         let text = self.span_with(env, p.span, |c| walk::walk_formal_parameters(c, p))?;
         let t = text.trim();
-        let t = t.strip_prefix('(').and_then(|x| x.strip_suffix(')')).unwrap_or(t);
+        let t = t
+            .strip_prefix('(')
+            .and_then(|x| x.strip_suffix(')'))
+            .unwrap_or(t);
         Ok(t.to_string())
     }
 
@@ -95,12 +99,29 @@ impl<'m, 'a> Tx<'m, 'a> {
     pub(crate) fn func(&self, env: &dyn Env<'a>, f: FnRef<'a>, is_async: bool) -> R<String> {
         let params = self.params(env, f)?;
         let body = self.body(env, f)?;
-        let body = if f.is_concise() { format!("({body})") } else { body };
-        Ok(format!("{}({params}) => {body}", if is_async { "async " } else { "" }))
+        let body = if f.is_concise() {
+            format!("({body})")
+        } else {
+            body
+        };
+        Ok(format!(
+            "{}({params}) => {body}",
+            if is_async { "async " } else { "" }
+        ))
     }
 
-    fn span_with(&self, env: &dyn Env<'a>, span: Span, run: impl FnOnce(&mut Collect<'_, 'm, 'a>)) -> R<String> {
-        let mut c = Collect { tx: self, env, edits: Vec::new(), err: None };
+    fn span_with(
+        &self,
+        env: &dyn Env<'a>,
+        span: Span,
+        run: impl FnOnce(&mut Collect<'_, 'm, 'a>),
+    ) -> R<String> {
+        let mut c = Collect {
+            tx: self,
+            env,
+            edits: Vec::new(),
+            err: None,
+        };
         run(&mut c);
         if let Some(e) = c.err {
             return Err(e);
@@ -111,7 +132,9 @@ impl<'m, 'a> Tx<'m, 'a> {
     fn special(&self, env: &dyn Env<'a>, e: &'a Expression<'a>) -> R<Option<String>> {
         match e {
             Expression::YieldExpression(y) if y.delegate => {
-                let Some(arg) = &y.argument else { return Err("empty yield*".into()) };
+                let Some(arg) = &y.argument else {
+                    return Err("empty yield*".into());
+                };
                 Ok(Some(env.read(self, arg)?))
             }
             Expression::YieldExpression(_) => Err("`yield` without `*` in a block".into()),
@@ -182,9 +205,13 @@ impl<'a> Visit<'a> for Collect<'_, '_, 'a> {
     fn visit_formal_parameter(&mut self, p: &FormalParameter<'a>) {
         if p.optional {
             // `x?: T` → `x`: erase from the pattern's end to the annotation's end.
-            let end = p.type_annotation.as_ref().map_or(p.pattern.span().end + 1, |t| t.span.end);
+            let end = p
+                .type_annotation
+                .as_ref()
+                .map_or(p.pattern.span().end + 1, |t| t.span.end);
             walk::walk_binding_pattern(self, &p.pattern);
-            self.edits.push((Span::new(p.pattern.span().end, end), String::new()));
+            self.edits
+                .push((Span::new(p.pattern.span().end, end), String::new()));
             if let Some(i) = &p.initializer {
                 self.visit_expression(i);
             }
