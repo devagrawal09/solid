@@ -19,7 +19,7 @@ use oxc_span::{GetSpan, Span};
 use super::client::{GroupCode, Serial, first_is_element};
 use super::graph::{Analysis, SiteKind, refs_expr};
 use super::jsx::{self, AttrVal, Child, Root, Tag};
-use super::model::{CellHost, FnRef, Item, LocalDecl, Model};
+use super::model::{FnRef, Item, LocalDecl, Model};
 use super::tx::{Env, R, Tx};
 use crate::store_scalars::splice;
 
@@ -42,6 +42,7 @@ function _$for(l, f, fb) { if (!l || !l.length) return _$e(fb); let s = ""; for 
 async function _$forA(l, f, fb) { if (!l || !l.length) return _$e(fb); const r = await Promise.all(l.map((x, i) => f(x, () => i))); let s = ""; for (const x of r) s += _$e(x); return s; }
 function _$err(f, fb) { try { return _$e(f()); } catch (e) { return _$e(typeof fb === "function" ? fb(() => e, () => {}) : fb); } }
 async function _$errA(f, fb) { try { return _$e(await f()); } catch (e) { return _$e(typeof fb === "function" ? fb(() => e, () => {}) : fb); } }
+async function _$proj(f, seed) { const d = seed === undefined ? {} : structuredClone(seed); const r = await f(d); return r === undefined ? d : r; }
 function _$pick(o, ks) { const r = {}; for (const k of ks) if (k in o) r[k] = o[k]; return r; }
 function _$ld($c, f, fb) { const s = $c && $c.get(Symbol.for("solid.islands.stream")); return s ? s.boundary($c, f, fb, _$e) : f($c); }
 function _$errS($c, f, fb) { const s = $c && $c.get(Symbol.for("solid.islands.stream")); return s ? s.errored($c, f, fb, _$e) : _$errA(() => f($c), fb); }
@@ -72,7 +73,7 @@ impl<'a> Env<'a> for SEnv<'_, '_, 'a> {
                 let s = self.se.m.symbol_of(id);
                 let acc = s.is_some_and(|s| {
                     self.se.m.comps[self.comp].setup.iter().any(|it| match it {
-                        Item::Cell { get, host, .. } => *get == s && *host != CellHost::Store,
+                        Item::Cell { get, .. } => *get == s && !it.store_like(),
                         Item::Memo { sym, .. } => *sym == s,
                         _ => false,
                     })
@@ -631,13 +632,9 @@ impl<'x, 'a> Se<'x, 'a> {
         for item in &c.setup {
             match item {
                 Item::Cell {
-                    get,
-                    set,
-                    init,
-                    host,
-                    ..
+                    get, set, init, rest, ..
                 } => {
-                    let init = match init {
+                    let init_text = match init {
                         Some(e) => tx.expr(&env, e)?,
                         None => "undefined".into(),
                     };
@@ -646,10 +643,28 @@ impl<'x, 'a> Se<'x, 'a> {
                         Some(s) => format!("[{g}, {}]", self.m.sym_name(*s)),
                         None => format!("[{g}]"),
                     };
-                    if *host == CellHost::Store {
-                        let _ = writeln!(body, "const {pat} = [{init}, _$noop];");
+                    if item.derived() {
+                        // A projection / derived cell: server-authoritative,
+                        // its settled value awaited (like an async memo).
+                        if item.store_like() {
+                            let seed = match rest.first() {
+                                Some(e) => tx.expr(&env, e)?,
+                                None => "undefined".into(),
+                            };
+                            let _ = writeln!(
+                                body,
+                                "const {pat} = [await _$proj({init_text}, {seed}), _$noop];"
+                            );
+                        } else {
+                            let _ = writeln!(
+                                body,
+                                "const {pat} = [_$v(await ({init_text})()), _$noop];"
+                            );
+                        }
+                    } else if item.store_like() {
+                        let _ = writeln!(body, "const {pat} = [{init_text}, _$noop];");
                     } else {
-                        let _ = writeln!(body, "const {pat} = _$cell({init});");
+                        let _ = writeln!(body, "const {pat} = _$cell({init_text});");
                     }
                 }
                 Item::Memo {
@@ -725,13 +740,14 @@ impl<'x, 'a> Se<'x, 'a> {
                                 ));
                                 continue;
                             }
-                            let Item::Cell { get, set, host, .. } = &c.setup[*ii] else {
+                            let item = &c.setup[*ii];
+                            let Item::Cell { get, set, .. } = item else {
                                 continue;
                             };
                             let n = self.m.sym_name(*get);
                             // A store's getter is its value on the server;
                             // only the keys its code touches are serialized.
-                            let v = if *host == CellHost::Store {
+                            let v = if item.store_like() {
                                 match super::store_paths::store_keys(self.m, c, *get, *set) {
                                     Some(keys) => format!(
                                         "_$pick({n}, [{}])",
@@ -829,7 +845,7 @@ pub(crate) fn emit_server<'a>(
         .map(|c| {
             c.setup
                 .iter()
-                .any(|it| matches!(it, Item::Memo { is_async: true, .. }))
+                .any(|it| matches!(it, Item::Memo { is_async: true, .. }) || it.derived())
         })
         .collect();
     loop {

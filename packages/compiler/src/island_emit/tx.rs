@@ -121,6 +121,8 @@ impl<'m, 'a> Tx<'m, 'a> {
             env,
             edits: Vec::new(),
             err: None,
+            plain: 0,
+            plain_fns: Default::default(),
         };
         run(&mut c);
         if let Some(e) = c.err {
@@ -160,7 +162,15 @@ struct Collect<'t, 'm, 'a> {
     env: &'t dyn Env<'a>,
     edits: Vec<(Span, String)>,
     err: Option<String>,
+    /// Depth inside plain generators: `action(function* …)` bodies, where
+    /// `yield` is the transaction dialect's await, not a block operation.
+    plain: u32,
+    plain_fns: std::collections::HashSet<u32>,
 }
+
+/// Runtime functions whose generator argument is plain JavaScript (the
+/// transaction dialect), not a block.
+const PLAIN_GENERATOR_HOSTS: &[&str] = &["action", "syncAction"];
 
 impl<'a> Visit<'a> for Collect<'_, '_, 'a> {
     fn visit_expression(&mut self, e: &Expression<'a>) {
@@ -171,11 +181,35 @@ impl<'a> Visit<'a> for Collect<'_, '_, 'a> {
         // arena ('a); the visitor API erases that to a local borrow, so the
         // emitters re-borrow through a raw pointer to recover it.
         let e: &'a Expression<'a> = unsafe { &*(e as *const Expression<'a>) };
+        if self.plain > 0 && matches!(e, Expression::YieldExpression(_)) {
+            walk::walk_expression(self, e);
+            return;
+        }
         match self.tx.special(self.env, e) {
             Ok(Some(r)) => self.edits.push((e.span(), r)),
             Ok(None) => walk::walk_expression(self, e),
             Err(x) => self.err = Some(x),
         }
+    }
+    fn visit_call_expression(&mut self, c: &CallExpression<'a>) {
+        if self
+            .tx
+            .m
+            .runtime_name(&c.callee)
+            .is_some_and(|n| PLAIN_GENERATOR_HOSTS.contains(&n))
+            && let Some(Expression::FunctionExpression(f)) =
+                c.arguments.first().and_then(|a| a.as_expression())
+            && f.generator
+        {
+            self.plain_fns.insert(f.span.start);
+        }
+        walk::walk_call_expression(self, c);
+    }
+    fn visit_function(&mut self, f: &oxc_ast::ast::Function<'a>, flags: oxc_semantic::ScopeFlags) {
+        let plain = self.plain_fns.contains(&f.span.start);
+        self.plain += u32::from(plain);
+        walk::walk_function(self, f, flags);
+        self.plain -= u32::from(plain);
     }
     fn visit_identifier_reference(&mut self, id: &IdentifierReference<'a>) {
         if let Some(r) = self.env.ident(self.tx, id) {

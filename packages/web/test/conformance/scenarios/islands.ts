@@ -447,4 +447,146 @@ export const App = $component(function* () {
   ]
 };
 
-export const islandsScenarios = [islandsList, islandsStream, islandsStore, islandsAsync];
+/**
+ * An optimistic store over server data with actions (todos-blocks' state
+ * shape, one module): the projection is adopted — the client's first run
+ * returns the server's value from the anchor (the fetch is not repeated);
+ * `refresh` re-runs it. A row's action writes optimistically, awaits its
+ * save, refreshes; the landing replaces the overlay. A live `Show` with a
+ * render callback (the row's error) opens from the refreshed data.
+ */
+export const islandsOptimistic: Scenario = {
+  name: "islands-optimistic",
+  covers: [
+    "optimistic store adopted from the server value",
+    "action: optimistic write, await, refresh, landing",
+    "live Show with a render callback (its parameter is the when accessor)"
+  ],
+  entry: { component: "App" },
+  sources: {
+    reference: `
+import { action, createOptimisticStore, For, refresh, Show } from "solid-js";
+import { h } from "conformance";
+const initial = () => [
+  { id: 1, title: "a", done: false },
+  { id: 2, title: "b", done: false }
+];
+function Row(props) {
+  return (
+    <li class={{ done: props.item.done, pending: !!props.item.pending }}>
+      <button class="toggle" onClick={() => props.toggle(props.item.id)} />
+      <span>{props.item.title}</span>
+      <Show when={props.item.error}>{error => <em class="err">{error().msg}</em>}</Show>
+    </li>
+  );
+}
+export function App() {
+  const [items, setItems] = createOptimisticStore(
+    async draft => (draft.length ? await h.task("fetch") : initial()),
+    []
+  );
+  const toggle = action(function* (id) {
+    setItems(t => {
+      const x = t.find(i => i.id === id);
+      x.done = !x.done;
+      x.pending = true;
+    });
+    yield h.task("save", id);
+    refresh(items);
+  });
+  return (
+    <ul>
+      <For each={items}>{item => <Row item={item} toggle={toggle} />}</For>
+    </ul>
+  );
+}
+`,
+    islands: `
+import { $component, $event, action, attempt, createOptimisticStore, For, refresh, Show } from "solid-js";
+import { h } from "conformance";
+const initial = () => [
+  { id: 1, title: "a", done: false },
+  { id: 2, title: "b", done: false }
+];
+const Row = $component(function* (props) {
+  const flip = $event(function* () {
+    const id = yield* props.item.id;
+    yield* attempt(() => props.toggle(id));
+  });
+  return function* () {
+    return (
+      <li class={{ done: yield* props.item.done, pending: !!(yield* props.item.pending) }}>
+        <button class="toggle" onClick={flip} />
+        <span>{yield* props.item.title}</span>
+        <Show when={yield* props.item.error}>{error => <em class="err">{error().msg}</em>}</Show>
+      </li>
+    );
+  };
+});
+export function App() {
+  const [items, setItems] = createOptimisticStore(
+    async draft => (draft.length ? await h.task("fetch") : initial()),
+    []
+  );
+  const toggle = action(function* (id) {
+    setItems(t => {
+      const x = t.find(i => i.id === id);
+      x.done = !x.done;
+      x.pending = true;
+    });
+    yield h.task("save", id);
+    refresh(items);
+  });
+  return (
+    <ul>
+      <For each={items}>{item => <Row item={item} toggle={toggle} />}</For>
+    </ul>
+  );
+}
+`
+  },
+  steps: [
+    {
+      name: "initial",
+      run: async ({ settle, html }) => {
+        await settle();
+        html();
+      }
+    },
+    {
+      name: "toggle a (optimistic)",
+      run: async ({ click, settle, html }) => {
+        click("li .toggle");
+        await settle();
+        html();
+      }
+    },
+    {
+      name: "save lands (refresh starts)",
+      run: async ({ tasks, settle, html }) => {
+        tasks.resolve("save#1");
+        await settle();
+        html();
+      }
+    },
+    {
+      name: "fetch lands (b errored)",
+      run: async ({ tasks, settle, html }) => {
+        tasks.resolve("fetch#1", [
+          { id: 1, title: "a", done: true },
+          { id: 2, title: "b", done: false, error: { msg: "nope" } }
+        ]);
+        await settle();
+        html();
+      }
+    }
+  ]
+};
+
+export const islandsScenarios = [
+  islandsList,
+  islandsStream,
+  islandsStore,
+  islandsAsync,
+  islandsOptimistic
+];

@@ -46,6 +46,9 @@ pub(crate) struct Refs {
     pub calls: Vec<String>,
     pub has_jsx: bool,
     pub prevent_default: bool,
+    /// Symbols passed to `refresh(…)`: a refresh re-runs their source (a
+    /// write, for liveness).
+    pub refreshed: Vec<SymbolId>,
 }
 
 struct Walker<'m, 'a> {
@@ -114,6 +117,13 @@ impl<'a> Visit<'a> for Walker<'_, 'a> {
     }
     fn visit_call_expression(&mut self, c: &CallExpression<'a>) {
         if let Some(n) = self.m.runtime_name(&c.callee) {
+            if n == "refresh" {
+                for a in &c.arguments {
+                    if let Some(s) = a.as_expression().and_then(|e| self.m.symbol_of_expr(e)) {
+                        self.out.refreshed.push(s);
+                    }
+                }
+            }
             self.out.calls.push(n.to_string());
         }
         walk::walk_call_expression(self, c);
@@ -989,6 +999,20 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                         a.written.extend(v.writes);
                     }
                 }
+            }
+        }
+    }
+    // `refresh(x)` anywhere re-runs x's source: x is written.
+    for (ci, _) in m.comps.iter().enumerate() {
+        let refreshed: Vec<SymbolId> = a.facts[ci]
+            .item_refs
+            .iter()
+            .chain(a.facts[ci].sites.iter().map(|s| &s.refs))
+            .flat_map(|r| r.refreshed.iter().copied())
+            .collect();
+        for s in refreshed {
+            if let Some(v) = a.sym_av.get(&s) {
+                a.written.extend(v.reads.iter().copied());
             }
         }
     }

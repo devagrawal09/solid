@@ -206,7 +206,7 @@ const HELPERS: &[(&str, &str)] = &[
     ),
     (
         "$show",
-        "const $show = (e, w, b) => { let d; $E(() => !!w(), (on, p) => { if (p === undefined) { if (on) $R(x => { d = x; const n = e.previousSibling; b(n.nodeType === 1 ? n : null) }); return; } if (on === p) return; if (on) $R(x => { d = x; e.before(b(null)); }); else { d(); d = undefined; const s = $start(e); while (s.nextSibling !== e) s.nextSibling.remove(); } }); };",
+        "const $show = (e, w, b) => { let d; $E(() => !!w(), (on, p) => { if (p === undefined) { if (on) $R(x => { d = x; const n = e.previousSibling; b(w, n.nodeType === 1 ? n : null) }); return; } if (on === p) return; if (on) $R(x => { d = x; e.before(b(w, null)); }); else { d(); d = undefined; const s = $start(e); while (s.nextSibling !== e) s.nextSibling.remove(); } }); };",
     ),
     (
         "$list",
@@ -1159,9 +1159,9 @@ impl<'x, 'a> Ce<'x, 'a> {
         // to later items (hoisted functions, events used by earlier locals).
         for (ii, item) in c.setup.iter().enumerate() {
             match item {
-                Item::Cell { get, set, host, .. } => {
+                Item::Cell { get, set, .. } => {
                     let gn = self.name_for(inst, *get);
-                    let kind = if *host == CellHost::Store {
+                    let kind = if item.store_like() {
                         Kind::Val
                     } else if t0 {
                         Kind::Cell0
@@ -1228,10 +1228,15 @@ impl<'x, 'a> Ce<'x, 'a> {
                     label,
                     ..
                 } => {
-                    if *host == CellHost::Optimistic || (*host == CellHost::Store && !self.t2) {
-                        return Err("store / optimistic cell in a compiled island".into());
+                    if *host != CellHost::Signal && !self.t2 {
+                        return Err("store / optimistic cell below tier 2".into());
                     }
                     let gn = self.insts[inst].names[get].0.clone();
+                    if *host == CellHost::Optimistic {
+                        let line = self.optimistic_cell(inst, comp, ii)?;
+                        self.bucket(inst).setup.push(line);
+                        continue;
+                    }
                     let init_text = match init {
                         None => "undefined".to_string(),
                         Some(e) => {
@@ -1465,6 +1470,95 @@ impl<'x, 'a> Ce<'x, 'a> {
             self.bucket(inst).setup.push(line);
         }
         Ok(())
+    }
+
+    /// An optimistic / projection cell (tier 2). A derived one (computed by
+    /// a function) is adopted: its first run returns the server's settled
+    /// value from the anchor instead of running the function (P2); later
+    /// runs (`refresh`) run it. Its function must read no reactive state
+    /// before that (the adopted run would not subscribe to it).
+    fn optimistic_cell(&mut self, inst: usize, comp: usize, ii: usize) -> R<String> {
+        let none = HashMap::new();
+        let item = &self.m.comps[comp].setup[ii];
+        let Item::Cell {
+            get,
+            set,
+            init,
+            ctor,
+            rest,
+            ..
+        } = item
+        else {
+            unreachable!()
+        };
+        if !CORE_ONLY.contains(&ctor.as_str()) && ctor != "createSignal" {
+            return Err(format!("`{ctor}` cell in a compiled island"));
+        }
+        let gn = self.insts[inst].names[get].0.clone();
+        let pat = match set {
+            Some(s) => format!("[{gn}, {}]", self.insts[inst].names[s].0),
+            None => format!("[{gn}]"),
+        };
+        let mut args = Vec::new();
+        for e in rest {
+            args.push(self.expr(inst, &none, e)?);
+        }
+        let first = match init {
+            None => "undefined".to_string(),
+            Some(e) if item.derived() => {
+                let av = self.a.av_of(comp, &self.a.facts[comp].item_refs[ii]);
+                if !av.reads.is_empty() {
+                    return Err(format!(
+                        "`{}` is computed from reactive state (its adoption would not subscribe)",
+                        self.m.sym_name(*get)
+                    ));
+                }
+                if !self.insts[inst].root {
+                    return Err(format!(
+                        "derived cell `{}` in a non-root island component",
+                        self.m.sym_name(*get)
+                    ));
+                }
+                let s = Serial::Cell(ii);
+                if !self.serial.contains(&s) {
+                    self.serial.push(s);
+                }
+                let f = self.expr(inst, &none, e)?;
+                let v = self.fresh("$ad");
+                let key = js_str(&format!("${}", self.m.sym_name(*get)));
+                self.bucket(inst).setup.push(format!("let {v} = 1;"));
+                format!("(($f) => (...a) => {v} ? ({v} = 0, $d[{key}]) : $f(...a))({f})")
+            }
+            Some(e) => {
+                let r = &self.a.facts[comp].item_refs[ii];
+                if self.evaluable(comp, r, 0) {
+                    self.expr(inst, &none, e)?
+                } else if self.insts[inst].root {
+                    let s = Serial::Cell(ii);
+                    if !self.serial.contains(&s) {
+                        self.serial.push(s);
+                    }
+                    format!("$d[{}]", js_str(&format!("${}", self.m.sym_name(*get))))
+                } else {
+                    return Err(format!(
+                        "cell `{}` initialized from server values in a non-root island component",
+                        self.m.sym_name(*get)
+                    ));
+                }
+            }
+        };
+        // `createSignal(fn)` (a derived signal) is the core's writable memo.
+        let ctor = if ctor == "createSignal" { "createSignal" } else { ctor.as_str() };
+        let callee = if ctor == "createSignal" {
+            self.rt.insert("createSignal");
+            "$S".to_string()
+        } else {
+            self.core.insert(ctor.to_string());
+            format!("$${ctor}")
+        };
+        let mut all = vec![first];
+        all.extend(args);
+        Ok(format!("const {pat} = {callee}({});", all.join(", ")))
     }
 
     /// Element / property kinds of a literal provider value.
@@ -2480,13 +2574,34 @@ impl<'x, 'a> Ce<'x, 'a> {
         let input_text = self.expr(inst, &none, input_expr)?;
         let kids = jsx::children(&el.children)?;
         let (content, param): (Vec<Child<'a>>, Option<SymbolId>) = if is_show {
-            if kids
-                .iter()
-                .any(|k| matches!(k, Child::Expr(e) if FnRef::from_expr(e).is_some()))
-            {
-                return Err("a live <Show> with a render callback".into());
+            match kids.as_slice() {
+                // A render callback: its parameter is the `when` accessor.
+                [Child::Expr(e)] if FnRef::from_expr(e).is_some() => {
+                    if jsx::attr(&attrs, "keyed").is_some() {
+                        return Err("a live keyed <Show> with a render callback".into());
+                    }
+                    let f = FnRef::from_expr(e).unwrap();
+                    let p = f.params().items.first().and_then(|p| match &p.pattern {
+                        BindingPattern::BindingIdentifier(id) => id.symbol_id.get(),
+                        _ => None,
+                    });
+                    let Some(root) = fn_root(f) else {
+                        return Err("a live <Show> render callback must return JSX".into());
+                    };
+                    let child = match root {
+                        Root::Element(e) => Child::Element(e),
+                        Root::Fragment(fr) => Child::Fragment(fr),
+                    };
+                    (vec![child], p)
+                }
+                _ if kids
+                    .iter()
+                    .any(|k| matches!(k, Child::Expr(e) if FnRef::from_expr(e).is_some())) =>
+                {
+                    return Err("a live <Show> with a render callback among other children".into());
+                }
+                _ => (kids, None),
             }
-            (kids, None)
         } else {
             let [Child::Expr(f)] = kids.as_slice() else {
                 return Err("<For> children must be one callback".into());
@@ -2516,7 +2631,10 @@ impl<'x, 'a> Ce<'x, 'a> {
             (p, n)
         });
         if let Some((p, n)) = &param_name {
-            self.insts[inst].names.insert(*p, (n.clone(), Kind::Val));
+            // A row's item is a value; a `Show` callback's parameter is the
+            // `when` accessor.
+            let kind = if is_show { Kind::Acc } else { Kind::Val };
+            self.insts[inst].names.insert(*p, (n.clone(), kind));
         }
         let saved = self.cur;
         let saved_stmt = std::mem::replace(&mut self.stmt_in_region, false);
@@ -2543,9 +2661,14 @@ impl<'x, 'a> Ce<'x, 'a> {
         let body = self.assemble(self.cur, inst);
         let nav = self.scopes[self.cur].nav.join("\n");
         self.cur = saved;
+        // Builders take (parameter, adopted node): a row's item, a `Show`'s
+        // `when` accessor.
         let builder = match &param_name {
             Some((_, n)) => format!(
                 "({n}, $e) => {{ const $f = !$e, $x = $e || $t{ti}();\n{nav}\n{body}\nreturn $x; }}"
+            ),
+            None if is_show => format!(
+                "(_, $e) => {{ const $f = !$e, $x = $e || $t{ti}();\n{nav}\n{body}\nreturn $x; }}"
             ),
             None => format!(
                 "($e) => {{ const $f = !$e, $x = $e || $t{ti}();\n{nav}\n{body}\nreturn $x; }}"
