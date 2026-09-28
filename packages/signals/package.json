@@ -41,6 +41,14 @@
       "development": "./dist/sync.dev.js",
       "default": "./dist/sync/index.sync.js"
     },
+    "./kernel": {
+      "types": "./dist/types/kernel/index.d.ts",
+      "default": "./dist/islands/kernel.js"
+    },
+    "./t0": {
+      "types": "./dist/types/kernel/t0.d.ts",
+      "default": "./dist/islands/t0.js"
+    },
     "./capabilities.json": "./capabilities.json",
     "./attribution": {
       "types": "./dist/types/attribution.d.ts",

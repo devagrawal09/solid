@@ -1,11 +1,12 @@
 //! Source-to-source expression translation by span splicing: the emitters
 //! decide what `yield*` reads, identifiers, `props.*` members, special calls
-//! and JSX become; everything else is copied from the source verbatim
-//! (TypeScript included — emitted modules are TS, like the compiler's other
-//! outputs).
+//! and JSX become; everything else is copied from the source verbatim,
+//! except TypeScript syntax, which is erased (type annotations, `as` /
+//! `satisfies` / `!`, type parameters and arguments, optional-parameter
+//! marks), so island chunks are plain JavaScript.
 use oxc_ast::ast::{
-    CallExpression, Expression, IdentifierReference, ObjectProperty, PropertyKey, Statement,
-    StaticMemberExpression,
+    CallExpression, Expression, FormalParameter, IdentifierReference, ObjectProperty, PropertyKey, Statement,
+    StaticMemberExpression, TSTypeAnnotation, TSTypeParameterDeclaration, TSTypeParameterInstantiation,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_span::{GetSpan, Span};
@@ -120,6 +121,12 @@ impl<'m, 'a> Tx<'m, 'a> {
                 env.props_member(self, s.property.name.as_str())
             }
             Expression::Identifier(id) => Ok(env.ident(self, id)),
+            // TypeScript expression wrappers: keep the expression only.
+            Expression::TSAsExpression(t) => Ok(Some(self.expr(env, &t.expression)?)),
+            Expression::TSSatisfiesExpression(t) => Ok(Some(self.expr(env, &t.expression)?)),
+            Expression::TSNonNullExpression(t) => Ok(Some(self.expr(env, &t.expression)?)),
+            Expression::TSTypeAssertion(t) => Ok(Some(self.expr(env, &t.expression)?)),
+            Expression::TSInstantiationExpression(t) => Ok(Some(self.expr(env, &t.expression)?)),
             _ => Ok(None),
         }
     }
@@ -162,6 +169,28 @@ impl<'a> Visit<'a> for Collect<'_, '_, 'a> {
             return;
         }
         walk::walk_static_member_expression(self, s);
+    }
+    fn visit_ts_type_annotation(&mut self, t: &TSTypeAnnotation<'a>) {
+        self.edits.push((t.span, String::new()));
+    }
+    fn visit_ts_type_parameter_declaration(&mut self, t: &TSTypeParameterDeclaration<'a>) {
+        self.edits.push((t.span, String::new()));
+    }
+    fn visit_ts_type_parameter_instantiation(&mut self, t: &TSTypeParameterInstantiation<'a>) {
+        self.edits.push((t.span, String::new()));
+    }
+    fn visit_formal_parameter(&mut self, p: &FormalParameter<'a>) {
+        if p.optional {
+            // `x?: T` → `x`: erase from the pattern's end to the annotation's end.
+            let end = p.type_annotation.as_ref().map_or(p.pattern.span().end + 1, |t| t.span.end);
+            walk::walk_binding_pattern(self, &p.pattern);
+            self.edits.push((Span::new(p.pattern.span().end, end), String::new()));
+            if let Some(i) = &p.initializer {
+                self.visit_expression(i);
+            }
+            return;
+        }
+        walk::walk_formal_parameter(self, p);
     }
     fn visit_object_property(&mut self, p: &ObjectProperty<'a>) {
         if p.shorthand

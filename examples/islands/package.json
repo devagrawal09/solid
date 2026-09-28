@@ -1,0 +1,20 @@
+{
+  "name": "islands-example",
+  "description": "Compiled islands: a v2-blocks page the compiler partitions into inert HTML and islands at runtime tiers 0 and 1 (documentation/plans/ssr-hydration-redesign.md, Compiler emission) — built with Vite (client + SSR) and prerendered",
+  "version": "0.0.0",
+  "private": true,
+  "author": "Ryan Carniato",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "vite build && vite build --ssr src/entry-server.ts --outDir dist-server && node prerender.mjs",
+    "check": "node check.mjs",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@solidjs/compiler": "workspace:*",
+    "@solidjs/signals": "workspace:*",
+    "solid-js": "workspace:*",
+    "vite": "^7.0.0"
+  }
+}

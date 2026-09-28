@@ -477,6 +477,15 @@ impl<'a> Env<'a> for CEnv<'_, '_, 'a> {
     }
 }
 
+/// Module-level code copied into a chunk: verbatim, TypeScript erased.
+struct PlainEnv;
+
+impl<'a> Env<'a> for PlainEnv {
+    fn read(&self, tx: &Tx<'_, 'a>, arg: &'a Expression<'a>) -> R<String> {
+        Err(format!("`yield*` in module-level code: `{}`", super::model::short(tx.m.text(arg.span()))))
+    }
+}
+
 /// The effect half of a split `$effect`: reads become `$v[i]` (their
 /// translated text goes to the compute half), `$cleanup(f)` registers `f`.
 struct EffEnv<'e, 'c, 'x, 'a> {
@@ -793,7 +802,19 @@ impl<'x, 'a> Ce<'x, 'a> {
             {
                 self.mutable_top.push(ti);
             }
-            out.push_str(self.m.text(t.stmt.span()));
+            // Type-only declarations have no runtime part.
+            let decl = match t.stmt {
+                Statement::ExportDeclaration(e) => Some(&e.declaration),
+                s => s.as_declaration(),
+            };
+            if decl.is_some_and(|d| d.is_type()) {
+                continue;
+            }
+            let text = {
+                let tx = self.tx();
+                tx.stmt(&PlainEnv, t.stmt)?
+            };
+            out.push_str(&text);
             out.push('\n');
         }
         Ok(out)

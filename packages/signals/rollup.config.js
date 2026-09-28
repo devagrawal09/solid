@@ -136,6 +136,16 @@ const syncDev = {
   plugins: [flags(true, true, false), ts("dist"), pretty]
 };
 
+// Island runtime tiers (documentation/plans/island-runtime-tiers.md): the
+// tier-1 kernel (`@solidjs/signals/kernel`, the core's API subset) and the
+// tier-0 batching helper (`@solidjs/signals/t0`), standalone modules that
+// compiled island chunks import (packages/compiler `compileIslands`).
+const islandRuntimes = {
+  input: { kernel: "src/kernel/index.ts", t0: "src/kernel/t0.ts" },
+  output: { dir: "dist/islands", format: "esm", entryFileNames: "[name].js" },
+  plugins: [flags(false, false), ts("dist/islands")]
+};
+
 export default [
   flat("dev", true, true),
   tree("dist/prod", false, false),
@@ -145,7 +155,8 @@ export default [
   // prod tree's caps must not move because of it.
   tree("dist/observe", false, true),
   syncTree("dist/sync"),
-  syncDev
+  syncDev,
+  islandRuntimes
 ];
 
 // Heuristic-oracle measurement build (documentation/plans/heuristic-oracles.md):

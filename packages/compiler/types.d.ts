@@ -458,3 +458,65 @@ export function transformRefreshAsync(
   code: string,
   options?: TransformRefreshOptions | null
 ): Promise<TransformResult>;
+
+/** Options of `compileIslands` (compiled islands over the v2 block graph). */
+export interface CompileIslandsOptions {
+  filename?: string;
+  /** Prefix of the module's island ids (unique per app). */
+  idPrefix?: string;
+  /** Tier runtimes the activation chunks import. */
+  t0Module?: string;
+  kernelModule?: string;
+  coreModule?: string;
+  /** Bind tier-1 islands to the core (a page that loads it anyway). */
+  tier1Core?: boolean;
+  /** Raise every island to at least this tier. */
+  minTier?: 0 | 1 | 2;
+  /** Instrumented output (labelled tier-0 cells, reads through `get`). */
+  debug?: boolean;
+  /** Probe cell hosts (`object.method`), e.g. the conformance harness's `h.signal`. */
+  probeHosts?: string[];
+  moduleName?: string;
+}
+
+export interface CompileIslandsResult {
+  /** String-template server module (or the hydratable SSR compile on fallback). */
+  server: string;
+  /** On fallback: the hydratable DOM compile. */
+  client: string | null;
+  /** One activation module per island group. */
+  chunks: { id: string; code: string }[];
+  manifest: {
+    version: 1;
+    module: string | null;
+    fallback: string | null;
+    islands: Array<{
+      id: string;
+      root: string;
+      members: string[];
+      tier: 0 | 1 | 2;
+      analysisTier: 0 | 1 | 2;
+      ownTiers: Record<string, number>;
+      why: string[];
+      runtime: string;
+      cells: string[];
+      events: string[];
+      windowEvents: string[];
+      anchor: "element" | "comment";
+      nests: boolean;
+      activation: "lazy" | "load";
+      preventDefault: boolean;
+      serialized: string[];
+      notes: string[];
+    }>;
+    components: Array<{
+      name: string;
+      class: "inert" | "island-root" | "island-member";
+      islands: string[];
+    }>;
+  };
+  /** Why the module falls back to hydration, when it does. */
+  fallback: string | null;
+}
+
+export function compileIslands(code: string, options?: CompileIslandsOptions): CompileIslandsResult;

@@ -46,7 +46,9 @@ function islandsEntry({
   budget,
   network = true,
   chunk = id => CHUNK + id,
-  hooks = {}
+  hooks = {},
+  hydrate = [],
+  web = "@solidjs/web"
 } = {}) {
   const J = JSON.stringify;
   const eager = islands.filter(i => mode === "eager" || i.activation === "load");
@@ -107,8 +109,18 @@ function islandsEntry({
       start += guard;
     }
   }
+  // Fallback modules (not compiled to islands, e.g. tier 2: stores, async,
+  // optimistic writes): today's hydration of their root component.
+  if (hydrate.length) {
+    s += `import { hydrate as $hydrate, createComponent as $cc } from ${J(web)};\n`;
+    hydrate.forEach((h, n) => (s += `import { ${h.export} as $H${n} } from ${J(h.module)};\n`));
+  }
   s += "export function start() {\n";
   if (hooks.before) s += hooks.before + "\n";
+  hydrate.forEach(
+    (h, n) =>
+      (s += `$hydrate(() => $cc($H${n}, {}), document.querySelector(${J(h.selector || "#root")}));\n`)
+  );
   eager.forEach((i, n) => {
     const find =
       i.anchor === "comment"
@@ -265,7 +277,9 @@ function solidIslands(options = {}) {
     budget,
     network,
     runtimes = {},
-    tier1Core = "auto"
+    tier1Core = "auto",
+    rootExport = "App",
+    mount = "#root"
   } = options;
   let compiler;
   let config;
@@ -304,26 +318,37 @@ function solidIslands(options = {}) {
           prefetch,
           overrides,
           budget,
-          network
+          network,
+          hydrate: fallbackRoots(collected, rootFile, rootExport, mount)
         });
       }
       const chunkId = id.slice(("\0" + CHUNK).length, -3);
       const code = collected.chunks.get(chunkId);
       if (code == null) this.error(`[solid-islands] unknown island chunk ${chunkId}`);
-      return await stripTypes(code, id);
+      // Chunks are plain JavaScript (the compiler erases TypeScript).
+      return code;
     },
     async transform(code, id, opts) {
       const file = id.split("?")[0];
       if (!matches(file) || file.startsWith("\0")) return null;
       const ssr = !!(opts && opts.ssr);
       const out = compiler.compileFile(file, code);
-      if (ssr) return { code: await stripTypes(out.server, file + ".ts"), map: null };
-      if (out.fallback) return { code: await stripTypes(out.client, file + ".ts"), map: null };
+      // The module keeps its .tsx id: Vite's TypeScript transform runs after
+      // this pre plugin on the (JSX-free) output.
+      if (ssr) return { code: out.server, map: null };
+      if (out.fallback) return { code: out.client, map: null };
       // An islands-compiled module has no client code of its own: its live
       // parts ship as the island chunks.
       return { code: "export {};\n", map: null };
     }
   };
+}
+
+/** A root module that fell back to hydration is hydrated by the entry. */
+function fallbackRoots(collected, rootFile, rootExport = "App", mount = "#root") {
+  return collected.fallbacks.some(f => f.file === rootFile)
+    ? [{ module: rootFile, export: rootExport, selector: mount }]
+    : [];
 }
 
 function collectWithDedupe(compiler, rootFile, tier1Core) {
@@ -343,17 +368,6 @@ function resolveRuntimes(r) {
   return { t0: r.t0, kernel: r.kernel, core: r.core };
 }
 
-async function stripTypes(code, id) {
-  const esbuild = require("esbuild");
-  const out = await esbuild.transform(code, {
-    loader: "ts",
-    sourcefile: id,
-    format: "esm",
-    target: "es2022"
-  });
-  return out.code;
-}
-
 /** esbuild plugin (the measurement harness). */
 function esbuildIslands({
   root,
@@ -364,7 +378,9 @@ function esbuildIslands({
   network,
   hooks,
   compiler,
-  filter = /\.[jt]sx$/
+  filter = /\.[jt]sx$/,
+  rootExport = "App",
+  mount = "#root"
 } = {}) {
   compiler ||= new IslandsCompiler();
   return {
@@ -387,7 +403,8 @@ function esbuildIslands({
               overrides,
               budget,
               network,
-              hooks
+              hooks,
+              hydrate: fallbackRoots(c, root, rootExport, mount)
             }),
             loader: "js",
             resolveDir: path.dirname(root)
@@ -409,6 +426,7 @@ module.exports = {
   IslandsCompiler,
   solidIslands,
   esbuildIslands,
+  fallbackRoots,
   PREFETCH,
   ENTRY,
   CHUNK

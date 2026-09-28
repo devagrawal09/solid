@@ -201,7 +201,13 @@ export const APPS = {
       // Reference bundle: the same app client-rendered (what hydration adds).
       CSR: { server: "apps/todos/server.tsx", client: "apps/todos/csr.tsx", hydratable: false, bytesOnly: true },
       // Runtime-only on-interaction hydration of the whole app.
-      "A-lazy": { server: "apps/todos/server.tsx", client: "apps/todos/client-lazy.ts", splitting: true }
+      "A-lazy": { server: "apps/todos/server.tsx", client: "apps/todos/client-lazy.ts", splitting: true },
+      // Compiler emission: `compileIslands` on todos-blocks' app module. Its
+      // one island group needs tier 2 (an optimistic async store, actions,
+      // Loading / Errored), so the module falls back to hydration: the
+      // server output is the hydratable SSR compile and the generated entry
+      // hydrates the root (the manifest records why).
+      C: { server: "apps/todos/server.tsx", client: "apps/islands-client.ts", islands: { root: "../../examples/todos-blocks/src/app.tsx", mode: "auto" } }
     }
   },
   "todos-local": {
