@@ -323,6 +323,23 @@ describe("pay-for-use tree-shaking (#2883)", () => {
     expect(minifiedBytes).toBeLessThan(25_500);
   });
 
+  it("renderer block entry points do not retain the block runtime (install-on-use)", async () => {
+    // What @solidjs/web's insert / event delegation and flatten reference:
+    // forwarders the first block constructor fills (block-hooks.ts).
+    const { code } = await bundleFixture(
+      `export { createSignal, createRoot, flatten, isBlock, inBlock, renderBlock, dispatchBlock, lazyView } from "sigsrc";`
+    );
+    for (const marker of [
+      "function runBlockAs",
+      "function reportBlockError",
+      "function readGuarded",
+      "function drive",
+      "function perform",
+      "function $("
+    ])
+      expect(code, marker).not.toContain(marker);
+  });
+
   it("plain stores shed the verdict layer, affects, boundaries, and map", async () => {
     const { retained } = await bundleFixture(
       `export { createStore, createSignal, createEffect, createRoot, flush } from "sigsrc";`

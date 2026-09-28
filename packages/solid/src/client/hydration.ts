@@ -25,6 +25,7 @@ import {
   createOptimistic as coreOptimistic,
   createProjection as coreProjection,
   createStore as coreStore,
+  createDerivedStore as coreDerivedStore,
   createOptimisticStore as coreOptimisticStore,
   createRenderEffect as coreRenderEffect,
   createEffect as coreEffect,
@@ -1754,6 +1755,31 @@ export const createStore: {
     ? _hydrateStoreLike!(coreStore, args[0], args[1] ?? {}, args[2])
     : (coreStore as Function)(...args);
 }) as any;
+
+/**
+ * The derived form of {@link createStore} alone:
+ * `createDerivedStore(fn, seed, options?)` is `createStore(fn, seed,
+ * options?)`, hydration-aware in the same way. The compiler rewrites a
+ * `createStore` call whose first argument is a function or a block to it, and
+ * one whose first argument is statically not a function to
+ * `createPlainStore`, so an app that never derives a store does not carry
+ * the projection / reconcile machinery.
+ */
+export const createDerivedStore: {
+  <T extends object, B extends ProjectionBlock<T>>(
+    fn: B & ProjectionBlock<T>,
+    seed: Partial<T> | Store<NoFn<T>>,
+    options?: HydrationProjectionOptions
+  ): BlockStoreReturn<B, T>;
+  <T extends object = {}>(
+    fn: ((draft: T) => void | T | Promise<void | T> | AsyncIterable<void | T>) & ReactiveHostBlock,
+    seed: Partial<T> | Store<NoFn<T>>,
+    options?: HydrationProjectionOptions
+  ): [get: Refreshable<Store<T>>, set: StoreSetter<T>];
+} = ((fn: any, seed: any, options?: any) =>
+  sharedConfig.hydrating
+    ? _hydrateStoreLike!(coreDerivedStore, fn, seed ?? {}, options)
+    : (coreDerivedStore as Function)(fn, seed, options)) as any;
 
 /**
  * The store equivalent of `createOptimistic`. Writes inside an

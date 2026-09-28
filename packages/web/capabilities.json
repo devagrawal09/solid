@@ -12,7 +12,7 @@
     "Repeat": ["count", "from"],
     "Dynamic": ["component"]
   },
-  "featureExportsDescription": "Core runtime slicing (documentation/plans/core-runtime-slicing.md): per link-time feature switch of @solidjs/signals (src/core/features.ts), the exports whose use needs it. The capability linker turns a switch off for a fully known graph that imports none of them (a namespace import uses them all). COMPILED_SEAMS is decided by the compiler configuration, never by imports.",
+  "featureExportsDescription": "Core runtime slicing (documentation/plans/core-runtime-slicing.md): per link-time feature switch of @solidjs/signals (src/core/features.ts), the exports whose use needs it. The capability linker turns a switch off for a fully known graph that imports none of them (a namespace import uses them all). COMPILED_SEAMS is decided by the compiler configuration, never by imports. In a build, the linker reads each application module's compiled output instead of its authored imports: the names it references, ITERABLE by the `yield*` left in it, COMPILED_SEAMS by the seams it requests.",
   "featureExports": {
     "OPTIMISTIC": [],
     "VERDICTS": [],

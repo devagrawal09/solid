@@ -28,7 +28,7 @@ afterAll(() => {
 });
 
 /** Rendered (pre-minify) bytes of @solidjs/signals store modules in the bundle. */
-async function storeBytes(code: string): Promise<number> {
+async function storeBytes(code: string, only?: RegExp): Promise<number> {
   const dir = mkdtempSync(join(tmpdir(), "solid-store-pfu-"));
   dirs.push(dir);
   const entry = join(dir, "entry.js");
@@ -40,7 +40,7 @@ async function storeBytes(code: string): Promise<number> {
   await bundle.close();
   let bytes = 0;
   for (const [id, mod] of Object.entries(output[0].modules))
-    if (/[\\/]store[\\/]/.test(id)) bytes += mod.renderedLength;
+    if ((only ?? /[\\/]store[\\/]/).test(id)) bytes += mod.renderedLength;
   return bytes;
 }
 
@@ -64,5 +64,23 @@ describe.skipIf(!existsSync(DIST))("store pay-for-use (dist/solid.js)", () => {
 
   it("$store retains the store (positive control)", async () => {
     expect(await storeBytes(`export { $store } from "SOLID";`)).toBeGreaterThan(10_000);
+  });
+
+  // Coupling 3: the derived `createStore(fn, seed)` form statically retains
+  // projection and reconcile. The compiler rewrites calls whose form is
+  // settled to the single-form constructors; the plain one ships neither.
+  const DERIVED = /[\\/]store[\\/]next[\\/](projection|reconcile)\.js$/;
+  it("the plain store constructors ship no projection / reconcile", async () => {
+    expect(await storeBytes(`export { createPlainStore } from "SOLID";`, DERIVED)).toBe(0);
+    expect(await storeBytes(`export { $store } from "SOLID";`, DERIVED)).toBe(0);
+  });
+
+  it("createStore and the derived constructor keep them (positive control)", async () => {
+    expect(await storeBytes(`export { createStore } from "SOLID";`, DERIVED)).toBeGreaterThan(
+      5_000
+    );
+    expect(
+      await storeBytes(`export { createDerivedStore } from "SOLID";`, DERIVED)
+    ).toBeGreaterThan(5_000);
   });
 });

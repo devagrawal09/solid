@@ -1,7 +1,7 @@
 import { template as _$template } from "@solidjs/web";
 import { insert as _$insert } from "@solidjs/web";
 var _tmpl$ = /* @__PURE__ */ _$template(`<p>`);
-import { $, createMemo, createSignal, createStore } from "solid-js";
+import { $, createMemo, createSignal, createStore, createPlainStore as _$createPlainStore } from "solid-js";
 interface Item {
 	id: number;
 	name: string;
@@ -11,7 +11,7 @@ export function List(props: {
 	filter: string;
 	selected: Item;
 }) {
-	const [store] = createStore({
+	const [store] = _$createPlainStore({
 		user: { name: "Ada" },
 		items: [] as Item[]
 	});
