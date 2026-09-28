@@ -173,7 +173,7 @@ impl Collector<'_> {
 
 /// Is the argument a function (expression or arrow) whose body contains JSX
 /// anywhere — including nested callbacks, which run during the block?
-fn body_has_jsx(argument: &Argument<'_>) -> bool {
+pub(crate) fn body_has_jsx(argument: &Argument<'_>) -> bool {
     #[derive(Default)]
     struct Finder {
         found: bool,

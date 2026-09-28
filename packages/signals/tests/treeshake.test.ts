@@ -340,6 +340,23 @@ describe("pay-for-use tree-shaking (#2883)", () => {
       expect(code, marker).not.toContain(marker);
   });
 
+  it("a fully compiled block module retains neither the driver nor perform", async () => {
+    // What the v2 client lowering emits when every body is lowered: the
+    // compiled-only constructors, the path readers, the compiled view reads
+    // and async bodies (documentation/plans/blocks-v2-performance.md §10).
+    const { code } = await bundleFixture(
+      `export { createSignal, createRoot, syncBlock, $componentCompiled, $eventCompiled, readPath1, readPathN, readValue, readAccessor, readSelected, readContext, asyncBody } from "sigsrc";`
+    );
+    for (const marker of [
+      "function drive(",
+      "function perform(",
+      "function performValue(",
+      "function stepSync(",
+      "function $("
+    ])
+      expect(code, marker).not.toContain(marker);
+  });
+
   it("plain stores shed the verdict layer, affects, boundaries, and map", async () => {
     const { retained } = await bundleFixture(
       `export { createStore, createSignal, createEffect, createRoot, flush } from "sigsrc";`

@@ -53,6 +53,7 @@
       "storeHasOptimisticFamily",
       "$store",
       "readStore",
+      "readSelected",
       "readPath",
       "readPath1",
       "readPath2",

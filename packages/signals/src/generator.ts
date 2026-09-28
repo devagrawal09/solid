@@ -769,8 +769,51 @@ function readThrough(value: unknown): unknown {
   if (isOp(value) && value[OP] === "read") return readThrough(value.source());
   return typeof value === "function" &&
     ((value as any)[BLOCK] || Symbol.iterator in (value as object))
-    ? perform(value as SourceAccessor<unknown>)
+    ? readFunction(value)
     : value;
+}
+
+/**
+ * `perform` of a readable function found at a path (`readThrough`): an
+ * accessor is read, a view is a value, a block is delegated to under the
+ * current host, and any other iterable function — a context provider — is
+ * stepped, each operation it yields performed as the driver would.
+ *
+ * Deliberately not `perform` itself, so the path readers (in every compiled
+ * block app) do not retain the generic dispatch: the one difference is that
+ * an iterable that yields something other than an operation fails with
+ * `[INVALID_YIELD]` here — the driver's verdict for the same iterable —
+ * where `perform` would dispatch on the yielded value.
+ */
+function readFunction(target: any): unknown {
+  if (target[Symbol.iterator] === accessorIterator) {
+    return blockGuard ? readGuarded(target) : target();
+  }
+  if (target[VIEW]) return target;
+  if (target[BLOCK]) return delegateSync(target as AnyBlock, undefined);
+  if (ownIterator(target)) {
+    const it = target[Symbol.iterator]() as Iterator<unknown>;
+    let step = it.next();
+    while (!step.done) {
+      const op = step.value;
+      if (!isOp(op)) throw invalidYield(op);
+      step = it.next(performOp(op));
+    }
+    return step.value;
+  }
+  return readGuarded(target);
+}
+
+/**
+ * `perform(readPath(root, keys))` for a root that is a path token (`const u
+ * = store.user` in a block body, then `yield* u.name`): the token is
+ * consumed and its prefix prepended, the host admits the read, and the walk
+ * runs with the guard lowered — without `perform`'s dispatch.
+ */
+function readTokenPath(root: unknown, keys: readonly PathKey[]): unknown {
+  const op = pathRead(root, keys, "store", false) as ReadOp<() => unknown>;
+  checkHost(currentHost, "read");
+  return readGuarded(op.source);
 }
 
 function pathRead(root: unknown, path: readonly PathKey[], kind: string, delegated: boolean): Op {
@@ -856,7 +899,7 @@ function propsTarget(root: any): any {
 export function readPath1<R, const K0 extends PathKey>(root: R, k0: K0): PathResult<R, [K0]>;
 export function readPath1(root: any, k0: PathKey): any {
   if (typedPropsCreated) root = propsTarget(root);
-  if (tokensCreated && isToken(root)) return perform(readPath(root, [k0]));
+  if (tokensCreated && isToken(root)) return readTokenPath(root, [k0]);
   if (!blockGuard) return readThrough(hop(root, k0));
   const prev = setBlockGuard(false);
   try {
@@ -874,7 +917,7 @@ export function readPath2<R, const K0 extends PathKey, const K1 extends PathKey>
 ): PathResult<R, [K0, K1]>;
 export function readPath2(root: any, k0: PathKey, k1: PathKey): any {
   if (typedPropsCreated) root = propsTarget(root);
-  if (tokensCreated && isToken(root)) return perform(readPath(root, [k0, k1]));
+  if (tokensCreated && isToken(root)) return readTokenPath(root, [k0, k1]);
   if (!blockGuard) return readThrough(hop(hop(root, k0), k1));
   const prev = setBlockGuard(false);
   try {
@@ -893,7 +936,7 @@ export function readPath3<
 >(root: R, k0: K0, k1: K1, k2: K2): PathResult<R, [K0, K1, K2]>;
 export function readPath3(root: any, k0: PathKey, k1: PathKey, k2: PathKey): any {
   if (typedPropsCreated) root = propsTarget(root);
-  if (tokensCreated && isToken(root)) return perform(readPath(root, [k0, k1, k2]));
+  if (tokensCreated && isToken(root)) return readTokenPath(root, [k0, k1, k2]);
   if (!blockGuard) return readThrough(hop(hop(hop(root, k0), k1), k2));
   const prev = setBlockGuard(false);
   try {
@@ -913,7 +956,7 @@ export function readPath4<
 >(root: R, k0: K0, k1: K1, k2: K2, k3: K3): PathResult<R, [K0, K1, K2, K3]>;
 export function readPath4(root: any, k0: PathKey, k1: PathKey, k2: PathKey, k3: PathKey): any {
   if (typedPropsCreated) root = propsTarget(root);
-  if (tokensCreated && isToken(root)) return perform(readPath(root, [k0, k1, k2, k3]));
+  if (tokensCreated && isToken(root)) return readTokenPath(root, [k0, k1, k2, k3]);
   if (!blockGuard) return readThrough(hop(hop(hop(hop(root, k0), k1), k2), k3));
   const prev = setBlockGuard(false);
   try {
@@ -930,7 +973,7 @@ export function readPathN<R, const P extends readonly PathKey[]>(
 ): PathResult<R, P>;
 export function readPathN(root: any, keys: readonly PathKey[]): any {
   if (typedPropsCreated) root = propsTarget(root);
-  if (tokensCreated && isToken(root)) return perform(readPath(root, keys));
+  if (tokensCreated && isToken(root)) return readTokenPath(root, keys);
   if (!blockGuard) return readThrough(walkProxies(root, keys));
   const prev = setBlockGuard(false);
   try {
@@ -1906,48 +1949,53 @@ function performValue(target: unknown): unknown {
   }
   // A v2 setter's receipt (`yield* set(v)`): the written value.
   if (target instanceof Receipt) return target.value;
-  if (isOp(target)) {
-    checkHost(currentHost, target[OP]);
-    switch (target[OP]) {
-      case "read":
-        return readGuarded(target.source);
-      case "attempt": {
-        const value = readGuarded(target.run);
-        if (isThenableValue(value)) {
-          throw new TypeError(
-            __DEV__
-              ? "[ASYNC_OP_OUTSIDE_DRIVER] An async `attempt` can only be performed by the generator driver. Keep `yield* attempt(...)` inline in the block so the compiler leaves it to the runtime"
-              : "[ASYNC_OP_OUTSIDE_DRIVER]"
-          );
-        }
-        return value;
-      }
-      case "create":
-        return readGuarded(target.make);
-      case "cleanup":
-        return void registerCleanup(target.fn);
-      case "context":
-        return readGuarded(target.read);
-      case "flush":
-        return void flush();
-      case "write":
-        return readGuarded(() => target.target(target.value));
-      case "call":
-        return delegateSync(target.block, target.input);
-      case "raise":
-        throw target.error;
-      case "wait":
-        throw new TypeError(
-          __DEV__
-            ? "[ASYNC_OP_OUTSIDE_DRIVER] A suspension can only be performed by the generator driver. Keep `yield* attempt(...)` inline in the block so the compiler leaves it to the runtime"
-            : "[ASYNC_OP_OUTSIDE_DRIVER]"
-        );
-    }
-  }
+  if (isOp(target)) return performOp(target);
   // Setter receipts, context objects and helper generators (`yield*
   // useTodos()`): step their iterator here.
   if (ownIterator(target) || isGeneratorObject(target)) return stepSync(target as any);
   throw invalidYield(target);
+}
+
+/** One operation, performed in call form under the current host (the
+ * host check, then the operation). */
+function performOp(op: Op): unknown {
+  checkHost(currentHost, op[OP]);
+  switch (op[OP]) {
+    case "read":
+      return readGuarded(op.source);
+    case "attempt": {
+      const value = readGuarded(op.run);
+      if (isThenableValue(value)) {
+        throw new TypeError(
+          __DEV__
+            ? "[ASYNC_OP_OUTSIDE_DRIVER] An async `attempt` can only be performed by the generator driver. Keep `yield* attempt(...)` inline in the block so the compiler leaves it to the runtime"
+            : "[ASYNC_OP_OUTSIDE_DRIVER]"
+        );
+      }
+      return value;
+    }
+    case "create":
+      return readGuarded(op.make);
+    case "cleanup":
+      return void registerCleanup(op.fn);
+    case "context":
+      return readGuarded(op.read);
+    case "flush":
+      return void flush();
+    case "write":
+      return readGuarded(() => op.target(op.value));
+    case "call":
+      return delegateSync(op.block, op.input);
+    case "raise":
+      throw op.error;
+    case "wait":
+      throw new TypeError(
+        __DEV__
+          ? "[ASYNC_OP_OUTSIDE_DRIVER] A suspension can only be performed by the generator driver. Keep `yield* attempt(...)` inline in the block so the compiler leaves it to the runtime"
+          : "[ASYNC_OP_OUTSIDE_DRIVER]"
+      );
+  }
+  return undefined;
 }
 
 function isGeneratorObject(target: unknown): boolean {

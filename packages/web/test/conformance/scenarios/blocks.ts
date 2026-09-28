@@ -500,11 +500,121 @@ export function App() {
   steps: [{ name: "initial", run: ({ html }) => html() }]
 };
 
+export const blocksAsyncEvent: Scenario = {
+  name: "blocks-async-event",
+  covers: [
+    "event that waits (`yield* attempt(() => promise)`)",
+    "write after the wait",
+    "context read through a helper generator"
+  ],
+  entry: { component: "App" },
+  sources: {
+    reference: `
+import { createContext, useContext } from "solid-js";
+import { h } from "conformance";
+const Api = createContext("api");
+function useApi() {
+  return useContext(Api);
+}
+function Saver() {
+  const api = useApi();
+  const [saved, setSaved] = h.signal("saved", "none");
+  const save = async () => {
+    h.run("save");
+    const value = await h.task("save", api);
+    h.run("resumed");
+    setSaved(value);
+  };
+  return <button class="save" onClick={save}>{saved()}</button>;
+}
+export function App() {
+  return (
+    <Api value="remote">
+      <Saver />
+    </Api>
+  );
+}
+`,
+    blocks: `
+import { $component, $event, attempt, createContext } from "solid-js";
+import { h } from "conformance";
+const Api = createContext("api");
+function* useApi() {
+  return yield* Api;
+}
+const Saver = $component(function* () {
+  const api = yield* useApi();
+  const [saved, setSaved] = h.signal("saved", "none");
+  const save = $event(function* () {
+    h.run("save");
+    const value = yield* attempt(() => h.task("save", api));
+    h.run("resumed");
+    setSaved(value);
+  });
+  return function* () {
+    return <button class="save" onClick={save}>{yield* saved}</button>;
+  };
+});
+export function App() {
+  return (
+    <Api value="remote">
+      <Saver />
+    </Api>
+  );
+}
+`
+  },
+  modes: {
+    "client/blocks-uncompiled": {
+      status: "differs",
+      reason:
+        "Uncompiled pipeline only (generic JSX transform + @solidjs/h, generator driver): after the resumed write the view renders `done`, then re-renders `none`. The same event on the driver under the Solid compiler (the compiled mode before the async lowering: `$eventCompiled($(function* …))`, dispatched by `dispatchBlock`) matches the oracle, and so does the compiled async body; the difference is in the uncompiled rendering path, not in the block runtime. Pinned here, not fixed.",
+      trace: [
+        "## mount",
+        'read saved = "none"',
+        "## initial",
+        'html = <button class="save">none</button>',
+        "## click",
+        "run save",
+        'task save#1 = "remote"',
+        'html = <button class="save">none</button>',
+        "## resolve",
+        'settle save#1 = "done"',
+        "run resumed",
+        'write saved = "done"',
+        'read saved = "done"',
+        'read saved = "none"',
+        'html = <button class="save">none</button>',
+        "## teardown"
+      ]
+    }
+  },
+  steps: [
+    { name: "initial", run: ({ html }) => html() },
+    {
+      name: "click",
+      run: ctx => {
+        click(".save")(ctx);
+        ctx.html();
+      }
+    },
+    {
+      name: "resolve",
+      run: async ({ tasks, settle, html }) => {
+        tasks.resolve("save#1", "done");
+        await settle();
+        html();
+      }
+    }
+  ]
+};
+
 export const blocksScenarios: Scenario[] = [
   blocksCounter,
   blocksEffect,
   blocksPropsChild,
   blocksAsyncResolve,
   blocksAsyncReject,
-  blocksContext
+  blocksContext,
+  blocksAsyncEvent
 ];

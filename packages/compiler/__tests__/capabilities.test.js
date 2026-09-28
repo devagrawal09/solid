@@ -356,6 +356,29 @@ export const App = $component(function* () {
   test("a residual generator with yield* keeps ITERABLE on, naming the module", async () => {
     const p = withLoad({
       "src/main.tsx": MAIN,
+      // An async event whose read the compiler cannot prove (a \`let\`
+      // binding) keeps its generator for the driver.
+      "src/app.tsx": `import { $component, $event, attempt } from "solid-js";
+let url = () => "/x";
+export const App = $component(function* () {
+  const save = $event(function* () { const u = yield* url; yield* attempt(() => fetch(u)); });
+  return function* () { return <button onClick={save}>save</button>; };
+});
+`
+    });
+    const report = await p.proveCompiled();
+    expect(report.features.ITERABLE.on).toBe(true);
+    expect(report.features.ITERABLE.because[0]).toMatch(
+      /^src\/app\.tsx:\d+: 2 yield\* left in compiled output$/
+    );
+    expect(report.facts.residualGenerators).toEqual([
+      expect.objectContaining({ file: "src/app.tsx", delegations: 2 })
+    ]);
+  });
+
+  test("an async event the client lowering compiles leaves no yield*: ITERABLE off", async () => {
+    const p = withLoad({
+      "src/main.tsx": MAIN,
       "src/app.tsx": `import { $component, $event, attempt } from "solid-js";
 export const App = $component(function* () {
   const save = $event(function* () { yield* attempt(() => fetch("/x")); });
@@ -364,13 +387,8 @@ export const App = $component(function* () {
 `
     });
     const report = await p.proveCompiled();
-    expect(report.features.ITERABLE.on).toBe(true);
-    expect(report.features.ITERABLE.because[0]).toMatch(
-      /^src\/app\.tsx:\d+: 1 yield\* left in compiled output$/
-    );
-    expect(report.facts.residualGenerators).toEqual([
-      expect.objectContaining({ file: "src/app.tsx", delegations: 1 })
-    ]);
+    expect(report.features.ITERABLE.on).toBe(false);
+    expect(report.facts.residualGenerators).toEqual([]);
   });
 
   test("an imported but never created store keeps STORES off; a created one turns it on", async () => {

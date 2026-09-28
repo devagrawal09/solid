@@ -188,12 +188,9 @@ impl Imports {
         {
             return local.clone();
         }
-        // `store_forms.rs` (a later pass) adds `createPlainStore as
-        // _$createPlainStore` without checking for an existing specifier.
-        let base = match imported {
-            "createPlainStore" => "_$plainStore".to_string(),
-            _ => format!("_${imported}"),
-        };
+        // (`store_forms.rs`, a later pass, reuses this specifier for the
+        // plain `createStore` calls it rewrites.)
+        let base = format!("_${imported}");
         let mut local = base.clone();
         let mut n = 2;
         while self.taken.contains(&local) {
@@ -957,11 +954,15 @@ impl EraseCollector<'_, '_> {
         // What the call becomes when its block is erasable, and whether the
         // check skips nested blocks (a setup's views, events and memos).
         let (target, skip_blocks) = match name {
+            // (A body with JSX is scoped for hydration ids on both sides,
+            // `block_scope.rs`: its block reserves an id slot the server
+            // reserves too, so it is never erased on the client alone.)
             "effectBlock"
                 if call.arguments.len() == 2
                     && function.params.items.len() == 1
                     && function.params.rest.is_none()
-                    && half_cleanups(function).is_some() =>
+                    && half_cleanups(function).is_some()
+                    && !crate::block_scope::body_has_jsx(&block.arguments[0]) =>
             {
                 ("createEffect", false)
             }
@@ -972,7 +973,8 @@ impl EraseCollector<'_, '_> {
                 if call.arguments.len() == 1
                     && function.params.items.is_empty()
                     && function.params.rest.is_none()
-                    && half_cleanups(function).is_some() =>
+                    && half_cleanups(function).is_some()
+                    && !crate::block_scope::body_has_jsx(&block.arguments[0]) =>
             {
                 ("onSettled", false)
             }
