@@ -33,7 +33,9 @@ const CHUNK = "virtual:solid-islands/chunk/";
  *       | "lazy" (all on interaction; hot islands still activate at load)
  * prefetch: app default, one of PREFETCH (default "interaction")
  * overrides: { [rootComponentOrId]: policy }
- * budget: bytes of lazy chunks prefetch may load (sizes from `island.size`)
+ * budget: bytes of lazy chunks prefetch may load (sizes from `sizeOf(island)`
+ *   — a JS expression; default `island.size`, the chunk's source bytes; the
+ *   Vite plugin passes placeholders it replaces with bundled output bytes)
  * network: downgrade prefetch to "interaction" under saveData / 2g (default true)
  * chunk: id → import specifier
  * hooks: { before, after } code run around the load-time work (timing hooks)
@@ -49,7 +51,8 @@ function islandsEntry({
   hooks = {},
   hydrate = [],
   web = "@solidjs/web",
-  streams = false
+  streams = false,
+  sizeOf = i => String(i.size || 0)
 } = {}) {
   const J = JSON.stringify;
   const eager = islands.filter(i => mode === "eager" || i.activation === "load");
@@ -81,7 +84,7 @@ function islandsEntry({
       .map(i => {
         const row = [`() => import(${J(chunk(i.id))})`, J(i.events)];
         if (wins.length) row.push(J(i.windowEvents || []));
-        if (budget != null) row.push(String(i.size || 0));
+        if (budget != null) row.push(sizeOf(i));
         return `${J(i.id)}: [${row.join(", ")}]`;
       })
       .join(",\n  ");
@@ -334,6 +337,47 @@ function toBase36(n) {
  * (import it from the client entry and call `start()`, or use
  * `virtual:solid-islands/auto`), and island chunks are virtual modules.
  */
+// A lazy chunk's size in the entry, before bundling: replaced in
+// `generateBundle` with the bundled output bytes (the chunk and the static
+// imports it adds to what the entry already loads).
+const SIZE = "__SOLID_ISLAND_SIZE__";
+const sizePlaceholder = i => SIZE + i.id.replace(/\W/g, "_");
+
+/** Bytes each lazy island chunk adds to a page, from the bundle (Vite's manifest data). */
+function bundledIslandSizes(bundle) {
+  const chunks = Object.values(bundle).filter(c => c.type === "chunk");
+  const byFile = new Map(chunks.map(c => [c.fileName, c]));
+  const closure = (c, out = new Set()) => {
+    if (!c || out.has(c.fileName)) return out;
+    out.add(c.fileName);
+    for (const f of c.imports) closure(byFile.get(f), out);
+    return out;
+  };
+  const sizes = {};
+  for (const entry of chunks.filter(c => c.code.includes(SIZE))) {
+    const loaded = closure(entry);
+    for (const c of chunks) {
+      const m =
+        c.facadeModuleId && /virtual:solid-islands\/chunk\/(.+)\.ts$/.exec(c.facadeModuleId);
+      if (!m) continue;
+      let bytes = 0,
+        gzip = 0;
+      for (const f of closure(c)) {
+        if (loaded.has(f)) continue;
+        const code = byFile.get(f).code;
+        bytes += Buffer.byteLength(code);
+        gzip += require("zlib").gzipSync(code).length;
+      }
+      sizes[m[1]] = { bytes, gzip, file: c.fileName };
+    }
+    entry.code = entry.code.replace(new RegExp(SIZE + "([\\w$]+)", "g"), (_, id) => {
+      const hit = Object.entries(sizes).find(([k]) => k.replace(/\W/g, "_") === id);
+      return String(hit ? hit[1].bytes : 0);
+    });
+  }
+  return sizes;
+}
+
 function solidIslands(options = {}) {
   const {
     root,
@@ -391,6 +435,9 @@ function solidIslands(options = {}) {
           budget,
           network,
           streams: collected.streams,
+          // Builds count bundled output bytes (see generateBundle); the dev
+          // server, the chunks' source bytes.
+          sizeOf: config.command === "build" ? sizePlaceholder : undefined,
           hydrate: fallbackRoots(collected, rootFile, rootExport, mount)
         });
       }
@@ -399,6 +446,16 @@ function solidIslands(options = {}) {
       if (code == null) this.error(`[solid-islands] unknown island chunk ${chunkId}`);
       // Chunks are plain JavaScript (the compiler erases TypeScript).
       return code;
+    },
+    generateBundle(_, bundle) {
+      if (budget == null) return;
+      const sizes = bundledIslandSizes(bundle);
+      // Next to Vite's manifest: what each lazy island adds to the page.
+      this.emitFile({
+        type: "asset",
+        fileName: ".vite/solid-islands.json",
+        source: JSON.stringify({ budget, islands: sizes }, null, 2)
+      });
     },
     async transform(code, id, opts) {
       const file = id.split("?")[0];
@@ -500,6 +557,7 @@ module.exports = {
   solidIslands,
   esbuildIslands,
   fallbackRoots,
+  bundledIslandSizes,
   PREFETCH,
   ENTRY,
   CHUNK

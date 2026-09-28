@@ -4,7 +4,7 @@
 // (src/island_emit/tests.rs); behavior is proven in the web package's
 // conformance islands mode and the ssr-redesign browser gate.
 const { compileIslands } = require("../index.js");
-const { islandsEntry, IslandsCompiler } = require("../islands-build.js");
+const { islandsEntry, IslandsCompiler, bundledIslandSizes } = require("../islands-build.js");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -157,6 +157,39 @@ describe("islandsEntry", () => {
     expect(s).toContain('const WT = ["i1"];');
     expect(s).toContain("Promise.all([L[id][0](), ready(el, id)])");
     expect(s).toContain("/^l\\d/.test(n.data)");
+  });
+
+  test("prefetch budget: sizes are bundled output bytes (the Vite plugin's placeholders)", () => {
+    const s = islandsEntry({
+      islands: [island],
+      budget: 100,
+      prefetch: "idle",
+      sizeOf: i => "__SOLID_ISLAND_SIZE__" + i.id
+    });
+    expect(s).toContain('["click"], __SOLID_ISLAND_SIZE__i0]');
+    // The bundle: the entry loads the runtime chunk; i0's chunk adds itself
+    // and a helper chunk the entry does not load.
+    const bundle = {
+      "index.js": {
+        type: "chunk",
+        fileName: "index.js",
+        imports: ["rt.js"],
+        code: `const L = { i0: [f, ["click"], __SOLID_ISLAND_SIZE__i0] };`,
+        facadeModuleId: "/src/entry.ts"
+      },
+      "rt.js": { type: "chunk", fileName: "rt.js", imports: [], code: "x".repeat(500) },
+      "i0.js": {
+        type: "chunk",
+        fileName: "i0.js",
+        imports: ["rt.js", "h.js"],
+        code: "y".repeat(40),
+        facadeModuleId: "\0virtual:solid-islands/chunk/i0.ts"
+      },
+      "h.js": { type: "chunk", fileName: "h.js", imports: [], code: "z".repeat(60) }
+    };
+    const sizes = bundledIslandSizes(bundle);
+    expect(sizes.i0.bytes).toBe(100);
+    expect(bundle["index.js"].code).toBe(`const L = { i0: [f, ["click"], 100] };`);
   });
 
   test("a fallback root is hydrated", () => {
