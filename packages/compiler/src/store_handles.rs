@@ -363,39 +363,36 @@ impl<'s, 'a> Analyzer<'s, 'a> {
                 Statement::VariableDeclaration(v) => (None, Some(&**v), false),
                 _ => continue,
             };
-            if let Some(f) = function {
-                if let Some(c) = self.function_component(f, exported, runtime) {
-                    components.push(c);
-                }
+            if let Some(f) = function
+                && let Some(c) = self.function_component(f, exported, runtime)
+            {
+                components.push(c);
             }
-            match variables {
-                Some(declaration) => {
-                    for declarator in &declaration.declarations {
-                        let BindingPattern::BindingIdentifier(id) = &declarator.id else {
-                            continue;
-                        };
-                        if !starts_uppercase(&id.name) {
-                            continue;
-                        }
-                        let Some(symbol) = id.symbol_id.get() else {
-                            continue;
-                        };
-                        let params = match &declarator.init {
-                            Some(Expression::ArrowFunctionExpression(arrow)) => &arrow.params,
-                            Some(Expression::FunctionExpression(function)) => &function.params,
-                            _ => continue,
-                        };
-                        let (props, declared) = self.props_contract(params, runtime);
-                        components.push(Component {
-                            name: id.name.to_string(),
-                            symbol,
-                            exported,
-                            props,
-                            declared,
-                        });
+            if let Some(declaration) = variables {
+                for declarator in &declaration.declarations {
+                    let BindingPattern::BindingIdentifier(id) = &declarator.id else {
+                        continue;
+                    };
+                    if !starts_uppercase(&id.name) {
+                        continue;
                     }
+                    let Some(symbol) = id.symbol_id.get() else {
+                        continue;
+                    };
+                    let params = match &declarator.init {
+                        Some(Expression::ArrowFunctionExpression(arrow)) => &arrow.params,
+                        Some(Expression::FunctionExpression(function)) => &function.params,
+                        _ => continue,
+                    };
+                    let (props, declared) = self.props_contract(params, runtime);
+                    components.push(Component {
+                        name: id.name.to_string(),
+                        symbol,
+                        exported,
+                        props,
+                        declared,
+                    });
                 }
-                None => {}
             }
         }
         components
@@ -938,35 +935,34 @@ impl<'s, 'a> Analyzer<'s, 'a> {
                 continue;
             }
             // Handed to a borrowed prop, whole or as a member chain.
-            if let Some((top, top_span)) = self.chain_top(node, span) {
-                if let Some((target, prop)) =
+            if let Some((top, top_span)) = self.chain_top(node, span)
+                && let Some((target, prop)) =
                     self.jsx_attribute_target(top, top_span, runtime, imports, &plan.components)
-                {
-                    let via = match &target {
-                        Target::Local(symbol) => {
-                            let index = plan.components.iter().position(|c| c.symbol == *symbol);
-                            index
-                                .filter(|i| plan.verified.contains(&(*i, prop.clone())))
-                                .map(|i| (plan.components[i].name.clone(), "local".to_string()))
-                        }
-                        Target::Import(source, name) => {
-                            let linked = self.linked(source, name, &prop);
-                            plan.requires.push((
-                                source.clone(),
-                                name.clone(),
-                                prop.clone(),
-                                if linked { "linked" } else { "unknown" },
-                            ));
-                            linked.then(|| (name.clone(), format!("import:{source}")))
-                        }
-                    };
-                    if let Some((component, via)) = via {
-                        store.handoffs.push((component, prop, via));
-                        if top_span != span {
-                            store.child_handoffs.push(top_span);
-                        }
-                        continue;
+            {
+                let via = match &target {
+                    Target::Local(symbol) => {
+                        let index = plan.components.iter().position(|c| c.symbol == *symbol);
+                        index
+                            .filter(|i| plan.verified.contains(&(*i, prop.clone())))
+                            .map(|i| (plan.components[i].name.clone(), "local".to_string()))
                     }
+                    Target::Import(source, name) => {
+                        let linked = self.linked(source, name, &prop);
+                        plan.requires.push((
+                            source.clone(),
+                            name.clone(),
+                            prop.clone(),
+                            if linked { "linked" } else { "unknown" },
+                        ));
+                        linked.then(|| (name.clone(), format!("import:{source}")))
+                    }
+                };
+                if let Some((component, via)) = via {
+                    store.handoffs.push((component, prop, via));
+                    if top_span != span {
+                        store.child_handoffs.push(top_span);
+                    }
+                    continue;
                 }
             }
             // Anything else is an escape: wrapped in `_$storeProxy(s)` where
