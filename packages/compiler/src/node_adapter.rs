@@ -464,6 +464,8 @@ fn core_options(options: TransformOptions) -> Result<CompileOptions> {
             .collect(),
         generators: options.generators.unwrap_or(true),
         host_fusion: options.host_fusion.unwrap_or(false),
+        // `hostFusion: false` opts out of the default v2 fusion too.
+        v2_fusion: options.host_fusion.unwrap_or(true),
         block_proofs: options.block_proofs.unwrap_or(false),
         store_handles: options.store_handles.unwrap_or(false),
         sync_actions: options.sync_actions.unwrap_or(false),

@@ -115,6 +115,15 @@ pub struct CompileOptions {
     /// hand-written Solid accessors. Requires `generators: true`. Default
     /// `false`.
     pub host_fusion: bool,
+    /// Generator blocks v2 fusion and client lowering (default `true`): the
+    /// proof-driven fusion of `host_fusion`, restricted to the bodies the v2
+    /// pass synthesized (`$memo` creations, split-effect computes, view
+    /// holes), and — DOM output — the v2 client lowering of
+    /// `blocks_v2_lower.rs` (direct setup creations, fused effect halves,
+    /// erased setups and events, compiled-only constructors). The Node
+    /// option `hostFusion: false` turns both off; `hostFusion: true` also
+    /// fuses plain (v1) `$` blocks. Requires `generators: true`.
+    pub v2_fusion: bool,
     /// Experimental (Track A, stage 1): prove lowered `$` blocks synchronous
     /// and / or non-throwing from local facts (and, in TypeScript modules,
     /// declared primitive signal types), and emit the proofs as block
@@ -176,6 +185,7 @@ impl Default for CompileOptions {
             renderers: Vec::new(),
             generators: true,
             host_fusion: false,
+            v2_fusion: true,
             block_proofs: false,
             store_handles: false,
             sync_actions: false,
@@ -319,6 +329,7 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
     // Strict (non-generator) `$(fn)` markers go first, so the generator pass
     // only ever sees authored generator blocks.
     let mut strict_blocks = None;
+    let mut v2_bodies = crate::blocks_v2::V2Bodies::default();
     if options.generators {
         strict_blocks = crate::strict::transform_strict_blocks(
             &allocator,
@@ -343,6 +354,7 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
             .map_err(CompileError::transform)?;
         crate::generators::transform_generators(&allocator, &mut program, source, proofs, &v2)
             .map_err(CompileError::transform)?;
+        v2_bodies = v2;
     }
 
     // Experimental (Track B slice 2, stage 2): store handles and the
@@ -368,16 +380,31 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
         crate::sync_actions::transform_sync_actions(&allocator, &mut program);
     }
 
-    // Experimental: fuse `$()` blocks with their statically known host
-    // (`createMemo($(fn))` → `createMemo(fn)` with direct accessor calls).
-    if options.host_fusion && options.generators {
+    // Fuse `$()` blocks with their statically known host (`createMemo($(fn))`
+    // → `createMemo(fn)` with direct accessor calls): every block with
+    // `host_fusion`, the generator-blocks-v2 bodies by default (`v2_fusion`).
+    // The same blocks fuse on every generate, so hydration ids agree.
+    if (options.host_fusion || options.v2_fusion) && options.generators {
         crate::generators::fuse_host_blocks(
             &allocator,
             &mut program,
             source,
             matches!(options.generate, Generate::Dom),
+            (!options.host_fusion).then_some(&v2_bodies),
         )
         .map_err(CompileError::transform)?;
+    }
+
+    // Generator blocks v2 client lowering (DOM output): direct setup
+    // creations, fused effect halves, erased setups and events, and the
+    // compiled-only constructors that keep the generator driver out of a
+    // fully compiled module (see `blocks_v2_lower.rs`).
+    if options.v2_fusion
+        && options.generators
+        && matches!(options.generate, Generate::Dom)
+        && !v2_bodies.kinds.is_empty()
+    {
+        crate::blocks_v2_lower::lower_v2_client(&allocator, &mut program, &v2_bodies);
     }
 
     // Generator blocks v2: a component whose props are only read through

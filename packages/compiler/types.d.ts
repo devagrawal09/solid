@@ -51,10 +51,18 @@ export interface TransformOptions {
    */
   generators?: boolean;
   /**
-   * Experimental: erase `$()` block wrappers and `perform` calls when
-   * consumed by a statically known host (`createMemo`, `createEffect`, …),
-   * producing output identical to hand-written Solid. Requires `generators:
-   * true`. Default `false`.
+   * Erase `$()` block wrappers and `perform` calls when consumed by a
+   * statically known host (`createMemo`, `createEffect`, …), producing output
+   * identical to hand-written Solid. Requires `generators: true`.
+   *
+   * Unset (the default): generator blocks v2 bodies are fused (`$memo`
+   * creations, split-effect computes, view holes) and — DOM output — lowered
+   * further on the client: setup creations become direct primitive calls,
+   * effect halves plain effect callbacks, operation-free events and setups
+   * lose their block, and constructors target their compiled-only entries
+   * (`$componentCompiled`, `syncBlock`, …) so a fully compiled module does
+   * not retain the generator driver. `true` also fuses plain `$` blocks;
+   * `false` opts out of all of it (the plain lowering).
    *
    * Strict `$(fn)` markers (a non-generator callback) are always compiled
    * when `generators` is on: the marker is erased for its statically known

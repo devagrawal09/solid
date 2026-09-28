@@ -15,6 +15,7 @@ import {
   $store as signals$store,
   createPlainStore,
   effectBlock as signalsEffectBlock,
+  effectBlockCompiled as signalsEffectBlockCompiled,
   settledBlock as signalsSettledBlock
 } from "@solidjs/signals";
 import { createEffect, createMemo, createSignal, useBlockPrimitive } from "./hydration.js";
@@ -44,6 +45,16 @@ export const $effect: typeof signals$effect = ((...args: [any, any?]) => {
 export const effectBlock: typeof signalsEffectBlock = (body: unknown, compute?: unknown) => {
   useBlockPrimitive(8, { createEffect });
   return signalsEffectBlock(body, compute);
+};
+
+// The compiled entry of `effectBlock` (a prebuilt block, no driver): the same
+// registration, so a compiled effect creates the hydration-aware effect.
+export const effectBlockCompiled: typeof signalsEffectBlockCompiled = (
+  block: unknown,
+  compute?: unknown
+) => {
+  useBlockPrimitive(8, { createEffect });
+  return signalsEffectBlockCompiled(block, compute);
 };
 
 export const $settled: typeof signals$settled = ((...args: [any]) => {

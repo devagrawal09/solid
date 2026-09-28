@@ -1042,7 +1042,7 @@ const FUSION_HOSTS: &[&str] = &[
     "createSignal",
 ];
 /// The local name of the fused path read (`readValue`).
-const READ_VALUE_LOCAL: &str = "_$readValue";
+pub(crate) const READ_VALUE_LOCAL: &str = "_$readValue";
 /// The local name of a fused v2 memo creation (`createMemo`).
 const CREATE_MEMO_LOCAL: &str = "_$createMemo";
 /// Bound on bottom-up passes over nested hosts. Real nesting is shallow; the
@@ -1058,15 +1058,19 @@ pub(crate) fn fuse_host_blocks<'a>(
     program: &mut Program<'a>,
     _source: &'a str,
     dom: bool,
+    v2_only: Option<&V2Bodies>,
 ) -> Result<(), String> {
     if !imports_adapter(program) {
+        return Ok(());
+    }
+    if v2_only.is_some_and(|v2| v2.kinds.is_empty()) {
         return Ok(());
     }
     let mut fused = false;
     let mut needs_read_value = false;
     let mut memo_import: Option<Span> = None;
     for _ in 0..MAX_FUSION_PASSES {
-        let plan = build_fusion_plan(program, dom);
+        let plan = build_fusion_plan(program, dom, v2_only);
         if plan.is_empty() {
             break;
         }
@@ -1086,7 +1090,7 @@ pub(crate) fn fuse_host_blocks<'a>(
 
 /// Runtime import bindings the fusion resolves by symbol.
 #[derive(Default)]
-struct FusionSymbols {
+pub(crate) struct FusionSymbols {
     /// `$`.
     adapter: Vec<SymbolId>,
     /// `createMemo` / `createEffect` / `createRenderEffect` / `createSignal`.
@@ -1115,12 +1119,15 @@ struct FusionSymbols {
     v2_store_tuples: Vec<SymbolId>,
     /// `$effect(half, compute)`: the compute is a reactive host position.
     v2_effect: Vec<SymbolId>,
+    /// `withReceipts(tuple)` (the v2 client lowering's escaping setters):
+    /// element 0 of the tuple is unchanged.
+    with_receipts: Vec<SymbolId>,
     /// The import declaration of `$memo` (a fused memo creation imports
     /// `createMemo` from the same module: the primitive `$memo` creates with).
     v2_memo_import: Option<Span>,
 }
 
-fn collect_fusion_symbols(program: &Program<'_>) -> FusionSymbols {
+pub(crate) fn collect_fusion_symbols(program: &Program<'_>) -> FusionSymbols {
     let mut symbols = FusionSymbols::default();
     for statement in &program.body {
         let Statement::ImportDeclaration(import) = statement else {
@@ -1153,7 +1160,9 @@ fn collect_fusion_symbols(program: &Program<'_>) -> FusionSymbols {
             match name {
                 "createSignal" | "createOptimistic" => symbols.accessor_tuples.push(symbol),
                 "createMemo" => symbols.accessor_values.push(symbol),
-                "createStore" | "createOptimisticStore" => symbols.store_tuples.push(symbol),
+                "createStore" | "createPlainStore" | "createOptimisticStore" => {
+                    symbols.store_tuples.push(symbol)
+                }
                 "createProjection" => symbols.store_values.push(symbol),
                 "$signal" => symbols.v2_accessor_tuples.push(symbol),
                 "$memo" => {
@@ -1161,7 +1170,10 @@ fn collect_fusion_symbols(program: &Program<'_>) -> FusionSymbols {
                     symbols.v2_memo_import.get_or_insert(import.span);
                 }
                 "$store" => symbols.v2_store_tuples.push(symbol),
-                "$effect" => symbols.v2_effect.push(symbol),
+                // `effectBlock(half, compute)` (a plain `createEffect(function* …)`)
+                // hands its compute to `createEffect` as `$effect` does.
+                "$effect" | "effectBlock" => symbols.v2_effect.push(symbol),
+                "withReceipts" => symbols.with_receipts.push(symbol),
                 _ => {}
             }
         }
@@ -1171,7 +1183,7 @@ fn collect_fusion_symbols(program: &Program<'_>) -> FusionSymbols {
 
 /// What a binding is proven to hold, from its declaration.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Origin {
+pub(crate) enum Origin {
     /// A signal accessor: `const [x] = createSignal(…)`, `const x = createMemo(…)`.
     Accessor,
     /// A store proxy: `const [s] = createStore(…)`, `const s = createProjection(…)`.
@@ -1180,14 +1192,14 @@ enum Origin {
     Other,
 }
 
-struct FusionContext<'s> {
-    scoping: &'s Scoping,
-    nodes: &'s AstNodes<'s>,
-    symbols: FusionSymbols,
+pub(crate) struct FusionContext<'s> {
+    pub(crate) scoping: &'s Scoping,
+    pub(crate) nodes: &'s AstNodes<'s>,
+    pub(crate) symbols: FusionSymbols,
 }
 
 impl FusionContext<'_> {
-    fn reference_symbol(&self, reference: &IdentifierReference<'_>) -> Option<SymbolId> {
+    pub(crate) fn reference_symbol(&self, reference: &IdentifierReference<'_>) -> Option<SymbolId> {
         reference
             .reference_id
             .get()
@@ -1197,7 +1209,7 @@ impl FusionContext<'_> {
     /// The origin of a binding: a `const` declarator whose initializer is a
     /// direct call to a runtime factory, with the symbol bound either as the
     /// whole value or as element 0 of an array pattern — nothing else.
-    fn binding_origin(&self, symbol: SymbolId) -> Origin {
+    pub(crate) fn binding_origin(&self, symbol: SymbolId) -> Origin {
         let mut node_id = self.scoping.symbol_declaration(symbol);
         // The binder records the declarator for every name it binds; walk up
         // from a binding identifier to be safe against either convention.
@@ -1236,13 +1248,27 @@ impl FusionContext<'_> {
             },
             _ => return Origin::Other,
         };
-        let Some(Expression::CallExpression(init)) = &declarator.init else {
+        let Some(Expression::CallExpression(first)) = declarator.init.as_ref() else {
             return Origin::Other;
         };
-        let Some(factory) = resolve_callee(self.scoping, init) else {
+        let mut init: &CallExpression<'_> = first;
+        let Some(mut factory) = resolve_callee(self.scoping, init) else {
             return Origin::Other;
         };
         let symbols = &self.symbols;
+        // `withReceipts(createSignal(…))`: element 0 is the factory's.
+        if symbols.with_receipts.contains(&factory) {
+            let (1, Some(Argument::CallExpression(inner))) =
+                (init.arguments.len(), init.arguments.first())
+            else {
+                return Origin::Other;
+            };
+            let Some(inner_factory) = resolve_callee(self.scoping, inner) else {
+                return Origin::Other;
+            };
+            init = inner;
+            factory = inner_factory;
+        }
         // A v2 creation in a lowered setup: `_$perform($signal(…))`.
         if symbols.perform.contains(&factory) {
             let (1, Some(Argument::CallExpression(op))) =
@@ -1280,15 +1306,15 @@ impl FusionContext<'_> {
 
 /// One pass's rewrites, all keyed by the span of the node they replace.
 #[derive(Default)]
-struct FusionPlan {
+pub(crate) struct FusionPlan {
     /// `$(fn)` → `fn`.
-    blocks: Vec<Span>,
+    pub(crate) blocks: Vec<Span>,
     /// `_$perform(acc)` → `acc()`.
-    accessor_calls: Vec<Span>,
+    pub(crate) accessor_calls: Vec<Span>,
     /// `_$perform(_$readPath(root, [keys]))` → `_$readValue(root.k…)`.
-    path_reads: Vec<Span>,
+    pub(crate) path_reads: Vec<Span>,
     /// `_$perform(_$readStore(store, selector))` → `selector(store)`.
-    store_reads: Vec<Span>,
+    pub(crate) store_reads: Vec<Span>,
     /// v2: `_$perform($memo(_$$(fn), …rest))` → `_$createMemo(fn, …rest)`.
     memo_creations: Vec<Span>,
     /// The import declaration that receives `createMemo as _$createMemo`.
@@ -1301,7 +1327,9 @@ impl FusionPlan {
     }
 }
 
-fn build_fusion_plan(program: &Program<'_>, dom: bool) -> FusionPlan {
+/// `v2_only`: fuse only the generator-blocks-v2 bodies (the default v2
+/// fusion) — blocks the v2 pass synthesized, and view holes inside them.
+fn build_fusion_plan(program: &Program<'_>, dom: bool, v2_only: Option<&V2Bodies>) -> FusionPlan {
     let semantic = SemanticBuilder::new()
         .with_build_nodes(true)
         .build(program)
@@ -1323,17 +1351,23 @@ fn build_fusion_plan(program: &Program<'_>, dom: bool) -> FusionPlan {
         context: &'s FusionContext<'s>,
         plan: FusionPlan,
         dom: bool,
+        v2_only: Option<&'s V2Bodies>,
+        /// Depth inside v2 bodies (`v2_only`: hole reads fuse only there).
+        v2_depth: usize,
     }
 
     impl<'b> Visit<'b> for Collector<'_> {
         fn visit_call_expression(&mut self, call: &CallExpression<'b>) {
-            if let Some(block) = self.host_block(call) {
+            let v2_body = self
+                .v2_only
+                .is_some_and(|v2| v2.kind_of(call.span).is_some());
+            if let Some(block) = self.host_block(call).filter(|block| self.admits(block)) {
                 self.try_fuse(block);
-            } else if let Some(block) = self.v2_effect_compute(call) {
+            } else if let Some(block) = self.v2_effect_compute(call).filter(|b| self.admits(b)) {
                 // `$effect(half, _$$(compute))`: the compute is handed to
                 // `createEffect` as is (`effectBlock`), a reactive host.
                 self.try_fuse(block);
-            } else if let Some(block) = self.v2_memo_creation(call) {
+            } else if let Some(block) = self.v2_memo_creation(call).filter(|b| self.admits(b)) {
                 // `_$perform($memo(_$$(fn)))` in a lowered setup is
                 // `createMemo(block)` under the component's owner.
                 if self.try_fuse(block) {
@@ -1341,7 +1375,13 @@ fn build_fusion_plan(program: &Program<'_>, dom: bool) -> FusionPlan {
                     self.plan.memo_import = self.context.symbols.v2_memo_import;
                 }
             }
+            if v2_body {
+                self.v2_depth += 1;
+            }
             walk::walk_call_expression(self, call);
+            if v2_body {
+                self.v2_depth -= 1;
+            }
         }
 
         fn visit_jsx_element(&mut self, element: &oxc_ast::ast::JSXElement<'b>) {
@@ -1351,6 +1391,7 @@ fn build_fusion_plan(program: &Program<'_>, dom: bool) -> FusionPlan {
             // component props are not: an event handler or a prop getter can
             // be evaluated inside the running block.)
             if self.dom
+                && (self.v2_only.is_none() || self.v2_depth > 0)
                 && matches!(&element.opening_element.name,
                     oxc_ast::ast::JSXElementName::Identifier(name)
                         if name.name.chars().next().is_some_and(|c| c.is_ascii_lowercase()))
@@ -1370,6 +1411,12 @@ fn build_fusion_plan(program: &Program<'_>, dom: bool) -> FusionPlan {
     }
 
     impl<'s> Collector<'s> {
+        /// `v2_only`: only the bodies the v2 pass synthesized fuse.
+        fn admits(&self, block: &CallExpression<'_>) -> bool {
+            self.v2_only
+                .is_none_or(|v2| v2.kind_of(block.span).is_some())
+        }
+
         /// Plan the erasure of one `$` block; true when it is erasable.
         fn try_fuse(&mut self, block: &CallExpression<'_>) -> bool {
             let mut check = BodyCheck::new(self.context, block);
@@ -1499,13 +1546,15 @@ fn build_fusion_plan(program: &Program<'_>, dom: bool) -> FusionPlan {
         context: &context,
         plan: FusionPlan::default(),
         dom,
+        v2_only,
+        v2_depth: 0,
     };
     collector.visit_program(program);
     collector.plan
 }
 
 /// Erasability of one block body (the sole argument of a `$` call).
-struct BodyCheck<'s, 'b> {
+pub(crate) struct BodyCheck<'s, 'b> {
     context: &'s FusionContext<'s>,
     block: &'b CallExpression<'b>,
     /// The body is an arrow: `this` and `arguments` are lexical either way.
@@ -1514,10 +1563,13 @@ struct BodyCheck<'s, 'b> {
     depth: usize,
     /// Depth inside nested `function`s only (arrows keep `this`).
     function_depth: usize,
-    ok: bool,
-    accessor_calls: Vec<Span>,
-    path_reads: Vec<Span>,
-    store_reads: Vec<Span>,
+    pub(crate) ok: bool,
+    pub(crate) accessor_calls: Vec<Span>,
+    pub(crate) path_reads: Vec<Span>,
+    pub(crate) store_reads: Vec<Span>,
+    /// Nested `$` blocks are their own bodies: not examined (a component
+    /// setup's views, events and memos keep their own wrappers).
+    pub(crate) skip_blocks: bool,
     /// Roots of erased path reads, by symbol.
     path_roots: Vec<SymbolId>,
     /// Identifiers the body accesses a member of (depth 0), by symbol.
@@ -1525,7 +1577,7 @@ struct BodyCheck<'s, 'b> {
 }
 
 impl<'s, 'b> BodyCheck<'s, 'b> {
-    fn new(context: &'s FusionContext<'s>, block: &'b CallExpression<'b>) -> Self {
+    pub(crate) fn new(context: &'s FusionContext<'s>, block: &'b CallExpression<'b>) -> Self {
         Self {
             context,
             block,
@@ -1538,10 +1590,11 @@ impl<'s, 'b> BodyCheck<'s, 'b> {
             store_reads: Vec::new(),
             path_roots: Vec::new(),
             member_roots: Vec::new(),
+            skip_blocks: false,
         }
     }
 
-    fn run(&mut self) {
+    pub(crate) fn run(&mut self) {
         match &self.block.arguments[0] {
             Argument::FunctionExpression(function) => {
                 if let Some(body) = function.body.as_ref() {
@@ -1702,6 +1755,9 @@ impl<'b> Visit<'b> for BodyCheck<'_, 'b> {
             return;
         }
         if let Some(symbol) = resolve_callee(self.context.scoping, call) {
+            if self.skip_blocks && self.context.symbols.adapter.contains(&symbol) {
+                return;
+            }
             if self.context.symbols.perform.contains(&symbol) {
                 // The operand's sub-expressions were examined by the
                 // classification; nothing else in a `perform` is walked.
@@ -1721,9 +1777,9 @@ impl<'b> Visit<'b> for BodyCheck<'_, 'b> {
     }
 }
 
-struct FusionRewriter<'a> {
-    allocator: &'a Allocator,
-    plan: FusionPlan,
+pub(crate) struct FusionRewriter<'a> {
+    pub(crate) allocator: &'a Allocator,
+    pub(crate) plan: FusionPlan,
 }
 
 impl<'a> VisitMut<'a> for FusionRewriter<'a> {
@@ -2532,11 +2588,14 @@ const later = createMemo($(function* () { const c = yield* count; return yield* 
         .map_err(|error| error.to_string())
     }
 
+    /// DOM fusion alone (the v2 client lowering, which the Node option
+    /// `hostFusion: true` also runs, is tested in `blocks_v2_lower.rs`).
     fn fused_dom(source: &str) -> Result<String, String> {
         compile(
             source,
             &CompileOptions {
                 host_fusion: true,
+                v2_fusion: false,
                 ..CompileOptions::default()
             },
         )

@@ -67,9 +67,10 @@ pub struct TransformOptions {
     /// `solid-js` / `@solidjs/signals`) to plain functions with `signal()`
     /// reads. Default `true`.
     pub generators: Option<bool>,
-    /// Experimental: erase `$()` block wrappers and `perform` calls when
-    /// consumed by a statically known host (`createMemo`, `createEffect`, …).
-    /// Default `false`. Requires `generators: true`.
+    /// Erase `$()` block wrappers and `perform` calls when consumed by a
+    /// statically known host (`createMemo`, `createEffect`, …). Unset: only
+    /// generator-blocks-v2 bodies fuse (plus the v2 client lowering, DOM);
+    /// `true`: every block; `false`: none. Requires `generators: true`.
     pub host_fusion: Option<bool>,
     /// Experimental Track A stage-1 block proofs (synchronous fast paths).
     /// Default `false`. Requires `generators: true`.
