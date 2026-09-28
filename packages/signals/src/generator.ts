@@ -1537,10 +1537,6 @@ export function $(
       currentHost = prevHost;
     }
   } as unknown as AnyBlock;
-  return brandBlock(block, body, flags);
-}
-
-function brandBlock(block: AnyBlock, body: unknown, flags: number): AnyBlock {
   (block as any)[BLOCK] = true;
   (block as any)[BODY] = body;
   (block as any)[FLAGS] = flags;
@@ -1589,7 +1585,14 @@ export function syncBlock<Input, R>(
       currentHost = prevHost;
     }
   } as unknown as AnyBlock;
-  return brandBlock(block, body, flags) as any;
+  // Branded here, not through a helper shared with `$`: a shared store site
+  // made uncompiled path reads measurably slower (+3.5% Ir, blocks-v2 bench).
+  (block as any)[BLOCK] = true;
+  (block as any)[BODY] = body;
+  (block as any)[FLAGS] = flags;
+  (block as any)[OWNER] = getOwner();
+  (block as any)[Symbol.iterator] = blockIterator;
+  return block as any;
 }
 
 /** `yield* block`: delegation (shared by every block; `this` is the block). */

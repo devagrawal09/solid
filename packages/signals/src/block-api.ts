@@ -70,7 +70,7 @@ import {
   type SourceAccessor,
   type Setter
 } from "./signals.js";
-import { createStore } from "./store/index.js";
+import { createStore, type Store, type StoreSetter } from "./store/index.js";
 
 // --- types -------------------------------------------------------------------
 
@@ -275,18 +275,23 @@ export function $signal<T>(
   value: T,
   options?: SignalOptions<T>
 ): CreateOp<[get: SourceAccessor<T>, set: BlockSetter<T>], "signal"> {
-  return new Operation("create", "signal", () =>
-    withReceipts((primitives.createSignal || createSignal)(value, options) as any)
-  ) as any;
+  return new Operation("create", "signal", () => {
+    const [get, set] = (primitives.createSignal || createSignal)(value, options) as [
+      SourceAccessor<T>,
+      Setter<T>
+    ];
+    return [get, blockSetter(set as any)];
+  }) as any;
 }
 
 /** `yield* $store(value)` — create a store in a component's setup. */
 export function $store<T extends object>(
   value: T
 ): CreateOp<[get: TypedStore<T>, set: BlockStoreSetter<T>], "store"> {
-  return new Operation("create", "store", () =>
-    withReceipts((primitives.createStore || createStore)(value) as any)
-  ) as any;
+  return new Operation("create", "store", () => {
+    const [get, set] = (primitives.createStore || createStore)(value) as [Store<T>, StoreSetter<T>];
+    return [get, blockSetter(set as any)];
+  }) as any;
 }
 
 /** `yield* $memo(function* () {…})` — create a memo in a component's setup. */
