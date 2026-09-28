@@ -119,6 +119,14 @@ impl V2Kind {
 #[derive(Default)]
 pub(crate) struct V2Bodies {
     pub(crate) kinds: Vec<(Span, V2Kind)>,
+    /// Client lowering on (DOM output with the v2 fusion): the generator
+    /// pass may compile a memo / event body that waits to an `async
+    /// function` (see `generators.rs`, "async v2 bodies").
+    pub(crate) async_lowering: bool,
+    /// The `_$$(…)` calls whose body the generator pass compiled to an
+    /// `async function`: `blocks_v2_lower.rs` erases each one, or restores
+    /// its generator.
+    pub(crate) async_bodies: Vec<Span>,
 }
 
 impl V2Bodies {

@@ -1380,11 +1380,178 @@ export function dispatchBlock<B extends AnyBlock>(
  * and a failure routed to the nearest error boundary above `owner`.
  */
 export function dispatchFused<E>(fn: (event: E) => unknown, event: E, owner: Owner | null): void {
+  let result: unknown;
   try {
-    if (getOwner() === null) fn(event);
-    else runWithOwner(null, () => fn(event));
+    result = getOwner() === null ? fn(event) : runWithOwner(null, () => fn(event));
   } catch (error) {
     if (!reportBlockError(owner, error)) throw error;
+    return;
+  }
+  // As `dispatchBlock`: a handler that waits (a compiled async body, see
+  // `asyncBody`) routes its rejection to the same boundary.
+  if (isThenableValue(result)) {
+    (result as PromiseLike<unknown>).then(undefined, error => {
+      if (!reportBlockError(owner, error)) throw error;
+    });
+  }
+}
+
+// --- compiled async bodies ----------------------------------------------------------
+//
+// The client lowering compiles a memo or event body that waits (`yield*
+// attempt(() => promise)`) to an `async function` instead of leaving the
+// generator to the driver, when the body has no other operation left (every
+// read is a direct accessor call or a path read, every write a setter call —
+// the conditions under which a synchronous body loses its block):
+//
+//   $event(function* (e) { const id = yield* props.id; yield* attempt(() => save(id)); })
+//   // →
+//   $eventCompiled(asyncBody(async function (e, _$a) {
+//     try {
+//       const id = readValue(props.id);
+//       _$a.t(() => save(id)) ? _$a.r(await _$a.p) : _$a.v;
+//     } catch (_$e) { _$a.x(_$e); }
+//   }));
+//
+// Each `yield* attempt(run, ...errors)` becomes `(_$a.t(run, ...errors) ?
+// _$a.r(await _$a.p) : _$a.v)`: `t` runs `run` as the driver does (a
+// synchronous throw is the typed error at the `yield*`) and awaits only a
+// thenable, so a body whose attempts all return plain values completes
+// synchronously — exactly as the driver steps it. `asyncBody` runs the body
+// and hands back the driver's result: the returned value (or the thrown
+// error) when the body never waited, else the body's promise.
+//
+// Driver parity, point by point:
+// - the first suspension registers the run's staleness on the running owner
+//   (a memo recompute or disposal supersedes the run); a stale run is never
+//   resumed (`r` throws `[BLOCK_SUPERSEDED]` instead of continuing, as the
+//   driver closes the generator) and a stale rejection is reported as
+//   superseded. The compiler lowers a memo only when no `attempt` sits in a
+//   `try` (so no user `catch` / `finally` could observe the difference
+//   between closing and throwing), none sits in a loop, and no read follows
+//   the first `attempt` (the driver's `[READ_AFTER_WAIT]`);
+// - a continuation runs in the settled promise's reaction, as the driver's
+//   `then` callback does: side effects happen at the same microtask. The one
+//   difference: with more than one suspension the driver's result promise
+//   adopts the next step's promise (two extra microtasks per suspension);
+//   the async function's promise settles as soon as the body returns;
+// - host and strict guard: the body is only compiled when no operation is
+//   left to check (the same erasure proof as a synchronous body), so the
+//   host the driver re-enters per step is not observable.
+//
+// `_$a.ret(v)` wraps every `return v` so a body that never waited reports its
+// value synchronously (the async function's own promise is then dropped; it
+// never rejects: `x` records a synchronous failure instead of rethrowing).
+
+/** @internal One run of a compiled async block body (see above). */
+export class AsyncRun {
+  /** Still in the synchronous first segment (no suspension yet). */
+  s = true;
+  /** Superseded (set by the owner's cleanup after the first suspension). */
+  stale = false;
+  /** The pending thenable of the last `t`, awaited by the body. */
+  p: unknown = undefined;
+  /** The plain value of the last `t`. */
+  v: unknown = undefined;
+  /** Synchronous outcome: the returned value, or the thrown error. */
+  value: unknown = undefined;
+  threw = false;
+  error: unknown = undefined;
+  /** `attempt(run)`: true when the result is a thenable to await (`p`). */
+  t(run: () => unknown): boolean {
+    let value: unknown;
+    try {
+      value = readGuarded(run);
+    } catch (error) {
+      throw unwrapStatusError(error);
+    }
+    if (isThenableValue(value)) {
+      if (this.s) {
+        this.s = false;
+        if (getOwner()) cleanup(() => (this.stale = true));
+      }
+      this.p = value;
+      return true;
+    }
+    this.v = value;
+    return false;
+  }
+  /** Resume after an await: a superseded run does not continue. */
+  r<T>(value: T): T {
+    if (this.stale) throw supersededError();
+    return value;
+  }
+  /** `return value`: recorded while synchronous (the promise is dropped). */
+  ret<T>(value: T): T | undefined {
+    if (!this.s) return value;
+    this.value = value;
+    return undefined;
+  }
+  /** The body's `catch`: a synchronous failure is recorded, a later one rejects. */
+  x(error: unknown): void {
+    if (this.s) {
+      this.threw = true;
+      this.error = error;
+      return;
+    }
+    throw this.stale ? supersededError() : error;
+  }
+}
+
+function supersededError(): Error {
+  return new Error(
+    __DEV__
+      ? "[BLOCK_SUPERSEDED] This block run was superseded before its wait settled"
+      : "[BLOCK_SUPERSEDED]"
+  );
+}
+
+/**
+ * @internal A compiled async memo / event body (see above) as the function
+ * its host calls: `(input) => result`, where `result` is what the driver
+ * would have returned for the same run.
+ */
+export function asyncBody<I, R>(
+  body: (input: I, run: AsyncRun) => Promise<unknown>
+): (input: I) => R | Promise<R> {
+  return (input: I) => {
+    const run = new AsyncRun();
+    const promise = body(input, run);
+    if (!run.s) return promise as Promise<R>;
+    if (run.threw) throw run.error;
+    return run.value as R;
+  };
+}
+
+// --- compiled reads -------------------------------------------------------------------
+
+/**
+ * @internal Compiled `yield* acc` for a binding the compiler proved to be a
+ * signal / memo accessor, where the read may run with the strict guard up
+ * (a prop getter, an attribute evaluated in the view body): exactly what
+ * `perform(acc)` does with an accessor, without its dispatch. Inside a
+ * computation the compiler emits the call itself.
+ */
+export function readAccessor<T>(accessor: () => T): T {
+  return blockGuard ? readGuarded(accessor) : accessor();
+}
+
+/**
+ * @internal Compiled `yield* readStore(store, selector)` outside a fused
+ * computation: `perform(readStore(store, selector))` without the operation
+ * object — a path-token argument (`readStore(store.user, …)` in a block
+ * body) is consumed and walked, the host admits the read, and the selector
+ * runs with the guard lowered.
+ */
+export function readSelected<S, R>(store: S, selector: (state: S) => R): R {
+  const token = tokenOf(store);
+  if (token) consume(token);
+  checkHost(currentHost, "read");
+  const prev = setBlockGuard(false);
+  try {
+    return selector(token ? (walk(token.root, token.path) as S) : store);
+  } finally {
+    setBlockGuard(prev);
   }
 }
 
