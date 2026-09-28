@@ -352,6 +352,10 @@ describe("pay-for-use tree-shaking (#2883)", () => {
       "function perform(",
       "function performValue(",
       "function stepSync(",
+      // The operation switch: the path readers step context providers
+      // found at a path themselves; the switch is installed by the
+      // constructors of every other operation (`performFound`, §11).
+      "function performOp(",
       "function $("
     ])
       expect(code, marker).not.toContain(marker);

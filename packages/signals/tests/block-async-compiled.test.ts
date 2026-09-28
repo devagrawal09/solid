@@ -25,6 +25,7 @@ import {
   perform,
   readAccessor,
   readContext,
+  raise,
   readPath1,
   readSelected,
   readStore,
@@ -306,6 +307,24 @@ describe("compiled reads", () => {
     const props = { count: n, plain: 1 };
     expect(readPath1(props, "count")).toBe(9);
     expect(readPath1(props, "plain")).toBe(1);
+  });
+
+  it("an iterable function found at a path is stepped operation by operation", () => {
+    // Reads and context reads are run by the path reader itself; any other
+    // operation through the operation switch its constructor installed.
+    const [n] = createSignal(5);
+    const reads = Object.assign(() => -1, {
+      *[Symbol.iterator]() {
+        return ((yield* n) as number) + 1;
+      }
+    });
+    expect(readPath1({ x: reads }, "x")).toBe(6);
+    const raises = Object.assign(() => -1, {
+      *[Symbol.iterator]() {
+        return yield* raise(new Bad("at a path"));
+      }
+    });
+    expect(() => readPath1({ x: raises }, "x")).toThrow(Bad);
   });
 });
 

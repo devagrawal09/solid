@@ -795,13 +795,37 @@ function readFunction(target: any): unknown {
     const it = target[Symbol.iterator]() as Iterator<unknown>;
     let step = it.next();
     while (!step.done) {
-      const op = step.value;
+      const op = step.value as Op;
       if (!isOp(op)) throw invalidYield(op);
-      step = it.next(performOp(op));
+      const kind = op[OP];
+      // A read or a context read (a context provider yields one): the
+      // operation switch's own cases. Any other operation was built by a
+      // constructor that installed the switch (`performFound`).
+      step = it.next(
+        kind === "read" || kind === "context"
+          ? (checkHost(currentHost, kind),
+            readGuarded(kind === "read" ? (op as ReadOp<() => unknown>).source : (op as any).read))
+          : performFound!(op)
+      );
     }
     return step.value;
   }
   return readGuarded(target);
+}
+
+/**
+ * The operation switch (`performOp`) for iterables `readFunction` steps,
+ * installed by every constructor of an operation other than a read or a
+ * context read (`raise`, `attempt`, the v2 creations, `$cleanup`, `$flush`):
+ * such an operation exists only once its constructor ran, and a bundle that
+ * calls none of them — a fully compiled app, whose only iterables at a path
+ * are context providers — does not retain the switch through the path
+ * readers.
+ */
+let performFound: ((op: Op) => unknown) | undefined;
+/** @internal See `performFound`. */
+export function usePerformOp(): void {
+  performFound = performOp;
 }
 
 /**
@@ -1222,6 +1246,7 @@ export function readValue<V>(value: V): ReadThrough<V> {
 
 /** The typed replacement for `throw`: the error joins the failure union. */
 export function raise<E>(error: E): RaiseOp<E> {
+  performFound = performOp;
   return { [OP]: "raise", error, delegated: false, [Symbol.iterator]: opIterator } as any;
 }
 
@@ -1246,6 +1271,7 @@ export function attempt<T, C extends ErrorClass<any>[] = []>(
   ...errors: C
 ): AttemptOp<T, C extends [] ? never : InstanceType<C[number]>>;
 export function attempt(run: () => unknown, ..._errors: ErrorClass<any>[]): Op {
+  performFound = performOp;
   return { [OP]: "attempt", run, delegated: false, [Symbol.iterator]: opIterator } as any;
 }
 

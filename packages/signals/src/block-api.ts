@@ -35,6 +35,7 @@ import {
   readProp,
   runBlockAs,
   Receipt,
+  usePerformOp,
   viewIterator,
   type AsyncOp,
   type BlockAsync,
@@ -278,6 +279,7 @@ export function $signal<T>(
   value: T,
   options?: SignalOptions<T>
 ): CreateOp<[get: SourceAccessor<T>, set: BlockSetter<T>], "signal"> {
+  usePerformOp();
   return new Operation("create", "signal", () => {
     const [get, set] = (primitives.createSignal || createSignal)(value, options) as [
       SourceAccessor<T>,
@@ -291,6 +293,7 @@ export function $signal<T>(
 export function $store<T extends object>(
   value: T
 ): CreateOp<[get: TypedStore<T>, set: BlockStoreSetter<T>], "store"> {
+  usePerformOp();
   return new Operation("create", "store", () => {
     // `$store(value)` is the plain form only: the plain constructor keeps the
     // projection / reconcile machinery out of block apps that never derive.
@@ -307,6 +310,7 @@ export function $memo<Y extends MemoOp, R>(
   body: () => Generator<Y, R, any>,
   options?: MemoOptions<R>
 ): CreateOp<MemoAccessor<R, Y>, "memo"> {
+  usePerformOp();
   return new Operation("create", "memo", () =>
     (primitives.createMemo || createMemo)(toBlock(body), options)
   ) as any;
@@ -322,6 +326,7 @@ export function $effect<Y extends EffectOp>(
   body: () => Generator<Y, void, any>,
   compute?: unknown
 ): CreateOp<void, "effect"> {
+  usePerformOp();
   return new Operation("create", "effect", () => effectBlock(body, compute)) as any;
 }
 
@@ -364,6 +369,7 @@ export function effectBlockCompiled(block: any, compute?: unknown): void {
 export function $settled<Y extends EffectOp>(
   body: () => Generator<Y, void, any>
 ): CreateOp<void, "settled"> {
+  usePerformOp();
   return new Operation("create", "settled", () => settledBlock(body)) as any;
 }
 
@@ -379,11 +385,13 @@ export function settledBlockCompiled(block: any): void {
 
 /** `yield* $cleanup(fn)` — run `fn` when the component (or the effect run) is disposed. */
 export function $cleanup(fn: () => void): CleanupOp {
+  usePerformOp();
   return new Operation("cleanup", undefined, undefined, fn) as any;
 }
 
 /** `yield* $flush()` — drain pending writes now (event blocks only). */
 export function $flush(): FlushOp {
+  usePerformOp();
   return new Operation("flush") as any;
 }
 
