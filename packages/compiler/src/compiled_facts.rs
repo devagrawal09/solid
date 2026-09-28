@@ -154,14 +154,14 @@ pub fn summarize_compiled(source: &str, filename: Option<&str>) -> Result<String
                 let source = export.source.value.as_str();
                 for specifier in &export.specifiers {
                     if specifier.export_kind != ImportOrExportKind::Type {
-                        use_name(source, &specifier.local.name().to_string());
+                        use_name(source, specifier.local.name().as_ref());
                     }
                 }
             }
-            Statement::ExportAllDeclaration(export) => {
-                if export.export_kind != ImportOrExportKind::Type {
-                    use_name(export.source.value.as_str(), "*");
-                }
+            Statement::ExportAllDeclaration(export)
+                if export.export_kind != ImportOrExportKind::Type =>
+            {
+                use_name(export.source.value.as_str(), "*");
             }
             _ => {}
         }

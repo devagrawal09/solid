@@ -145,13 +145,20 @@ function compilerPlugin({ generate, hydratable, rewrites = {}, options = {}, swa
         const out = transform(src, { filename: args.path, generate, hydratable, ...options });
         return { contents: out.code, loader: "ts", resolveDir: dirname(args.path) };
       });
-      // Rewrites on plain .ts modules (no JSX) are applied without compiling.
+      // Plain .ts app modules: rewrites apply as given; a module holding a
+      // generator body (a block, e.g. todos-blocks' `onSettled(function* …)`
+      // in filter.ts) goes through the compiler, as the example's own Vite
+      // config does (`extensions: [[".ts", …]]`). Left uncompiled in an
+      // otherwise driver-free bundle, nothing installs the block driver and
+      // the production build runs the generator function as a plain callback.
       b.onLoad({ filter: /\.ts$/ }, args => {
+        if (args.path.includes("node_modules") || args.path.includes("/packages/")) return undefined;
         const rel = relative(ROOT, args.path);
-        if (!rewrites[rel]) return undefined;
         let src = readFileSync(args.path, "utf8");
-        for (const [from, to] of rewrites[rel]) src = once(src, from, to, rel);
-        return { contents: src, loader: "ts" };
+        for (const [from, to] of rewrites[rel] || []) src = once(src, from, to, rel);
+        if (!/function\s*\*/.test(src)) return rewrites[rel] ? { contents: src, loader: "ts" } : undefined;
+        const out = transform(src, { filename: args.path, generate, hydratable, ...options });
+        return { contents: out.code, loader: "ts", resolveDir: dirname(args.path) };
       });
     }
   };

@@ -1,0 +1,5 @@
+{
+  "name": "v2-settled-after-hydration",
+  "shell": "<main _hk=0><!--$--><header _hk=10><h1>todos</h1></header><!--/--><!--$--><p _hk=3>pending</p><!--/--></main>",
+  "rest": ""
+}
