@@ -129,7 +129,8 @@ for (const name of appNames) {
         const b = normalize(eq ? gate.steps.find((s, i) => normalize(s) !== normalize(reference.steps[i])) : gate.load);
         let i = 0;
         while (a[i] === b[i]) i++;
-        console.log(`  GATE FAIL ${vname} at ${i}:\n    A: ${a.slice(Math.max(0, i - 80), i + 120)}\n    ${vname}: ${b.slice(Math.max(0, i - 80), i + 120)}`);
+        const k = eq ? gate.steps.findIndex((s, j) => normalize(s) !== normalize(reference.steps[j])) : -1;
+        console.log(`  GATE FAIL ${vname} ${k < 0 ? "after load" : `after step ${k}`} at ${i}:\n    A: ${a.slice(Math.max(0, i - 80), i + 120)}\n    ${vname}: ${b.slice(Math.max(0, i - 80), i + 120)}`);
       }
     }
     r.gate.load = undefined;

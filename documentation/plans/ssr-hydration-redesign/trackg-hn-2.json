@@ -1,0 +1,330 @@
+{
+  "chromium": "141.0.7390.37",
+  "reps": 7,
+  "cpus": [
+    1,
+    4
+  ],
+  "apps": {
+    "hn": {
+      "variants": {
+        "A": {
+          "ssrMs": 53.92216999999994,
+          "ssrCpuMs": 83.564,
+          "html": {
+            "bytes": 1457254,
+            "gzip": 415332,
+            "data": {
+              "bytes": 639868,
+              "gzip": 209581
+            },
+            "bootstrap": {
+              "bytes": 426,
+              "gzip": 303
+            },
+            "hk": {
+              "count": 2712,
+              "bytes": 65645,
+              "gzip": 11539
+            },
+            "markers": {
+              "count": 5632,
+              "bytes": 45056,
+              "gzip": 1434
+            }
+          },
+          "js": {
+            "bytes": 60433,
+            "gzip": 22859,
+            "groups": {
+              "signals": 32683,
+              "solid": 12237,
+              "web": 12821,
+              "app": 2691,
+              "other": 0
+            },
+            "lazy": {
+              "names": [],
+              "bytes": 0,
+              "gzip": 0,
+              "groups": {
+                "signals": 0,
+                "solid": 0,
+                "web": 0,
+                "app": 0,
+                "other": 0
+              }
+            }
+          },
+          "counts": {
+            "gatherMs": 5.1,
+            "owner": 2061,
+            "computed": 4880,
+            "recompute": 13775,
+            "signal": 654,
+            "adopted": 1,
+            "traceRerun": 1,
+            "claim": 2712
+          },
+          "countsAfterSession": {
+            "owner": 2061,
+            "computed": 4880,
+            "recompute": 13787,
+            "signal": 654,
+            "adopted": 1,
+            "traceRerun": 1,
+            "claim": 2712
+          },
+          "gate": {
+            "steps": 4,
+            "identity": true
+          },
+          "timing": {
+            "1": {
+              "readyAt": 383.5,
+              "hydrateMs": 84.40000000223517,
+              "scriptMs": 88.31400000000001,
+              "heapKB": 13666.6640625,
+              "firstMs": 1.3999999985098839,
+              "scriptTotalMs": 89.24600000000001
+            },
+            "4": {
+              "readyAt": 1373.7000000029802,
+              "hydrateMs": 293.4000000022352,
+              "scriptMs": 301.637,
+              "heapKB": 13652.71875,
+              "firstMs": 7.100000001490116,
+              "scriptTotalMs": 305.90099999999995
+            }
+          }
+        },
+        "C-eager": {
+          "ssrMs": 2.945757000001322,
+          "ssrCpuMs": 10.857,
+          "html": {
+            "bytes": 714130,
+            "gzip": 192857,
+            "data": {
+              "bytes": 0,
+              "gzip": 0
+            },
+            "bootstrap": {
+              "bytes": 56,
+              "gzip": 38
+            },
+            "hk": {
+              "count": 0,
+              "bytes": 0,
+              "gzip": 0
+            },
+            "markers": {
+              "count": 0,
+              "bytes": 0,
+              "gzip": 0
+            }
+          },
+          "js": {
+            "bytes": 1214,
+            "gzip": 707,
+            "groups": {
+              "signals": 530,
+              "solid": 0,
+              "web": 0,
+              "app": 683,
+              "other": 0
+            },
+            "lazy": {
+              "names": [],
+              "bytes": 0,
+              "gzip": 0,
+              "groups": {
+                "signals": 0,
+                "solid": 0,
+                "web": 0,
+                "app": 0,
+                "other": 0
+              }
+            }
+          },
+          "counts": {},
+          "countsAfterSession": {},
+          "gate": {
+            "steps": 4,
+            "identity": true,
+            "equalToA": true
+          },
+          "timing": {
+            "1": {
+              "readyAt": 199,
+              "hydrateMs": 2.600000001490116,
+              "scriptMs": 3.871,
+              "heapKB": 2023.00390625,
+              "firstMs": 0.8000000007450581,
+              "scriptTotalMs": 4.392
+            },
+            "4": {
+              "readyAt": 1053.5,
+              "hydrateMs": 11.399999998509884,
+              "scriptMs": 18.624000000000002,
+              "heapKB": 2016.87890625,
+              "firstMs": 3.699999999254942,
+              "scriptTotalMs": 21.726
+            }
+          }
+        },
+        "C-lazy": {
+          "ssrMs": 2.1384109999999055,
+          "ssrCpuMs": 4.263,
+          "html": {
+            "bytes": 714130,
+            "gzip": 192857,
+            "data": {
+              "bytes": 0,
+              "gzip": 0
+            },
+            "bootstrap": {
+              "bytes": 56,
+              "gzip": 38
+            },
+            "hk": {
+              "count": 0,
+              "bytes": 0,
+              "gzip": 0
+            },
+            "markers": {
+              "count": 0,
+              "bytes": 0,
+              "gzip": 0
+            }
+          },
+          "js": {
+            "bytes": 819,
+            "gzip": 537,
+            "groups": {
+              "signals": 0,
+              "solid": 0,
+              "web": 0,
+              "app": 818,
+              "other": 0
+            },
+            "lazy": {
+              "names": [
+                "chunk-4JNQVOHX.js"
+              ],
+              "bytes": 914,
+              "gzip": 555,
+              "groups": {
+                "signals": 530,
+                "solid": 0,
+                "web": 0,
+                "app": 361,
+                "other": 0
+              }
+            }
+          },
+          "counts": {},
+          "countsAfterSession": {},
+          "gate": {
+            "steps": 4,
+            "identity": true,
+            "equalToA": true
+          },
+          "timing": {
+            "1": {
+              "readyAt": 210.40000000223517,
+              "hydrateMs": 0.19999999925494194,
+              "scriptMs": 1.244,
+              "heapKB": 1487.15234375,
+              "firstMs": 5.300000000745058,
+              "scriptTotalMs": 2.4160000000000004
+            },
+            "4": {
+              "readyAt": 932.9000000022352,
+              "hydrateMs": 0.8000000007450581,
+              "scriptMs": 7.109,
+              "heapKB": 1487.12890625,
+              "firstMs": 88.60000000149012,
+              "scriptTotalMs": 13.289
+            }
+          }
+        },
+        "C-stream": {
+          "ssrMs": 3.3965270000044256,
+          "ssrCpuMs": 6.916,
+          "html": {
+            "bytes": 715172,
+            "gzip": 193331,
+            "data": {
+              "bytes": 0,
+              "gzip": 0
+            },
+            "bootstrap": {
+              "bytes": 1006,
+              "gzip": 463
+            },
+            "hk": {
+              "count": 0,
+              "bytes": 0,
+              "gzip": 0
+            },
+            "markers": {
+              "count": 0,
+              "bytes": 0,
+              "gzip": 0
+            }
+          },
+          "js": {
+            "bytes": 819,
+            "gzip": 537,
+            "groups": {
+              "signals": 0,
+              "solid": 0,
+              "web": 0,
+              "app": 818,
+              "other": 0
+            },
+            "lazy": {
+              "names": [
+                "chunk-4JNQVOHX.js"
+              ],
+              "bytes": 914,
+              "gzip": 555,
+              "groups": {
+                "signals": 530,
+                "solid": 0,
+                "web": 0,
+                "app": 361,
+                "other": 0
+              }
+            }
+          },
+          "counts": {},
+          "countsAfterSession": {},
+          "gate": {
+            "steps": 4,
+            "identity": true,
+            "equalToA": true
+          },
+          "timing": {
+            "1": {
+              "readyAt": 62,
+              "hydrateMs": 0.10000000149011612,
+              "scriptMs": 2.878,
+              "heapKB": 1068.76953125,
+              "firstMs": 6.5,
+              "scriptTotalMs": 3.813
+            },
+            "4": {
+              "readyAt": 860.5999999977648,
+              "hydrateMs": 0.8000000007450581,
+              "scriptMs": 17.586000000000002,
+              "heapKB": 1075.03125,
+              "firstMs": 23.400000002235174,
+              "scriptTotalMs": 23.273
+            }
+          }
+        }
+      }
+    }
+  }
+}

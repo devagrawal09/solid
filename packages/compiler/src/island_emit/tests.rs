@@ -487,7 +487,10 @@ export const App = $component(function* () {
 "#);
     assert!(out.fallback.is_none(), "{:?}", out.fallback);
     let m = manifest(&out);
-    assert!(m.contains("async memo `user`") && m.contains(r#""tier":2"#), "{m}");
+    assert!(
+        m.contains("async memo `user`") && m.contains(r#""tier":2"#),
+        "{m}"
+    );
     assert!(m.contains(r#""serialized":["memo user"]"#), "{m}");
     // The server serializes the settled value; the client's first run reads
     // `id` (subscribing) and returns it without calling `load`.
@@ -523,7 +526,10 @@ export const App = $component(function* () {
     assert!(out.fallback.is_none(), "{:?}", out.fallback);
     let chunk = &out.chunks[0].code;
     assert!(chunk.contains("const save = async () => {"), "{chunk}");
-    assert!(chunk.contains(r#"(await (() => fetch("/n"))())"#), "{chunk}");
+    assert!(
+        chunk.contains(r#"(await (() => fetch("/n"))())"#),
+        "{chunk}"
+    );
 }
 
 #[test]
@@ -546,7 +552,11 @@ export const App = $component(function* () {
     assert!(out.fallback.is_none(), "fallback: {:?}", out.fallback);
     let m = manifest(&out);
     assert!(m.contains(r#""root":"Child""#), "{m}");
-    assert!(out.server.contains(r#"Child({ "t": "x" }, $c)"#), "{}", out.server);
+    assert!(
+        out.server.contains(r#"Child({ "t": "x" }, $c)"#),
+        "{}",
+        out.server
+    );
     // A call form the pre-pass cannot express as JSX (a spread) is refused.
     let reason = fallback_of(
         r#"
@@ -801,7 +811,10 @@ export function plain(x) { return x + 1; }
 #[test]
 fn island_exports_summarize_kinds_and_relative_imports() {
     let s = island_exports(COUNTER, Some("counter.ts"));
-    assert!(s.contains(r#"{"name":"createCounter","kind":"factory"}"#), "{s}");
+    assert!(
+        s.contains(r#"{"name":"createCounter","kind":"factory"}"#),
+        "{s}"
+    );
     assert!(s.contains(r#"{"name":"plain","kind":"function"}"#), "{s}");
     assert!(
         s.contains(r#""imports":[{"specifier":"./log","names":["log"]}]"#),
@@ -847,7 +860,11 @@ export const App = $component(function* () {
     assert!(chunk.contains("const step$m1 = 1;"), "{chunk}");
     assert!(chunk.contains(r#"from "/app/src/log""#), "{chunk}");
     assert!(chunk.contains("$S(start$f"), "{chunk}");
-    assert!(out.server.contains(r#"import { plain } from "./counter";"#), "{}", out.server);
+    assert!(
+        out.server.contains(r#"import { plain } from "./counter";"#),
+        "{}",
+        out.server
+    );
 }
 
 #[test]
@@ -880,8 +897,16 @@ export const App = $component(function* () {
     // `Badge` receives live state: it is compiled into the page's island.
     assert!(m.contains(r#""members":["App","Badge"]"#), "{m}");
     // The context is still the module's (imported, not copied).
-    assert!(out.server.contains(r#"import { Theme } from "./theme";"#), "{}", out.server);
-    assert!(!out.server.contains("createContext(\"light\")"), "{}", out.server);
+    assert!(
+        out.server.contains(r#"import { Theme } from "./theme";"#),
+        "{}",
+        out.server
+    );
+    assert!(
+        !out.server.contains("createContext(\"light\")"),
+        "{}",
+        out.server
+    );
     assert!(out.server.contains("_$ctx($c, Theme)"), "{}", out.server);
 }
 
@@ -945,7 +970,10 @@ export const App = $component(function* () {
         "{chunk}"
     );
     assert!(chunk.contains("$err($m"), "{chunk}");
-    assert!(chunk.contains("addEventListener(\"click\", reset$"), "{chunk}");
+    assert!(
+        chunk.contains("addEventListener(\"click\", reset$"),
+        "{chunk}"
+    );
     // A tier-0 island under an `<Errored>` keeps its runtime (no boundary).
     let out = run(r#"
 import { $component, $event, $signal, Errored } from "solid-js";
@@ -959,4 +987,51 @@ export const App = $component(function* () {
 "#);
     assert!(manifest(&out).contains(r#""tier":0"#), "{}", manifest(&out));
     assert!(!out.server.contains("<!--$-->"), "{}", out.server);
+}
+
+#[test]
+fn a_context_provided_outside_the_island_is_serialized_at_its_root() {
+    let src = r#"
+import { $component, $event, $signal, createContext } from "solid-js";
+const Api = createContext("api");
+function* useApi() { return yield* Api; }
+const Saver = $component(function* () {
+  const api = yield* useApi();
+  const [saved, setSaved] = yield* $signal("none");
+  const save = $event(function* () { setSaved(api); });
+  return function* () { return <button onClick={save}>{yield* saved}</button>; };
+});
+export function App() {
+  return <Api value="remote"><Saver /></Api>;
+}
+"#;
+    let out = run(src);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains(r#""serialized":["context Api"]"#), "{m}");
+    assert!(
+        out.server
+            .contains(r#""$ctx:Api": _$cv(_$ctx($c, Api), "Api")"#),
+        "{}",
+        out.server
+    );
+    let chunk = &out.chunks[0].code;
+    assert!(chunk.contains(r#"= $d["$ctx:Api"];"#), "{chunk}");
+    // A provider whose value holds reactive state makes it the island's: the
+    // provider joins the island (or the module falls back), never a
+    // serialized snapshot.
+    let live = src.replace(
+        r#"export function App() {
+  return <Api value="remote"><Saver /></Api>;
+}"#,
+        r#"export const App = $component(function* () {
+  const [k, setK] = yield* $signal("remote");
+  const flip = $event(function* () { setK("local"); });
+  return function* () { return <div onClick={flip}><Api value={k}><Saver /></Api></div>; };
+});"#,
+    );
+    let out = run(&live);
+    for c in &out.chunks {
+        assert!(!c.code.contains("$ctx:Api"), "{}", c.code);
+    }
 }

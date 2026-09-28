@@ -43,6 +43,7 @@ async function _$forA(l, f, fb) { if (!l || !l.length) return _$e(fb); const r =
 function _$err(f, fb) { try { return _$e(f()); } catch (e) { return _$e(typeof fb === "function" ? fb(() => e, () => {}) : fb); } }
 async function _$errA(f, fb) { try { return _$e(await f()); } catch (e) { return _$e(typeof fb === "function" ? fb(() => e, () => {}) : fb); } }
 async function _$proj(f, seed) { const d = seed === undefined ? {} : structuredClone(seed); const r = await f(d); return r === undefined ? d : r; }
+function _$cv(v, n) { const ok = x => x === null || ["string", "number", "boolean"].includes(typeof x) || (Array.isArray(x) ? x.every(ok) : typeof x === "object" && Object.getPrototypeOf(x) === Object.prototype && Object.values(x).every(ok)); if (v !== undefined && !ok(v)) throw new Error("island context `" + n + "` is provided outside the island with a value that is not serializable"); return v; }
 function _$pick(o, ks) { const r = {}; for (const k of ks) if (k in o) r[k] = o[k]; return r; }
 function _$ld($c, f, fb) { const s = $c && $c.get(Symbol.for("solid.islands.stream")); return s ? s.boundary($c, f, fb, _$e) : f($c); }
 function _$errS($c, f, fb) { const s = $c && $c.get(Symbol.for("solid.islands.stream")); return s ? s.errored($c, f, fb, _$e) : _$errA(() => f($c), fb); }
@@ -291,7 +292,8 @@ impl<'x, 'a> Se<'x, 'a> {
                     .iter()
                     .any(|(c, s)| *c == comp && inside(self.a.facts[*c].sites[*s].span))
                     || self.a.facts[comp].calls.iter().any(|call| {
-                        inside(call.span) && matches!(call.tag, Tag::Comp(k) if g.members.contains(&k))
+                        inside(call.span)
+                            && matches!(call.tag, Tag::Comp(k) if g.members.contains(&k))
                     }))
         })
     }
@@ -543,7 +545,8 @@ impl<'x, 'a> Se<'x, 'a> {
                                 let params = self.tx().params(&SEnv { se: self, comp }, f)?;
                                 let mut inner = String::new();
                                 self.root(comp, body, &mut inner, None)?;
-                                let _ = write!(out, "${{_$forR({iv}, ({params}) => `{inner}`, {fb})}}");
+                                let _ =
+                                    write!(out, "${{_$forR({iv}, ({params}) => `{inner}`, {fb})}}");
                             } else {
                                 let ft = self.func(comp, f, is_async)?;
                                 let helper = if is_async { "_$forA" } else { "_$for" };
@@ -659,7 +662,11 @@ impl<'x, 'a> Se<'x, 'a> {
         for item in &c.setup {
             match item {
                 Item::Cell {
-                    get, set, init, rest, ..
+                    get,
+                    set,
+                    init,
+                    rest,
+                    ..
                 } => {
                     let init_text = match init {
                         Some(e) => tx.expr(&env, e)?,
@@ -756,6 +763,11 @@ impl<'x, 'a> Se<'x, 'a> {
                             "{}: _$r({props}[{}])",
                             super::client_js_str(p),
                             super::client_js_str(p)
+                        )),
+                        Serial::Ctx(n) => fields.push(format!(
+                            "{}: _$cv(_$ctx($c, {n}), {})",
+                            super::client_js_str(&format!("$ctx:{n}")),
+                            super::client_js_str(n)
                         )),
                         Serial::Cell(ii) => {
                             // An adopted async memo: its settled value.
@@ -956,9 +968,14 @@ pub(crate) fn emit_server<'a>(
 fn awaits_in_setup(m: &Model<'_>, ci: usize) -> bool {
     let c = &m.comps[ci];
     c.setup.iter().any(|it| {
-        !matches!(it, Item::Event { .. } | Item::Effect { .. }) && m.text(it.span()).contains("attempt(")
-    }) || c.view_stmts.iter().any(|s| m.text(s.span()).contains("attempt("))
-        || c.view.is_some_and(|v| m.text(v.span()).contains("attempt("))
+        !matches!(it, Item::Event { .. } | Item::Effect { .. })
+            && m.text(it.span()).contains("attempt(")
+    }) || c
+        .view_stmts
+        .iter()
+        .any(|s| m.text(s.span()).contains("attempt("))
+        || c.view
+            .is_some_and(|v| m.text(v.span()).contains("attempt("))
 }
 
 fn handler_prevents(m: &Model<'_>, site: &super::graph::Site<'_>) -> bool {

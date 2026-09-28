@@ -4,6 +4,8 @@ Status: 2026-09-27. A design with measured prototypes. The only production chang
 
 Update 2026-09-28: the compiler emits compiled islands (phases 3–4 for the constructs listed there): `compileIslands` output reproduces the P1 and tier prototypes at byte and time parity, behind the same gate. See [Compiler emission](#compiler-emission).
 
+Update 2026-09-28 (later): islands for real apps — streamed boundary chunks, tier-2 islands over stores and async (adopted, not hydrated), islands spanning modules, component call forms, client error boundaries, a bundled prefetch budget and a dev verifier; `examples/todos-blocks` compiles to one island instead of falling back. See [Islands for real apps](#islands-for-real-apps).
+
 This builds on, and does not redo:
 - [resumability.md](./resumability.md): hydration vs pruned resumability, and the hydrate-before-write rule;
 - [compiler-heuristics-build.md](./compiler-heuristics-build.md): per-island hydration F, the handler → island map, and compiled resumability C;
@@ -497,15 +499,132 @@ What the numbers say:
 
 ### What falls back (whole module → today's hydration, reason in the manifest)
 
-- **Tier 2 by the rules:** `$store` / `createStore`, `createOptimistic*` / `createProjection` / a derived `createSignal(fn)`, an async memo read by an island, `attempt` / `action` / `refresh` / `startTransition` in island code, `Loading` / `Errored` inside a live region. Compiling stores and async at tier 2 (P2 adoption, store paths as cells) is the next step; until then these islands hydrate.
-- **Not modeled yet:** component call forms in views (`X(props)`, `Loading({…})`); helper generators and reads in setups (`yield* useX()`); view statements before the return; JSX produced by a live expression (use `Show` / `For`); a live `Show` with a fallback or a render callback; a live `For` with an index or a fallback, or rows that are not one element; SVG / MathML inside live regions; `ref`, spreads, `Index` / `Switch` / `Match` / `Dynamic` / `Portal`, member-expression tags; island sites under a `Show` / `For` over server data; recursion inside an island; a member component also rendered outside its island's root; a context an island reads with no provider inside it; reactive state passed to a component of another module (islands do not span modules); module-level reactive state, or module-level mutable state two islands share; an element address that needs a path past two variable-size regions; serialized values on a comment anchor.
-- **Semantics to know:** side-effect statements in the setup of an *inert* component run on the server only (hydration would re-run them on the client); a setter stored in a module binding is reachable through the island chunk's exports, not through the module's own (empty) client export.
+Updated for [Islands for real apps](#islands-for-real-apps): stores, optimistic stores, projections, live async memos, actions, `refresh`, async `$event`s, component call forms, helper generators, factories and components from other modules, a live `Show` with a render callback and an `<Errored>` around or inside live content no longer fall back.
+
+- **Not modeled yet:** a `Loading` *inside* a live region (content the client creates under it needs a client pending fallback); a live keyed `Show` with a render callback; view statements before the return; JSX produced by a live expression (use `Show` / `For`); a live `Show` / `For` with a fallback; a live `For` with an index, or rows that are not one element; SVG / MathML inside live regions; `ref`, spreads (also in call forms), `Index` / `Switch` / `Match` / `Dynamic` / `Portal`, member-expression tags; island sites under a `Show` / `For` over server data; recursion inside an island; a member component also rendered outside its island's root; a context an island reads with no provider inside it when a provider's value holds reactive state (otherwise its value at the island's root is serialized: `"$ctx:Name"` in `data-s`, checked JSON-plain on the server); module-level reactive state, or module-level mutable state two islands share; an element address that needs a path past two variable-size regions; serialized values on a comment anchor; an async memo whose value is not the result of its one final `attempt` (not adoptable); a derived cell (projection) that reads reactive state (its adoption would not subscribe); a `yield*` read of a value computed by a function from a module the compiler does not see (its reactive state is invisible).
+- **Semantics to know:** side-effect statements in the setup of an *inert* component run on the server only (hydration would re-run them on the client); a setter stored in a module binding is reachable through the island chunk's exports, not through the module's own (empty) client export; a boundary's fallback is server HTML (its handlers are not island sites); an `<Errored>` routes the client errors of the **tier-2** islands in its content to its fallback (a client boundary), while tier-0 / tier-1 islands under it keep their runtime and a throw in their holes escapes (the kernel and the t0 helper have no error routing).
 
 ### Not done
 
-- Streaming: the server awaits every server-authoritative memo before the page (no boundary chunks yet); P2 adoption; stateful islands over stores (Phase 5); islands spanning modules (the per-module compile has no cross-module flows); a dev verifier; navigation (§3.7).
-- Lazy chunks are per island group, not clustered per route; the prefetch budget counts chunk source bytes, not the bundler's output.
-- The lazy loader is 0.5 KB gz against the prototype's 0.3 KB: it keeps one ordered queue across islands (events on active islands wait behind a loading chunk), nested anchors, `data-pd`, checkbox replay and window-event stubs, each only when a page uses it.
+See [Islands for real apps](#islands-for-real-apps) → Not done.
+
+## Islands for real apps
+
+Status: 2026-09-28 (Track G). The islands "not done" list above is closed for the constructs below, and `examples/todos-blocks` — the all-live app the tier study called "tier 2 by construction" — compiles to one island instead of falling back. Code: `packages/compiler/src/island_emit/` (`callforms.rs`, `inline.rs`, `store_paths.rs` new; `graph.rs`, `client.rs`, `server.rs`, `model.rs`, `tx.rs` extended), `packages/compiler/islands-stream.js` (new), `packages/compiler/islands-build.js`.
+
+### Streaming boundary chunks
+
+- **Server.** A `<Loading>` whose content awaits server data renders through `_$ld($c, content, fallback)`. Without a stream in the render context it awaits in place (the whole page, as before). With one (`renderIslandsStream(render)` / `renderIslandsToString(render)`, `@solidjs/compiler/islands-stream`), the shell carries the fallback between `<!--lN-->` … `<!--/lN-->`, the content renders concurrently, and it is written when it settles as an out-of-order chunk: `<template id="slN">…</template><script>$sl("lN")</script>`. The swap script (0.5 KB raw, once, before the first chunk) replaces the region, removes the markers and dispatches `solid-islands` on `document`. A nested boundary's chunk follows its parent's. A failure inside a streamed boundary renders the nearest `<Errored>` fallback on the server and swaps it over that boundary's region (`<!--eN-->`), dropping the region's other pending chunks; with no `<Errored>` it goes to `onError`.
+- **Inert content streams as HTML only** — no serialized data, no client boundary object, no `$df` bookkeeping. Islands inside a chunk carry their anchors and `data-s` with it.
+- **Per-boundary activation.** The entry activates eager islands at load and again on every `solid-islands` event (each anchor once); lazy ones are found by the loader once their anchor exists. An island whose static paths cross a boundary (its root renders a streamed `<Loading>`: `waits` in the manifest) activates only once no boundary around its anchor is pending — a lazy one loads its chunk at once and activates (and replays its queued events) when the boundary lands.
+- **Limits.** A component's own async memo is awaited in its setup, so only boundaries *above* the awaiting component stream (HN's `Page` → `StoryPage` does; todos' projection is created in `App`, above its `<Loading>`, so the shell waits for it).
+
+### Stateful islands over stores and async (tier 2 compiled, not hydrated)
+
+Groups the tier rules put at tier 2 now compile against the full core instead of falling back (§3.3's per-block-kind rules):
+
+| Block | Client | Serialized |
+| --- | --- | --- |
+| `$store` / `createStore(value)` / `createPlainStore` | the core's plain store; `yield* s.a.b` reads through the proxy, `readStore(s, sel)` is `sel(s)`, setters are called directly | nothing when its initializer is client-evaluable; otherwise the store, **pruned to the top-level keys its component's code reads or writes** (`S.key…`, `readStore` selectors and draft setters that only use `d.key…`; any other use serializes it whole) — `store_paths.rs` |
+| `createOptimisticStore(fn, seed)` / `createProjection` / `createStore(fn, seed)` / `createOptimistic` / `createSignal(fn)` | the core's constructor over an **adopting** function: the first run returns the anchor's value instead of running `fn` (the fetch is not repeated), later runs (`refresh`) run it | its settled value (the server awaits it) |
+| live async `$memo` (`… return yield* attempt(f)`) | adopted (P2): the first run evaluates the body up to the `attempt` (so it subscribes to what it reads there) and returns the anchor's value; later runs are the async body | its settled value |
+| `$event` with `yield* attempt(f)` | an async handler awaiting `f()` (a rejection throws at the `yield*`, as in the driver) | – |
+| `action(function* …)`, `refresh(x)` | the core's; `yield` inside an action generator is the transaction dialect, not a block operation; `refresh(x)` counts as a write of `x` for liveness | – |
+| a `For` over a store | rows bind their item's fields (a row reads through the proxy), the list tracks the array's items | – |
+
+Refusals keep this sound: an async memo whose value is not its one final `attempt`'s result, a projection function that reads reactive state (its adopting run would not subscribe), a derived cell outside the island's root component.
+
+### Islands spanning modules
+
+- **Summaries (pass one).** `islandExports(code)` summarizes a module: its exports by kind (`component`, `factory` — a function creating reactive state, `helper` — a generator read with `yield*`, `function`, `value`) and its relative imports with the names they import. `IslandsCompiler` caches it by content.
+- **Inlining (pass two).** For each module, the plugin passes the sources of the relative imports whose used names are factories, helpers or components (`imports` option). `compileIslands` copies each such export's closure (the top-level declarations it reads, transitively) into the module, renamed apart; runtime imports merge into the module's, other imports become absolute paths; exported *values* it reads (a context, shared state) stay imported so they keep their identity, and the model reads a context imported from a provided module as a context. Then, in every component setup, `const x = f(args)` / `f(args)` / `const x = yield* g(args)` of a module-level factory or helper with one exit is replaced by its body (locals renamed, parameters bound, the `return` bound to the pattern); in a plain component a provider value that calls one (`<Ctx value={createTodos()}>`) is hoisted first. Imported components that receive live state (or that the island's DOM crosses) are inlined on a second pass when the first falls back for that reason. Flows, liveness, tiers, the server templates and the chunks all see the inlined code; the imported modules themselves are unchanged.
+- **Soundness.** Without a module's source, a `yield*` read of a value that a function from it computed is refused (strict v2 code reads only reactive values with `yield*`, so the value is reactive state the compiler cannot see) — `islands-modules` and the Rust test `an_imported_factory_is_inlined_and_its_state_is_the_islands` pin both sides. The cache key of a module's compile includes its imports' contents.
+
+### Component call forms, boundaries and their fallbacks
+
+- `X({ … })`, `Loading({ … })`, `Errored({ … })`, `Show({ … })`, `For({ … })` in a view are read as the elements they stand for (a source pre-pass, inside out; a spread, a getter, a method or a computed key is refused). The `blocks-async-resolve` / `-reject` scenarios, skipped before, pass in the islands mode (streamed: the task resolves or rejects while the server streams).
+- A boundary's fallback is server HTML: its holes and handlers are not island sites.
+- **Client error boundaries.** An `<Errored>` around a tier-2 island's live content keeps a client boundary: the server marks its region with a marker pair, the content's activation runs inside `createErrorBoundary`, and a failure detaches the content (kept, still bound) and shows the fallback, built on the client from the fallback JSX with `err` / `reset`; a reset that recovers puts the same content back (`islands-errored`). The same holds for an `<Errored>` *inside* a live region — in rows the client creates, too: its region is part of the row's template and each row's content activates inside its own boundary (`islands-errored-rows`); a live hole in a fallback reads the fallback's live state. A `<Loading>` around adopted content is pass-through (its content is resolved at activation, and a settled boundary does not show its fallback again).
+
+### todos-blocks compiles to islands
+
+`examples/todos-blocks/src/app.tsx` with its imports (`createTodos` from `./todos`: an optimistic async store, five actions, `refresh`; `createHashFilter` from `./filter`: a signal written by a `hashchange` listener registered in `onSettled`) compiles to **one island at tier 2** rooted at `App` (members Header, TodoItem, MainSection, Footer): the store is adopted from the anchor's `data-s` (the 100 todos), the hash filter's settled body is a lazy window stub, the TodoItem rows bind their store fields, the retry button is a live `Show` render callback, and `App`'s `<Errored>` is a client boundary. The page's JS at load drops from 38.9 KB gz (today; 38.5 KB before this work, when the module fell back) to **0.66 KB gz** (lazy: the loader; the island's 25.2 KB gz chunk loads on the first event or `hashchange`), or 25.3 KB gz activated at load. Script time at load: 16.2 / 62.0 ms (eager, 1× / 4× CPU) and 0.6 / 3.3 ms (lazy) against today's 34.6 / 134.8 ms; the lazy page's first interaction (chunk fetch, parse, activation, replay) is 33.8 / 97.1 ms. HTML drops from 2.57 to 1.56 KB gz (no `_$HY` data or hydration keys; the store's `data-s` is pruned). The harness session was extended (toggle, delete, toggle all, filter by hash, add, filter back, clear completed) and the page equaled today's after load and after every step until the final merge, after which today's page stopped filtering by hash (see Measurements → Gate on todos).
+
+### Prefetch budget from the bundle
+
+The Vite plugin's entry carries a placeholder per lazy island; `generateBundle` replaces it with the bytes the island's chunk adds to the page — the chunk and its static imports the entry does not already load — and writes the sizes (raw and gzip) next to Vite's manifest (`.vite/solid-islands.json`). In `examples/islands` the Toggle island counts 1,007 bytes (its 0.43 KB chunk plus the t0 helper) instead of its source size.
+
+### Dev verifier
+
+`verify: true` (the Vite plugin's default in the dev server) makes each chunk export `verify(anchor)`: it walks the island's static addresses on the server markup — the same walk as `activate`, nothing activated — and reports each node that is not what the code expects, naming the element, its component and source line and its full path from the anchor (`expected <a> (App, line 13) at $a.firstElementChild.firstElementChild, found <span>`), a missing `data-s`, and client error boundaries' regions. The entry runs it on every anchor at load and as streamed boundaries land (an island that `waits` is checked once its boundary has landed), and reports anchors naming an island the build does not know (server and client built from different sources). The conformance islands mode checks it is silent on every scenario's own server markup and precise on a tampered one.
+
+### Measurements
+
+`scripts/ssr-redesign/trackg-report.mjs` over `trackg-<app>-{1,2}.json` (this work, one session, 7 loads per run and CPU rate) and `compiler-<app>-{1,2}.json` (the compiler emission before it, measured in an earlier session). Byte numbers are exact; times are means of the two runs.
+
+#### hn
+
+| | HTML gz | JS gz at load | + JS gz on first interaction | script at load 1× | 4× | first interaction 1× | 4× | server render (CPU ms) | gate |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| today: hydrate (A) | 405.60 | 22.32 | – | 94.1 | 325.0 | 1.5 | 6.8 | 70.7 | reference |
+| before: compiled islands, tier 0, eager | 188.34 | 0.62 | – | 4.2 | 7.4 | 0.7 | 1.7 | 1.4 | pass |
+| before: compiled islands, tier 0, lazy | 188.34 | 0.52 | 0.54 | 1.8 | 1.8 | 8.9 | 44.1 | 3.9 | pass |
+| after: tier 0, eager | 188.34 | 0.69 | – | 3.8 | 17.6 | 0.8 | 3.2 | 4.6 | pass |
+| after: tier 0, lazy | 188.34 | 0.52 | 0.54 | 1.4 | 7.5 | 10.0 | 79.3 | 8.1 | pass |
+| after: tier 0, lazy, streamed boundary | 188.80 | 0.52 | 0.54 | 2.8 | 16.3 | 6.3 | 40.2 | 5.3 | pass |
+
+(after: 2 run(s); before: 2 run(s); 7 loads per run and CPU rate.)
+
+#### todos-local
+
+| | HTML gz | JS gz at load | + JS gz on first interaction | script at load 1× | 4× | first interaction 1× | 4× | server render (CPU ms) | gate |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| today: hydrate (A) | 1.39 | 22.81 | – | 10.9 | 49.1 | 2.0 | 11.6 | 1.0 | reference |
+| before: tier 1, eager | 0.86 | 3.97 | – | 3.8 | 14.3 | 1.3 | 5.7 | 0.3 | pass |
+| before: tier 1, lazy | 0.86 | 0.67 | 3.90 | 0.8 | 3.8 | 14.3 | 48.5 | 0.2 | pass |
+| after: tier 1, eager | 0.86 | 4.02 | – | 3.8 | 14.5 | 1.3 | 6.6 | 0.2 | pass |
+| after: tier 1, lazy | 0.86 | 0.67 | 3.96 | 0.7 | 3.2 | 12.9 | 42.6 | 0.2 | pass |
+
+(after: 2 run(s); before: 2 run(s); 7 loads per run and CPU rate.)
+
+#### todos
+
+| | HTML gz | JS gz at load | + JS gz on first interaction | script at load 1× | 4× | first interaction 1× | 4× | server render (CPU ms) | gate |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| today: hydrate (A) | 2.57 | 38.92 | – | 34.6 | 134.8 | 4.7 | 19.4 | 7.1 | reference |
+| before: whole-module fallback (hydrate) | 2.62 | 38.50 | – | 36.9 | 132.3 | timeout | timeout | 7.4 | pass |
+| after: one tier-2 island, eager | 1.56 | 25.29 | – | 16.2 | 62.0 | 3.2 | 16.4 | 0.9 | false |
+| after: one tier-2 island, lazy | 1.56 | 0.66 | 25.22 | 0.6 | 3.3 | 33.8 | 97.1 | 1.2 | false |
+
+(after: 2 run(s); before: 2 run(s); 7 loads per run and CPU rate.)
+
+Reading the tables:
+
+- **todos-blocks** is the change: from whole-module fallback (38.5 KB gz, today's hydration) to one tier-2 island — 25.3 KB gz eager, or a 0.66 KB gz loader with the chunk on first interaction. The chunk is the full core (stores, optimistic, projections, transitions, the error boundary) plus the app; the loader is the same as HN's.
+- **Gate on todos.** After the final merge of `experiment/iterable-signals` the reference page (A, today's hydration of `examples/todos-blocks`) no longer filters by hash: the fused `onSettled(function () { … addEventListener("hashchange", …) })` that the blocks-v2 lowering now emits for `createHashFilter` never runs after hydration (instrumented: the listener is never added; client-only rendering, as in the example's own tests, still works). The compiled island filters correctly and differs from A only from step 3 (`#/active`) on; before the merge (same island code) the gate passed after all seven steps. The table's `false` is that A defect, not the island.
+- **HN and todos-local** are unchanged in bytes except the eager entry (+0.07 KB gz for per-boundary activation: `solid-islands` listener and `waits`). Their time rows moved in both directions between sessions (A too: HN A 4× script is 325 ms here); treat sub-20 ms differences between the "before" and "after" rows as run-to-run noise — the byte columns and the same-session A comparison are the reliable ones.
+- **Streamed HN (`C-stream`)**: the shell (with the `<Loading>` fallback) and the story chunk arrive in one response; HTML +0.46 KB gz for the swap script and markers; JS unchanged.
+
+### Behaviour evidence
+
+- **Browser gate** (`measure.mjs --check`): HN `C-eager` / `C-lazy` / `C-stream` (the page's `<Loading>` streamed as a chunk after the shell; the swap runs while parsing), todos-local `C-eager` / `C-lazy`, equal today's page after load and after every session step, with server nodes kept; todos-blocks `C` / `C-eager` (compiled, no longer the fallback) did too before the final merge, and now differ only where today's page stopped reacting to `hashchange` (see Measurements); form controls' live state (`checked`) is part of the comparison.
+- **Conformance islands mode**: 75 tests, **0 skipped** (was 25 + 3 skipped). New: `blocks-async-resolve` / `-reject` (call forms, streamed resolve / reject into `Errored`), `blocks-async-event` (merged from blocks v2: an async `$event` reading a context provided outside the island — serialized), `blocks-effect`'s markup test (compared after the load-time effect's activation), and islands-only scenarios `islands-stream` (a streamed boundary with an island inside and an island spanning it), `islands-store` (a store island from server data, pruned serialization, rows over a store), `islands-async` (an adopted live async memo, an async `$event`), `islands-optimistic` (todos' state shape in one module: adopted optimistic store, action, refresh, a live `Show` render callback), `islands-modules` (a factory and a component from other modules, a helper generator reading an imported context), `islands-errored` (a client error boundary: throw, fallback, reset), `islands-errored-rows` (an error boundary inside rows the client creates); and the dev verifier on every scenario.
+- **Rust unit tests** (`src/island_emit/tests.rs`, 33): the above plus call forms, a context provided outside the island, streaming and `waits`, stores and key pruning, adoption (and its refusals), async handlers, cross-module summaries and inlining, imported contexts, factory / helper / provider inlining, client error boundaries. **JS tests**: `__tests__/islands-build.test.js` (16: streaming entry, bundled budget sizes, cross-module pass and cache, verifier entry), `__tests__/islands-stream.test.js` (5: in-place vs streamed, nested order, error routing, HTML form, swap).
+
+### Navigation and route-level clustering (design; not implemented)
+
+- **Routes as roots.** The plugin takes a route table (`routes: { "/": "src/routes/index.tsx", "/item/:id": "src/routes/item.tsx" }`) and collects islands per route root as it does per page now. Per route it emits a small loader table (the route's lazy islands, their events, policies and bundled sizes) and clusters chunks: groups the handler map activates together (a hydrate-before-write set) share one chunk; `load` / `visible` groups of one route merge into one route chunk up to the budget; runtimes dedupe per route (`tier1Core: "auto"` per route).
+- **Navigation is streaming into a region.** A same-origin link to a known route is intercepted; the server renders the route's outlet region with `renderIslandsStream` (the page shell is already there) and the client swaps the outlet exactly as a boundary chunk lands (`$sl` → `solid-islands`): inert content is replaced wholesale — the inert proof is what makes it a server component without annotations (§3.7 path 2) — islands in it activate through the same landing path, and the route's loader table merges into the page loader's (prefetched with the route on `intent`). Islands outside the outlet keep their DOM and state; islands inside are disposed (`activate` returns a disposer at tiers 1/2; tier 0 holds only element listeners).
+- **Gates.** The hackernews twin's story-list → story-page navigation equals a full load of the target page; islands outside the outlet keep state across it; chunk requests per navigation are counted.
+- **Why not route chunks with component code (§3.7 path 1):** they ship the inert regions' code that the islands proof removed; the streaming path reuses the proof and the loader unchanged.
+
+### Not done
+
+- `Loading` inside live regions (a client pending boundary around content the client creates), and client pending fallbacks for new async reads under a `Loading` around adopted content.
+- Streaming a boundary whose data is created above it (a projection in `App` read under `App`'s `<Loading>`): the server awaits setup data before the shell.
+- Navigation and route-level clustering (design above).
+- The t0 helper and the kernel route no errors: tier-0/1 islands under an `<Errored>` keep their runtime and do not show its fallback on a client error.
+- Store serialization is pruned to top-level keys (not paths or rows).
 
 ## Defects found
 
@@ -585,6 +704,12 @@ node scripts/ssr-redesign/islands-debug.mjs todos-local C-eager  # unminified, i
 (cd packages/compiler && cargo test --lib island_emit && pnpm exec vitest run __tests__/islands-build.test.js)
 (cd packages/web && pnpm exec vitest run test/conformance/islands.spec.ts)
 (cd examples/islands && pnpm build && pnpm check)
+# Islands for real apps (section "Islands for real apps")
+node scripts/ssr-redesign/measure.mjs --apps hn --only A,C-eager,C-lazy,C-stream --out documentation/plans/ssr-hydration-redesign/trackg-hn-1.json   # and -2
+node scripts/ssr-redesign/measure.mjs --apps todos-local --only A,C-eager,C-lazy --out documentation/plans/ssr-hydration-redesign/trackg-todos-local-1.json   # and -2
+node scripts/ssr-redesign/measure.mjs --apps todos --only A,C,C-eager --out documentation/plans/ssr-hydration-redesign/trackg-todos-1.json   # and -2
+node scripts/ssr-redesign/trackg-report.mjs                    # the tables in "Islands for real apps"
+(cd packages/compiler && pnpm exec vitest run __tests__/islands-stream.test.js)
 ```
 
 Harness notes:

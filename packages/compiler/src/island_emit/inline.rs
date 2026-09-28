@@ -622,10 +622,10 @@ fn function_of<'a>(program: &'a Program<'a>, sym: SymbolId) -> Option<FnRef<'a>>
             s => s.as_declaration(),
         };
         match decl {
-            Some(Declaration::FunctionDeclaration(f)) => {
-                if f.id.as_ref().and_then(|i| i.symbol_id.get()) == Some(sym) {
-                    return Some(FnRef::Func(f));
-                }
+            Some(Declaration::FunctionDeclaration(f))
+                if f.id.as_ref().and_then(|i| i.symbol_id.get()) == Some(sym) =>
+            {
+                return Some(FnRef::Func(f));
             }
             Some(Declaration::VariableDeclaration(v)) => {
                 for d in &v.declarations {

@@ -64,6 +64,10 @@ pub(crate) struct GroupCode {
 pub(crate) enum Serial {
     Prop(String),
     Cell(usize),
+    /// A context the island reads with no provider inside it: its value at
+    /// the island's root (the same at every member, since no provider in the
+    /// island sits between), serialized when it holds no reactive state.
+    Ctx(String),
 }
 
 #[derive(Clone, Debug)]
@@ -710,7 +714,10 @@ fn adoptable(body: FnRef<'_>) -> bool {
     let is_attempt = super::model::yield_delegate(arg)
         .and_then(call_of)
         .is_some_and(|c| matches!(c.callee.without_parentheses(), Expression::Identifier(id) if id.name == "attempt"));
-    is_attempt && !stmts[..stmts.len() - 1].iter().any(|s| contains_attempt_call(s))
+    is_attempt
+        && !stmts[..stmts.len() - 1]
+            .iter()
+            .any(|s| contains_attempt_call(s))
 }
 
 fn contains_attempt_call(s: &Statement<'_>) -> bool {
@@ -978,8 +985,11 @@ impl<'x, 'a> Ce<'x, 'a> {
                 let mut i = 0;
                 while i < b.len() {
                     if b[i] == b'$' && i + 1 < b.len() && (b[i + 1] == b'n' || b[i + 1] == b'm') {
-                        let j = i + 2 + b[i + 2..].iter().take_while(|c| c.is_ascii_digit()).count();
-                        if j > i + 2 && let Some(p) = full.get(&e[i..j]) {
+                        let j =
+                            i + 2 + b[i + 2..].iter().take_while(|c| c.is_ascii_digit()).count();
+                        if j > i + 2
+                            && let Some(p) = full.get(&e[i..j])
+                        {
                             out.push_str(p);
                             i = j;
                             continue;
@@ -1455,7 +1465,8 @@ impl<'x, 'a> Ce<'x, 'a> {
                         self.rt.extend(uses.rt);
                         self.core.extend(uses.core);
                         self.top_syms.extend(uses.top);
-                        let run = self.translate(inst, &none, |tx, env| tx.func(env, *body, true))?;
+                        let run =
+                            self.translate(inst, &none, |tx, env| tx.func(env, *body, true))?;
                         self.rt.insert("createMemo");
                         let v = self.fresh("$ad");
                         let n = &self.insts[inst].names[sym].0;
@@ -1463,9 +1474,10 @@ impl<'x, 'a> Ce<'x, 'a> {
                             "let {v} = 1; const {n} = $M(() => {v} ? ({v} = 0, (() => {adopt})()) : ({run})());"
                         )
                     } else {
-                    self.rt.insert("createMemo");
-                    let f = self.translate(inst, &none, |tx, env| tx.func(env, *body, false))?;
-                    format!("const {} = $M({f});", self.insts[inst].names[sym].0)
+                        self.rt.insert("createMemo");
+                        let f =
+                            self.translate(inst, &none, |tx, env| tx.func(env, *body, false))?;
+                        format!("const {} = $M({f});", self.insts[inst].names[sym].0)
                     }
                 }
                 Item::Event { sym, body, .. } => {
@@ -1539,10 +1551,28 @@ impl<'x, 'a> Ce<'x, 'a> {
                 }
                 Item::Context { pattern, ctx, .. } => {
                     let Some(bind) = self.insts[inst].ctx.get(ctx).cloned() else {
-                        return Err(format!(
-                            "context `{}` read in the island without a provider inside it",
-                            self.m.sym_name(*ctx)
-                        ));
+                        // Provided outside the island: a server value, unless
+                        // a provider anywhere gives it reactive state.
+                        let name = self.m.sym_name(*ctx).to_string();
+                        if self
+                            .a
+                            .ctx_av
+                            .get(ctx)
+                            .is_some_and(|v| !v.reads.is_empty() || !v.writes.is_empty())
+                        {
+                            return Err(format!(
+                                "context `{name}` read in the island without a provider inside it (its value holds reactive state)"
+                            ));
+                        }
+                        let s = Serial::Ctx(name.clone());
+                        if !self.serial.contains(&s) {
+                            self.serial.push(s);
+                        }
+                        let pat = self.pattern(inst, pattern)?;
+                        let line =
+                            format!("const {pat} = $d[{}];", js_str(&format!("$ctx:{name}")));
+                        self.bucket(inst).setup.push(line);
+                        continue;
                     };
                     let pat = self.pattern(inst, pattern)?;
                     self.bind_context_kinds(inst, pattern, &bind.kinds);
@@ -1663,7 +1693,11 @@ impl<'x, 'a> Ce<'x, 'a> {
             }
         };
         // `createSignal(fn)` (a derived signal) is the core's writable memo.
-        let ctor = if ctor == "createSignal" { "createSignal" } else { ctor.as_str() };
+        let ctor = if ctor == "createSignal" {
+            "createSignal"
+        } else {
+            ctor.as_str()
+        };
         let callee = if ctor == "createSignal" {
             self.rt.insert("createSignal");
             "$S".to_string()
@@ -1699,7 +1733,9 @@ impl<'x, 'a> Ce<'x, 'a> {
                 .iter()
                 .filter_map(|p| match p {
                     ObjectPropertyKind::ObjectProperty(p) => match &p.key {
-                        PropertyKey::StaticIdentifier(k) => Some((Some(k.name.to_string()), kind_of(&p.value))),
+                        PropertyKey::StaticIdentifier(k) => {
+                            Some((Some(k.name.to_string()), kind_of(&p.value)))
+                        }
                         _ => None,
                     },
                     _ => None,
@@ -1710,7 +1746,12 @@ impl<'x, 'a> Ce<'x, 'a> {
     }
 
     /// Accessors destructured from a literal provider value read statically.
-    fn bind_context_kinds(&mut self, inst: usize, p: &BindingPattern<'a>, kinds: &[(Option<String>, Kind)]) {
+    fn bind_context_kinds(
+        &mut self,
+        inst: usize,
+        p: &BindingPattern<'a>,
+        kinds: &[(Option<String>, Kind)],
+    ) {
         let mut set = |id: &oxc_ast::ast::BindingIdentifier<'a>, k: &Kind| {
             if let Some(s) = id.symbol_id.get()
                 && let Some(entry) = self.insts[inst].names.get_mut(&s)
@@ -1731,8 +1772,13 @@ impl<'x, 'a> Ce<'x, 'a> {
             }
             BindingPattern::ObjectPattern(o) => {
                 for prop in &o.properties {
-                    if let (PropertyKey::StaticIdentifier(key), BindingPattern::BindingIdentifier(id)) = (&prop.key, &prop.value)
-                        && let Some((_, k)) = kinds.iter().find(|(n, _)| n.as_deref() == Some(key.name.as_str()))
+                    if let (
+                        PropertyKey::StaticIdentifier(key),
+                        BindingPattern::BindingIdentifier(id),
+                    ) = (&prop.key, &prop.value)
+                        && let Some((_, k)) = kinds
+                            .iter()
+                            .find(|(n, _)| n.as_deref() == Some(key.name.as_str()))
                     {
                         set(id, k);
                     }
@@ -1994,7 +2040,11 @@ impl<'x, 'a> Ce<'x, 'a> {
                         .push(Seq::Line(format!("const {var} = {value};")));
                     // The binding stays for the whole instance: its subtree is
                     // laid out lazily (one provider per context per component).
-                    if self.insts[inst].ctx.insert(ctx, CtxBind { var, kinds }).is_some() {
+                    if self.insts[inst]
+                        .ctx
+                        .insert(ctx, CtxBind { var, kinds })
+                        .is_some()
+                    {
                         return Err("a context provided twice in one island component".into());
                     }
                     self.flatten(&kids, inst, out)?;
@@ -2324,7 +2374,11 @@ impl<'x, 'a> Ce<'x, 'a> {
     fn placeholders(&self, s: &Slot<'a>) -> usize {
         match s {
             Slot::Hole(_, _, false) => 1,
-            Slot::Boundary(_, _, bi) => self.bounds[*bi].1.iter().map(|x| self.placeholders(x)).sum(),
+            Slot::Boundary(_, _, bi) => self.bounds[*bi]
+                .1
+                .iter()
+                .map(|x| self.placeholders(x))
+                .sum(),
             _ => 0,
         }
     }
@@ -2355,10 +2409,8 @@ impl<'x, 'a> Ce<'x, 'a> {
                 .try_fold(0usize, |acc, c| c.1.map(|x| acc + x))
         };
         let nested = base > 0 || after_node.is_some();
-        let sole = parent.is_some()
-            && !nested
-            && slots.len() == 1
-            && matches!(slots[0], Slot::Hole(..));
+        let sole =
+            parent.is_some() && !nested && slots.len() == 1 && matches!(slots[0], Slot::Hole(..));
         // The last element variable at a known index: the next one chains
         // from it (`prev.nextElementSibling`) instead of walking from the parent.
         let mut last: Option<(usize, String)> = None;
@@ -2388,7 +2440,9 @@ impl<'x, 'a> Ce<'x, 'a> {
                         (Some(p), Some(b), _) => {
                             if b == 0 {
                                 format!("{p}.firstElementChild")
-                            } else if let Some((lb, lv)) = last.as_ref().filter(|(lb, _)| *lb < b && b - lb < 3) {
+                            } else if let Some((lb, lv)) =
+                                last.as_ref().filter(|(lb, _)| *lb < b && b - lb < 3)
+                            {
                                 format!("{lv}{}", ".nextElementSibling".repeat(b - lb))
                             } else if b < 3 {
                                 format!("{p}.firstElementChild{}", ".nextElementSibling".repeat(b))
@@ -2418,7 +2472,11 @@ impl<'x, 'a> Ce<'x, 'a> {
                     }
                     if !self.scopes[self.cur].builder {
                         let what = self.describe(el, inst);
-                        let target = if nav == "$a" { "$a".to_string() } else { var.clone() };
+                        let target = if nav == "$a" {
+                            "$a".to_string()
+                        } else {
+                            var.clone()
+                        };
                         self.checks.push((target, what, nav.clone()));
                     }
                     if nav == "$a" {
@@ -2444,7 +2502,10 @@ impl<'x, 'a> Ce<'x, 'a> {
                     } else if self.scopes[self.cur].builder {
                         // Inert hole in fresh content: a placeholder.
                         let k = ph_base
-                            + slots[..i].iter().map(|s| self.placeholders(s)).sum::<usize>();
+                            + slots[..i]
+                                .iter()
+                                .map(|s| self.placeholders(s))
+                                .sum::<usize>();
                         let p = parent
                             .clone()
                             .ok_or("inert hole at a builder's root level")?;
@@ -2459,10 +2520,13 @@ impl<'x, 'a> Ce<'x, 'a> {
                 }
                 Slot::Boundary(el, inst, bi) => {
                     let k = pairs_in(0, i).ok_or("a boundary after a variable region")?;
-                    let before = elems_in(0, i)
-                        .ok_or("a boundary after a variable-size region")?
-                        + base;
-                    let end = if parent.is_none() && after_node.is_none() && before == 0 && self.element_anchor {
+                    let before =
+                        elems_in(0, i).ok_or("a boundary after a variable-size region")? + base;
+                    let end = if parent.is_none()
+                        && after_node.is_none()
+                        && before == 0
+                        && self.element_anchor
+                    {
                         // The boundary encloses the anchor element: its end is
                         // the first unbalanced end marker after the anchor.
                         self.helpers.insert("$mke");
@@ -2485,7 +2549,11 @@ impl<'x, 'a> Ce<'x, 'a> {
                     let start = self.fresh("$bs");
                     self.helpers.insert("$start");
                     self.scope_nav(format!("const {start} = $start({end});"));
-                    let ph = ph_base + slots[..i].iter().map(|s| self.placeholders(s)).sum::<usize>();
+                    let ph = ph_base
+                        + slots[..i]
+                            .iter()
+                            .map(|s| self.placeholders(s))
+                            .sum::<usize>();
                     let r = self.container_at(parent.clone(), &inner, before, Some(start), ph);
                     self.cur = saved;
                     r?;
@@ -2511,7 +2579,13 @@ impl<'x, 'a> Ce<'x, 'a> {
 
     /// Emit a client error boundary: its content's activation (the scope's
     /// code) runs inside it; the fallback is built on the client.
-    fn boundary(&mut self, el: &'a JSXElement<'a>, inst: usize, bscope: usize, end: String) -> R<()> {
+    fn boundary(
+        &mut self,
+        el: &'a JSXElement<'a>,
+        inst: usize,
+        bscope: usize,
+        end: String,
+    ) -> R<()> {
         let nav = self.scopes[bscope].nav.join("\n");
         let body = self.assemble(bscope, inst);
         // Code that landed in other instances' buckets of this scope.
@@ -2542,7 +2616,9 @@ impl<'x, 'a> Ce<'x, 'a> {
                 }
                 Some(AttrVal::Expr(e)) => {
                     let Some(f) = FnRef::from_expr(e) else {
-                        return Err("an <Errored> fallback that is not JSX or a render callback".into());
+                        return Err(
+                            "an <Errored> fallback that is not JSX or a render callback".into()
+                        );
                     };
                     let Some(Root::Element(r)) = fn_root(f) else {
                         return Err("an <Errored> fallback callback must return one element".into());
@@ -2550,22 +2626,33 @@ impl<'x, 'a> Ce<'x, 'a> {
                     let mut ps = Vec::new();
                     for (i, p) in f.params().items.iter().enumerate() {
                         let BindingPattern::BindingIdentifier(id) = &p.pattern else {
-                            return Err("an <Errored> fallback with a destructured parameter".into());
+                            return Err(
+                                "an <Errored> fallback with a destructured parameter".into()
+                            );
                         };
-                        let Some(sym) = id.symbol_id.get() else { continue };
+                        let Some(sym) = id.symbol_id.get() else {
+                            continue;
+                        };
                         ps.push((sym, if i == 0 { Kind::Acc } else { Kind::Val }));
                     }
                     (r, ps)
                 }
-                _ => return Err("an <Errored> fallback that is not JSX or a render callback".into()),
+                _ => {
+                    return Err("an <Errored> fallback that is not JSX or a render callback".into());
+                }
             };
-        if !matches!(jsx::tag_of(self.m, &root.opening_element.name), Tag::Intrinsic(_)) {
+        if !matches!(
+            jsx::tag_of(self.m, &root.opening_element.name),
+            Tag::Intrinsic(_)
+        ) {
             return Err("an <Errored> fallback whose root is not an element".into());
         }
         let mut names = Vec::new();
         for (sym, kind) in &params {
             let n = format!("{}{}", self.m.sym_name(*sym), self.fresh("$"));
-            self.insts[inst].names.insert(*sym, (n.clone(), kind.clone()));
+            self.insts[inst]
+                .names
+                .insert(*sym, (n.clone(), kind.clone()));
             names.push(n);
         }
         while names.len() < 2 {
@@ -2632,7 +2719,10 @@ impl<'x, 'a> Ce<'x, 'a> {
             _ => "?".into(),
         };
         let line = self.m.src[..el.span.start as usize].matches('\n').count() + 1;
-        format!("<{tag}> ({}, line {line})", self.m.comps[self.insts[inst].comp].name)
+        format!(
+            "<{tag}> ({}, line {line})",
+            self.m.comps[self.insts[inst].comp].name
+        )
     }
 
     fn subtree_has_handlers(&self, el: &'a JSXElement<'a>, inst: usize) -> bool {
@@ -3034,9 +3124,11 @@ impl<'x, 'a> Ce<'x, 'a> {
             self.helpers.insert("$list");
             // A row whose code creates no computation, cleanup or nested
             // region needs no owner of its own.
-            let reactive = ["$E(", "$M(", "$C(", "$Ef(", "$S(", "$show(", "$list(", "$R("]
-                .iter()
-                .any(|k| builder.contains(k))
+            let reactive = [
+                "$E(", "$M(", "$C(", "$Ef(", "$S(", "$show(", "$list(", "$R(",
+            ]
+            .iter()
+            .any(|k| builder.contains(k))
                 || stmt_here;
             if reactive {
                 format!("$list({end}, () => {input_text}, {builder});")
@@ -3060,7 +3152,9 @@ impl<'x, 'a> Ce<'x, 'a> {
         let Tag::Intrinsic(tag) = jsx::tag_of(self.m, &el.opening_element.name) else {
             return Err("template root".into());
         };
-        if crate::shared::constants::svg_elements(&tag) || crate::shared::constants::mathml_elements(&tag) {
+        if crate::shared::constants::svg_elements(&tag)
+            || crate::shared::constants::mathml_elements(&tag)
+        {
             // An HTML <template> would create them in the HTML namespace.
             return Err(format!("<{tag}> (SVG / MathML) inside a live region"));
         }

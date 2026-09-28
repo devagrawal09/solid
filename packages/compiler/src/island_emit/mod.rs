@@ -411,6 +411,7 @@ fn manifest(
         for s in &code.serial {
             match s {
                 client::Serial::Prop(p) => w.string(&format!("props.{p}")),
+                client::Serial::Ctx(n) => w.string(&format!("context {n}")),
                 client::Serial::Cell(ii) => match &m.comps[g.root].setup[*ii] {
                     model::Item::Cell { name, .. } => w.string(&format!("cell {name}")),
                     model::Item::Memo { name, .. } => w.string(&format!("memo {name}")),
