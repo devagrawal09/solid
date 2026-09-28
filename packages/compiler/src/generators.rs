@@ -3298,7 +3298,8 @@ export const Parent = $component(function* () {
             "{out}"
         );
 
-        // SSR output evaluates holes inline: no hole erasure.
+        // SSR output evaluates holes inline, possibly with the guard up: no
+        // hole erasure (the v2 lowering reads through `readAccessor`).
         let ssr_out = fused(
             r#"import { $component, $signal } from "solid-js";
 export const Hole = $component(function* () {
@@ -3308,6 +3309,7 @@ export const Hole = $component(function* () {
 "#,
         )
         .unwrap();
-        assert!(ssr_out.contains("_$perform(n)"), "{ssr_out}");
+        assert!(ssr_out.contains("_$readAccessor(n)"), "{ssr_out}");
+        assert!(!ssr_out.contains("_$perform"), "{ssr_out}");
     }
 }

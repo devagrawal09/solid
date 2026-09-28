@@ -238,8 +238,8 @@ fn opting_out_and_server_output_keep_the_lowering() {
     assert!(off.contains("$component(_$$(function(props)"), "{off}");
     assert!(!off.contains("Compiled"), "{off}");
 
-    // SSR: the v2 fusion runs (the same blocks fuse on every generate), the
-    // client lowering does not.
+    // SSR: the same lowering as DOM output (hydration ids stay aligned: the
+    // same blocks are erased on both sides, `block_scope.rs`).
     let ssr = compile_with(
         APP,
         CompileOptions {
@@ -247,15 +247,13 @@ fn opting_out_and_server_output_keep_the_lowering() {
             ..CompileOptions::default()
         },
     );
-    assert!(ssr.contains("_$perform($signal(0))"), "{ssr}");
+    assert!(!ssr.contains("_$perform"), "{ssr}");
+    assert!(ssr.contains("_$createSignal(0)"), "{ssr}");
     assert!(
         ssr.contains("const doubled = _$createMemo(function() {"),
         "{ssr}"
     );
-    assert!(
-        !ssr.contains("Compiled") && !ssr.contains("syncBlock"),
-        "{ssr}"
-    );
+    assert!(ssr.contains("_$$componentCompiled("), "{ssr}");
 }
 
 #[test]
@@ -419,7 +417,7 @@ fn async_bodies_are_async_functions_or_stay_with_the_driver() {
         "{out}"
     );
     assert!(flat.contains(" $ as _$$"), "{out}");
-    // Server output keeps every body with the driver.
+    // Server output: the same bodies are erased, restored and refused.
     let ssr = compile_with(
         ASYNC_APP,
         CompileOptions {
@@ -427,8 +425,17 @@ fn async_bodies_are_async_functions_or_stay_with_the_driver() {
             ..CompileOptions::default()
         },
     );
-    assert!(!ssr.contains("async function"), "{ssr}");
-    assert!(!ssr.contains("_$asyncBody"), "{ssr}");
+    let ssr_flat = self::flat(&ssr);
+    assert!(
+        ssr_flat.contains(
+            "const erased = _$$eventCompiled(_$asyncBody(async function(e, _$a) {"
+        ),
+        "{ssr}"
+    );
+    assert!(
+        ssr_flat.contains("const looped = _$createMemo(_$$(function* () {"),
+        "{ssr}"
+    );
 }
 
 #[test]

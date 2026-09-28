@@ -1,5 +1,7 @@
-//! Generator blocks v2: client lowering (DOM output, on by default with the
-//! v2 fusion; `hostFusion: false` turns it off).
+//! Generator blocks v2: the lowering of compiled v2 bodies (DOM and SSR
+//! output, on by default with the v2 fusion; `hostFusion: false` turns it
+//! off). Named "client lowering" historically: it ran on DOM output only
+//! until section 11 of `documentation/plans/blocks-v2-performance.md`.
 //!
 //! After the generator pass has lowered the v2 bodies to call form and the
 //! v2 fusion has erased the blocks consumed by reactive hosts, what is left
@@ -79,13 +81,21 @@
 //!    and, after the JSX transform, plain calls where the transform put them
 //!    inside a computation (`fuse_computation_reads`).
 //!
-//! Only SYNC-flagged blocks are erased, and only in DOM output: a flagged
-//! `$` call passed to `$component` / `$event` is never wrapped in a
-//! hydration id scope (`block_scope.rs`; flagged views are, on both sides,
-//! as `$` or `syncBlock`), so erasing it on the client alone keeps hydration
-//! ids aligned with the server, and every primitive is still created in the
-//! same order. An erased effect half or settled body, and every async body,
-//! has no JSX: a block with JSX is scoped on both sides and never erased.
+//! The pass runs identically on DOM and SSR output (same input: the v2 and
+//! generator passes, the fusion and the async lowering run on both), so the
+//! same blocks are erased on both sides. Hydration ids stay aligned twice
+//! over: only SYNC-flagged blocks are erased, and a flagged `$` call passed
+//! to `$component` / `$event` is never wrapped in a hydration id scope
+//! (`block_scope.rs`; flagged views are, on both sides, as `$` or
+//! `syncBlock`), and every primitive is still created in the same order. An
+//! erased effect half or settled body, and every async body, has no JSX: a
+//! block with JSX is scoped on both sides and never erased. The server's
+//! primitives are the ones the operations created with (`solid-js`'
+//! server entry registers them as the block primitives): `createEffect(
+//! compute, half)` and `effectBlock` both reach the server effect with the
+//! compute only, `onSettled` and `settledBlock` both allocate the one id.
+//! What stays DOM-only is `fuse_computation_reads` (the server's holes are
+//! thunks the renderer may evaluate with the guard up: `readAccessor`).
 use std::collections::{HashMap, HashSet};
 
 use oxc_allocator::Allocator;
@@ -114,7 +124,7 @@ mod tests;
 
 const RUNTIME_SOURCES: &[&str] = &["solid-js", "@solidjs/signals"];
 
-/// Run the v2 client lowering over a DOM program (after fusion).
+/// Run the v2 lowering over a DOM or SSR program (after fusion).
 pub(crate) fn lower_v2_client<'a>(
     allocator: &'a Allocator,
     program: &mut Program<'a>,

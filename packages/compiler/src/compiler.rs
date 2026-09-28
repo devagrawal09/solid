@@ -352,9 +352,11 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
         // `$` blocks the generator pass lowers.
         let mut v2 = crate::blocks_v2::transform_blocks_v2(&allocator, &mut program, source)
             .map_err(CompileError::transform)?;
-        // The client lowering compiles memo / event bodies that wait to
-        // `async function`s (DOM output only: the server keeps the driver).
-        v2.async_lowering = options.v2_fusion && matches!(options.generate, Generate::Dom);
+        // The v2 lowering compiles memo / event bodies that wait to
+        // `async function`s (DOM and SSR output alike: see
+        // `blocks_v2_lower.rs`).
+        v2.async_lowering =
+            options.v2_fusion && matches!(options.generate, Generate::Dom | Generate::Ssr);
         v2.async_bodies =
             crate::generators::transform_generators(&allocator, &mut program, source, proofs, &v2)
                 .map_err(CompileError::transform)?;
@@ -399,13 +401,14 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
         .map_err(CompileError::transform)?;
     }
 
-    // Generator blocks v2 client lowering (DOM output): direct setup
-    // creations, fused effect halves, erased setups and events, and the
-    // compiled-only constructors that keep the generator driver out of a
-    // fully compiled module (see `blocks_v2_lower.rs`).
+    // Generator blocks v2 lowering (DOM and SSR output, identically, so
+    // hydration ids stay aligned): direct setup creations, fused effect
+    // halves, erased setups and events, and the compiled-only constructors
+    // that keep the generator driver out of a fully compiled module (see
+    // `blocks_v2_lower.rs`).
     if options.v2_fusion
         && options.generators
-        && matches!(options.generate, Generate::Dom)
+        && matches!(options.generate, Generate::Dom | Generate::Ssr)
         && !v2_bodies.kinds.is_empty()
     {
         crate::blocks_v2_lower::lower_v2_client(&allocator, &mut program, &v2_bodies);

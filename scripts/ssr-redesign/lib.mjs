@@ -121,7 +121,7 @@ function patchPlugin({ count = false, oracles = [] } = {}) {
 }
 
 /** Compile .tsx/.jsx through the Rust compiler; `rewrites` model compiler output a prototype would emit. */
-function compilerPlugin({ generate, hydratable, rewrites = {}, options = {}, swaps = {}, islands }) {
+function compilerPlugin({ generate, hydratable, rewrites = {}, options = {}, swaps = {}, islands, compileTs = false }) {
   return {
     name: "solid-compiler",
     setup(b) {
@@ -145,13 +145,18 @@ function compilerPlugin({ generate, hydratable, rewrites = {}, options = {}, swa
         const out = transform(src, { filename: args.path, generate, hydratable, ...options });
         return { contents: out.code, loader: "ts", resolveDir: dirname(args.path) };
       });
-      // Rewrites on plain .ts modules (no JSX) are applied without compiling.
+      // Rewrites on plain .ts modules (no JSX) are applied without compiling;
+      // `compileTs` also runs the app's `.ts` modules through the compiler
+      // (block bodies there, as examples/todos-blocks' Vite config does).
       b.onLoad({ filter: /\.ts$/ }, args => {
         const rel = relative(ROOT, args.path);
-        if (!rewrites[rel]) return undefined;
+        const compile = compileTs && !/node_modules|\/packages\/|\.d\.ts$/.test(args.path);
+        if (!rewrites[rel] && !compile) return undefined;
         let src = readFileSync(args.path, "utf8");
-        for (const [from, to] of rewrites[rel]) src = once(src, from, to, rel);
-        return { contents: src, loader: "ts" };
+        for (const [from, to] of rewrites[rel] || []) src = once(src, from, to, rel);
+        if (!compile) return { contents: src, loader: "ts" };
+        const out = transform(src, { filename: args.path, generate, hydratable, ...options });
+        return { contents: out.code, loader: "ts", resolveDir: dirname(args.path) };
       });
     }
   };
@@ -243,7 +248,7 @@ function originOf(input) {
 }
 
 /** Bundle and import a server entry (node, ESM). */
-export async function loadServer(entry, outfile, { rewrites, swaps, tildeRoot, options, islands } = {}) {
+export async function loadServer(entry, outfile, { rewrites, swaps, tildeRoot, options, islands, compileTs } = {}) {
   await build({
     entryPoints: [entry],
     bundle: true,
@@ -253,7 +258,7 @@ export async function loadServer(entry, outfile, { rewrites, swaps, tildeRoot, o
     logLevel: "error",
     loader: { ".json": "json" },
     alias: { "solid-js": DIST.solidServer, "@solidjs/web": DIST.webServer, "@solidjs/signals": DIST.signals },
-    plugins: [tildePlugin(tildeRoot), compilerPlugin({ generate: "ssr", hydratable: true, rewrites, options, swaps, islands })]
+    plugins: [tildePlugin(tildeRoot), compilerPlugin({ generate: "ssr", hydratable: true, rewrites, options, swaps, islands, compileTs })]
   });
   return import(pathToFileURL(outfile).href + `?${Date.now()}`);
 }
