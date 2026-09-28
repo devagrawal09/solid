@@ -145,4 +145,106 @@ export const App = $component(function* () {
   ]
 };
 
-export const islandsScenarios = [islandsList];
+/**
+ * Streaming: a `Loading` over a server-authoritative async memo streams its
+ * content as an out-of-order chunk (the shell carries the fallback). Two
+ * islands meet the boundary: `Counter` (tier 0) lives inside the streamed
+ * content and activates when it lands; `App`'s island spans it (its button is
+ * in the shell, its member `Data` reads `props.n` inside the boundary), so it
+ * `waits`: it activates once the boundary it crosses has landed.
+ */
+export const islandsStream: Scenario = {
+  name: "islands-stream",
+  covers: [
+    "Loading over server data streams as a chunk",
+    "an island inside a streamed boundary activates when it lands",
+    "an island spanning a streamed boundary waits for it"
+  ],
+  entry: { component: "App" },
+  sources: {
+    reference: `
+import { createMemo, createSignal, Loading } from "solid-js";
+import { h } from "conformance";
+function Counter() {
+  const [c, setC] = createSignal(0);
+  return <button class="count" onClick={() => setC(x => x + 1)}>{c()}</button>;
+}
+function Data(props) {
+  const info = createMemo(() => h.task("load"));
+  return (
+    <section>
+      <h2>{info().title}</h2>
+      <span class="n">{props.n}</span>
+      <Counter />
+    </section>
+  );
+}
+export function App() {
+  const [n, setN] = createSignal(0);
+  return (
+    <div>
+      <button class="inc" onClick={() => setN(x => x + 1)}>inc</button>
+      <Loading fallback={<p class="loading">loading</p>}>
+        <Data n={n()} />
+      </Loading>
+    </div>
+  );
+}
+`,
+    islands: `
+import { $component, $event, $memo, $signal, attempt, Loading } from "solid-js";
+import { h } from "conformance";
+const Counter = $component(function* () {
+  const [c, setC] = yield* $signal(0);
+  const inc = $event(function* () { setC(x => x + 1); });
+  return function* () {
+    return <button class="count" onClick={inc}>{yield* c}</button>;
+  };
+});
+const Data = $component(function* (props) {
+  const info = yield* $memo(function* () {
+    return yield* attempt(() => h.task("load"));
+  });
+  return function* () {
+    return (
+      <section>
+        <h2>{(yield* info).title}</h2>
+        <span class="n">{yield* props.n}</span>
+        <Counter />
+      </section>
+    );
+  };
+});
+export const App = $component(function* () {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    return (
+      <div>
+        <button class="inc" onClick={inc}>inc</button>
+        <Loading fallback={<p class="loading">loading</p>}>
+          <Data n={yield* n} />
+        </Loading>
+      </div>
+    );
+  };
+});
+`
+  },
+  steps: [
+    { name: "initial", run: ({ html }) => html() },
+    {
+      name: "resolve (the chunk lands)",
+      run: async ({ tasks, settle, html }) => {
+        tasks.resolve("load#1", { title: "T" });
+        await settle();
+        html();
+      }
+    },
+    step("inc (the spanning island is active)", ctx => ctx.click(".inc")),
+    step("count (the island inside the chunk is active)", ctx => ctx.click(".count")),
+    step("count again", ctx => ctx.click(".count"))
+  ]
+};
+
+export const islandsScenarios = [islandsList, islandsStream];

@@ -374,7 +374,30 @@ impl<'a> ViewWalk<'_, 'a> {
                     self.root(a);
                 }
             }
-            _ => self.f.issues.push("render callback with statements".into()),
+            _ => {
+                // Statements before the markup (an error fallback that logs,
+                // a row that computes a local): the markup is every `return`'s
+                // JSX; the statements run where the callback runs (the server
+                // for inert content; client emission refuses live callbacks
+                // with statements). Handlers inside are not compiled.
+                let before = self.f.sites.len();
+                let mut v = Returns { out: Vec::new() };
+                for s in stmts {
+                    v.visit_statement(s);
+                }
+                for e in v.out {
+                    let e: &'a Expression<'a> = unsafe { &*(e as *const Expression<'a>) };
+                    self.root(e);
+                }
+                if self.f.sites[before..]
+                    .iter()
+                    .any(|s| matches!(s.kind, SiteKind::Handler(_)))
+                {
+                    self.f
+                        .issues
+                        .push("event handler inside a render callback with statements".into());
+                }
+            }
         }
     }
     fn attr_jsx(&mut self, v: &AttrVal<'a>) {
@@ -521,6 +544,22 @@ impl<'a> ViewWalk<'_, 'a> {
             }
         }
     }
+}
+
+/// `return` arguments of a function body (not of nested functions).
+struct Returns<'x> {
+    out: Vec<&'x Expression<'x>>,
+}
+
+impl<'a> Visit<'a> for Returns<'a> {
+    fn visit_return_statement(&mut self, r: &oxc_ast::ast::ReturnStatement<'a>) {
+        if let Some(a) = &r.argument {
+            let a: &'a Expression<'a> = unsafe { &*(a as *const Expression<'a>) };
+            self.out.push(a);
+        }
+    }
+    fn visit_function(&mut self, _: &Function<'a>, _: ScopeFlags) {}
+    fn visit_arrow_function_expression(&mut self, _: &ArrowFunctionExpression<'a>) {}
 }
 
 pub(crate) struct Group {

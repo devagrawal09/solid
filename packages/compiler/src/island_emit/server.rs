@@ -42,6 +42,8 @@ function _$for(l, f, fb) { if (!l || !l.length) return _$e(fb); let s = ""; for 
 async function _$forA(l, f, fb) { if (!l || !l.length) return _$e(fb); const r = await Promise.all(l.map((x, i) => f(x, () => i))); let s = ""; for (const x of r) s += _$e(x); return s; }
 function _$err(f, fb) { try { return _$e(f()); } catch (e) { return _$e(typeof fb === "function" ? fb(() => e, () => {}) : fb); } }
 async function _$errA(f, fb) { try { return _$e(await f()); } catch (e) { return _$e(typeof fb === "function" ? fb(() => e, () => {}) : fb); } }
+function _$ld($c, f, fb) { const s = $c && $c.get(Symbol.for("solid.islands.stream")); return s ? s.boundary($c, f, fb, _$e) : f($c); }
+function _$errS($c, f, fb) { const s = $c && $c.get(Symbol.for("solid.islands.stream")); return s ? s.errored($c, f, fb, _$e) : _$errA(() => f($c), fb); }
 "#;
 
 struct Se<'x, 'a> {
@@ -52,6 +54,8 @@ struct Se<'x, 'a> {
     roots: HashMap<usize, Vec<(String, &'x GroupCode, usize)>>,
     /// Handler elements whose handler prevents default (by span start).
     pd: HashSet<u32>,
+    /// Components whose view has a `<Loading>` over server data (streamed).
+    streams: std::cell::RefCell<HashSet<usize>>,
 }
 
 struct SEnv<'e, 'x, 'a> {
@@ -161,7 +165,7 @@ impl<'a> Env<'a> for SEnv<'_, '_, 'a> {
         let mut out = String::new();
         self.se.root(self.comp, e, &mut out, None)?;
         let _ = tx;
-        Ok(format!("{{ t: `{out}` }}"))
+        Ok(format!("({{ t: `{out}` }})"))
     }
 }
 
@@ -416,18 +420,37 @@ impl<'x, 'a> Se<'x, 'a> {
                 match b.as_str() {
                     "Loading" => {
                         let kids = jsx::children(&el.children)?;
-                        self.kids(comp, &kids, out, anchor, false)
+                        if !is_async {
+                            // Nothing to wait for: the content renders in place.
+                            return self.kids(comp, &kids, out, anchor, false);
+                        }
+                        // A boundary over server data: streamed out of order
+                        // when the render has a stream (`_$ld`), its fallback
+                        // in the shell; awaited in place otherwise.
+                        self.streams.borrow_mut().insert(comp);
+                        let mut inner = String::new();
+                        self.kids(comp, &kids, &mut inner, anchor, false)?;
+                        let fb = self.fallback_raw(comp, &attrs)?;
+                        let _ = write!(
+                            out,
+                            "${{await _$ld($c, async ($c) => `{inner}`, () => {fb})}}"
+                        );
+                        Ok(())
                     }
                     "Errored" => {
                         let kids = jsx::children(&el.children)?;
                         let mut inner = String::new();
                         self.kids(comp, &kids, &mut inner, anchor, false)?;
                         let fb = self.fallback(comp, &attrs)?;
-                        let helper = if is_async { "_$errA" } else { "_$err" };
-                        let _ = write!(
-                            out,
-                            "${{{aw}{helper}({asy}() => ({{ t: `{inner}` }}), {fb})}}"
-                        );
+                        if is_async {
+                            // Streamed boundaries inside route their failures here.
+                            let _ = write!(
+                                out,
+                                "${{await _$errS($c, async ($c) => ({{ t: `{inner}` }}), {fb})}}"
+                            );
+                        } else {
+                            let _ = write!(out, "${{_$err(() => ({{ t: `{inner}` }}), {fb})}}");
+                        }
                         Ok(())
                     }
                     "Show" | "For" => {
@@ -756,11 +779,12 @@ fn declarator<'a>(
 
 /// Server module text: the source with every component replaced by its
 /// string function, plus the helpers.
+/// The server module, and per component whether its view streams a boundary.
 pub(crate) fn emit_server<'a>(
     m: &Model<'a>,
     a: &Analysis<'a>,
     codes: &[(usize, GroupCode)],
-) -> R<String> {
+) -> R<(String, Vec<bool>)> {
     let n = m.comps.len();
     // Async components: async memos, or rendering an async / opaque one.
     let mut is_async: Vec<bool> = m
@@ -815,6 +839,7 @@ pub(crate) fn emit_server<'a>(
         is_async,
         roots,
         pd,
+        streams: Default::default(),
     };
     let mut edits: Vec<(Span, String)> = Vec::new();
     for (ci, c) in m.comps.iter().enumerate() {
@@ -842,7 +867,8 @@ pub(crate) fn emit_server<'a>(
     out.push('\n');
     out.push_str(SERVER_HELPERS);
     let _ = refs_expr;
-    Ok(out)
+    let streams = se.streams.borrow();
+    Ok((out, (0..n).map(|c| streams.contains(&c)).collect()))
 }
 
 fn handler_prevents(m: &Model<'_>, site: &super::graph::Site<'_>) -> bool {

@@ -48,7 +48,8 @@ function islandsEntry({
   chunk = id => CHUNK + id,
   hooks = {},
   hydrate = [],
-  web = "@solidjs/web"
+  web = "@solidjs/web",
+  streams = false
 } = {}) {
   const J = JSON.stringify;
   const eager = islands.filter(i => mode === "eager" || i.activation === "load");
@@ -59,6 +60,13 @@ function islandsEntry({
   });
   if (eager.some(i => i.anchor === "comment"))
     s += `const $ca = id => { const out = [], w = document.createTreeWalker(document.body, 128); for (let n; (n = w.nextNode()); ) if (n.data.startsWith("i:") && n.data.slice(2).split(" ").includes(id)) out.push(n); return out; };\n`;
+  // Streaming (islands-stream.js): boundary chunks land after the shell.
+  // Islands they carry activate as they land (`solid-islands` on document);
+  // an island whose static paths cross a boundary (`waits`) activates once no
+  // boundary around its anchor is pending.
+  const waits = streams && islands.some(i => i.waits);
+  if (waits)
+    s += `const $pd = el => { const w = document.createTreeWalker(el.parentNode || el, 128); for (let n; (n = w.nextNode()); ) if (/^l\\d/.test(n.data)) return 1; };\n`;
   let start = "";
   if (lazy.length) {
     const policy = i => {
@@ -78,11 +86,14 @@ function islandsEntry({
       })
       .join(",\n  ");
     s += `const L = {\n  ${table}\n}, Q = [];\nlet B = 0, R = 0;\n`;
+    const lazyWaits = waits ? lazy.filter(i => i.waits).map(i => i.id) : [];
+    if (lazyWaits.length) s += `const WT = ${J(lazyWaits)};\n`;
     s += loader({
       wins: wins.length > 0,
       nest: lazy.some(i => i.nests !== false),
       pd: lazy.some(i => i.preventDefault),
-      click: types.includes("click")
+      click: types.includes("click"),
+      waits: lazyWaits.length > 0
     });
     start += `for (const t of ${J(types)}) document.addEventListener(t, E, true);\n`;
     if (wins.length) start += `for (const t of ${J(wins)}) addEventListener(t, W);\n`;
@@ -99,7 +110,7 @@ function islandsEntry({
       if (uses("idle"))
         pf += `(self.requestIdleCallback || setTimeout)(() => { for (const id of ${J(byPolicy.idle)}) pf(id); });\n`;
       if (uses("visible"))
-        pf += `{ const ids = ${J(byPolicy.visible)}, io = new IntersectionObserver(es => { for (const x of es) if (x.isIntersecting) { io.unobserve(x.target); for (const id of x.target.dataset.i.split(" ")) ids.includes(id) && pf(id); } }); for (const id of ids) for (const el of document.querySelectorAll('[data-i~="' + id + '"]')) io.observe(el); }\n`;
+        pf += `{ const ids = ${J(byPolicy.visible)}, io = new IntersectionObserver(es => { for (const x of es) if (x.isIntersecting) { io.unobserve(x.target); for (const id of x.target.dataset.i.split(" ")) ids.includes(id) && pf(id); } }), ob = () => { for (const id of ids) for (const el of document.querySelectorAll('[data-i~="' + id + '"]')) io.observe(el); }; ob();${streams ? ` document.addEventListener("solid-islands", ob);` : ""} }\n`;
       if (uses("intent"))
         pf += `{ const ids = ${J(byPolicy.intent)}; for (const t of ["pointerover", "focusin", "touchstart"]) document.addEventListener(t, e => { const el = e.target.closest && e.target.closest("[data-i]"); if (el) for (const id of el.dataset.i.split(" ")) ids.includes(id) && pf(id); }, { capture: true, passive: true }); }\n`;
       // Network downgrade: saveData or a 2G connection prefetches nothing.
@@ -121,16 +132,26 @@ function islandsEntry({
     (h, n) =>
       (s += `$hydrate(() => $cc($H${n}, {}), document.querySelector(${J(h.selector || "#root")}));\n`)
   );
-  eager.forEach((i, n) => {
-    const find =
-      i.anchor === "comment"
-        ? `$ca(${J(i.id)})`
-        : `document.querySelectorAll('[data-i~="${i.id}"]')`;
-    s += `for (const el of ${find}) a${n}(el);\n`;
-  });
-  eager.forEach((i, n) => {
-    if (i.tier) s += `f${n}();\n`;
-  });
+  if (streams && eager.length) {
+    // Activate each anchor once, now and whenever a boundary chunk lands.
+    const rows = eager.map(
+      (i, n) =>
+        `[a${n}, ${i.tier ? `f${n}` : 0}, ${J(i.id)}${i.anchor === "comment" || (waits && i.waits) ? `, ${i.anchor === "comment" ? 1 : 0}` : ""}${waits && i.waits ? ", 1" : ""}]`
+    );
+    s += `const $act = () => { for (const [a, f, id, c, w] of [${rows.join(", ")}]) for (const el of ${eager.some(i => i.anchor === "comment") ? `c ? $ca(id) : ` : ""}document.querySelectorAll('[data-i~="' + id + '"]')) { const s = (el.$i ||= {}); if (s[id]${waits ? " || (w && $pd(el))" : ""}) continue; s[id] = 1; a(el); f && f(); } };\n`;
+    s += `$act();\ndocument.addEventListener("solid-islands", $act);\n`;
+  } else {
+    eager.forEach((i, n) => {
+      const find =
+        i.anchor === "comment"
+          ? `$ca(${J(i.id)})`
+          : `document.querySelectorAll('[data-i~="${i.id}"]')`;
+      s += `for (const el of ${find}) a${n}(el);\n`;
+    });
+    eager.forEach((i, n) => {
+      if (i.tier) s += `f${n}();\n`;
+    });
+  }
   s += start;
   if (hooks.after) s += hooks.after + "\n";
   s += "}\n";
@@ -143,7 +164,7 @@ function islandsEntry({
 // when a replayed click would toggle a checkbox again), the islands it can
 // reach are imported and activated, and every event that arrived meanwhile
 // is replayed in order: one queue per page.
-function loader({ wins, nest, pd, click }) {
+function loader({ wins, nest, pd, click, waits }) {
   const walk = nest
     ? `for (; el; el = el.parentElement && el.parentElement.closest("[data-i]"))\n    `
     : "";
@@ -151,8 +172,15 @@ function loader({ wins, nest, pd, click }) {
     pd && `t.closest("[data-pd]")`,
     click && `(e.type == "click" && (t.type == "checkbox" || t.type == "radio"))`
   ].filter(Boolean);
+  // A `waits` island whose boundary is still streaming: its chunk loads now,
+  // its activation (and the queued events) once the boundary has landed.
+  const ready = waits
+    ? `const ready = (el, id) => WT.includes(id) && $pd(el) ? new Promise(r => { const f = () => { if (!$pd(el)) { document.removeEventListener("solid-islands", f); r(); } }; document.addEventListener("solid-islands", f); }) : 0;
+`
+    : "";
+  const load = waits ? `Promise.all([L[id][0](), ready(el, id)]).then(([m]) => m)` : `L[id][0]()`;
   let s = `const has = (el, id) => el.$i && el.$i[id];
-const act = (el, id) => L[id][0]().then(m => { if (!has(el, id)) { (el.$i ||= {})[id] = 1; m.activate(el); m.flush && m.flush(); } });
+${ready}const act = (el, id) => ${load}.then(m => { if (!has(el, id)) { (el.$i ||= {})[id] = 1; m.activate(el); m.flush && m.flush(); } });
 const done = () => { if (!--B) { R = 1; for (const [t, e] of Q.splice(0)) t.dispatchEvent(new e.constructor(e.type, e)); R = 0; } };
 const wait = (t, e, p) => { Q.push([t, e]); B++; Promise.all(p).then(done, done); };
 function E(e) {
@@ -225,12 +253,14 @@ class IslandsCompiler {
     const islands = [];
     const chunks = new Map();
     const fallbacks = [];
+    let streams = false;
     const visit = file => {
       if (seen.has(file)) return;
       seen.add(file);
       const code = fs.readFileSync(file, "utf8");
       const out = this.compileFile(file, code);
       if (out.fallback) fallbacks.push({ file, reason: out.fallback });
+      if (out.manifest.streams) streams = true;
       for (const i of out.manifest.islands) {
         const c = out.chunks.find(c => c.id === i.id);
         islands.push({ ...i, file, size: c ? c.size : 0 });
@@ -242,7 +272,7 @@ class IslandsCompiler {
       }
     };
     visit(root);
-    return { islands, chunks, fallbacks, files: [...seen] };
+    return { islands, chunks, fallbacks, files: [...seen], streams };
   }
 }
 
@@ -322,6 +352,7 @@ function solidIslands(options = {}) {
           overrides,
           budget,
           network,
+          streams: collected.streams,
           hydrate: fallbackRoots(collected, rootFile, rootExport, mount)
         });
       }
@@ -407,6 +438,7 @@ function esbuildIslands({
               budget,
               network,
               hooks,
+              streams: c.streams,
               hydrate: fallbackRoots(c, root, rootExport, mount)
             }),
             loader: "js",

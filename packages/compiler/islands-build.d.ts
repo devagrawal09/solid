@@ -15,6 +15,8 @@ export interface IslandInfo {
   anchor: "element" | "comment";
   preventDefault: boolean;
   nests?: boolean;
+  /** Its static paths cross a streamed boundary: activate once none around it is pending. */
+  waits?: boolean;
   /** Per-island prefetch override. */
   prefetch?: PrefetchPolicy;
   /** Chunk size in bytes (for the prefetch budget). */
@@ -39,6 +41,8 @@ export interface IslandsEntryOptions {
   /** Root components of modules that fell back to hydration. */
   hydrate?: { module: string; export: string; selector?: string }[];
   web?: string;
+  /** Some module streams boundary chunks (islands-stream.js): activate islands as they land. */
+  streams?: boolean;
 }
 
 /** The page's client entry module source (exports `start()`). */
@@ -72,6 +76,8 @@ export class IslandsCompiler {
     chunks: Map<string, string>;
     fallbacks: { file: string; reason: string }[];
     files: string[];
+    /** Some collected module streams a boundary. */
+    streams: boolean;
   };
 }
 

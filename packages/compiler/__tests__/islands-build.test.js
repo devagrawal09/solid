@@ -140,6 +140,25 @@ describe("islandsEntry", () => {
     expect(s).toContain('el.parentElement.closest("[data-i]")');
   });
 
+  test("streaming: islands activate as boundary chunks land; spanning islands wait", () => {
+    const plain = islandsEntry({ islands: [{ ...island, activation: "load", tier: 1 }] });
+    expect(plain).not.toContain('addEventListener("solid-islands"');
+    const s = islandsEntry({
+      islands: [
+        { ...island, activation: "load", tier: 1, waits: true },
+        { ...island, id: "i1", waits: true }
+      ],
+      streams: true
+    });
+    // Eager: one scan now and one per landed chunk, each anchor once.
+    expect(s).toContain('document.addEventListener("solid-islands", $act);');
+    expect(s).toContain("if (s[id] || (w && $pd(el))) continue;");
+    // Lazy: a waiting island's activation waits for its boundary.
+    expect(s).toContain('const WT = ["i1"];');
+    expect(s).toContain("Promise.all([L[id][0](), ready(el, id)])");
+    expect(s).toContain("/^l\\d/.test(n.data)");
+  });
+
   test("a fallback root is hydrated", () => {
     const s = islandsEntry({ islands: [], hydrate: [{ module: "/src/app.tsx", export: "App" }] });
     expect(s).toContain('import { App as $H0 } from "/src/app.tsx";');

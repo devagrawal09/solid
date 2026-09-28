@@ -21,6 +21,7 @@
 //! actions, boundaries in live regions) falls back as a whole to today's
 //! hydration: the server and client outputs are the ordinary hydratable
 //! compiles, and the manifest says why.
+mod callforms;
 mod client;
 mod graph;
 mod jsx;
@@ -110,7 +111,13 @@ pub struct IslandsOutput {
     pub fallback: Option<String>,
 }
 
-pub fn compile_islands(source: &str, opts: &IslandOptions) -> Result<IslandsOutput, CompileError> {
+pub fn compile_islands(
+    original: &str,
+    opts: &IslandOptions,
+) -> Result<IslandsOutput, CompileError> {
+    // Component call forms are read as the JSX they stand for.
+    let rewritten = callforms::rewrite(original, opts.filename.as_deref());
+    let source = rewritten.as_deref().unwrap_or(original);
     let allocator = Allocator::default();
     let source_type = source_type_for_filename(opts.filename.as_deref())?;
     let program = parse_program(&allocator, source, source_type)?;
@@ -137,7 +144,8 @@ pub fn compile_islands(source: &str, opts: &IslandOptions) -> Result<IslandsOutp
             manifest,
             fallback: None,
         }),
-        Err(reason) => fallback(source, opts, &m, &a, reason),
+        // The fallback compiles the module as written.
+        Err(reason) => fallback(original, opts, &m, &a, reason),
     }
 }
 
@@ -213,7 +221,7 @@ fn emit(
     if owners.values().any(|n| *n > 1) {
         return Err("module-level mutable state referenced by two islands".into());
     }
-    let server = server::emit_server(m, a, &codes)?;
+    let (server, streams) = server::emit_server(m, a, &codes)?;
     let chunks = codes
         .iter()
         .map(|(gi, c)| IslandChunk {
@@ -221,7 +229,7 @@ fn emit(
             code: c.code.clone(),
         })
         .collect();
-    let manifest = manifest(m, a, &codes, &notes, None, opts);
+    let manifest = manifest(m, a, &codes, &notes, None, opts, &streams);
     Ok((server, chunks, manifest))
 }
 
@@ -232,11 +240,15 @@ fn manifest(
     notes: &[Vec<String>],
     fallback: Option<&str>,
     opts: &IslandOptions,
+    streams: &[bool],
 ) -> String {
     let mut w = JsonWriter::default();
     w.begin_object();
     w.key("version");
     w.number(1);
+    // A `<Loading>` over server data streams its content as a chunk.
+    w.key("streams");
+    w.boolean(streams.iter().any(|s| *s));
     w.key("module");
     match &opts.filename {
         Some(f) => w.string(f),
@@ -320,6 +332,10 @@ fn manifest(
         w.string(if code.lazy_ok { "lazy" } else { "load" });
         w.key("preventDefault");
         w.boolean(g.prevent_default);
+        // Its static paths may cross a streamed boundary: activate once no
+        // boundary around its DOM is pending.
+        w.key("waits");
+        w.boolean(waits(a, g.root, streams));
         w.key("serialized");
         w.begin_array();
         for s in &code.serial {
@@ -375,6 +391,26 @@ fn manifest(
     w.out
 }
 
+/// A streamed boundary in the island root's render tree.
+fn waits(a: &graph::Analysis<'_>, root: usize, streams: &[bool]) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = vec![root];
+    while let Some(c) = stack.pop() {
+        if !seen.insert(c) {
+            continue;
+        }
+        if streams.get(c).copied().unwrap_or(false) {
+            return true;
+        }
+        for call in &a.facts[c].calls {
+            if let jsx::Tag::Comp(k) = call.tag {
+                stack.push(k);
+            }
+        }
+    }
+    false
+}
+
 fn fallback(
     source: &str,
     opts: &IslandOptions,
@@ -402,7 +438,7 @@ fn fallback(
             ..base
         },
     )?;
-    let manifest = manifest(m, a, &[], &[], Some(&reason), opts);
+    let manifest = manifest(m, a, &[], &[], Some(&reason), opts, &[]);
     Ok(IslandsOutput {
         server: server.code,
         client: Some(client.code),

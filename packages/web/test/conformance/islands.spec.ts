@@ -30,7 +30,7 @@ import * as t0 from "../../../signals/src/kernel/t0.js";
 import { evaluate } from "./harness/module.js";
 import { mode } from "./harness/modes.js";
 import { observeClient } from "./harness/runner.js";
-import { drain, Forbidden, NotFound, probe, Recorder } from "./harness/trace.js";
+import { controller, drain, Forbidden, NotFound, probe, Recorder } from "./harness/trace.js";
 import type { DriverContext, Scenario } from "./harness/types.js";
 import { scenarios as registered } from "./scenarios/index.js";
 // Islands-only scenarios: their oracle is the reference source run here
@@ -40,6 +40,16 @@ import { islandsScenarios } from "./scenarios/islands.js";
 const scenarios = [...registered, ...islandsScenarios];
 
 const require = createRequire(import.meta.url);
+const stream = require("../../../compiler/islands-stream.js") as {
+  renderIslandsStream(
+    render: ($c: unknown) => unknown,
+    options: {
+      onChunk(c: { id: string; html: string }): void;
+      onError(e: unknown): void;
+    }
+  ): { shell: Promise<string> };
+  swap(id: string, html: string, root: Element): void;
+};
 const compiler = require("../../../compiler/index.js") as {
   compileIslands(
     code: string,
@@ -49,7 +59,7 @@ const compiler = require("../../../compiler/index.js") as {
     chunks: { id: string; code: string }[];
     manifest: {
       fallback: string | null;
-      islands: { id: string; tier: number; anchor: string; root: string }[];
+      islands: { id: string; tier: number; anchor: string; root: string; waits: boolean }[];
     };
     fallback: string | null;
   };
@@ -97,13 +107,12 @@ const normalizeHtml = (html: string) =>
     );
 const normalize = (trace: string[]) =>
   trace.map(line => (line.startsWith("html = ") ? normalizeHtml(line) : line));
-const afterMount = (trace: string[]) =>
-  trace.slice(trace.findIndex((l, i) => i > 0 && l.startsWith("## ")));
-const mountOf = (trace: string[]) =>
-  trace.slice(
-    1,
-    trace.findIndex((l, i) => i > 0 && l.startsWith("## "))
-  );
+/** Steps start at the first step marker (after `## server` / `## mount`). */
+const firstStep = (trace: string[]) =>
+  trace.findIndex(l => l.startsWith("## ") && l !== "## server" && l !== "## mount");
+const afterMount = (trace: string[]) => trace.slice(firstStep(trace));
+/** Events of the client mount (activation), without the server render's. */
+const mountOf = (trace: string[]) => trace.slice(trace.indexOf("## mount") + 1, firstStep(trace));
 
 function expectSame(expected: string[], actual: string[], what: string) {
   if (actual.join("\n") === expected.join("\n")) return;
@@ -122,14 +131,16 @@ function tracedT0(recorder: Recorder) {
   return {
     ...t0,
     cell: (v: unknown, label?: string) => Object.assign(t0.cell(v), { label }),
+    // Only probe-host cells (`h.signal("label", …)`) are traced, as `h.signal`
+    // traces them; plain `$signal` cells are not.
     get: (c: any) => {
-      recorder.push("read", c.label, c.v);
+      if (c.label) recorder.push("read", c.label, c.v);
       return c.v;
     },
     set: (c: any, v: any) =>
       t0.set(c, (prev: any) => {
         const next = typeof v === "function" ? v(prev) : v;
-        recorder.push("write", c.label, next);
+        if (c.label) recorder.push("write", c.label, next);
         return next;
       })
   };
@@ -149,16 +160,28 @@ const compileFor = (source: string, minTier = 0) =>
 async function runIslands(scenario: Scenario, source: string, minTier: number) {
   const out = compileFor(source, minTier);
   if (out.fallback) throw new Error(`falls back: ${out.fallback}`);
-  // --- server: the string-template module renders the page -----------------------------
-  const serverRecorder = new Recorder();
+  // One recorder for the whole page: the server keeps rendering while the
+  // steps run (streamed boundaries settle on the server, and an `<Errored>`
+  // fallback over a streamed failure renders there).
+  const recorder = new Recorder();
+  recorder.raw("## server");
+  // --- server: the string-template module renders the page, streaming ------------------
   const server = evaluate(out.server, {
     "solid-js": solid,
     "@solidjs/web": web,
-    conformance: { h: probe(serverRecorder, solid as any), NotFound, Forbidden }
+    conformance: { h: probe(recorder, solid as any), NotFound, Forbidden }
   });
-  const markup: string = await server[(scenario.entry as { component: string }).component]({});
+  const early: { id: string; html: string }[] = [];
+  let land: ((c: { id: string; html: string }) => void) | null = null;
+  const rendered = stream.renderIslandsStream(
+    ($c: unknown) => server[(scenario.entry as { component: string }).component]({}, $c),
+    {
+      onChunk: c => (land ? land(c) : early.push(c)),
+      onError: e => recorder.raw(`server error ${e}`)
+    }
+  );
+  const markup: string = await rendered.shell;
   // --- client: activate every island group on the markup --------------------------------
-  const recorder = new Recorder();
   const container = document.createElement("div");
   container.innerHTML = markup;
   document.body.appendChild(container);
@@ -174,6 +197,30 @@ async function runIslands(scenario: Scenario, source: string, minTier: number) {
   };
   const flushers = new Set<() => void>([() => t0.flush()]);
   const tiers: number[] = [];
+  const groups: { island: any; chunk: any }[] = [];
+  /** A boundary is still pending around an anchor (the loader's `waits` check). */
+  const pending = (el: Node) => {
+    const w = document.createTreeWalker(el.parentNode ?? el, NodeFilter.SHOW_COMMENT);
+    for (let n = w.nextNode(); n; n = w.nextNode())
+      if (/^l\d/.test((n as Comment).data)) return true;
+    return false;
+  };
+  /** Activate every anchor not yet active (the entry's scan, at load and on each landing). */
+  const activateAll = () => {
+    for (const { island, chunk } of groups) {
+      const anchors: Node[] =
+        island.anchor === "comment"
+          ? commentAnchors(container, island.id)
+          : Array.from(container.querySelectorAll(`[data-i~="${island.id}"]`));
+      for (const el of anchors) {
+        const seen = ((el as any).$i ||= {});
+        if (seen[island.id] || (island.waits && pending(el))) continue;
+        seen[island.id] = 1;
+        const d = chunk.activate(el);
+        if (typeof d === "function") disposers.push(d);
+      }
+    }
+  };
   try {
     recorder.raw("## mount");
     for (const island of out.manifest.islands) {
@@ -188,30 +235,32 @@ async function runIslands(scenario: Scenario, source: string, minTier: number) {
       });
       tiers.push(island.tier);
       if (rt.flush) flushers.add(() => rt.flush());
-      const anchors: Node[] =
-        island.anchor === "comment"
-          ? commentAnchors(container, island.id)
-          : Array.from(container.querySelectorAll(`[data-i~="${island.id}"]`));
-      for (const el of anchors) {
-        const d = chunk.activate(el);
-        if (typeof d === "function") disposers.push(d);
-      }
-      for (const k of Object.keys(chunk)) if (k !== "activate" && k !== "flush") app[k] = chunk[k];
+      groups.push({ island, chunk });
     }
     const flush = () => {
       for (const f of flushers) f();
     };
+    // Chunks that landed before the entry ran, then the entry's scan; later
+    // chunks swap in and activate what they carry as they land.
+    land = c => {
+      stream.swap(c.id, c.html, container);
+      activateAll();
+    };
+    for (const c of early.splice(0)) land(c);
+    activateAll();
     flush();
+    const activated = container.innerHTML;
     const ctx: DriverContext = {
       app: new Proxy(app, {
-        get: (target, key: string) => {
+        get: (_, key: string) => {
           // Live bindings of the chunk modules (`export let setX`).
-          for (const k of Object.keys(target)) if (k === key) return target[k];
+          for (const { chunk } of groups)
+            if (key !== "activate" && key !== "flush" && key in chunk) return chunk[key];
           return undefined;
         }
       }),
       environment: "client",
-      tasks: undefined as any,
+      tasks: controller(recorder),
       flush,
       async settle() {
         await drain();
@@ -235,7 +284,7 @@ async function runIslands(scenario: Scenario, source: string, minTier: number) {
       recorder.raw("## teardown");
       disposeAll();
     }
-    return { markup, trace: recorder.events, tiers, manifest: out.manifest };
+    return { markup, activated, trace: recorder.events, tiers, manifest: out.manifest };
   } finally {
     container.remove();
     await drain();
@@ -276,16 +325,17 @@ describe("compiled islands reproduce the oracle", () => {
     const hot = probe.manifest.islands.some(
       (i: any) => i.activation === "load" && i.why.some((w: string) => w.includes("effect"))
     );
-    (hot ? test.skip : test)(
-      `${scenario.name}: server markup equals the oracle's initial DOM${hot ? " — n/a: a load-time effect writes after the server render" : ""}`,
-      async () => {
-        const expected = await observed(scenario);
-        const initial = expected[expected.indexOf("## initial") + 1];
-        if (!initial?.startsWith("html = ")) return; // no initial snapshot in this scenario
-        const { markup } = await runIslands(scenario, source, 0);
-        expect(normalizeHtml(markup)).toBe(normalizeHtml(initial.slice("html = ".length)));
-      }
-    );
+    test(`${scenario.name}: server markup equals the oracle's initial DOM${hot ? " (after the load-time effect's activation)" : ""}`, async () => {
+      const expected = await observed(scenario);
+      const initial = expected[expected.indexOf("## initial") + 1];
+      if (!initial?.startsWith("html = ")) return; // no initial snapshot in this scenario
+      const { markup, activated } = await runIslands(scenario, source, 0);
+      // A hot island's load-time effect writes after the server render (as it
+      // does after hydration): the page after activation is the oracle's.
+      expect(normalizeHtml(hot ? activated : markup)).toBe(
+        normalizeHtml(initial.slice("html = ".length))
+      );
+    });
     test(`${scenario.name}: ${chosen} (compiler's choice)`, async () => {
       const expected = normalize(await observed(scenario));
       const { trace, tiers } = await runIslands(scenario, source, 0);

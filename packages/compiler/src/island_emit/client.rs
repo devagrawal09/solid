@@ -602,6 +602,15 @@ impl<'x, 'a> Ce<'x, 'a> {
             (r, env.uses.into_inner())
         };
         let out = res?;
+        if let Some(i) = out.find("__SERVER_VALUE_") {
+            let name: String = out[i + "__SERVER_VALUE_".len()..]
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '$' || *c == '_')
+                .collect();
+            return Err(format!(
+                "client code reads `{name}`, a server-authoritative async memo"
+            ));
+        }
         if out.contains("__UNSUPPORTED_RUNTIME_") {
             let name = out
                 .split("__UNSUPPORTED_RUNTIME_")
@@ -1032,8 +1041,14 @@ impl<'x, 'a> Ce<'x, 'a> {
                             .insert(*s, (sn, if t0 { Kind::Set0(gn) } else { Kind::Val }));
                     }
                 }
-                Item::Memo { sym, .. } => {
-                    let n = self.name_for(inst, *sym);
+                Item::Memo { sym, is_async, .. } => {
+                    // A server-authoritative async memo has no client value:
+                    // client code that reads it is refused (`translate`).
+                    let n = if *is_async && !self.a.live.contains(&(comp, ii)) {
+                        format!("__SERVER_VALUE_{}", self.m.sym_name(*sym))
+                    } else {
+                        self.name_for(inst, *sym)
+                    };
                     self.insts[inst].names.insert(*sym, (n, Kind::Acc));
                 }
                 Item::Event { sym, .. } => {
@@ -1062,6 +1077,11 @@ impl<'x, 'a> Ce<'x, 'a> {
         let none = HashMap::new();
         for (ii, item) in c.setup.iter().enumerate() {
             if !need.contains(&ii) {
+                continue;
+            }
+            if let Item::Memo { is_async: true, .. } = item
+                && !self.a.live.contains(&(comp, ii))
+            {
                 continue;
             }
             let line = match item {
@@ -1102,10 +1122,6 @@ impl<'x, 'a> Ce<'x, 'a> {
                             (true, Some(l)) => {
                                 format!("const {gn} = $cell({init_text}, {});", js_str(l))
                             }
-                            (true, None) => format!(
-                                "const {gn} = $cell({init_text}, {});",
-                                js_str(self.m.sym_name(*get))
-                            ),
                             _ => format!("const {gn} = $cell({init_text});"),
                         }
                     } else {

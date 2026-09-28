@@ -456,17 +456,41 @@ export const App = $component(function* () {
 }
 
 #[test]
-fn component_call_forms_and_live_jsx_expressions_fall_back() {
+fn component_call_forms_compile_as_jsx() {
+    // `Loading({ … })` / `Child({ … })` in a view are read as the elements
+    // they stand for (a source pre-pass), nested ones inside out.
+    let out = run(r#"
+import { $component, $event, $signal, Loading, Errored } from "solid-js";
+const Child = $component(function* (props) {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () { return <b onClick={inc} title={props.t}>{yield* n}</b>; };
+});
+export const App = $component(function* () {
+  return function* () {
+    return <main>{Errored({ fallback: e => <p>{String(e())}</p>, children: Loading({ fallback: "…", children: Child({ t: "x" }) }) })}</main>;
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "fallback: {:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains(r#""root":"Child""#), "{m}");
+    assert!(out.server.contains(r#"Child({ "t": "x" }, $c)"#), "{}", out.server);
+    // A call form the pre-pass cannot express as JSX (a spread) is refused.
     let reason = fallback_of(
         r#"
 import { $component, Loading } from "solid-js";
 const Child = $component(function* () { return function* () { return <b />; }; });
-export const App = $component(function* () {
-  return function* () { return <main>{Loading({ fallback: "…", children: Child({}) })}</main>; };
+export const App = $component(function* (props) {
+  return function* () { return <main>{Child({ ...props })}</main>; };
 });
 "#,
     );
     assert!(reason.contains("component call form"), "{reason}");
+}
+
+#[test]
+fn live_jsx_expressions_fall_back() {
     let reason = fallback_of(
         r#"
 import { $component, $event, $signal } from "solid-js";
@@ -478,6 +502,39 @@ export const App = $component(function* () {
 "#,
     );
     assert!(reason.contains("live expression producing JSX"), "{reason}");
+}
+
+#[test]
+fn a_loading_over_server_data_streams_and_a_spanning_island_waits() {
+    let out = run(r#"
+import { $component, $event, $memo, $signal, attempt, Loading } from "solid-js";
+const Data = $component(function* (props) {
+  const info = yield* $memo(function* () { return yield* attempt(() => fetch("/x")); });
+  return function* () { return <section><h2>{(yield* info).title}</h2><span>{yield* props.n}</span></section>; };
+});
+export const App = $component(function* () {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    return <div><button onClick={inc}>inc</button><Loading fallback={<p>…</p>}><Data n={yield* n} /></Loading></div>;
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "fallback: {:?}", out.fallback);
+    // The boundary renders through `_$ld` (streamed with a stream, awaited
+    // in place without one); its fallback is a thunk.
+    assert!(
+        out.server.contains("await _$ld($c, async ($c) =>"),
+        "{}",
+        out.server
+    );
+    let m = manifest(&out);
+    assert!(m.contains(r#""streams":true"#), "{m}");
+    // The island's member renders inside the boundary: it waits for it.
+    assert!(m.contains(r#""waits":true"#), "{m}");
+    // The member's server-authoritative async memo is not rebuilt.
+    let chunk = &out.chunks[0].code;
+    assert!(!chunk.contains("info"), "{chunk}");
 }
 
 #[test]
