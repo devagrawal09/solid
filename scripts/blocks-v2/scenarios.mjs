@@ -6,7 +6,8 @@
 //                components, `{x()}` JSX holes
 //   v2           generator blocks v2: $component / $memo / $effect / $event,
 //                `{yield* x}` JSX holes — compiled by the native compiler
-//                (default lowering, or with `hostFusion`)
+//                (default lowering, `hostFusion: true`, or the `hostFusion: false`
+//                opt-out)
 //   uncompiled   the same v2 program as it must be written WITHOUT the
 //                compiler's generator pass (a `yield*` cannot sit inside a
 //                JSX hole, so a view reads into a `const` first — or passes
@@ -262,5 +263,8 @@ export const VARIANTS = {
   lazyView: { source: "lazyView", options: {} },
   compiled: { source: "v2", options: {} },
   fused: { source: "v2", options: { hostFusion: true } },
+  // The opt-out: the lowering without the (default) v2 fusion and client
+  // lowering — what `compiled` was before them.
+  unfused: { source: "v2", options: { hostFusion: false } },
   uncompiled: { source: "uncompiled", options: { generators: false } }
 };

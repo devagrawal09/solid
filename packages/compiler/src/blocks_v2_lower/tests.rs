@@ -112,13 +112,18 @@ fn a_fully_lowered_component_is_plain_solid() {
 
 #[test]
 fn escaping_setters_keep_their_receipts() {
-    let out = dom(r#"import { $component, $signal, $event } from "solid-js";
+    let out = dom(r#"import { $component, $signal, $event, raise } from "solid-js";
 export const C = $component(function* () {
   const [a, setA] = yield* $signal(0);
   const [b, setB] = yield* $signal(0);
   const [c, setC] = yield* $signal(0);
   const [d, setD] = yield* $signal(0);
   const read = $event(function* () { const next = yield* setA(1); log(next); });
+  const receipts = $event(function* (e) {
+    log(yield* setB(2));
+    yield* setB(3);
+    if (e.fail) yield* raise(new Error("no"));
+  });
   const concise = () => setB(1);
   const forward = { set: setC };
   const statement = () => { setD(1); };
@@ -145,6 +150,15 @@ export const C = $component(function* () {
     // A statement call discards the result.
     assert!(
         flat.contains("const [d, setD] = _$createSignal(0);"),
+        "{out}"
+    );
+    // A receipt's value is read directly (`perform` returns it before any
+    // host check), and a raised error in statement position is a `throw`:
+    // the event has no operation left and is erased.
+    assert!(
+        flat.contains(
+            "const receipts = _$$eventCompiled(function(e) { log(setB(2).value); setB(3); if (e.fail) throw new Error(\"no\"); });"
+        ),
         "{out}"
     );
 }

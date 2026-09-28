@@ -114,10 +114,31 @@ createEffect(() => [query(), showLog()], ([q, log]) => {
 });
 ```
 
-Version one hoists branch reads unconditionally (a superset subscription with correct
-values) and refuses reads whose source depends on a value computed in the callback
-(other than another read) and reads in loops over runtime lists. Uncompiled, an effect
-block runs as a tracked effect (reads and body in one pass, writes deferred).
+The compute half keeps the body's control flow, so it subscribes to exactly the reads
+the body takes, as a hand-written compute would. A read under an `if` / `else`, `?:`,
+`&&`, `||` or `??`, or after an early `return`, is read only under the same condition,
+evaluated over the compute's own values (`const v = yield* a` makes `v` the value of
+`a`'s read) and bindings declared before the effect that nothing writes:
+
+```ts
+yield* $effect(function* () {
+  const v = yield* a;
+  if (v > 1) log(yield* c);
+});
+// →
+createEffect(
+  () => { const r0 = a(); const r1 = r0 > 1 ? c() : undefined; return [r0, r1]; },
+  ([v, c]) => { if (v > 1) log(c); }
+);
+```
+
+A condition the compute cannot evaluate (a call, a member access, a mutable
+binding) is dropped from the read's guard — never inverted — so the read is taken at
+least as often as the body takes it; reads under `switch`, `try`, labels or optional
+chains are taken on every run. The split is refused for reads whose source depends on
+a value computed in the callback (other than another read) and reads in loops over
+runtime lists. Uncompiled, an effect block runs as a tracked effect (reads and body in
+one pass, writes deferred).
 
 ### Interop
 
@@ -185,6 +206,19 @@ v2 forms into `$(function* …)` blocks, which that pass lowers to call form (`y
 - in memo and event bodies an `attempt` may be async, so a body that attempts stays a
   generator for the runtime driver. Effect, setup and view bodies lower fully.
 
+After lowering, the proof-driven host fusion runs on the v2 bodies by default (a `$memo`
+in a setup is `createMemo(fn)`, a split effect's compute a plain function, a view hole
+of a proven accessor a direct call), and DOM output is lowered further by
+`packages/compiler/src/blocks_v2_lower.rs` wherever the result is the same by
+construction: setup creations become direct primitive calls from the module the
+constructor came from (a `$signal` setter keeps its write receipts only when it
+escapes), a split effect whose `$cleanup`s are top-level statements becomes
+`createEffect(compute, half)` returning its cleanup, `$event` and setup blocks with no
+operation left lose their block (`$eventCompiled(fn)`, `$componentCompiled(fn)`), and a
+module whose every block is lowered and proven synchronous imports `syncBlock` instead
+of `$`, so it does not retain the generator driver. `hostFusion: false` turns all of it
+off. See [blocks-v2-performance.md](./blocks-v2-performance.md), section 9.
+
 ## Build plan
 
 1. Types and type tests (`packages/signals`, `solid-js`, `@solidjs/web` JSX types). Done.
@@ -196,8 +230,8 @@ v2 forms into `$(function* …)` blocks, which that pass lowers to call form (`y
    `write` and `call` (tests, fixtures and conformance scenarios moved to `attempt`,
    direct setter calls and v2 receipts). Done.
 
-Follow-ups: the effect split's dynamic-read optimization (hoist only the reads each
-branch takes) and a Volar plugin so editors show the compile-time host rules inline.
+Follow-ups: a Volar plugin so editors show the compile-time host rules inline. The
+effect split's dynamic reads (only the reads each branch takes) are done.
 `PROPS_COMPILED` (skip the typed-props proxy when every prop read was lowered) is done;
 its cost, and the rest of the runtime and bundle cost of blocks, is measured in
 [blocks-v2-performance.md](./blocks-v2-performance.md).

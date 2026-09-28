@@ -307,8 +307,11 @@ struct Direct {
 #[derive(Default)]
 struct OpsPlan {
     direct: HashMap<Span, Direct>,
-    /// `_$perform(set(x))` → `set(x)`.
-    unwrap: HashSet<Span>,
+    /// `_$perform(set(x))` → `set(x)` (`false`), or `set(x).value` (`true`:
+    /// the setter returns receipts and the value is used).
+    unwrap: HashMap<Span, bool>,
+    /// `_$perform(raise(e));` → `throw e;`.
+    throws: HashSet<Span>,
 }
 
 fn lower_operations<'a>(allocator: &'a Allocator, program: &mut Program<'a>, v2: &V2Bodies) {
@@ -331,7 +334,7 @@ fn lower_operations<'a>(allocator: &'a Allocator, program: &mut Program<'a>, v2:
         collector.visit_program(program);
         collector.plan
     };
-    if plan.direct.is_empty() && plan.unwrap.is_empty() {
+    if plan.direct.is_empty() && plan.unwrap.is_empty() && plan.throws.is_empty() {
         return;
     }
     OpsRewriter { allocator, plan }.visit_program(program);
@@ -398,6 +401,14 @@ impl<'s> OpsCollector<'s, '_> {
             ("$settled", V2Kind::Setup) if prebuilt => ("settledBlock", false),
             ("$cleanup", V2Kind::Setup | V2Kind::Effect) => ("blockCleanup", false),
             ("$flush", V2Kind::Event) if statement && op.arguments.is_empty() => ("flush", false),
+            // `perform` throws a raised error (the host rules admit `raise`
+            // in these kinds): as a statement it is a `throw`.
+            ("raise", V2Kind::Memo | V2Kind::Effect | V2Kind::Event)
+                if statement && op.arguments.len() == 1 =>
+            {
+                self.plan.throws.insert(call.span);
+                return;
+            }
             _ => return,
         };
         let local = self.imports.local(&source, imported);
@@ -405,8 +416,11 @@ impl<'s> OpsCollector<'s, '_> {
         self.plan.direct.insert(call.span, Direct { local, wrap });
     }
 
-    /// `const [get, set] = _$perform($signal(…))`: does `set` escape? When it
-    /// does not, each `_$perform(set(x))` is planned as `set(x)`.
+    /// `const [get, set] = _$perform($signal(…))`: does `set` escape? Every
+    /// `_$perform(set(x))` is planned either way: `set(x)` when the setter
+    /// stays plain (it returns the value the receipt would carry) or its
+    /// result is discarded, else `set(x).value` (`perform` reads a receipt's
+    /// value before any host check).
     fn setter_escapes(&mut self, perform: &CallExpression<'_>) -> bool {
         // The perform must be the whole initializer of a `const` array
         // pattern `[get, set]` (no defaults, no rest).
@@ -433,16 +447,20 @@ impl<'s> OpsCollector<'s, '_> {
         let Some(setter) = setter else {
             return true;
         };
-        let mut unwrap = Vec::new();
+        let mut escapes = false;
+        // `_$perform(set(x))` calls: (perform span, result discarded).
+        let mut performed = Vec::new();
         for reference in self.scoping.get_resolved_references(setter) {
             let node = reference.node_id();
             let span = self.nodes.get_node(node).kind().span();
             let parent = self.nodes.parent_id(node);
             let AstKind::CallExpression(call) = self.nodes.get_node(parent).kind() else {
-                return true;
+                escapes = true;
+                continue;
             };
             if call.callee.span() != span {
-                return true;
+                escapes = true;
+                continue;
             }
             let outer = self.nodes.parent_id(parent);
             match self.nodes.get_node(outer).kind() {
@@ -454,13 +472,20 @@ impl<'s> OpsCollector<'s, '_> {
                         && perform.arguments[0].span() == call.span
                         && self.names.is(self.scoping, perform, "perform") =>
                 {
-                    unwrap.push(perform.span);
+                    let statement = self.nodes.parent_id(outer);
+                    let discarded = matches!(
+                        self.nodes.get_node(statement).kind(),
+                        AstKind::ExpressionStatement(_)
+                    ) && !self.concise_arrow_body(statement);
+                    performed.push((perform.span, discarded));
                 }
-                _ => return true,
+                _ => escapes = true,
             }
         }
-        self.plan.unwrap.extend(unwrap);
-        false
+        for (span, discarded) in performed {
+            self.plan.unwrap.insert(span, escapes && !discarded);
+        }
+        escapes
     }
 
     /// Is this expression statement the body of a concise arrow?
@@ -566,13 +591,58 @@ struct OpsRewriter<'a> {
 }
 
 impl<'a> VisitMut<'a> for OpsRewriter<'a> {
+    fn visit_statement(&mut self, statement: &mut Statement<'a>) {
+        // `_$perform(raise(e));` → `throw e;`.
+        let thrown = match statement {
+            Statement::ExpressionStatement(it) => {
+                let span = it.span;
+                match &mut it.expression {
+                    Expression::CallExpression(perform)
+                        if self.plan.throws.remove(&perform.span) =>
+                    {
+                        let Some(Argument::CallExpression(mut raise)) = perform.arguments.pop()
+                        else {
+                            unreachable!("planned: a raise call");
+                        };
+                        let error = raise.arguments.pop().expect("planned: one argument");
+                        Some((
+                            span,
+                            argument_to_expression(error).expect("planned: no spread"),
+                        ))
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        if let Some((span, error)) = thrown {
+            *statement = Statement::new_throw_statement(
+                span,
+                error,
+                &oxc_ast::builder::AstBuilder::new(self.allocator),
+            );
+        }
+        walk_mut::walk_statement(self, statement);
+    }
+
     fn visit_expression(&mut self, expression: &mut Expression<'a>) {
         if let Expression::CallExpression(call) = expression {
             let span = call.span;
-            if self.plan.unwrap.contains(&span) {
-                // `_$perform(set(x))` → `set(x)`.
+            if let Some(value) = self.plan.unwrap.remove(&span) {
+                // `_$perform(set(x))` → `set(x)` / `set(x).value`.
                 let argument = call.arguments.pop().expect("planned: one argument");
-                *expression = argument_to_expression(argument).expect("planned: a call");
+                let write = argument_to_expression(argument).expect("planned: a call");
+                *expression = if value {
+                    let ast = AstBuilder::new(self.allocator);
+                    Expression::StaticMemberExpression(ast.alloc_static_member_expression(
+                        span,
+                        write,
+                        ast.identifier_name(Span::new(0, 0), ast.ident("value")),
+                        false,
+                    ))
+                } else {
+                    write
+                };
             } else if let Some(direct) = self.plan.direct.remove(&span) {
                 // `_$perform(OP(args))` → `LOCAL(args)` / `WRAP(LOCAL(args))`.
                 let ast = AstBuilder::new(self.allocator);
