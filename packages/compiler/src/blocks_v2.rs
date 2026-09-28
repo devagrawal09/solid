@@ -2172,6 +2172,32 @@ export const C = $component(function* () {
     }
 
     #[test]
+    fn views_reading_only_in_deferred_holes_are_static() {
+        let view = |body: &str| {
+            let out = dom(&format!(
+                r#"import {{ $component, $signal }} from "solid-js";
+export const C = $component(function* () {{
+  const [n] = yield* $signal(0);
+  const go = () => {{}};
+  return function* () {{ {body} }};
+}});
+"#
+            ))
+            .unwrap();
+            out.contains("}, 5);")
+        };
+        // Holes, dynamic attributes and component props are deferred.
+        assert!(view("return <p class={(yield* n) ? \"a\" : \"b\"}>{yield* n}</p>;"));
+        assert!(view("return <div><b>{yield* n}</b><Other v={yield* n} onClick={yield* n} /></div>;"));
+        // A read the view evaluates itself is not.
+        assert!(!view("const v = yield* n; return <p>{v}</p>;"));
+        assert!(!view("return (yield* n) ? <p /> : <b />;"));
+        // Handlers, refs and spreads on an intrinsic element run eagerly.
+        assert!(!view("return <p onClick={(yield* n) ? go : go} />;"));
+        assert!(!view("return <p {...{ a: yield* n }} />;"));
+    }
+
+    #[test]
     fn lowered_v2_bodies_carry_the_sync_proof_by_default() {
         let out = dom(r#"import { $component, $signal, $memo } from "solid-js";
 export const Counter = $component(function* () {
@@ -2181,7 +2207,8 @@ export const Counter = $component(function* () {
 });
 "#)
         .unwrap();
-        // The memo and the view (JSX) are proven BLOCK_SYNC: `$(fn, 1)`.
+        // The memo is proven BLOCK_SYNC (`$(fn, 1)`); the view (JSX whose
+        // only read is a hole) BLOCK_SYNC | BLOCK_STATIC (`$(fn, 5)`).
         assert!(
             out.contains(
                 "return _$perform(count) * 2;
@@ -2191,11 +2218,8 @@ export const Counter = $component(function* () {
         );
         assert!(
             out.contains(
-                "return _$el$;
-	}, 1);"
-            ) || out.contains(
-                "}, 1);
-}"
+                "return _el$;
+	}, 5);"
             ),
             "{out}"
         );

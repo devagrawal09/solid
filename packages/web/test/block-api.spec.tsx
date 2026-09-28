@@ -240,3 +240,35 @@ describe("$component in the DOM", () => {
     expect(log.at(-1)).toBe("cleanup 2");
   });
 });
+
+describe("static views (BLOCK_STATIC)", () => {
+  test("a view that reads only in holes renders once; its holes update and dispose with it", () => {
+    let viewRuns = 0,
+      cleanups = 0,
+      set!: (v: number) => void;
+    const Counter = $component(function* () {
+      const [n, setN] = yield* $signal(1);
+      set = setN;
+      yield* $effect(function* () {
+        yield* n;
+        yield* $cleanup(() => cleanups++);
+      });
+      return function* () {
+        viewRuns++;
+        return <p class={(yield* n) > 1 ? "many" : "one"}>{yield* n}</p>;
+      };
+    });
+    const root = document.createElement("div");
+    const dispose = render(() => <Counter />, root);
+    flush();
+    expect(root.innerHTML).toBe('<p class="one">1</p>');
+    set(2);
+    flush();
+    expect(root.innerHTML).toBe('<p class="many">2</p>');
+    expect(viewRuns).toBe(1);
+    const before = cleanups;
+    dispose();
+    expect(cleanups).toBe(before + 1);
+    expect(root.innerHTML).toBe("");
+  });
+});

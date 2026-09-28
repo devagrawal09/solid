@@ -136,6 +136,10 @@ export const BLOCK_SYNC = 1;
  * of a source that can be pending or errored, no unknown call. A reactive
  * host may run the block on the status-free path (`noThrow: true`). */
 export const BLOCK_NOTHROW = 2;
+/** The body reads nothing when it runs: every read sits in a hole the JSX
+ * transform defers (its own effect or a prop getter). A renderer may run the
+ * block once, untracked, instead of in a computation that could never re-run. */
+export const BLOCK_STATIC = 4;
 
 /** The metadata flags a block was created with (0 for an unannotated block,
  * or for a value that is not a block). */

@@ -21,7 +21,9 @@ import {
   OBSERVE,
   isBlock,
   renderBlock,
-  dispatchBlock
+  dispatchBlock,
+  blockFlags,
+  BLOCK_STATIC
 } from "solid-js";
 import { effect, memo, tagElement } from "./render.js";
 
@@ -1046,6 +1048,19 @@ export function insert(parent, accessor, marker, initial, options) {
   const host = options && options.host;
   if (multi && !initial) initial = [];
   if (hydrationRt !== null) initial = hydrationRt.claimInitial(parent, multi, initial);
+  // A view the compiler proved static (it reads nothing when it runs: every
+  // read is in a hole with its own effect) renders once, untracked, like a
+  // plain component's DOM. The computation `read` would get has no sources
+  // and could never re-run. Hydration keeps the computation: it carries the
+  // id scope the server rendered with.
+  if (hydrationRt === null && blockFlags(accessor) & BLOCK_STATIC && !accessor.$s)
+    return insert(
+      parent,
+      untrack(() => renderBlock(accessor)),
+      marker,
+      initial,
+      options
+    );
   if (typeof accessor !== "function") {
     accessor = normalize(accessor, initial, multi, true);
     if (typeof accessor !== "function") {

@@ -50,6 +50,7 @@ export {
   blockFlags,
   BLOCK_SYNC,
   BLOCK_NOTHROW,
+  BLOCK_STATIC,
   statusFree,
   syncOnly,
   isBlock,

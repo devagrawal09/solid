@@ -87,7 +87,7 @@ use oxc_span::{GetSpan, Span};
 use oxc_syntax::identifier::is_identifier_name;
 use oxc_syntax::scope::ScopeFlags;
 
-use crate::block_proofs::{BLOCK_SYNC, ProofSymbols, Prover};
+use crate::block_proofs::{BLOCK_STATIC, BLOCK_SYNC, ProofSymbols, Prover};
 use crate::blocks_v2::{V2Bodies, V2Kind};
 use crate::shared::ast::{argument_to_expression, expression_to_argument};
 use crate::shared::ast_builder::AstBuilder;
@@ -505,8 +505,14 @@ fn build_plan(
                     && (!self.v2_only || is_v2)
                 {
                     let proof = prover.prove(call, function);
+                    // A static body only matters where a renderer runs it:
+                    // a v2 view (or any block under the full proofs).
+                    let view = matches!(
+                        self.v2.kind_of(call.span),
+                        Some(crate::blocks_v2::V2Kind::View)
+                    );
                     let flags = if self.v2_only {
-                        proof.flags & BLOCK_SYNC
+                        proof.flags & (BLOCK_SYNC | if view { BLOCK_STATIC } else { 0 })
                     } else {
                         proof.flags
                     };
@@ -2858,9 +2864,10 @@ export const comp = $(function* () { return <Other value={yield* count} />; });
         )
         .unwrap()
         .code;
-        // An intrinsic element is a node (SYNC); a component returns anything.
-        assert!(out.contains("}, 1);"), "{out}");
-        assert_eq!(out.matches("}, 1);").count(), 1, "{out}");
+        // An intrinsic element is a node (SYNC; its only read is a hole, so
+        // STATIC too); a component returns anything (no flags).
+        assert_eq!(out.matches("}, 5);").count(), 1, "{out}");
+        assert!(!out.contains("}, 1);"), "{out}");
     }
 
     #[test]

@@ -45,7 +45,8 @@ fn a_fully_lowered_component_is_plain_solid() {
         flat.contains("const App = _$$componentCompiled(function(props) {"),
         "{out}"
     );
-    assert!(flat.contains("}, 1); }, 1);"), "{out}");
+    // The view reads only in holes: BLOCK_SYNC | BLOCK_STATIC.
+    assert!(flat.contains("}, 5); }, 1);"), "{out}");
     // Creations are direct primitive calls (non-escaping setters).
     assert!(
         flat.contains("const [count, setCount] = _$createSignal(0);"),

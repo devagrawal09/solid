@@ -56,6 +56,12 @@ pub(crate) const BLOCK_SYNC: u32 = 1;
 pub(crate) const BLOCK_NOTHROW: u32 = 2;
 /// Both: a reactive host may run the block on the status-free path.
 pub(crate) const BLOCK_STATUS_FREE: u32 = BLOCK_SYNC | BLOCK_NOTHROW;
+/// The body reads nothing when it runs: it is a single `return` of JSX whose
+/// every `yield*` sits where the JSX transform defers it (a child hole, a
+/// component prop, a dynamic intrinsic attribute). A renderer may run such a
+/// block once, untracked, instead of in a computation of its own: a
+/// computation with no sources would never re-run anyway.
+pub(crate) const BLOCK_STATIC: u32 = 4;
 
 /// Bound on recursive expression / binding analysis.
 const MAX_DEPTH: usize = 16;
@@ -228,6 +234,9 @@ impl<'s> Prover<'s> {
         let mut flags = 0;
         if sync {
             flags |= BLOCK_SYNC;
+            if static_jsx_body(&body.statements) {
+                flags |= BLOCK_STATIC;
+            }
         }
         if nothrow {
             flags |= BLOCK_NOTHROW;
@@ -951,6 +960,113 @@ fn is_primitive_type(ty: &TSType<'_>) -> bool {
 /// Collect the argument of every `return` in `statements` (nested functions
 /// and classes own their returns; they are expressions, never reached here).
 /// `bare` records a `return;`.
+/// `BLOCK_STATIC`: the body is `return <jsx/>` and every `yield*` of the body
+/// (not of a nested function) is in a deferred JSX position.
+fn static_jsx_body(statements: &[Statement<'_>]) -> bool {
+    let [Statement::ReturnStatement(statement)] = statements else {
+        return false;
+    };
+    let Some(argument) = statement.argument.as_ref() else {
+        return false;
+    };
+    match argument.without_parentheses() {
+        Expression::JSXElement(element) => static_jsx_element(element),
+        Expression::JSXFragment(fragment) => static_jsx_children(&fragment.children),
+        _ => false,
+    }
+}
+
+fn static_jsx_element(element: &oxc_ast::ast::JSXElement<'_>) -> bool {
+    use oxc_ast::ast::{JSXAttributeItem, JSXAttributeName, JSXAttributeValue};
+    let intrinsic = match &element.opening_element.name {
+        JSXElementName::Identifier(_) => true,
+        JSXElementName::NamespacedName(_) => true,
+        JSXElementName::IdentifierReference(identifier) => {
+            !identifier.name.starts_with(|c: char| c.is_ascii_uppercase())
+        }
+        _ => false,
+    };
+    for attribute in &element.opening_element.attributes {
+        match attribute {
+            // A spread is merged eagerly: refuse any read in it.
+            JSXAttributeItem::SpreadAttribute(spread) => {
+                if contains_yield(&spread.argument) {
+                    return false;
+                }
+            }
+            JSXAttributeItem::Attribute(attribute) => {
+                let Some(value) = attribute.value.as_ref() else {
+                    continue;
+                };
+                let name = match &attribute.name {
+                    JSXAttributeName::Identifier(identifier) => identifier.name.to_string(),
+                    JSXAttributeName::NamespacedName(name) => {
+                        format!("{}:{}", name.namespace.name, name.name.name)
+                    }
+                };
+                // Evaluated when the element is created, not in an effect:
+                // refs, handlers and directives (on an intrinsic element; a
+                // component's props are all getters).
+                let eager = name == "ref"
+                    || (intrinsic && (name.starts_with("on") || name.starts_with("use:")));
+                match value {
+                    JSXAttributeValue::ExpressionContainer(container) => {
+                        if eager
+                            && container
+                                .expression
+                                .as_expression()
+                                .is_some_and(contains_yield)
+                        {
+                            return false;
+                        }
+                    }
+                    JSXAttributeValue::Element(element) => {
+                        if !static_jsx_element(element) {
+                            return false;
+                        }
+                    }
+                    JSXAttributeValue::Fragment(fragment) => {
+                        if !static_jsx_children(&fragment.children) {
+                            return false;
+                        }
+                    }
+                    JSXAttributeValue::StringLiteral(_) => {}
+                }
+            }
+        }
+    }
+    static_jsx_children(&element.children)
+}
+
+fn static_jsx_children(children: &[oxc_ast::ast::JSXChild<'_>]) -> bool {
+    use oxc_ast::ast::JSXChild;
+    children.iter().all(|child| match child {
+        JSXChild::Element(element) => static_jsx_element(element),
+        JSXChild::Fragment(fragment) => static_jsx_children(&fragment.children),
+        // A hole: the transform wraps it (insert / a getter).
+        JSXChild::ExpressionContainer(_) | JSXChild::Text(_) => true,
+        JSXChild::Spread(spread) => !contains_yield(&spread.expression),
+    })
+}
+
+/// A `yield*` / `yield` of the enclosing function inside `expression`.
+fn contains_yield(expression: &Expression<'_>) -> bool {
+    use oxc_ast::ast::{ArrowFunctionExpression, YieldExpression};
+    use oxc_ast_visit::Visit;
+    use oxc_syntax::scope::ScopeFlags;
+    struct Finder(bool);
+    impl<'a> Visit<'a> for Finder {
+        fn visit_yield_expression(&mut self, _: &YieldExpression<'a>) {
+            self.0 = true;
+        }
+        fn visit_function(&mut self, _: &Function<'a>, _: ScopeFlags) {}
+        fn visit_arrow_function_expression(&mut self, _: &ArrowFunctionExpression<'a>) {}
+    }
+    let mut finder = Finder(false);
+    finder.visit_expression(expression);
+    finder.0
+}
+
 fn collect_returns<'b, 'a>(
     statements: &'b [Statement<'a>],
     out: &mut Vec<&'b Expression<'a>>,

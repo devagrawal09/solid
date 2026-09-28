@@ -96,6 +96,7 @@ export {
   blockFlags,
   BLOCK_SYNC,
   BLOCK_NOTHROW,
+  BLOCK_STATIC,
   isBlock,
   outsideBlock,
   renderBlock,

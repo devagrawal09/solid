@@ -10,6 +10,7 @@
 // `createComponent` is `untrack(() => Comp(props))`. Nodes are plain objects:
 // `template(html)` builds one root with a child per `<!>` marker.
 import {
+  blockFlags,
   createMemo,
   createRenderEffect,
   dispatchBlock,
@@ -67,6 +68,9 @@ export function insert(parent, accessor, marker) {
     slot.v = accessor;
     return;
   }
+  // BLOCK_STATIC (4): a view that reads only in its holes renders once,
+  // untracked, as @solidjs/web's insert does outside hydration.
+  if (blockFlags(accessor) & 4) return insert(parent, untrack(() => renderBlock(accessor)), marker);
   const read = isBlock(accessor) ? () => renderBlock(accessor) : accessor;
   createRenderEffect(
     () => resolve(read()),
