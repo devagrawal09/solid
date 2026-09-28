@@ -63,10 +63,14 @@
 //!    binding proven to be a context (`const Ctx = createContext(…)` from a
 //!    runtime module) is `_$readContext(Ctx)`: `perform` steps the context's
 //!    iterator and performs its one context operation, which the host rules
-//!    already admitted. A module-local `function*` helper whose every
-//!    `yield*` reads a proven context and whose every reference is
-//!    `_$perform(helper(…))` directly in a setup becomes a plain function
-//!    (`yield* Ctx` → `_$readContext(Ctx)`), called directly.
+//!    already admitted. A module-level `function*` helper whose every
+//!    `yield*` the lowering can take (context reads, accessor reads,
+//!    creations, cleanups, `raise` statements, other lowered helpers) becomes
+//!    a plain function — in place, or as an exported twin `helper$lowered`
+//!    next to the generator — and its call sites in bodies whose host admits
+//!    its operations call it directly (`helpers.rs`; imported helpers through
+//!    the build-supplied summaries of their modules). This runs first, so
+//!    the bodies that called a helper lose their block like any other.
 //! 6. **Async bodies.** A memo / event body the generator pass compiled to an
 //!    `async function` (`generators.rs`, "async v2 bodies") is erased like a
 //!    synchronous one — `$event(_$$(fn))` → `$eventCompiled(_$asyncBody(fn))`,
@@ -119,21 +123,40 @@ use crate::generators::{
 use crate::shared::ast::{argument_to_expression, expression_to_argument};
 use crate::shared::ast_builder::AstBuilder;
 
+pub(crate) mod helpers;
 #[cfg(test)]
 mod tests;
 
 const RUNTIME_SOURCES: &[&str] = &["solid-js", "@solidjs/signals"];
 
-/// Run the v2 lowering over a DOM or SSR program (after fusion).
+/// Run the v2 lowering over a DOM or SSR program (after fusion). Returns
+/// the module's exported helper twins (its helper summary).
 pub(crate) fn lower_v2_client<'a>(
     allocator: &'a Allocator,
     program: &mut Program<'a>,
     v2: &V2Bodies,
-) {
+    imported_helpers: &[helpers::ImportedHelper],
+    filename: Option<&str>,
+) -> Vec<helpers::ExportedHelper> {
     if runtime_imports(program).is_empty() {
-        return;
+        return Vec::new();
+    }
+    let (exported, helpers_lowered) =
+        lower_helpers(allocator, program, v2, imported_helpers, filename);
+    if v2.kinds.is_empty() {
+        // A module with helpers and no v2 body: nothing else to lower.
+        if helpers_lowered {
+            drop_unused_generated(allocator, program);
+        }
+        return exported;
     }
     lower_operations(allocator, program, v2);
+    if helpers_lowered {
+        // A memo whose only operation was a helper's `perform` fuses now,
+        // exactly as the first fusion would have (identically on every
+        // generate; the DOM-only hole fusion stays off).
+        let _ = crate::generators::fuse_host_blocks(allocator, program, "", false, Some(v2));
+    }
     erase_blocks(allocator, program, v2);
     if !v2.async_bodies.is_empty() {
         restore_async_generators(allocator, program, v2);
@@ -141,6 +164,27 @@ pub(crate) fn lower_v2_client<'a>(
     lower_remaining_reads(allocator, program);
     compiled_constructors(allocator, program, v2);
     drop_unused_generated(allocator, program);
+    exported
+}
+
+/// Section 5: helper generators (see `helpers.rs`). Returns the exported
+/// twins and whether anything was lowered.
+fn lower_helpers<'a>(
+    allocator: &'a Allocator,
+    program: &mut Program<'a>,
+    v2: &V2Bodies,
+    imported: &[helpers::ImportedHelper],
+    filename: Option<&str>,
+) -> (Vec<helpers::ExportedHelper>, bool) {
+    let mut imports = Imports::new(program);
+    let plan = helpers::plan_helpers(program, v2, &mut imports, imported, filename);
+    if plan.is_empty() {
+        return (Vec::new(), false);
+    }
+    let exported = plan.exported.clone();
+    plan.apply(allocator, program);
+    imports.apply(allocator, program);
+    (exported, true)
 }
 
 // --- imports -----------------------------------------------------------------------
@@ -358,12 +402,6 @@ struct OpsPlan {
     throws: HashSet<Span>,
     /// `_$perform(Ctx)` of a proven context in a setup → `_$readContext(Ctx)`.
     contexts: HashMap<Span, String>,
-    /// `_$perform(helper(args))` of a lowered helper → `helper(args)`.
-    helper_calls: HashSet<Span>,
-    /// Lowered helpers: their `function*` declarations (by function span)
-    /// become plain functions, their `yield* Ctx` → `_$readContext(Ctx)`.
-    helper_functions: HashSet<Span>,
-    helper_yields: HashMap<Span, String>,
 }
 
 fn lower_operations<'a>(allocator: &'a Allocator, program: &mut Program<'a>, v2: &V2Bodies) {
@@ -375,14 +413,6 @@ fn lower_operations<'a>(allocator: &'a Allocator, program: &mut Program<'a>, v2:
             .semantic;
         let names = Names::new(program);
         let contexts = context_symbols(program, semantic.scoping(), &names);
-        let helpers = lowerable_helpers(
-            program,
-            semantic.scoping(),
-            semantic.nodes(),
-            &names,
-            v2,
-            &contexts,
-        );
         let mut collector = OpsCollector {
             scoping: semantic.scoping(),
             nodes: semantic.nodes(),
@@ -392,28 +422,14 @@ fn lower_operations<'a>(allocator: &'a Allocator, program: &mut Program<'a>, v2:
             plan: OpsPlan::default(),
             stack: Vec::new(),
             contexts: &contexts,
-            helpers: helpers.iter().map(|(symbol, _)| *symbol).collect(),
         };
         collector.visit_program(program);
-        let mut plan = collector.plan;
-        if !helpers.is_empty() {
-            let source = contexts_source(program, &names, &contexts);
-            let local = imports.local(&source, "readContext");
-            for (_, function) in &helpers {
-                plan.helper_functions.insert(function.0);
-                for span in &function.1 {
-                    plan.helper_yields.insert(*span, local.clone());
-                }
-            }
-        }
-        plan
+        collector.plan
     };
     if plan.direct.is_empty()
         && plan.unwrap.is_empty()
         && plan.throws.is_empty()
         && plan.contexts.is_empty()
-        && plan.helper_calls.is_empty()
-        && plan.helper_functions.is_empty()
     {
         return;
     }
@@ -433,8 +449,6 @@ struct OpsCollector<'s, 'x> {
     stack: Vec<(V2Kind, usize)>,
     /// Proven contexts (`const Ctx = createContext(…)`).
     contexts: &'s HashSet<SymbolId>,
-    /// Lowered helper generators.
-    helpers: HashSet<SymbolId>,
 }
 
 impl<'s> OpsCollector<'s, '_> {
@@ -466,14 +480,6 @@ impl<'s> OpsCollector<'s, '_> {
                     .unwrap_or_else(|| "solid-js".to_string());
                 let local = self.imports.local(&source, "readContext");
                 self.plan.contexts.insert(call.span, local);
-                return;
-            }
-            // `yield* helper()` of a lowered helper: the plain call.
-            if let Some(Argument::CallExpression(helper)) = call.arguments.first()
-                && callee_symbol(self.scoping, helper)
-                    .is_some_and(|symbol| self.helpers.contains(&symbol))
-            {
-                self.plan.helper_calls.insert(call.span);
                 return;
             }
         }
@@ -739,41 +745,13 @@ impl<'a> VisitMut<'a> for OpsRewriter<'a> {
         walk_mut::walk_statement(self, statement);
     }
 
-    fn visit_function(&mut self, it: &mut Function<'a>, flags: ScopeFlags) {
-        if self.plan.helper_functions.remove(&it.span) {
-            // A lowered helper: its `yield* Ctx` reads are direct calls.
-            it.generator = false;
-            it.return_type = None;
-        }
-        walk_mut::walk_function(self, it, flags);
-    }
-
     fn visit_expression(&mut self, expression: &mut Expression<'a>) {
-        if let Expression::YieldExpression(it) = expression
-            && let Some(local) = self.plan.helper_yields.remove(&it.span)
-        {
-            let ast = AstBuilder::new(self.allocator);
-            let span = it.span;
-            let context = it.argument.take().expect("planned: `yield* Ctx`");
-            *expression = ast.expression_call(
-                span,
-                ast.expression_identifier(Span::new(0, 0), ast.ident(&local)),
-                None,
-                ast.vec1(expression_to_argument(context)),
-                false,
-            );
-            return;
-        }
         if let Expression::CallExpression(call) = expression {
             let span = call.span;
             if let Some(local) = self.plan.contexts.remove(&span) {
                 // `_$perform(Ctx)` → `_$readContext(Ctx)`.
                 let ast = AstBuilder::new(self.allocator);
                 call.callee = ast.expression_identifier(call.callee.span(), ast.ident(&local));
-            } else if self.plan.helper_calls.remove(&span) {
-                // `_$perform(helper(args))` → `helper(args)`.
-                let argument = call.arguments.pop().expect("planned: one argument");
-                *expression = argument_to_expression(argument).expect("planned: a call");
             } else if let Some(value) = self.plan.unwrap.remove(&span) {
                 // `_$perform(set(x))` → `set(x)` / `set(x).value`.
                 let argument = call.arguments.pop().expect("planned: one argument");
@@ -1428,135 +1406,6 @@ fn contexts_source(program: &Program<'_>, _names: &Names, _contexts: &HashSet<Sy
         .find(|i| i.imported == "$")
         .map(|i| i.source)
         .unwrap_or_else(|| "solid-js".to_string())
-}
-
-/// Helper generators a setup delegates to (`yield* useTodos()`) that lower
-/// to plain functions: a module-level, non-exported `function*` declaration
-/// whose every `yield*` reads a proven context, and whose every reference
-/// is `_$perform(helper(…))` directly in a lowered setup body. `perform` of
-/// the helper's generator steps it under the setup's host, performing each
-/// context read (`readGuarded(getContext(Ctx))`); the lowered helper makes
-/// the same reads, in the same order, as direct `readContext` calls, and
-/// returns what the generator returned. Returns each helper's symbol with
-/// its function span and the spans of its `yield*`s.
-#[allow(clippy::type_complexity)]
-fn lowerable_helpers(
-    program: &Program<'_>,
-    scoping: &Scoping,
-    nodes: &AstNodes<'_>,
-    names: &Names,
-    v2: &V2Bodies,
-    contexts: &HashSet<SymbolId>,
-) -> Vec<(SymbolId, (Span, Vec<Span>))> {
-    let mut out = Vec::new();
-    if contexts.is_empty() {
-        return out;
-    }
-    for statement in &program.body {
-        let Statement::FunctionDeclaration(function) = statement else {
-            continue;
-        };
-        if !function.generator || function.r#async {
-            continue;
-        }
-        let (Some(id), Some(body)) = (function.id.as_ref(), function.body.as_ref()) else {
-            continue;
-        };
-        let Some(symbol) = id.symbol_id.get() else {
-            continue;
-        };
-        // The body: every `yield` a `yield*` of a proven context.
-        struct Yields<'s> {
-            scoping: &'s Scoping,
-            contexts: &'s HashSet<SymbolId>,
-            spans: Vec<Span>,
-            ok: bool,
-        }
-        impl<'b> Visit<'b> for Yields<'_> {
-            fn visit_function(&mut self, _: &Function<'b>, _: ScopeFlags) {}
-            fn visit_arrow_function_expression(
-                &mut self,
-                _: &oxc_ast::ast::ArrowFunctionExpression<'b>,
-            ) {
-            }
-            fn visit_class(&mut self, _: &oxc_ast::ast::Class<'b>) {}
-            fn visit_yield_expression(&mut self, it: &oxc_ast::ast::YieldExpression<'b>) {
-                let context = it.delegate
-                    && matches!(&it.argument, Some(Expression::Identifier(reference))
-                        if reference_symbol(self.scoping, reference)
-                            .is_some_and(|symbol| self.contexts.contains(&symbol)));
-                if context {
-                    self.spans.push(it.span);
-                } else {
-                    self.ok = false;
-                }
-            }
-        }
-        let mut yields = Yields {
-            scoping,
-            contexts,
-            spans: Vec::new(),
-            ok: true,
-        };
-        yields.visit_function_body(body);
-        if !yields.ok {
-            continue;
-        }
-        // Every reference: `_$perform(helper(…))` directly in a lowered setup.
-        let mut any = false;
-        let callers_ok = scoping.get_resolved_references(symbol).all(|reference| {
-            any = true;
-            let node = reference.node_id();
-            let span = nodes.get_node(node).kind().span();
-            let parent = nodes.parent_id(node);
-            let AstKind::CallExpression(call) = nodes.get_node(parent).kind() else {
-                return false;
-            };
-            if call.callee.span() != span
-                || call
-                    .arguments
-                    .iter()
-                    .any(|a| matches!(a, Argument::SpreadElement(_)))
-            {
-                return false;
-            }
-            let outer = nodes.parent_id(parent);
-            let AstKind::CallExpression(perform) = nodes.get_node(outer).kind() else {
-                return false;
-            };
-            if perform.arguments.len() != 1
-                || perform.arguments[0].span() != call.span
-                || !names.is(scoping, perform, "perform")
-            {
-                return false;
-            }
-            // The first function around the perform is a lowered setup body.
-            let mut current = outer;
-            loop {
-                let next = nodes.parent_id(current);
-                if next == current {
-                    return false;
-                }
-                current = next;
-                match nodes.get_node(current).kind() {
-                    AstKind::Function(function) => {
-                        let block = nodes.parent_id(current);
-                        return matches!(nodes.get_node(block).kind(),
-                            AstKind::CallExpression(block)
-                                if names.is(scoping, block, "$")
-                                    && v2.kind_of(block.span) == Some(V2Kind::Setup)
-                                    && lowered(function));
-                    }
-                    AstKind::ArrowFunctionExpression(_) | AstKind::Class(_) => return false,
-                    _ => {}
-                }
-            }
-        });
-        if any && callers_ok {
-            out.push((symbol, (function.span, yields.spans)));
-        }
-    }
-    out
 }
 
 // --- 6. async bodies the erasure did not take ------------------------------------------

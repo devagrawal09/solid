@@ -29,6 +29,9 @@ function transform(code, options) {
     output.cssHash = result.cssHash ?? null;
   }
   if (result.storeSummary != null) output.storeSummary = JSON.parse(result.storeSummary);
+  // Generator blocks v2: the module's exported helper twins, for importers
+  // (`helperSummaries`, see helpers-build.js).
+  if (result.helperSummary != null) output.helperSummary = JSON.parse(result.helperSummary);
   return output;
 }
 
@@ -437,6 +440,10 @@ function validateOptions(code, options) {
       nativeOptions.storeLinkFacts = flattenStoreLinkFacts(value);
       continue;
     }
+    if (key === "helperSummaries") {
+      nativeOptions.helperSummaries = flattenHelperSummaries(value);
+      continue;
+    }
     if (key === "validate") {
       if (typeof value !== "boolean") {
         throw new TypeError("@solidjs/compiler `validate` option must be boolean");
@@ -471,6 +478,29 @@ function flattenStoreLinkFacts(facts) {
         );
       }
       for (const prop of props) out.push(`${source}\0${name}\0${prop}`);
+    }
+  }
+  return out;
+}
+
+// Helper summaries of imported modules (generator blocks v2): `{ [import
+// source or module path]: { [export]: { lowered, hosts: string[] } } }` —
+// what `transform()` returns as `helperSummary`, keyed by the module it came
+// from — flattened to `source\0export\0lowered\0hosts` strings.
+function flattenHelperSummaries(summaries) {
+  if (summaries == null) return [];
+  if (typeof summaries !== "object" || Array.isArray(summaries)) {
+    throw new TypeError("@solidjs/compiler `helperSummaries` option must be an object");
+  }
+  const out = [];
+  for (const [source, helpers] of Object.entries(summaries)) {
+    for (const [name, helper] of Object.entries(helpers ?? {})) {
+      if (!helper || typeof helper.lowered !== "string" || !Array.isArray(helper.hosts)) {
+        throw new TypeError(
+          "@solidjs/compiler `helperSummaries[source][export]` must be `{ lowered: string, hosts: string[] }`"
+        );
+      }
+      out.push(`${source}\0${name}\0${helper.lowered}\0${helper.hosts.join(",")}`);
     }
   }
   return out;

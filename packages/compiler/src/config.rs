@@ -95,6 +95,9 @@ pub struct TransformOptions {
     /// Linker facts for `store_handles`, flattened by the JS wrapper to
     /// `source\0export\0prop` strings.
     pub store_link_facts: Option<Vec<String>>,
+    /// Helper summaries of imported modules (generator blocks v2), flattened
+    /// by the JS wrapper to `source\0export\0lowered\0hosts` strings.
+    pub helper_summaries: Option<Vec<String>>,
 }
 
 #[napi(object)]
@@ -110,6 +113,9 @@ pub struct TransformResult {
     pub strict_blocks: Option<String>,
     /// The module's store summary (JSON) when `storeHandles` is on.
     pub store_summary: Option<String>,
+    /// The module's helper summary (JSON) when it exports helper generators
+    /// with a lowered twin.
+    pub helper_summary: Option<String>,
 }
 
 pub(crate) fn source_type_for_filename(filename: Option<&str>) -> Result<SourceType> {

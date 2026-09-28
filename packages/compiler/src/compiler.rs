@@ -153,6 +153,12 @@ pub struct CompileOptions {
     /// Linker facts for `store_handles`: `(import source, exported
     /// component, verified Borrowed prop)` triples.
     pub store_link_facts: Vec<crate::store_handles::LinkFact>,
+    /// Helper summaries of imported modules (generator blocks v2, see
+    /// `blocks_v2_lower/helpers.rs`), flattened `source\0export\0lowered\0hosts`
+    /// (hosts comma-separated). `source` is an import source as written or
+    /// the imported module's path (matched against relative imports of
+    /// `filename`).
+    pub helper_summaries: Vec<String>,
 }
 
 impl Default for CompileOptions {
@@ -193,6 +199,7 @@ impl Default for CompileOptions {
             store_scalars: false,
             store_forms: true,
             store_link_facts: Vec::new(),
+            helper_summaries: Vec::new(),
         }
     }
 }
@@ -211,6 +218,9 @@ pub struct CompileOutput {
     pub strict_blocks: Option<String>,
     /// The module's store summary (JSON) when `store_handles` ran.
     pub store_summary: Option<String>,
+    /// The module's helper summary (JSON: export → `{ lowered, hosts }`) when
+    /// it exports helper generators with a lowered twin.
+    pub helper_summary: Option<String>,
 }
 
 /// Compile one JavaScript or TypeScript module containing JSX.
@@ -305,6 +315,7 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
             css_hash,
             strict_blocks: None,
             store_summary: None,
+            helper_summary: None,
         });
     }
 
@@ -401,6 +412,7 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
         .map_err(CompileError::transform)?;
     }
 
+    let mut helper_summary = None;
     // Generator blocks v2 lowering (DOM and SSR output, identically, so
     // hydration ids stay aligned): direct setup creations, fused effect
     // halves, erased setups and events, and the compiled-only constructors
@@ -409,9 +421,21 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
     if options.v2_fusion
         && options.generators
         && matches!(options.generate, Generate::Dom | Generate::Ssr)
-        && !v2_bodies.kinds.is_empty()
+        && (!v2_bodies.kinds.is_empty()
+            || crate::blocks_v2_lower::helpers::has_candidates(&program))
     {
-        crate::blocks_v2_lower::lower_v2_client(&allocator, &mut program, &v2_bodies);
+        let imported =
+            crate::blocks_v2_lower::helpers::parse_imported(&options.helper_summaries);
+        let exported = crate::blocks_v2_lower::lower_v2_client(
+            &allocator,
+            &mut program,
+            &v2_bodies,
+            &imported,
+            options.filename.as_deref(),
+        );
+        if !exported.is_empty() {
+            helper_summary = Some(crate::blocks_v2_lower::helpers::summary_json(&exported));
+        }
     }
 
     // Generator blocks v2: a component whose props are only read through
@@ -567,6 +591,7 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
         css_hash,
         strict_blocks,
         store_summary,
+        helper_summary,
     })
 }
 

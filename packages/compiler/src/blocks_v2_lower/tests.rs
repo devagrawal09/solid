@@ -475,7 +475,8 @@ fn context_reads_and_helpers_lower_in_setups() {
         !out.contains("function*  useCtx") && !out.contains("_$perform"),
         "{out}"
     );
-    // An exported helper, or a context the compiler cannot prove, keeps `perform`.
+    // An exported helper keeps its generator and gains a lowered twin the
+    // setup calls; a context the compiler cannot prove keeps `perform`.
     let kept = dom(r#"import { $component, createContext } from "solid-js";
 import { Theme } from "./theme";
 const Ctx = createContext();
@@ -487,7 +488,8 @@ export const C = $component(function* () {
 });
 "#);
     assert!(kept.contains("export function* useCtx()"), "{kept}");
-    assert!(kept.contains("const a = _$perform(useCtx());"), "{kept}");
+    assert!(kept.contains("export function useCtx$lowered()"), "{kept}");
+    assert!(kept.contains("const a = useCtx$lowered();"), "{kept}");
     assert!(kept.contains("const b = _$perform(Theme);"), "{kept}");
 }
 
@@ -565,4 +567,216 @@ export const C = $component(function* () {
 "#,
     );
     assert!(self::flat(&unproven).contains(" $ as _$$"), "{unproven}");
+}
+
+const HELPERS_APP: &str = r#"import { $component, $signal, $memo, $event, $cleanup, raise, createContext, createSignal } from "solid-js";
+import { imported } from "./data";
+const Theme = createContext("light");
+const [global] = createSignal(1);
+function* useTheme() {
+  return yield* Theme;
+}
+function* useCounter(start) {
+  const theme = yield* useTheme();
+  const [count, setCount] = yield* $signal(start);
+  const [plain, setPlain] = yield* $signal(0);
+  const doubled = yield* $memo(function* () {
+    return (yield* count) * 2;
+  });
+  yield* $cleanup(() => { setPlain(0); });
+  return { theme, count, doubled, inc: () => setCount(c => c + 1) };
+}
+function* label() {
+  return `g${yield* global}`;
+}
+function* checked(v) {
+  if (v < 0) yield* raise(new Error("negative"));
+  return v;
+}
+function* unknown() {
+  return yield* imported;
+}
+function* mixed() {
+  const [a] = yield* $signal(0);
+  return (yield* global) + 1;
+}
+function* passedAround() {
+  return yield* Theme;
+}
+export function* useShared(v) {
+  const [s, setS] = yield* $signal(v);
+  return [s, setS];
+}
+export const C = $component(function* () {
+  const counter = yield* useCounter(1);
+  const [shared] = yield* useShared(2);
+  const theme = yield* passedAround();
+  keep(passedAround);
+  const text = yield* $memo(function* () {
+    return (yield* label()) + (yield* checked(yield* global));
+  });
+  const other = yield* $memo(function* () {
+    return yield* unknown();
+  });
+  const click = $event(function* () {
+    console.log(yield* label());
+  });
+  return function* () {
+    return <p onClick={click}>{yield* text}{yield* label()}{yield* other}</p>;
+  };
+});
+"#;
+
+#[test]
+fn helpers_lower_in_place_or_as_twins() {
+    for generate in [Generate::Dom, Generate::Ssr] {
+        let out = compile_with(
+            HELPERS_APP,
+            CompileOptions {
+                generate,
+                hydratable: true,
+                ..CompileOptions::default()
+            },
+        );
+        let flat = self::flat(&out);
+        // A setup helper: context through a nested helper, creations (the
+        // escaping setter keeps its receipts, the plain one does not), a
+        // cleanup; its memo fuses.
+        assert!(
+            flat.contains("function useTheme() { return _$readContext(Theme); }"),
+            "{out}"
+        );
+        assert!(
+            flat.contains(
+                "function useCounter(start) { const theme = useTheme(); const [count, setCount] = _$withReceipts(_$createSignal(start)); const [plain, setPlain] = _$createSignal(0); const doubled = _$createMemo(function() { return count() * 2; }); _$blockCleanup(() => { setPlain(0); });"
+            ),
+            "{out}"
+        );
+        // Read helpers, called from a memo, an event and the view; a `raise`
+        // statement is a `throw`.
+        assert!(
+            flat.contains("function label() { return `g${_$readAccessor(global)}`; }"),
+            "{out}"
+        );
+        assert!(
+            flat.contains(
+                "function checked(v) { if (v < 0) throw new Error(\"negative\"); return v; }"
+            ),
+            "{out}"
+        );
+        assert!(
+            flat.contains(
+                "const text = _$createMemo(function() { return label() + checked(global()); });"
+            ),
+            "{out}"
+        );
+        assert!(flat.contains("console.log(label());"), "{out}");
+        // Not lowered: an operand the lowering cannot prove, a helper that
+        // both creates and reads (no host admits both).
+        assert!(flat.contains("function* unknown() {"), "{out}");
+        assert!(flat.contains("function* mixed() {"), "{out}");
+        assert!(flat.contains("_$perform(unknown())"), "{out}");
+        // A helper passed around as a value keeps its generator; the call
+        // site calls its twin.
+        assert!(flat.contains("function* passedAround() {"), "{out}");
+        assert!(
+            flat.contains("function passedAround$lowered() { return _$readContext(Theme); }"),
+            "{out}"
+        );
+        assert!(
+            flat.contains("const theme = passedAround$lowered();"),
+            "{out}"
+        );
+        // An exported helper: the generator stays, an exported twin is added.
+        assert!(flat.contains("export function* useShared(v) {"), "{out}");
+        assert!(
+            flat.contains(
+                "export function useShared$lowered(v) { const [s, setS] = _$withReceipts(_$createSignal(v)); return [s, setS]; }"
+            ),
+            "{out}"
+        );
+        assert!(
+            flat.contains("const [shared] = useShared$lowered(2);"),
+            "{out}"
+        );
+        assert!(flat.contains("_$$componentCompiled(function() {"), "{out}");
+    }
+    let summary = compile(HELPERS_APP, &CompileOptions::default())
+        .unwrap()
+        .helper_summary;
+    assert_eq!(
+        summary.as_deref(),
+        Some(r#"{"useShared":{"lowered":"useShared$lowered","hosts":["setup"]}}"#)
+    );
+}
+
+#[test]
+fn helper_call_sites_follow_host_admission_and_async_bodies() {
+    let out = dom(
+        r#"import { $component, $signal, $memo, $event, attempt, createSignal } from "solid-js";
+const [n] = createSignal(1);
+function* read() { return yield* n; }
+function* make() { const [s] = yield* $signal(0); return s; }
+export const C = $component(function* () {
+  const s = yield* make();
+  const m = yield* $memo(function* () { return yield* make(); });
+  const wait = $event(function* () {
+    const v = yield* read();
+    yield* attempt(() => save(v));
+  });
+  return function* () { return <i onClick={wait}>{yield* read()}</i>; };
+});
+"#,
+    );
+    let flat = self::flat(&out);
+    // `make` is called from a memo too (a memo may not create): its
+    // generator stays for that site, the setup calls its twin.
+    assert!(flat.contains("function* make() {"), "{out}");
+    assert!(flat.contains("const s = make$lowered();"), "{out}");
+    assert!(flat.contains("_$perform(make())"), "{out}");
+    // `read` is called from an async body (which may be restored to its
+    // generator) and a view: the async site keeps the generator.
+    assert!(flat.contains("function* read() {"), "{out}");
+    assert!(flat.contains("function read$lowered() {"), "{out}");
+}
+
+#[test]
+fn imported_helpers_lower_through_summaries() {
+    let source = r#"import { $component, $memo } from "solid-js";
+import { useShared, other } from "./shared";
+export const D = $component(function* () {
+  const [shared] = yield* useShared(1);
+  const m = yield* $memo(function* () { return yield* useShared(2); });
+  return function* () { return <i>{other}</i>; };
+});
+"#;
+    let with = |key: &str| {
+        compile_with(
+            source,
+            CompileOptions {
+                filename: Some("/app/src/d.tsx".into()),
+                helper_summaries: vec![format!("{key}\0useShared\0useShared$lowered\0setup")],
+                ..CompileOptions::default()
+            },
+        )
+    };
+    for key in ["/app/src/shared.ts", "./shared", "/app/src/shared/index.tsx"] {
+        let out = with(key);
+        let flat = self::flat(&out);
+        assert!(
+            flat.contains(
+                "import { useShared, other, useShared$lowered as _$useShared$lowered } from \"./shared\";"
+            ),
+            "{key}: {out}"
+        );
+        assert!(
+            flat.contains("const [shared] = _$useShared$lowered(1);"),
+            "{key}: {out}"
+        );
+        // A memo is not admitted: the generator stays.
+        assert!(flat.contains("_$perform(useShared(2))"), "{key}: {out}");
+    }
+    // A summary for another module changes nothing.
+    let out = with("/app/src/other.ts");
+    assert!(!out.contains("$lowered"), "{out}");
 }

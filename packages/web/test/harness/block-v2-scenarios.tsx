@@ -25,6 +25,11 @@
  *   read's proxy as a template object (the boundary then handed the page to
  *   the client as "client-only content"), and a component called inside a
  *   server memo was deferred on the server only.
+ * - v2-helpers: helper generators (blocks-v2-performance.md section 11) —
+ *   a setup helper that reads context through a nested helper and creates a
+ *   signal and a memo, and a read helper called from a memo and from the
+ *   view. Compiled, every helper is a plain function on both sides, the
+ *   setup and the memos lose their blocks, and hydration ids still agree.
  */
 // @ts-nocheck
 import {
@@ -33,6 +38,7 @@ import {
   $memo,
   $signal,
   attempt,
+  createContext,
   createSignal,
   For,
   Loading,
@@ -166,6 +172,49 @@ function V2ForwardedChildren() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// V4. Helper generators.
+const V2Theme = createContext("plain");
+function* useV2Theme() {
+  return yield* V2Theme;
+}
+let setV2Base!: (v: number) => void;
+function* useV2Counter(start: number) {
+  const theme = yield* useV2Theme();
+  const [n, setN] = yield* $signal(start);
+  const doubled = yield* $memo(function* () {
+    return (yield* n) * 2;
+  });
+  setV2Base = setN;
+  return { theme, doubled };
+}
+const [v2Suffix, setV2Suffix] = createSignal("!");
+function* v2SuffixText() {
+  return yield* v2Suffix;
+}
+const V2Helpers = $component(function* () {
+  const counter = yield* useV2Counter(1);
+  const label = yield* $memo(function* () {
+    return `${yield* counter.doubled}${yield* v2SuffixText()}`;
+  });
+  return function* () {
+    return (
+      <p>
+        <b>{counter.theme}</b>
+        <i>{yield* label}</i>
+        <u>{yield* v2SuffixText()}</u>
+      </p>
+    );
+  };
+});
+function V2HelpersApp() {
+  return (
+    <V2Theme value="dark">
+      <V2Helpers />
+    </V2Theme>
+  );
+}
+
 export const blockV2Scenarios: Scenario[] = [
   {
     name: "v2-view-then-boundary",
@@ -196,5 +245,16 @@ export const blockV2Scenarios: Scenario[] = [
     update: () => setV2Open(false),
     expectedTextAfterUpdate: "annk1k2bob",
     stableSelector: "ol, li, b, i, div"
+  },
+  {
+    name: "v2-helpers",
+    App: V2HelpersApp,
+    expectedText: "dark2!!",
+    update: () => {
+      setV2Base(2);
+      setV2Suffix("?");
+    },
+    expectedTextAfterUpdate: "dark4??",
+    stableSelector: "p, b, i, u"
   }
 ];

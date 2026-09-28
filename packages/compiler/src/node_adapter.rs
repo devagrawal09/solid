@@ -406,6 +406,7 @@ pub fn transform(code: String, options: Option<TransformOptions>) -> Result<Tran
         css_hash: output.css_hash,
         strict_blocks: output.strict_blocks,
         store_summary: output.store_summary,
+        helper_summary: output.helper_summary,
     })
 }
 
@@ -472,6 +473,7 @@ fn core_options(options: TransformOptions) -> Result<CompileOptions> {
         memo_fusion: options.memo_fusion.unwrap_or(false),
         store_scalars: options.store_scalars.unwrap_or(false),
         store_forms: options.store_forms.unwrap_or(true),
+        helper_summaries: options.helper_summaries.clone().unwrap_or_default(),
         store_link_facts: options
             .store_link_facts
             .unwrap_or_default()
@@ -524,6 +526,7 @@ fn legacy_preflight(
             css_hash: None,
             strict_blocks: None,
             store_summary: None,
+            helper_summary: None,
         });
     }
     Err(Error::from_reason(validation_error))

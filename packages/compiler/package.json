@@ -29,6 +29,10 @@
     "./islands-build": {
       "types": "./islands-build.d.ts",
       "default": "./islands-build.js"
+    },
+    "./helpers-build": {
+      "types": "./helpers-build.d.ts",
+      "default": "./helpers-build.js"
     }
   },
   "files": [
@@ -40,7 +44,9 @@
     "islands.js",
     "islands.d.ts",
     "islands-build.js",
-    "islands-build.d.ts"
+    "islands-build.d.ts",
+    "helpers-build.js",
+    "helpers-build.d.ts"
   ],
   "scripts": {
     "build": "napi build --release --strip --manifest-path ./Cargo.toml",

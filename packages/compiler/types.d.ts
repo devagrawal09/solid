@@ -89,7 +89,22 @@ export interface TransformOptions {
   storeHandles?: boolean;
   /** Linker facts for `storeHandles`: imported components' verified Borrowed props. */
   storeLinkFacts?: StoreLinkFacts | null;
+  /**
+   * Generator blocks v2: the helper summaries of imported modules (each
+   * module's `helperSummary`), keyed by the import source as written or by
+   * the imported module's path (matched against this module's relative
+   * imports, resolved from `filename`). A call site of a summarized helper
+   * whose host the summary admits calls the helper's lowered twin. See
+   * `@solidjs/compiler/helpers-build`.
+   */
+  helperSummaries?: Record<string, HelperSummary> | null;
 }
+
+/** A module's exported helper generators with a lowered twin. */
+export type HelperSummary = Record<
+  string,
+  { lowered: string; hosts: ("setup" | "view" | "memo" | "effect" | "event")[] }
+>;
 
 export interface StoreLinkFacts {
   borrowed?: Record<string, Record<string, string[]>>;
@@ -145,6 +160,8 @@ export interface TransformResult {
   strictBlocks?: StrictAnalysis;
   /** The module's store summary, when `storeHandles` is on. */
   storeSummary?: StoreSummary;
+  /** Generator blocks v2: the module's exported helper twins, when it has any. */
+  helperSummary?: HelperSummary;
 }
 
 export function transform(code: string, options?: TransformOptions | null): TransformResult;
