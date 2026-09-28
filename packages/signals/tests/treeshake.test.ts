@@ -267,7 +267,12 @@ describe("pay-for-use tree-shaking (#2883)", () => {
     // cut-off — the option term in createEffectNode (CONFIG_EFFECT_EQUALS)
     // and recompute's first-run rule for such effects. A memo fused into its
     // only reader keeps its cut-off through it. Measured at 23,066.
-    expect(minifiedBytes).toBeLessThan(23_100);
+    // CONSCIOUS BUMP (zombie-heap fix, island-runtime-tiers.md "Defects
+    // found"): +69 B — updateIfNecessary moves a pulled zombie's heap entry
+    // from zombieQueue to dirtyQueue when it clears REACTIVE_ZOMBIE, so the
+    // flag keeps naming the heap the node is linked in
+    // (tests/zombie-pull-heap.test.ts). Measured at 23,135.
+    expect(minifiedBytes).toBeLessThan(23_170);
     expect(retainedFrom(retained, ["core/status-free.ts"])).toEqual([]);
   });
 
