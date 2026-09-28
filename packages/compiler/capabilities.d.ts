@@ -121,3 +121,15 @@ export interface SolidCapabilitiesOptions {
 /** Vite / Rollup plugin: selects the async-free runtime for proven graphs,
  * and switches off the runtime features the graph is proven not to use. */
 export function solidCapabilities(options?: SolidCapabilitiesOptions): any;
+
+/**
+ * A module's final output that hands a generator body to `createMemo` /
+ * `createEffect` / `onSettled` (a module the Solid compiler did not
+ * transform): the output importing and calling `installBlockDriver` first,
+ * and the bodies found; `null` when it has none. `solidCapabilities` applies
+ * it to every application module (a post transform) and warns.
+ */
+export function installDriverFor(
+  code: string,
+  id: string
+): { code: string; bodies: { line: number; host: string; source: string }[] } | null;

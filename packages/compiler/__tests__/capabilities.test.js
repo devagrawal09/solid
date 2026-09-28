@@ -458,3 +458,65 @@ export const App = $component(function* () {
     expect(off(report)).toEqual(ALL_OFF);
   });
 });
+
+// A module the Solid compiler did not transform, in an otherwise compiled
+// (driver-free) app: its generator body handed to `onSettled` needs the
+// block driver, which no compiled module installs (blocks-v2-performance.md
+// §11). The plugin installs it in that module only, and warns.
+describe("residual generator bodies install the block driver", () => {
+  const FILTER = `import { $cleanup, $event, createSignal, onSettled } from "solid-js";
+export function createHashFilter() {
+  const [filter, setFilter] = createSignal("all");
+  onSettled(function* () {
+    const sync = $event(function* () { setFilter(location.hash); });
+    window.addEventListener("hashchange", sync);
+    yield* $cleanup(() => window.removeEventListener("hashchange", sync));
+  });
+  return filter;
+}
+`;
+  const { installDriverFor, solidCapabilities } = require("../capabilities.js");
+  const { transform } = require("..");
+
+  test("installDriverFor: uncompiled bodies only", () => {
+    const installed = installDriverFor(FILTER, "/app/src/filter.ts");
+    expect(installed.bodies).toEqual([{ line: 4, host: "onSettled", source: "solid-js" }]);
+    expect(installed.code.split("\n")[0]).toBe(
+      'import { installBlockDriver as __solidInstallBlockDriver } from "solid-js"; __solidInstallBlockDriver(); import { $cleanup, $event, createSignal, onSettled } from "solid-js";'
+    );
+    // Line numbers are kept.
+    expect(installed.code.split("\n").length).toBe(FILTER.split("\n").length);
+    // Compiled, the body is `onSettled(fn)`: nothing to install.
+    const compiled = transform(FILTER, { filename: "/app/src/filter.ts" }).code;
+    expect(installDriverFor(compiled, "/app/src/filter.ts")).toBeNull();
+    // An action's generator is not a block body.
+    expect(
+      installDriverFor(
+        `import { action } from "solid-js";\nexport const save = action(function* () { yield 1; });\n`,
+        "/app/src/a.ts"
+      )
+    ).toBeNull();
+  });
+
+  test("the plugin transform (post) warns and records the module", () => {
+    const p = project({ "src/filter.ts": FILTER });
+    const plugin = solidCapabilities();
+    const warnings = [];
+    plugin.configResolved({ root: p.root, command: "build" });
+    const out = plugin.transform.handler.call(
+      { warn: m => warnings.push(m) },
+      FILTER,
+      path.join(p.root, "src/filter.ts")
+    );
+    expect(plugin.transform.order).toBe("post");
+    expect(out.code).toContain("__solidInstallBlockDriver();");
+    expect(warnings).toEqual([
+      "src/filter.ts:4: a generator body handed to `onSettled` was left uncompiled, so the bundle installs the block driver for it. Compile this module with the Solid compiler (add its extension to the Solid plugin's `extensions`) to keep the bundle driver-free."
+    ]);
+    // Library code and virtual modules are left alone.
+    expect(
+      plugin.transform.handler.call({ warn() {} }, FILTER, "/app/node_modules/lib/index.js")
+    ).toBeNull();
+    expect(plugin.transform.handler.call({ warn() {} }, FILTER, "\0virtual:x.ts")).toBeNull();
+  });
+});

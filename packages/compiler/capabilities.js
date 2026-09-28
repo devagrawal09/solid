@@ -31,6 +31,17 @@
 // bundler's own resolver (aliases, conditions and `resolve.*` all apply), so
 // the entry is fixed before the first `@solidjs/signals` import resolves.
 // Server and client builds each run it over their own graph.
+//
+// The plugin also guards against a module the Solid compiler did not
+// transform in an otherwise compiled app (blocks-v2-performance.md §11): a
+// generator body handed to `createMemo` / `createEffect` / `onSettled` runs
+// on the block driver, which only a block constructor installs — a fully
+// compiled bundle has none, so the body would run as a plain callback
+// (dev builds throw `[GENERATOR_BODY]`). Every application module's final
+// output is checked (`summarizeCompiled`'s `hookBodies`); a module with such
+// a body imports and calls `installBlockDriver` first, and the build warns,
+// naming the module. Modules without one are untouched, so a driver-free
+// bundle stays driver-free.
 
 const fs = require("fs");
 const path = require("path");
@@ -571,6 +582,27 @@ function featuresModuleSource(features, tier) {
 }
 
 /**
+ * A module's final output that hands a generator body to a generator-hook
+ * host: the output with the block driver installed first, and the bodies
+ * (`{ line, host, source }`), or null when it has none.
+ */
+function installDriverFor(code, id) {
+  if (!/function\s*\*/.test(code)) return null;
+  let compiled;
+  try {
+    compiled = summarizeCompiled(code, { filename: compiledFilename(id) });
+  } catch {
+    return null;
+  }
+  const bodies = compiled.hookBodies ?? [];
+  if (!bodies.length) return null;
+  const source = bodies.find(b => b.source)?.source ?? "solid-js";
+  // One line, so the module's own lines keep their numbers.
+  const prefix = `import { installBlockDriver as __solidInstallBlockDriver } from ${JSON.stringify(source)}; __solidInstallBlockDriver();`;
+  return { code: `${prefix}${code.startsWith("\n") ? "" : " "}${code}`, bodies };
+}
+
+/**
  * Vite / Rollup plugin. Runs `proveGraph` over the build's entries in
  * `buildStart` and, when the graph is async-free, resolves every
  * `@solidjs/signals` import to the async-free entry.
@@ -597,6 +629,8 @@ function featuresModuleSource(features, tier) {
 function solidCapabilities(options = {}) {
   let config;
   let decision = null;
+  // Modules whose output needed the block driver installed (see the header).
+  const driverInstalls = [];
   // The proof inputs, fixed in buildStart and reused by the feature proof.
   let proofInputs = null;
   // The feature proof over compiled output (build only), run once per build
@@ -641,6 +675,7 @@ function solidCapabilities(options = {}) {
     },
     async buildStart(input) {
       featureDecision = null;
+      driverInstalls.length = 0;
       const root = config?.root ?? process.cwd();
       // The build input when it names entries (client HTML / JS inputs, an
       // SSR entry); `options.entries` when it does not (vitest).
@@ -683,6 +718,7 @@ function solidCapabilities(options = {}) {
       }
       decision.graph =
         this.environment?.config?.consumer === "server" || config?.build?.ssr ? "server" : "client";
+      decision.driverInstalls = driverInstalls;
       writeReport(root);
       const summary = decision.asyncFree
         ? `async-free ${decision.graph} graph (${decision.modules.length} modules): ${RUNTIME_PACKAGE} → ${decision.entry}`
@@ -738,6 +774,46 @@ function solidCapabilities(options = {}) {
       if (FEATURE_SWITCHES.every(f => decision.features[f].on)) return null;
       return FEATURES_ID + tier[1];
     },
+    // Residual generator bodies in application modules: install the block
+    // driver there (see the header). After every other transform, so the
+    // Solid compiler's output is what is checked.
+    transform: {
+      order: "post",
+      handler(code, id) {
+        const file = stripQuery(id);
+        if (
+          id.startsWith("\0") ||
+          !SOURCE_RE.test(file) ||
+          file.includes(`${path.sep}node_modules${path.sep}`)
+        )
+          return null;
+        const installed = installDriverFor(code, id);
+        if (!installed) return null;
+        const root = config?.root ?? process.cwd();
+        const rel = displayId(root, file);
+        // Lines of the authored module when its own source shows the same
+        // bodies (the output's lines move under other transforms).
+        let bodies = installed.bodies;
+        try {
+          const authored = summarizeCompiled(fs.readFileSync(file, "utf8"), {
+            filename: compiledFilename(id)
+          }).hookBodies;
+          if (authored?.length === bodies.length) bodies = authored;
+        } catch {}
+        for (const body of bodies) {
+          const where = `${rel}:${body.line}`;
+          driverInstalls.push({ file: rel, line: body.line, host: body.host });
+          const message = `${where}: a generator body handed to \`${body.host}\` was left uncompiled, so the bundle installs the block driver for it. Compile this module with the Solid compiler (add its extension to the Solid plugin's \`extensions\`) to keep the bundle driver-free.`;
+          if (typeof this?.warn === "function") this.warn(message);
+          else config?.logger?.warn?.(`[solid:capabilities] ${message}`);
+        }
+        if (decision) {
+          decision.driverInstalls = driverInstalls;
+          writeReport(root);
+        }
+        return { code: installed.code, map: null };
+      }
+    },
     load(id) {
       if (!id.startsWith(FEATURES_ID)) return null;
       return featuresModuleSource(decision.features, id.slice(FEATURES_ID.length));
@@ -746,6 +822,7 @@ function solidCapabilities(options = {}) {
 }
 
 module.exports = {
+  installDriverFor,
   proveGraph,
   proveFeatures,
   solidCapabilities,

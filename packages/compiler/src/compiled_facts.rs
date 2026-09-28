@@ -20,6 +20,14 @@
 //!   of `yield*` delegations each contains, and `delegations` (their total):
 //!   a `yield*` may iterate an accessor, the one runtime use of the
 //!   accessor iterator (`ITERABLE`);
+//! - `hookBodies`: generator functions handed to a host that runs them on
+//!   the block driver through the generator hook (`createMemo(function* …)`,
+//!   `createEffect(function* …)`, `onSettled(function* …)`, directly or by a
+//!   module-level binding), with the host and the runtime module it came
+//!   from. Only a block constructor (`$`, and every v2 constructor through
+//!   it) installs that hook; in a bundle with none left — a fully compiled
+//!   app — such a body left uncompiled would run as a plain callback. The
+//!   capability linker installs the driver for these modules;
 //! - `seams`: the compiled seams the output requests from the core
 //!   (`COMPILED_SEAMS`): `statusFree` (noThrow + sync), `isEqual` (memo
 //!   fusion's effect cut-off), a `noThrow` option key, or effect options that
@@ -167,10 +175,42 @@ pub fn summarize_compiled(source: &str, filename: Option<&str>) -> Result<String
         }
     }
 
+    // Module-level generator bindings (`function* f`, `const f = function* …`).
+    let mut generator_bindings = Vec::new();
+    for statement in &program.body {
+        let declaration = match statement {
+            Statement::ExportDeclaration(export) => Some(&export.declaration),
+            _ => statement.as_declaration(),
+        };
+        match declaration {
+            Some(oxc_ast::ast::Declaration::FunctionDeclaration(function)) if function.generator => {
+                if let Some(symbol) = function.id.as_ref().and_then(|id| id.symbol_id.get()) {
+                    generator_bindings.push(symbol);
+                }
+            }
+            Some(oxc_ast::ast::Declaration::VariableDeclaration(declaration)) => {
+                for declarator in &declaration.declarations {
+                    if let (
+                        oxc_ast::ast::BindingPattern::BindingIdentifier(id),
+                        Some(Expression::FunctionExpression(function)),
+                    ) = (&declarator.id, declarator.init.as_ref())
+                        && function.generator
+                        && let Some(symbol) = id.symbol_id.get()
+                    {
+                        generator_bindings.push(symbol);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     let mut facts = Facts {
         scoping,
         source,
         imports: &imports,
+        generator_bindings: &generator_bindings,
+        hook_bodies: Vec::new(),
         creates: Vec::new(),
         store_reads: 0,
         generators: Vec::new(),
@@ -231,6 +271,19 @@ pub fn summarize_compiled(source: &str, filename: Option<&str>) -> Result<String
     json.end_array();
     json.key("delegations");
     json.number(facts.delegations);
+    json.key("hookBodies");
+    json.begin_array();
+    for (line, host, source) in &facts.hook_bodies {
+        json.begin_object();
+        json.key("line");
+        json.number(*line as u64);
+        json.key("host");
+        json.string(host);
+        json.key("source");
+        json.string(source);
+        json.end_object();
+    }
+    json.end_array();
     json.key("seams");
     json.begin_array();
     for seam in &facts.seams {
@@ -245,6 +298,9 @@ struct Facts<'s, 'i> {
     scoping: &'s Scoping,
     source: &'s str,
     imports: &'i [(SymbolId, String, String)],
+    generator_bindings: &'i [SymbolId],
+    /// (line, host, runtime source) per generator body handed to a hook host.
+    hook_bodies: Vec<(usize, String, String)>,
     creates: Vec<(&'static str, u64)>,
     store_reads: u64,
     /// (line, delegations) per residual generator function.
@@ -268,6 +324,35 @@ impl Facts<'_, '_> {
             .iter()
             .find(|(s, source, _)| *s == symbol && RUNTIME_SOURCES.contains(&source.as_str()))
             .map(|(_, _, imported)| imported.as_str())
+    }
+
+    /// The runtime source a callee is imported from.
+    fn runtime_source(&self, callee: &Expression<'_>) -> Option<&str> {
+        let Expression::Identifier(identifier) = callee else {
+            return None;
+        };
+        let symbol = identifier
+            .reference_id
+            .get()
+            .and_then(|id| self.scoping.get_reference(id).symbol_id())?;
+        self.imports
+            .iter()
+            .find(|(s, source, _)| *s == symbol && RUNTIME_SOURCES.contains(&source.as_str()))
+            .map(|(_, source, _)| source.as_str())
+    }
+
+    /// A generator function: a `function*` expression, or a reference to a
+    /// module-level generator binding.
+    fn is_generator(&self, argument: &Argument<'_>) -> bool {
+        match argument {
+            Argument::FunctionExpression(function) => function.generator,
+            Argument::Identifier(identifier) => identifier
+                .reference_id
+                .get()
+                .and_then(|id| self.scoping.get_reference(id).symbol_id())
+                .is_some_and(|symbol| self.generator_bindings.contains(&symbol)),
+            _ => false,
+        }
     }
 
     fn seam(&mut self, name: &str) {
@@ -296,6 +381,18 @@ impl<'a> Visit<'a> for Facts<'_, '_> {
             }
             if is_store_reader(&name) {
                 self.store_reads += 1;
+            }
+            // A generator body the host runs through the generator hook
+            // (`createEffect` only as a one-argument effect block).
+            let hook_host = match name.as_str() {
+                "createMemo" | "onSettled" => true,
+                "createEffect" => call.arguments.len() == 1,
+                _ => false,
+            };
+            if hook_host && call.arguments.first().is_some_and(|a| self.is_generator(a)) {
+                let line = self.line(call.span.start);
+                let source = self.runtime_source(&call.callee).unwrap_or("").to_string();
+                self.hook_bodies.push((line, name.clone(), source));
             }
             // Effect options that carry — or may carry — `equals` (the
             // effect cut-off is a compiled seam; a memo's `equals` is not).
@@ -406,6 +503,32 @@ const m = createMemo(() => 1);
         );
         assert!(out.contains(r#""delegations":3"#), "{out}");
         assert!(out.contains(r#""creates":{"memo":1}"#), "{out}");
+    }
+
+    #[test]
+    fn reports_generator_bodies_handed_to_hook_hosts() {
+        let out = facts(
+            r#"
+import { createMemo, createEffect, onSettled, action } from "solid-js";
+import { createMemo as signalsMemo } from "@solidjs/signals";
+function* body() { yield* x; }
+const named = function* () {};
+onSettled(function* () { yield* $cleanup(() => {}); });
+createEffect(body);
+const m = signalsMemo(named);
+createEffect(function* () {}, v => v);
+const save = action(function* () { yield fetch("/x"); });
+createMemo(() => 1);
+"#,
+        );
+        assert!(
+            out.contains(
+                r#""hookBodies":[{"line":6,"host":"onSettled","source":"solid-js"},{"line":7,"host":"createEffect","source":"solid-js"},{"line":8,"host":"createMemo","source":"@solidjs/signals"}]"#
+            ),
+            "{out}"
+        );
+        // A compiled module hands none.
+        assert!(facts("import { onSettled } from \"solid-js\";\nonSettled(function () {});").contains(r#""hookBodies":[]"#));
     }
 
     #[test]

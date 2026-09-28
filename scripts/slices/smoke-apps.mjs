@@ -58,6 +58,16 @@ async function todoFlow(doc, win) {
   return `rows: ${doc.querySelectorAll(".todo-list li").length}, count: "${doc.querySelector(".todo-count").textContent.trim()}"`;
 }
 
+// The TodoMVC flow, then the hash filter (`createHashFilter`'s settled
+// listener): two rows, one completed; `#/completed` shows one row.
+async function todoFlowWithFilter(doc, win) {
+  const detail = await todoFlow(doc, win);
+  win.location.hash = "#/completed";
+  win.dispatchEvent(new win.HashChangeEvent("hashchange"));
+  await until(() => doc.querySelectorAll(".todo-list li").length === 1, `the completed filter (${win.location.hash}, rows ${doc.querySelectorAll(".todo-list li").length}, footer ${doc.querySelector("footer")?.outerHTML.slice(0, 400)})`);
+  return `${detail}, #/completed rows: ${doc.querySelectorAll(".todo-list li").length}`;
+}
+
 const EXAMPLES = {
   "sync-blocks": {
     entry: "src/main.tsx",
@@ -90,7 +100,19 @@ const EXAMPLES = {
       return `items: ${doc.querySelectorAll("li").length}, converter: "${doc.querySelector(".converter span").textContent}"`;
     }
   },
-  "todos-blocks": { entry: "src/main.tsx", flow: todoFlow },
+  "todos-blocks": { entry: "src/main.tsx", flow: todoFlowWithFilter },
+  // A mixed app (blocks-v2-performance.md §11): the same example with its
+  // `.ts` modules left to the runtime (the Solid plugin's default
+  // extensions), so filter.ts's `onSettled(function* …)` reaches an
+  // otherwise driver-free bundle uncompiled. The linker installs the block
+  // driver in that module and warns; without it the listener never attaches.
+  "todos-blocks-mixed": {
+    dir: "todos-blocks",
+    entry: "src/main.tsx",
+    uncompiledTs: true,
+    flow: todoFlowWithFilter,
+    expectWarning: /src\/filter\.ts:\d+: a generator body handed to `onSettled` was left uncompiled/
+  },
   todos: { entry: "src/main.tsx", flow: todoFlow },
   sierpinski: {
     entry: "src/main.tsx",
@@ -102,7 +124,7 @@ const EXAMPLES = {
 };
 
 async function smoke(name, spec) {
-  const dir = join(ROOT, "examples", name);
+  const dir = join(ROOT, "examples", spec.dir ?? name);
   const require = createRequire(join(dir, "package.json"));
   const { build } = await import(require.resolve("vite"));
   const { JSDOM } = require(
@@ -113,20 +135,39 @@ async function smoke(name, spec) {
   );
   process.env.SOLID_CAPABILITIES = "0";
   const reportFile = join(ROOT, "node_modules/.cache/slices", `${name}.smoke.report.json`);
+  const warnings = [];
+  const solidPlugin = spec.uncompiledTs
+    ? await import(pathToFileURL(require.resolve("@solidjs/vite-plugin")).href).then(m => (typeof m.default === "function" ? m.default : m.default.default))
+    : null;
+  const capabilities = solidCapabilities({
+    entries: [spec.entry],
+    typedSummary: spec.typedSummary,
+    report: reportFile
+  });
   const result = await build({
     root: dir,
-    configFile: ["vite.config.mjs", "vite.config.ts", "vite.config.js"]
-      .map(f => join(dir, f))
-      .find(existsSync),
+    // The mixed variant: the Solid plugin with its default extensions (no
+    // `.ts`), in place of the example's own configuration.
+    configFile: spec.uncompiledTs
+      ? false
+      : ["vite.config.mjs", "vite.config.ts", "vite.config.js"]
+          .map(f => join(dir, f))
+          .find(existsSync),
     logLevel: "warn",
-    plugins: [
-      solidCapabilities({
-        entries: [spec.entry],
-        typedSummary: spec.typedSummary,
-        report: reportFile
-      })
-    ],
-    build: { write: false, reportCompressedSize: false, modulePreload: false }
+    plugins: spec.uncompiledTs
+      ? [solidPlugin(), capabilities]
+      : [capabilities],
+    build: {
+      write: false,
+      reportCompressedSize: false,
+      modulePreload: false,
+      rollupOptions: {
+        onwarn(warning, warn) {
+          warnings.push(String(warning.message ?? warning));
+          warn(warning);
+        }
+      }
+    }
   });
   const report = JSON.parse(readFileSync(reportFile, "utf8"));
   const off = Object.keys(report.features).filter(f => !report.features[f].on);
@@ -168,8 +209,13 @@ async function smoke(name, spec) {
   dom.window.addEventListener("error", onError);
   try {
     await import(pathToFileURL(entry).href);
-    const detail = await spec.flow(dom.window.document, dom.window);
+    let detail = await spec.flow(dom.window.document, dom.window);
     if (errors.length) throw errors[0];
+    if (spec.expectWarning) {
+      if (!warnings.some(w => spec.expectWarning.test(w)))
+        throw new Error(`no driver-install warning (warnings: ${JSON.stringify(warnings)})`);
+      detail += `, driver installed for ${report.driverInstalls.map(d => `${d.file}:${d.line}`).join(", ")}`;
+    }
     return { ok: true, off, detail };
   } catch (error) {
     return {

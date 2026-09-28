@@ -309,6 +309,18 @@ describe("compiled reads", () => {
     expect(readPath1(props, "plain")).toBe(1);
   });
 
+  it("the path readers read an accessor without its iterator (ITERABLE off)", () => {
+    // The generator-free slice installs no iterator on accessors; a compiled
+    // app still reads one found at a path through its refresh brand.
+    const [n] = createSignal("all");
+    delete (n as any)[Symbol.iterator];
+    expect(Symbol.iterator in n).toBe(false);
+    expect(readPath1({ filter: n }, "filter")).toBe("all");
+    // A plain function at a path is a value, as before.
+    const handler = () => "clicked";
+    expect(readPath1({ onClick: handler }, "onClick")).toBe(handler);
+  });
+
   it("an iterable function found at a path is stepped operation by operation", () => {
     // Reads and context reads are run by the path reader itself; any other
     // operation through the operation switch its constructor installed.

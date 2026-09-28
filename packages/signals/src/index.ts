@@ -120,7 +120,8 @@ export {
   asyncBody,
   AsyncRun,
   readAccessor,
-  readSelected
+  readSelected,
+  installBlockDriver
 } from "./generator.js";
 // Renderer entry points: forwarders the block runtime fills when the first
 // block is built (block-hooks.ts), so renderers do not retain it.

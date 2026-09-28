@@ -1,5 +1,5 @@
 import { markAsyncCapability } from "./core/dev.js";
-import { STATUS_ERROR } from "./core/constants.js";
+import { $REFRESH, STATUS_ERROR } from "./core/constants.js";
 import { unwrapStatusError } from "./core/error.js";
 import { blockGuard } from "./core/core.js";
 import { flush } from "./core/scheduler.js";
@@ -767,8 +767,14 @@ function readThrough(value: unknown): unknown {
   // A forwarded prop read (`Child({ id: props.id })` in a v2 component)
   // arrives as the parent's read operation: perform it.
   if (isOp(value) && value[OP] === "read") return readThrough(value.source());
+  // An accessor is recognized by its refresh brand as well as its iterator:
+  // the generator-free slice (`ITERABLE` off, core/features.ts) installs no
+  // iterator on accessors, and a compiled app's path readers still read
+  // through one found at a path (`yield* props.filter` holding a signal).
+  // Every function carrying the brand is an accessor (`accessor()`), which
+  // `readFunction` reads.
   return typeof value === "function" &&
-    ((value as any)[BLOCK] || Symbol.iterator in (value as object))
+    ((value as any)[BLOCK] || Symbol.iterator in (value as object) || $REFRESH in (value as object))
     ? readFunction(value)
     : value;
 }
@@ -1703,6 +1709,28 @@ function hasErrorBoundary(owner: Owner): boolean {
 export type StrictCallback<Input, R> = ((input: Input) => R) & { readonly [STRICT]: true };
 
 /**
+ * @internal Install the block driver: the generator hook through which
+ * `createMemo` / `createEffect` / `onSettled` run a generator body, the
+ * renderers' block entry points and the store's path tokens. `$` does it the
+ * first time a block is built. The capability linker imports this in a
+ * module whose compiled output still hands a generator body to one of those
+ * hosts (a module the Solid compiler did not transform), so a bundle with no
+ * other block constructor still runs that body on the driver.
+ */
+export function installBlockDriver(): void {
+  if (generatorHookInstalled) return;
+  generatorHookInstalled = true;
+  installGeneratorHook(generatorBody);
+  // Renderers reach blocks through block-hooks.ts (install-on-use): a
+  // block exists from here on, so its render / dispatch / deferred-view
+  // implementations do too.
+  installBlockRenderer(renderBlock, dispatchBlock, lazyView);
+  // The strict guard is only ever raised by a block run, so the store's
+  // path tokens are only reachable once a block exists.
+  makePathToken = pathToken;
+}
+
+/**
  * Build a typed block from a generator body. See the module comment for the
  * contract. The compiler lowers `$(function* () { … yield* x … })` to
  * `$(function () { … perform(x) … })` — a body in call form that `$` runs
@@ -1748,17 +1776,7 @@ export function $(
         : "[STRICT_NOT_COMPILED]"
     );
   }
-  if (!generatorHookInstalled) {
-    generatorHookInstalled = true;
-    installGeneratorHook(generatorBody);
-    // Renderers reach blocks through block-hooks.ts (install-on-use): a
-    // block exists from here on, so its render / dispatch / deferred-view
-    // implementations do too.
-    installBlockRenderer(renderBlock, dispatchBlock, lazyView);
-    // The strict guard is only ever raised by a block run, so the store's
-    // path tokens are only reachable once a block exists.
-    makePathToken = pathToken;
-  }
+  if (!generatorHookInstalled) installBlockDriver();
   // BLOCK_SYNC: the compiler lowered the body to call form and proved its
   // result is a plain value (never a generator, thenable or async iterable),
   // so the result-shape probes — an untracked, guard-lowered walk of the

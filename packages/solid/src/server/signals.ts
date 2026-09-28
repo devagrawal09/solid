@@ -66,6 +66,7 @@ export {
   $componentCompiled,
   $eventCompiled,
   syncBlock,
+  installBlockDriver,
   blockCleanup,
   asyncBody,
   readAccessor,
