@@ -232,6 +232,8 @@ const primitives: {
   createTrackedEffect?: (fn: () => void) => void;
   createEffect?: (compute: any, effect: any) => void;
   onSettled?: (callback: () => void | (() => void)) => void;
+  /** The server's deferral gives the deferred content an id-carrying owner. */
+  lazyView?: <T>(make: () => T) => () => T;
 } = {};
 
 /** A generator body, or the block the compiler already built from it. */
@@ -505,7 +507,7 @@ function makeComponent(setup: any, flags: number, toView: (body: any) => unknown
   const component = function (props: any): unknown {
     // Called inside a running view (uncompiled `Loading({ children: X(p) })`):
     // defer to where it renders, as the compiler's prop getters do.
-    if (inBlock()) return lazyView(() => component(props));
+    if (inBlock()) return (primitives.lazyView || lazyView)(() => component(props));
     return untrack(() => {
       const input = flags & PROPS_COMPILED ? props : typedProps(props);
       const viewBody = isBlock(setup) ? runBlockAs(COMPONENT, setup, input) : setup(input);
