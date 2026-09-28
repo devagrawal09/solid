@@ -78,6 +78,8 @@ pub struct IslandOptions {
     pub min_tier: u8,
     /// Instrumented output (labels on tier-0 cells, reads through `get`).
     pub debug: bool,
+    /// Dev builds: chunks export `verify(anchor)` (the dev verifier).
+    pub verify: bool,
     /// Probe cell hosts, `object.method` (the conformance harness's `h.signal`).
     pub probe_hosts: Vec<String>,
     /// Module name for the fallback compiles.
@@ -99,6 +101,7 @@ impl Default for IslandOptions {
             tier1_core: false,
             min_tier: 0,
             debug: false,
+            verify: false,
             probe_hosts: Vec::new(),
             module_name: crate::compiler::DEFAULT_MODULE_NAME.into(),
             imports: Vec::new(),
@@ -241,6 +244,7 @@ fn emit(
         core: opts.core_module.clone(),
         tier1_core: opts.tier1_core,
         debug: opts.debug,
+        verify: opts.verify,
     };
     let mut codes = Vec::new();
     let mut notes: Vec<Vec<String>> = Vec::new();

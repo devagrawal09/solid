@@ -192,6 +192,26 @@ describe("islandsEntry", () => {
     expect(bundle["index.js"].code).toBe(`const L = { i0: [f, ["click"], 100] };`);
   });
 
+  test("the dev verifier checks every anchor against its island's chunk, and unknown ids", () => {
+    expect(islandsEntry({ islands: [island] })).not.toContain("verify");
+    const s = islandsEntry({
+      islands: [island, { ...island, id: "i1", waits: true }],
+      verify: true,
+      streams: true
+    });
+    expect(s).toContain('["i0", "Toggle", () => import("virtual:solid-islands/chunk/i0"), 0]');
+    expect(s).toContain("const e = m.verify(el);");
+    expect(s).toContain("does not match the server markup");
+    expect(s).toContain("anchor names unknown island");
+    // Streamed boundaries are verified as they land.
+    expect(s).toContain('document.addEventListener("solid-islands", check);');
+    const out = compileIslands(TOGGLE, { filename: "toggle.tsx", verify: true });
+    expect(out.chunks[0].code).toContain("export function verify($a)");
+    expect(compileIslands(TOGGLE, { filename: "toggle.tsx" }).chunks[0].code).not.toContain(
+      "verify"
+    );
+  });
+
   test("a fallback root is hydrated", () => {
     const s = islandsEntry({ islands: [], hydrate: [{ module: "/src/app.tsx", export: "App" }] });
     expect(s).toContain('import { App as $H0 } from "/src/app.tsx";');

@@ -482,6 +482,8 @@ export interface CompileIslandsOptions {
   minTier?: 0 | 1 | 2;
   /** Instrumented output (labelled tier-0 cells, reads through `get`). */
   debug?: boolean;
+  /** Dev builds: chunks also export `verify(anchor)` (the dev verifier). */
+  verify?: boolean;
   /** Probe cell hosts (`object.method`), e.g. the conformance harness's `h.signal`. */
   probeHosts?: string[];
   moduleName?: string;

@@ -377,6 +377,84 @@ describe("compiled islands reproduce the oracle", () => {
   }
 });
 
+/**
+ * The dev verifier (`verify: true`, dev builds): each chunk's `verify(anchor)`
+ * walks the island's static addresses on the server markup. It must be
+ * silent on every scenario's own server markup, and name the node, the
+ * component and the source line when the markup does not match.
+ */
+const pendingIn = (el: Node) => {
+  const w = document.createTreeWalker(el.parentNode ?? el, NodeFilter.SHOW_COMMENT);
+  for (let n = w.nextNode(); n; n = w.nextNode()) if (/^l\d/.test((n as Comment).data)) return true;
+  return false;
+};
+
+describe("dev verifier", () => {
+  const verifyAll = async (scenario: Scenario, source: string, edit = (h: string) => h) => {
+    const out = compiler.compileIslands(source, {
+      filename: "/scenario/app.jsx",
+      probeHosts: ["h.signal"],
+      verify: true,
+      imports: Object.entries(scenario.modules ?? {}).map(([specifier, code]) => ({
+        specifier,
+        filename: `/scenario/${specifier.slice(2)}.jsx`,
+        code
+      }))
+    } as any);
+    const mods: Record<string, unknown> = {
+      "solid-js": solid,
+      "@solidjs/web": web,
+      conformance: { h: probe(new Recorder(), solid as any), NotFound, Forbidden }
+    };
+    for (const [spec, code] of Object.entries(scenario.modules ?? {}))
+      mods[spec] = evaluate(
+        compiler.compileIslands(code, { filename: `/scenario/${spec.slice(2)}.jsx` }).server,
+        mods
+      );
+    const server = evaluate(out.server, mods);
+    const rendered = stream.renderIslandsStream(
+      ($c: unknown) => server[(scenario.entry as { component: string }).component]({}, $c),
+      { onChunk() {}, onError() {} }
+    );
+    const container = document.createElement("div");
+    container.innerHTML = edit(await rendered.shell);
+    const errors: string[] = [];
+    for (const island of out.manifest.islands) {
+      const chunk = evaluate(out.chunks.find(c => c.id === island.id)!.code, {
+        [RUNTIMES.t0]: t0,
+        [RUNTIMES.kernel]: kernel,
+        [RUNTIMES.core]: solid,
+        conformance: { h: probe(new Recorder(), solid as any), NotFound, Forbidden }
+      });
+      const anchors =
+        island.anchor === "comment"
+          ? commentAnchors(container, island.id)
+          : Array.from(container.querySelectorAll(`[data-i~="${island.id}"]`));
+      // An island whose paths cross a boundary still streaming is verified
+      // when it lands (the entry re-checks on each landing).
+      for (const a of anchors) if (!(island.waits && pendingIn(a))) errors.push(...chunk.verify(a));
+    }
+    return errors;
+  };
+  for (const scenario of candidates) {
+    const source = ((scenario.sources as Record<string, string | undefined>).islands ??
+      scenario.sources.blocks)!;
+    if (compileFor(source, 0, scenario.modules).fallback) continue;
+    test(`${scenario.name}: silent on its own server markup`, async () => {
+      expect(await verifyAll(scenario, source)).toEqual([]);
+    });
+  }
+  test("reports a node the island's code does not expect, with its component and line", async () => {
+    const scenario = scenarios.find(s => s.name === "tier-toggle")!;
+    const errors = await verifyAll(scenario, scenario.sources.blocks!, h =>
+      h.replace(/<a>/, "<span>").replace(/<\/a>/, "</span>")
+    );
+    expect(errors).toEqual([
+      "expected <a> (App, line 13) at $a.firstElementChild.firstElementChild, found <span>"
+    ]);
+  });
+});
+
 describe("islands mode self-test", () => {
   test("a tier-0 island without batching diverges from the oracle", async () => {
     const scenario = scenarios.find(s => s.name === "tier-toggle")!;

@@ -52,7 +52,8 @@ function islandsEntry({
   hydrate = [],
   web = "@solidjs/web",
   streams = false,
-  sizeOf = i => String(i.size || 0)
+  sizeOf = i => String(i.size || 0),
+  verify = false
 } = {}) {
   const J = JSON.stringify;
   const eager = islands.filter(i => mode === "eager" || i.activation === "load");
@@ -156,8 +157,29 @@ function islandsEntry({
     });
   }
   s += start;
+  if (verify) s += verifier(islands, chunk, streams);
   if (hooks.after) s += hooks.after + "\n";
   s += "}\n";
+  return s;
+}
+
+// The dev verifier (dev builds): every island's chunk (compiled with
+// `verify`) walks its static addresses on each anchor of the server markup
+// and reports every node that is not what its code expects, with the
+// component and source line; anchors naming an island this build does not
+// know are reported too (server and client built from different sources).
+// Streamed boundaries are verified as they land. Nothing is activated.
+function verifier(islands, chunk, streams) {
+  const J = JSON.stringify;
+  const rows = islands
+    .map(i => `[${J(i.id)}, ${J(i.root)}, () => import(${J(chunk(i.id))}), ${i.waits ? 1 : 0}]`)
+    .join(", ");
+  let s = `{ const V = [${rows}], known = new Set(V.map(v => v[0])), check = () => {\n`;
+  s += `for (const el of document.querySelectorAll("[data-i]")) for (const id of el.dataset.i.split(" ")) if (!known.has(id) && !(el.$vu ||= {})[id]) { el.$vu[id] = 1; console.error("[solid-islands] anchor names unknown island " + id + " (the server markup and the client build disagree)", el); }\n`;
+  // A waiting island is verified once no boundary around it is pending.
+  s += `const pend = el => { const w = document.createTreeWalker(el.parentNode || el, 128); for (let n; (n = w.nextNode()); ) if (/^l\\d/.test(n.data)) return 1; };\n`;
+  s += `for (const [id, root, load, waits] of V) load().then(m => { if (!m.verify) return; for (const el of document.querySelectorAll('[data-i~="' + id + '"]')) { if ((el.$v ||= {})[id] || (waits && pend(el))) continue; el.$v[id] = 1; const e = m.verify(el); if (e.length) console.error("[solid-islands] island " + id + " (" + root + ") does not match the server markup:\\n  " + e.join("\\n  "), el); } });\n`;
+  s += `}; check();${streams ? ` document.addEventListener("solid-islands", check);` : ""} }\n`;
   return s;
 }
 
@@ -216,9 +238,10 @@ class IslandsCompiler {
     debug = false,
     idPrefix,
     compile = compileIslands,
-    crossModule = true
+    crossModule = true,
+    verify = false
   } = {}) {
-    this.options = { runtimes, tier1Core, minTier, debug };
+    this.options = { runtimes, tier1Core, minTier, debug, verify };
     this.compile = compile;
     this.cache = new Map();
     this.summaries = new Map();
@@ -271,9 +294,10 @@ class IslandsCompiler {
       hit.imports.every((m, i) => m.filename === imports[i].filename && m.code === imports[i].code)
     )
       return hit.out;
-    const { runtimes, tier1Core, minTier, debug } = this.options;
+    const { runtimes, tier1Core, minTier, debug, verify } = this.options;
     const out = this.compile(code, {
       imports,
+      verify,
       filename: file,
       idPrefix: this.prefixFor(file),
       t0Module: runtimes.t0,
@@ -391,8 +415,11 @@ function solidIslands(options = {}) {
     runtimes = {},
     tier1Core = "auto",
     rootExport = "App",
-    mount = "#root"
+    mount = "#root",
+    // The dev verifier: on by default in the dev server.
+    verify
   } = options;
+  const verifying = () => verify ?? config.command === "serve";
   let compiler;
   let config;
   let collected;
@@ -404,7 +431,11 @@ function solidIslands(options = {}) {
       config = c;
     },
     buildStart() {
-      compiler = new IslandsCompiler({ runtimes: resolveRuntimes(runtimes), tier1Core: false });
+      compiler = new IslandsCompiler({
+        runtimes: resolveRuntimes(runtimes),
+        tier1Core: false,
+        verify: verifying()
+      });
       // Island ids must match across the SSR and client builds: assign
       // every module's id prefix in the root's import order (a DFS), before
       // either build transforms anything in its own order.
@@ -438,6 +469,7 @@ function solidIslands(options = {}) {
           // Builds count bundled output bytes (see generateBundle); the dev
           // server, the chunks' source bytes.
           sizeOf: config.command === "build" ? sizePlaceholder : undefined,
+          verify: verifying(),
           hydrate: fallbackRoots(collected, rootFile, rootExport, mount)
         });
       }

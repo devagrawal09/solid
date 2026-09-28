@@ -38,6 +38,10 @@ pub(crate) struct ClientOpts {
     /// Instrumented output: tier-0 cells carry their labels and reads go
     /// through `get` (the conformance harness traces them).
     pub debug: bool,
+    /// Dev builds: the chunk also exports `verify(anchor)`, which walks the
+    /// island's static addresses on the server markup and reports every node
+    /// that is not what the client code expects.
+    pub verify: bool,
 }
 
 pub(crate) struct GroupCode {
@@ -174,6 +178,9 @@ struct Ce<'x, 'a> {
     mutable_top: Vec<usize>,
     /// A setup side-effect statement was emitted inside the current region.
     stmt_in_region: bool,
+    /// Dev verifier: (node variable, expected node, where it comes from) for
+    /// the activation scope's addresses.
+    checks: Vec<(String, String, String)>,
 }
 
 const HELPERS: &[(&str, &str)] = &[
@@ -308,6 +315,7 @@ pub(crate) fn emit_group<'a>(
         shapes: HashMap::new(),
         mutable_top: Vec::new(),
         stmt_in_region: false,
+        checks: Vec::new(),
     };
     ce.run()
 }
@@ -917,6 +925,62 @@ impl<'x, 'a> Ce<'x, 'a> {
             return Err("serialized values on a comment anchor".into());
         };
         let nav = self.scopes[0].nav.join("\n");
+        if self.opts.verify {
+            // Dev: walk the same addresses, check every node, report.
+            let mut v = String::from(
+                "export function verify($a) {\nconst $e = [], $x = (n, w, p) => { const t = w.startsWith(\"<!--\") ? n && n.nodeType === 8 && n.data === \"/\" : n && n.nodeType === 1 && \"<\" + n.localName + \">\" === w.split(\" \")[0]; if (!t) $e.push(\"expected \" + w + \" at \" + p + \", found \" + (n ? (n.nodeType === 1 ? \"<\" + n.localName + \">\" : n.nodeType === 8 ? \"<!--\" + n.data + \"-->\" : \"text \" + JSON.stringify(n.data)) : \"nothing\")); };\ntry {\n",
+            );
+            if !serial.is_empty() {
+                let _ = writeln!(
+                    v,
+                    "if (!$a.getAttribute || !$a.getAttribute(\"data-s\")) $e.push(\"missing data-s (serialized values) on the anchor\"); else if (!({} in JSON.parse($a.getAttribute(\"data-s\")))) $e.push(\"data-s has no entry for this island\");",
+                    js_str(&self.g.id)
+                );
+            }
+            for (var, want, path) in &self.checks {
+                if var == "$a" {
+                    let _ = writeln!(v, "$x($a, {}, {});", js_str(want), js_str(path));
+                }
+            }
+            // Messages name each node by its full path from the anchor.
+            let mut full: HashMap<String, String> = HashMap::new();
+            let resolve = |e: &str, full: &HashMap<String, String>| -> String {
+                let mut out = String::new();
+                let b = e.as_bytes();
+                let mut i = 0;
+                while i < b.len() {
+                    if b[i] == b'$' && i + 1 < b.len() && (b[i + 1] == b'n' || b[i + 1] == b'm') {
+                        let j = i + 2 + b[i + 2..].iter().take_while(|c| c.is_ascii_digit()).count();
+                        if j > i + 2 && let Some(p) = full.get(&e[i..j]) {
+                            out.push_str(p);
+                            i = j;
+                            continue;
+                        }
+                    }
+                    out.push(b[i] as char);
+                    i += 1;
+                }
+                out
+            };
+            let mut checked: BTreeSet<&str> = BTreeSet::new();
+            for line in &self.scopes[0].nav {
+                v.push_str(line);
+                v.push('\n');
+                if let Some(rest) = line.strip_prefix("const ")
+                    && let Some((var, expr)) = rest.split_once(" = ")
+                {
+                    let p = resolve(expr.trim_end_matches(';'), &full);
+                    full.insert(var.to_string(), p);
+                }
+                for (var, want, _) in &self.checks {
+                    if line.starts_with(&format!("const {var} =")) && checked.insert(var.as_str()) {
+                        let _ = writeln!(v, "$x({var}, {}, {});", js_str(want), js_str(&full[var]));
+                    }
+                }
+            }
+            v.push_str("} catch (err) { $e.push(\"the static walk failed: \" + err.message); }\nreturn $e;\n}\n");
+            out.push_str(&v);
+        }
         if tier == 0 {
             let _ = write!(
                 out,
@@ -2241,6 +2305,11 @@ impl<'x, 'a> Ce<'x, 'a> {
                             self.lazy_ok = false;
                         }
                     }
+                    if self.cur == 0 {
+                        let what = self.describe(el, inst);
+                        let target = if nav == "$a" { "$a".to_string() } else { var.clone() };
+                        self.checks.push((target, what, nav.clone()));
+                    }
                     if nav == "$a" {
                         // The anchor element itself.
                         self.element(el, inst, "$a")?;
@@ -2295,11 +2364,28 @@ impl<'x, 'a> Ce<'x, 'a> {
         self.helpers.insert("$mk");
         let var = self.fresh("$m");
         let nav = match parent {
-            Some(p) => format!("const {var} = $mk({p}, {k});"),
-            None => format!("const {var} = $mk(null, {k}, $a);"),
+            Some(p) => format!("$mk({p}, {k})"),
+            None => format!("$mk(null, {k}, $a)"),
         };
-        self.scope_nav(nav);
+        if self.cur == 0 {
+            self.checks.push((
+                var.clone(),
+                format!("<!--/--> (live region or hole #{k})"),
+                nav.clone(),
+            ));
+        }
+        self.scope_nav(format!("const {var} = {nav};"));
         var
+    }
+
+    /// `<tag> (Component, line N)` for the dev verifier's messages.
+    fn describe(&self, el: &JSXElement<'a>, inst: usize) -> String {
+        let tag = match jsx::tag_of(self.m, &el.opening_element.name) {
+            Tag::Intrinsic(t) => t,
+            _ => "?".into(),
+        };
+        let line = self.m.src[..el.span.start as usize].matches('\n').count() + 1;
+        format!("<{tag}> ({}, line {line})", self.m.comps[self.insts[inst].comp].name)
     }
 
     fn subtree_has_handlers(&self, el: &'a JSXElement<'a>, inst: usize) -> bool {

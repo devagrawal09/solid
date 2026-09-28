@@ -161,6 +161,8 @@ pub struct CompileIslandsOptions {
     pub min_tier: Option<u32>,
     /// Instrumented output (the conformance harness).
     pub debug: Option<bool>,
+    /// Dev builds: chunks export `verify(anchor)`.
+    pub verify: Option<bool>,
     /// Probe cell hosts (`object.method`).
     pub probe_hosts: Option<Vec<String>>,
     pub module_name: Option<String>,
@@ -222,6 +224,7 @@ pub fn compile_islands(code: String, options: Option<CompileIslandsOptions>) -> 
         tier1_core: o.tier1_core.unwrap_or(false),
         min_tier: o.min_tier.unwrap_or(0) as u8,
         debug: o.debug.unwrap_or(false),
+        verify: o.verify.unwrap_or(false),
         probe_hosts: o.probe_hosts.unwrap_or_default(),
         module_name: o.module_name.unwrap_or(d.module_name),
         imports: o

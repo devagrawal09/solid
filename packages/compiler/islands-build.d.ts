@@ -43,6 +43,10 @@ export interface IslandsEntryOptions {
   web?: string;
   /** Some module streams boundary chunks (islands-stream.js): activate islands as they land. */
   streams?: boolean;
+  /** A lazy island's chunk size as a JS expression (default: its source bytes). */
+  sizeOf?: (island: IslandInfo) => string;
+  /** The dev verifier: check every anchor's server markup against its island's addresses. */
+  verify?: boolean;
 }
 
 /** The page's client entry module source (exports `start()`). */
@@ -54,6 +58,10 @@ export interface IslandsCompilerOptions {
   minTier?: 0 | 1 | 2;
   debug?: boolean;
   idPrefix?: string;
+  /** Cross-module inlining from per-module summaries (default true). */
+  crossModule?: boolean;
+  /** Chunks export `verify(anchor)` (the dev verifier). */
+  verify?: boolean;
 }
 
 export class IslandsCompiler {
@@ -68,6 +76,10 @@ export class IslandsCompiler {
     manifest: any;
     fallback: string | null;
   };
+  /** A module's `islandExports` summary (pass one, cached by content). */
+  summary(file: string, code?: string): import("./types").IslandExports;
+  /** The imported modules whose sources this module's compile inlines. */
+  importsFor(file: string, code: string): { specifier: string; filename: string; code: string }[];
   collect(
     root: string,
     filter?: (file: string) => boolean
@@ -98,6 +110,8 @@ export interface SolidIslandsOptions {
   rootExport?: string;
   /** Mount selector for a fallback root (default "#root"). */
   mount?: string;
+  /** The dev verifier (default: on in the dev server). */
+  verify?: boolean;
 }
 
 /** Vite plugin: client (virtual:solid-islands entry + chunks) and SSR builds. */
