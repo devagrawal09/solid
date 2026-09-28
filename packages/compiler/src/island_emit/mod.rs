@@ -279,6 +279,11 @@ fn manifest(
         w.string(if code.element_anchor { "element" } else { "comment" });
         w.key("nests");
         w.boolean(code.nests);
+        w.key("prefetch");
+        match &m.comps[g.root].prefetch {
+            Some(p) => w.string(p),
+            None => w.null(),
+        }
         w.key("activation");
         w.string(if code.lazy_ok { "lazy" } else { "load" });
         w.key("preventDefault");

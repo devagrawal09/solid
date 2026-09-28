@@ -172,6 +172,9 @@ pub(crate) struct Comp<'a> {
     pub view_stmts: Vec<&'a Statement<'a>>,
     pub view: Option<&'a Expression<'a>>,
     pub issues: Vec<String>,
+    /// Per-island prefetch override from a `// @island-prefetch <policy>`
+    /// pragma in the component's leading comments.
+    pub prefetch: Option<String>,
 }
 
 pub(crate) struct Top<'a> {
@@ -363,8 +366,10 @@ pub(crate) fn build_model<'a>(
         }
         m.top.push(Top { stmt, symbols: syms, import: true, runtime_import: runtime, comp: None });
     }
+    let mut prev_end = 0u32;
     for stmt in &program.body {
         if matches!(stmt, Statement::ImportDeclaration(_)) {
+            prev_end = stmt.span().end;
             continue;
         }
         let (decl_stmt, exported): (Option<&'a Declaration<'a>>, bool) = match stmt {
@@ -452,9 +457,25 @@ pub(crate) fn build_model<'a>(
         for s in &symbols {
             m.top_of.insert(*s, i);
         }
+        if let Some(ci) = comp {
+            let lead = &src[prev_end as usize..stmt.span().start as usize];
+            m.comps[ci].prefetch = prefetch_pragma(lead);
+        }
+        prev_end = stmt.span().end;
         m.top.push(Top { stmt, symbols, import: false, runtime_import: false, comp });
     }
     m
+}
+
+/// `@island-prefetch <policy>` in a component's leading comments.
+fn prefetch_pragma(lead: &str) -> Option<String> {
+    let i = lead.rfind("@island-prefetch")?;
+    let word: String = lead[i + "@island-prefetch".len()..]
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect();
+    matches!(word.as_str(), "load" | "idle" | "visible" | "intent" | "interaction").then_some(word)
 }
 
 pub(crate) fn is_component_name(name: &str) -> bool {
@@ -507,6 +528,7 @@ fn read_component_expr<'a>(
         view_stmts: Vec::new(),
         view: None,
         issues: Vec::new(),
+        prefetch: None,
     };
     if f.params.items.len() > 1 || f.params.items.first().is_some_and(|p| single_id(&p.pattern).is_none()) {
         comp.issues.push("setup parameters other than a single `props` binding".into());
@@ -580,6 +602,7 @@ fn read_plain_component<'a>(
         view_stmts: Vec::new(),
         view: None,
         issues: Vec::new(),
+        prefetch: None,
     };
     if f.is_concise() {
         if let Some(e) = f.concise()

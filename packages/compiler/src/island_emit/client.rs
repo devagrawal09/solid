@@ -1600,6 +1600,11 @@ impl<'x, 'a> Ce<'x, 'a> {
                             self.lazy_ok = false;
                         }
                     }
+                    if nav == "$a" {
+                        // The anchor element itself.
+                        self.element(el, inst, "$a")?;
+                        continue;
+                    }
                     let decl = format!("const {var} = {nav};");
                     self.scope_nav(decl);
                     self.element(el, inst, &var)?;
@@ -1808,11 +1813,12 @@ impl<'x, 'a> Ce<'x, 'a> {
                 if all {
                     for (key, v) in parts {
                         let c = self.expr(inst, &none, v)?;
-                        push(
-                            self,
-                            c,
-                            format!("v != null ? {var}.style.setProperty({k}, v) : {var}.style.removeProperty({k})", k = js_str(&key)),
-                        );
+                        let apply = if is_stringy(v) {
+                            format!("{var}.style.setProperty({k}, v)", k = js_str(&key))
+                        } else {
+                            format!("v != null ? {var}.style.setProperty({k}, v) : {var}.style.removeProperty({k})", k = js_str(&key))
+                        };
+                        push(self, c, apply);
                     }
                     return Ok(());
                 }
@@ -1836,14 +1842,20 @@ impl<'x, 'a> Ce<'x, 'a> {
     fn text_hole(&mut self, e: &'a Expression<'a>, inst: usize, live: bool, target: TextTarget) -> R<()> {
         let none = HashMap::new();
         let c = self.expr(inst, &none, e)?;
-        self.helpers.insert("$s");
+        // A value that is always a string needs no text coercion.
+        let s = if is_stringy(e) {
+            "v".to_string()
+        } else {
+            self.helpers.insert("$s");
+            "$s(v)".to_string()
+        };
         let apply = match &target {
-            TextTarget::Sole(el) => format!("{el}.textContent = $s(v)"),
+            TextTarget::Sole(el) => format!("{el}.textContent = {s}"),
             TextTarget::Pair(end) => {
                 self.helpers.insert("$tx");
                 format!("$tx({end}, v)")
             }
-            TextTarget::Placeholder(p, k) => format!("$pk({p}, {k}).replaceWith($s(v))"),
+            TextTarget::Placeholder(p, k) => format!("$pk({p}, {k}).replaceWith({s})"),
         };
         let fresh = self.scopes[self.cur].builder;
         if !live {
@@ -2156,6 +2168,19 @@ fn fn_root<'a>(f: FnRef<'a>) -> Option<Root<'a>> {
     match stmts {
         [Statement::ReturnStatement(r)] => r.argument.as_ref().and_then(jsx::root_of),
         _ => None,
+    }
+}
+
+/// Is the expression's value always a string (literals, templates, `+` with
+/// a string literal, conditionals / `||` of such)?
+fn is_stringy(e: &Expression<'_>) -> bool {
+    match e.without_parentheses() {
+        Expression::StringLiteral(_) | Expression::TemplateLiteral(_) => true,
+        Expression::ConditionalExpression(c) => is_stringy(&c.consequent) && is_stringy(&c.alternate),
+        Expression::BinaryExpression(b) => {
+            b.operator == oxc_ast::ast::BinaryOperator::Addition && (is_stringy(&b.left) || is_stringy(&b.right))
+        }
+        _ => false,
     }
 }
 
