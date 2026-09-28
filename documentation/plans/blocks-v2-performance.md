@@ -519,12 +519,14 @@ at a path) reference it.
 - Attribute holes (`<input value={yield* draft}>` compiles to an `effect`
   whose compute is `_$perform(draft)`) keep `perform`: which attributes the JSX
   transform turns into effects (vs. evaluated inline: `on*`, `ref`, directives,
-  `@static`) is decided after this pass.
+  `@static`) is decided after this pass. (Done in section 10.)
 - Events and setups that read context (`yield* Ctx`) or call helpers keep their
   block (the context read needs the component host); their creations are
-  direct regardless. Async `attempt` bodies keep `$` and the driver.
+  direct regardless. Async `attempt` bodies keep `$` and the driver. (Done in
+  section 10 for context reads, context-only helpers and async bodies.)
 - `$settled` bodies stay blocks (`settledBlockCompiled`); fusing them like
-  effect halves is possible but not measured by any scenario.
+  effect halves is possible but not measured by any scenario. (Done in
+  section 10.)
 - The linker (`@solidjs/compiler/capabilities`) reasons about authored source,
   so the new compiler-emitted names need no feature facts; if a compiled-output
   analysis is added, `syncBlock` and the `…Compiled` entries belong under the
@@ -597,7 +599,66 @@ module load by `app.tsx`) having installed the generator hook; an app whose
 compiled modules never call `$` must compile every module with a block (the
 `[GENERATOR_BODY]` dev error names the case).
 
-MEASUREMENTS_PLACEHOLDER
+**Instructions per op** (before = the section 9 runtime and compiler; after =
+this change; × = vs handwritten). Two scenarios are new to the harness:
+`attrs` (n views with an attribute and a hole reading one signal) and
+`asyncEvent` (n handlers that read their signal, wait for a resolved promise,
+then write it).
+
+| scenario, n=100 | handwritten | compiled before | compiled after |
+| --- | ---: | ---: | ---: |
+| asyncEvent | 402k | 925k (2.30×) | **550k (1.37×, −40.5%)** |
+| async (memos) | 7371k | 8243k (1.12×) | **7942k (1.08×, −3.7%)** |
+| attrs | 449k | 461k (1.03×) | 458k (1.02×, −0.7%) |
+| view | 272k | 321k | 316k (−1.7%) |
+| memo, create, holes, event, effect, paths | | | ±0.2% (no program in them uses what changed) |
+
+| scenario, n=300 (30 ops) | handwritten | compiled before | compiled after |
+| --- | ---: | ---: | ---: |
+| asyncEvent | 1101k | 2664k (2.42×) | **1549k (1.41×, −41.9%)** |
+| async (memos) | 45480k | 48239k (1.06×) | 47361k (1.04×, −1.8%) |
+| attrs | 1357k | 1396k (1.03×) | 1385k (1.02×, −0.7%) |
+
+The handwritten `effect` cell moved +4.7% (273k → 286k) between the section 9
+runtime and this branch's base (Track E, measured with that base's runtime
+snapshot); this change moves no handwritten cell. The remaining `asyncEvent`
+cost over handwritten is the handler contract (`dispatchFused`: owner
+bracket, boundary routing of the returned promise) and the run object; the
+driver's generator, operation objects and host bracket per step are gone.
+
+**Bundles** (min / gzip bytes; before = this branch's base, `ce813167`, same
+harness, same day):
+
+| fixture | before | after |
+| --- | ---: | ---: |
+| `examples/todos-blocks`, linker (sliced) | 91,920 / 32,963 | **89,888 / 32,313 (−2.2% / −2.0%)** |
+| `examples/todos-blocks`, no linker | 92,291 / 33,072 | 90,281 / 32,434 |
+| `examples/sync-blocks`, linker (sliced) | 55,484 / 20,387 | 55,245 / 20,303 (−0.4%) |
+| `examples/sync-blocks`, no linker | 65,132 / 23,862 | 64,893 / 23,774 |
+| size.mjs: web app, v2 compiled (default) | 77,831 / 24,395 | 77,547 / 24,308 |
+| size.mjs: same app, `hostFusion: false` (keeps `perform` and the driver) | 83,181 / 25,951 | 83,641 / 26,050 |
+| size.mjs: same app, uncompiled | 82,068 / 25,671 | 81,725 / 25,570 |
+| size.mjs: web app, plain Solid | 67,533 / 21,442 | 67,533 / 21,442 |
+
+- `todos-blocks`: the linker now switches `ITERABLE` off (compiled facts: no
+  `yield*` in any module), and the bundle has no `drive` / `step` / `settle` /
+  `resume`, no `$`, no `perform` (`[READ_AFTER_WAIT]`, the driver's, is gone
+  from the minified output). `smoke-apps.mjs`: the sliced production bundle
+  adds two todos through the async action and toggles one: ok (sync-blocks,
+  todos, sierpinski: ok).
+- `sync-blocks` was already driver-free; it drops `perform` (the path readers
+  no longer reference it), `performValue`, `stepSync` and the generator-object
+  probe. A fully compiled bundle keeps `performOp` (the operation switch) for
+  iterables found at a path.
+- A bundle that keeps `perform` (the opt-out, the `$`-only fixture: 28,151 →
+  28,438) pays ~0.3–0.5 kB min for the second copy of `perform`'s function
+  branch (`readFunction`) and `readTokenPath`.
+
+**Behaviour.** `check.mjs`: every variant of every scenario (including the two
+new ones) renders the same trees and sinks. Census differential
+(`slices-differential.mjs`, 1,965 tests): 0 regressions in all eight
+configurations (−OPTIMISTIC, −VERDICTS, −STORES, −SNAPSHOTS, −ITERABLE,
+−COMPILED_SEAMS, full −all, sync −all).
 
 **Tests.** Compiler: Rust `blocks_v2_lower` tests for each item (async erased,
 restored and refused bodies; contexts and helpers, and what keeps `perform`;
@@ -662,8 +723,14 @@ difference is in the uncompiled rendering path — pinned, not fixed here.
 - Uncompiled v2 is still 3–11× plain Solid on creation, effects and path reads
   (typed-props proxy chains, generator delegation per `yield*`).
 - Compiled v2 is within 1.01–1.06× plain Solid except creation (1.48×, mostly
-  the view's own render effect, recommendation 4) and async memos (1.12×,
-  the driver). `blocks-effect`'s compiled mode now equals handwritten Solid.
+  the view's own render effect, recommendation 4), async memos (1.08×, was
+  1.12× on the driver; section 10) and handlers that wait (1.37×, was 2.30×:
+  the handler contract and the run object). `blocks-effect`'s compiled mode
+  now equals handwritten Solid.
+- In the conformance matrix, `blocks-async-event`'s uncompiled mode (the
+  `@solidjs/h` pipeline) re-renders the pre-write value after an awaited write;
+  the same event on the driver under the compiler matches the oracle (section
+  10). Not investigated further.
 - A `$memo` imported from `@solidjs/signals` in a `solid-js` app, compiled with
   `hostFusion`, fuses to `@solidjs/signals`' `createMemo`; uncompiled it would
   use the primitive `solid-js` registered (hydration-aware) if any `solid-js`
