@@ -227,6 +227,48 @@ export const SCENARIOS = [
     }
   ),
   scenario(
+    "helpers",
+    "n components each calling a setup helper generator (a signal and a memo) and reading a shared signal through a read helper, in a memo and in the view; mount, and update: write the shared signal (n memo recomputes + 2n hole updates)",
+    ["mount", "update"],
+    {
+      state: `const [src, setSrc] = createSignal(0);`,
+      update: `setSrc(++r); flush();`,
+      handwritten: `function useCounter(start) {
+    const [c, setC] = createSignal(start);
+    const d = createMemo(() => c() * 2);
+    return { d, inc: () => setC(c() + 1) };
+  }
+  function label() { return src() + 1; }
+  function Item() {
+    const k = useCounter(1);
+    const t = createMemo(() => label() + k.d());
+    return <p>{t()}{label()}</p>;
+  }`,
+      v2: `function* useCounter(start) {
+    const [c, setC] = yield* $signal(start);
+    const d = yield* $memo(function* () { return (yield* c) * 2; });
+    return { d, inc: () => setC(x => x + 1) };
+  }
+  function* label() { return (yield* src) + 1; }
+  const Item = $component(function* () {
+    const k = yield* useCounter(1);
+    const t = yield* $memo(function* () { return (yield* label()) + (yield* k.d); });
+    return function* () { return <p>{yield* t}{yield* label()}</p>; };
+  });`,
+      uncompiled: `function* useCounter(start) {
+    const [c, setC] = yield* $signal(start);
+    const d = yield* $memo(function* () { return (yield* c) * 2; });
+    return { d, inc: () => setC(x => x + 1) };
+  }
+  function* label() { return (yield* src) + 1; }
+  const Item = $component(function* () {
+    const k = yield* useCounter(1);
+    const t = yield* $memo(function* () { return (yield* label()) + (yield* k.d); });
+    return function* () { const l = yield* label(); return <p>{t}{l}</p>; };
+  });`
+    }
+  ),
+  scenario(
     "effect",
     "n components each with an effect reading a shared signal and a prop, writing a sink and registering a cleanup; update: write the signal (n effect runs + n cleanups)",
     ["update"],
