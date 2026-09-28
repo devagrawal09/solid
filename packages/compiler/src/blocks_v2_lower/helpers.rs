@@ -69,6 +69,10 @@ use crate::generators::{FusionContext, Origin, collect_fusion_symbols};
 use crate::shared::ast::{argument_to_expression, expression_to_argument};
 use crate::shared::ast_builder::AstBuilder;
 
+/// A helper body's classification: its `yield*` sites (None: not lowerable),
+/// the spans of its `$cleanup` statements, and its host-operation bits.
+type Classified = (Option<Vec<(Span, Yield)>>, Vec<Span>, u8);
+
 pub(crate) const SETUP: u8 = 1;
 pub(crate) const VIEW: u8 = 2;
 pub(crate) const MEMO: u8 = 4;
@@ -400,7 +404,7 @@ impl<'s> Analysis<'s> {
 
     /// Classify the yields of a helper body: (yields or `None`, throws, own
     /// admitted hosts).
-    fn classify(&self, function: &Function<'_>) -> (Option<Vec<(Span, Yield)>>, Vec<Span>, u8) {
+    fn classify(&self, function: &Function<'_>) -> Classified {
         let Some(body) = function.body.as_ref() else {
             return (None, Vec::new(), 0);
         };
@@ -973,7 +977,7 @@ impl HelperPlan {
             debug_assert_eq!(function.span, span);
             let mut twin = function.clone_in(allocator);
             if let Some(id) = twin.id.as_mut() {
-                id.name = ast.ident(&name).into();
+                id.name = ast.ident(&name);
                 id.symbol_id = std::cell::Cell::new(None);
             }
             self.lower_function(allocator, &mut twin);
