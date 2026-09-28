@@ -1,7 +1,9 @@
 # Generator blocks v2 — runtime and bundle cost
 
 Status: measured and optimized (2026-09-27); client lowering landed
-(2026-09-28, section 9). Companion to
+(2026-09-28, section 9); lowering gaps closed — async bodies, contexts and
+helpers, attribute holes, `$settled`, path readers without `perform`
+(2026-09-28, section 10). Companion to
 [generator-blocks-v2.md](./generator-blocks-v2.md). Harness: `scripts/blocks-v2/`.
 
 ## Summary
@@ -527,6 +529,106 @@ at a path) reference it.
   so the new compiler-emitted names need no feature facts; if a compiled-output
   analysis is added, `syncBlock` and the `…Compiled` entries belong under the
   block feature.
+
+## 10. Closing the lowering gaps (2026-09-28)
+
+Section 9 left four things on the driver or on `perform` in fully compiled
+apps: async `attempt` bodies, context reads and helper generators, attribute /
+prop holes, and the path readers' references to `perform`. This pass closes
+them, plus `$settled` fusion and one import defect. `examples/todos-blocks` now
+ships **no generator driver** and its linker switches `ITERABLE` off; nothing in
+a fully compiled bundle references `perform`.
+
+Compiler: `generators.rs` ("async v2 bodies"), `blocks_v2_lower.rs` (sections 5–8
+of its module doc, `fuse_computation_reads`), `block_proofs.rs`
+(`plain_components`), `store_forms.rs`. Runtime (`@solidjs/signals`, re-exported
+by `solid-js`): `asyncBody` / `AsyncRun`, `readAccessor`, `readSelected`,
+`readContext`, `dispatchFused` (thenable results), path readers without
+`perform`.
+
+| gap | what landed | why it is the same program |
+| --- | --- | --- |
+| 1. attribute / prop holes | In every lowered v2 body, `_$perform(acc)` of a proven accessor → `_$readAccessor(acc)`, `_$perform(readStore(s, sel))` → `_$readSelected(s, sel)`. After the DOM JSX transform, inside the computations it created (`effect(compute, …)`, `insert(el, compute, …)`, `memo(compute)` from the renderer module, at the compute's own depth) those become `acc()` / `sel(s)`. A component prop getter keeps the helper. | `readAccessor` is `perform`'s accessor branch (the read with the guard lowered); `readSelected` is `perform(readStore(…))` (token consumed, host check, selector with the guard lowered) without the operation object. A computation run lowers the guard itself (`recompute`), so inside one the call is the read — the argument section 9 made for `insert` children, extended to the transform's attribute effects. |
+| 2. `$settled` | `settledBlock(_$$(fn, SYNC))` → `onSettled(fn')` when the body passes the effect-half conditions (top-level `$cleanup`s only, no `return`, no parameter, no JSX): the cleanups become the returned cleanup. | `settledCallback` runs the block under the effect host and returns what `runEffectHalf` collected: exactly the fused body's return. `onSettled` calls the callback with no argument, as the block got `undefined`. |
+| 3. context reads | In a setup, `_$perform(Ctx)` of `const Ctx = createContext(…)` (a runtime import) → `_$readContext(Ctx)`; a setup with no other operation loses its block (`$componentCompiled(fn)`). | `perform(Ctx)` steps the context iterator, which yields one context operation: host check (admitted at compile time: only a setup reads context) and `readGuarded(reader ?? getContext(Ctx))` — `readContext`'s body. |
+| 4a. helper generators | A module-local, non-exported `function*` whose every `yield*` reads a proven context, and whose every reference is `_$perform(helper(…))` directly in a lowered setup, becomes a plain function (`yield* Ctx` → `readContext(Ctx)`), called directly: `const [, { addTodo }] = useTodos();`. | `perform` of the helper's generator steps it under the setup's host, performing each context read in order and returning the generator's return value; parameters are bound at the call either way, and nothing runs between the call and the `perform`. |
+| 4b. async memo / event bodies | Client output: a `$memo` / `$event` (or generator `createMemo`) body whose only operations the call form cannot run are its `yield* attempt(…)`s compiles to `async function (input, _$a) { try { … } catch (_$e) { _$a.x(_$e); } }`, each attempt to `(_$a.t(ARGS) ? _$a.r(await _$a.p) : _$a.v)` and each `return v` to `return _$a.ret(v)`. When the body check passes, `$event(_$$(fn))` → `$eventCompiled(asyncBody(fn))` and `createMemo(_$$(fn))` → `createMemo(asyncBody(fn))`; otherwise the generator is restored exactly (`yield*`s, parameters and all) and runs on the driver as before. | Point by point in `generator.ts` ("compiled async bodies"): `t` runs the attempt with the driver's error unwrapping and awaits only a thenable, so a body whose attempts return plain values completes synchronously, and `asyncBody` hands back its value / throws its error synchronously; the first suspension registers staleness on the running owner, a superseded run never resumes (`[BLOCK_SUPERSEDED]`) and its rejection is reported as superseded; the continuation runs in the settled promise's reaction, the microtask the driver's `then` callback runs in. Memo bodies are refused when an `attempt` sits in a `try` (the driver closes a superseded generator, running only `finally`) or a loop, or a read follows the first `attempt` (`[READ_AFTER_WAIT]`). Bodies with JSX (hydration id scopes) and with more than one parameter, a default or a rest are refused. Only difference: with two or more suspensions, the driver's result promise adopts each step's promise (two extra microtasks per suspension); the async function's settles when the body returns. Server output keeps the driver. |
+| 5. duplicate `createPlainStore` import | `storeForms` reuses an existing `createPlainStore` specifier from the same module (the lowered `$store`'s), else adds `_$createPlainStore` (suffixed when taken). The lowering's `_$plainStore` workaround is gone. | Import bookkeeping only. |
+| 6. `perform` via the path readers | The token fallback of `readPath1…4` / `readPathN` is `readTokenPath` (the path operation's host check and guarded walk); `readThrough` reads a readable found at a path with `readFunction` (accessor, view, block, or an iterable stepped operation by operation) instead of `perform`. | `readTokenPath(root, keys)` is `perform(readPath(root, keys))` without the dispatch. `readFunction` is `perform`'s function branch, except that an iterable yielding something other than an operation fails with `[INVALID_YIELD]` (the driver's verdict for the same iterable) where `perform` would dispatch on the yielded value — the one semantic difference in this section, for malformed iterables only. |
+
+Also: a view returning a `solid-js` flow component (`Show`, `For`, `Switch`,
+`Repeat`, `Loading`, `Errored`) is now proven `BLOCK_SYNC` (each renders a
+function: a memo / list accessor, a boundary accessor, or a deferred view
+thunk; verified in dev by `[BLOCK_SYNC_VIOLATED]`). Before, `todos-blocks`'
+`MainSection` and `Footer` views kept `$` for that reason alone. Such a view is
+flagged on both generates, and Track E's `block_scope.rs` scopes flagged views
+on both sides, so hydration ids are unaffected (hydrate config and the islands
+example pass). Effect halves and settled bodies with JSX are no longer fused
+(the server scopes them).
+
+What `todos-blocks`' `app.tsx` compiles to now (excerpt):
+
+```js
+function useTodos() {                                  // was function* + _$perform(useTodos())
+  const value = _$readContext(TodosContext);
+  if (!value) throw new Error("TodosContext is not provided");
+  return value;
+}
+const TodoItem = _$$componentCompiled(function (props) { // setup block erased
+  const [, { toggleTodo, removeTodo, retryTodo }] = useTodos();
+  const toggle = _$$eventCompiled(_$asyncBody(async function (e, _$a) {
+    try {
+      const id = _$readPath2(props, "todo", "id");
+      _$a.t(() => toggleTodo(id, e.currentTarget.checked)) ? _$a.r(await _$a.p) : _$a.v;
+    } catch (_$e) { _$a.x(_$e); }
+  }));
+  …
+// MainSection's view (was `$`, now proven SYNC → syncBlock):
+//   get when() { return _$readSelected(todos, (t) => t.length) > 0; }
+//   get each() { return _$readAccessor(filtered); }
+//   _$effect(() => allCompleted(), (_v$) => { _el$11.checked = _v$; });   // was _$perform(allCompleted)
+// import { syncBlock as _$$, … } from "solid-js"   — no `$`, no `perform`, no `yield*`
+```
+
+`filter.ts` holds `onSettled(function* …)`; the example's Vite config now
+routes `.ts` modules through the compiler (`extensions: [[".ts", { typescript:
+true }]]`). Before, that module ran uncompiled and relied on `$` (called at
+module load by `app.tsx`) having installed the generator hook; an app whose
+compiled modules never call `$` must compile every module with a block (the
+`[GENERATOR_BODY]` dev error names the case).
+
+MEASUREMENTS_PLACEHOLDER
+
+**Tests.** Compiler: Rust `blocks_v2_lower` tests for each item (async erased,
+restored and refused bodies; contexts and helpers, and what keeps `perform`;
+view reads in computations and getters; settled fusion; the shared / suffixed
+`createPlainStore` local), `capabilities.test.js` (an erased async event turns
+`ITERABLE` off; an unprovable one keeps its `yield*`s). Signals:
+`block-async-compiled.test.ts` compares each compiled form with the driver
+event by event and microtask by microtask (sync completion, sync failure,
+resume order, rejection routing, superseded memo runs, synchronous memo), and
+`treeshake.test.ts` pins that a fully compiled module's entries retain neither
+`drive` nor `perform`. Web: conformance scenario `blocks-async-event` (an
+event that waits, a write after the wait, a context read through a helper):
+compiled `=` the oracle. Its uncompiled mode differs (declared): after the
+resumed write the `@solidjs/h` pipeline renders `done`, then `none`; the same
+event on the driver under the Solid compiler matches the oracle, so the
+difference is in the uncompiled rendering path — pinned, not fixed here.
+
+**Not done:**
+
+- SSR output: the lowering is client-only; server bundles keep `perform` for
+  attribute holes and the driver for async bodies (the server never runs an
+  event, and its memo bodies serialize through the driver as before).
+- Helper generators with anything but context reads (reads, creations, nested
+  helpers), exported helpers, and helpers in other modules (cross-module needs
+  an exported summary the linker threads through; the compiler is per-module).
+- An async event with a statement `$flush()` stays on the driver (restored
+  exactly): erasing it is exact, but the restore path would have to undo the
+  `flush` lowering.
+- `readFunction` still retains the operation switch (`performOp`) for iterables
+  found at a path (context providers); only the generic `perform` dispatch,
+  `performValue`, `stepSync` and the generator-object probe are dropped.
 
 ## Evaluated and not done
 

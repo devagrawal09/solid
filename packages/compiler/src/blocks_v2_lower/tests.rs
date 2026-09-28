@@ -112,7 +112,8 @@ fn a_fully_lowered_component_is_plain_solid() {
 
 #[test]
 fn escaping_setters_keep_their_receipts() {
-    let out = dom(r#"import { $component, $signal, $event, raise } from "solid-js";
+    let out = dom(
+        r#"import { $component, $signal, $event, raise } from "solid-js";
 export const C = $component(function* () {
   const [a, setA] = yield* $signal(0);
   const [b, setB] = yield* $signal(0);
@@ -129,7 +130,8 @@ export const C = $component(function* () {
   const statement = () => { setD(1); };
   return function* () { return <i onClick={read}>{yield* a}{yield* b}{yield* c}{yield* d}</i>; };
 });
-"#);
+"#,
+    );
     let flat = flat(&out);
     // `yield* setA(1)`'s value is read: the plain setter returns the value
     // the receipt carries, so the perform is dropped.
@@ -291,13 +293,15 @@ export const m = createMemo(function* () { return (yield* n) + 1; });
 fn store_forms_and_lowered_stores_share_a_module() {
     // `store_forms` names its plain store `_$createPlainStore`; the lowered
     // `$store` must not collide with it.
-    let out = dom(r#"import { $component, $store, createStore } from "solid-js";
+    let out = dom(
+        r#"import { $component, $store, createStore } from "solid-js";
 const [shared] = createStore({ n: 1 });
 export const C = $component(function* () {
   const [s, setS] = yield* $store({ n: 2 });
   return function* () { return <i>{yield* s.n}{yield* shared.n}</i>; };
 });
-"#);
+"#,
+    );
     // One specifier serves both: the lowered `$store` adds it, `store_forms`
     // reuses it for the plain `createStore`.
     assert!(out.contains("_$createPlainStore({ n: 2 })"), "{out}");
@@ -313,8 +317,14 @@ export const C = $component(function* () {
   return function* () { return <i>{yield* s.n}{yield* shared.n}</i>; };
 });
 "#);
-    assert!(mixed.contains("createPlainStore as _$createPlainStore,"), "{mixed}");
-    assert!(mixed.contains("createPlainStore as _$createPlainStore2"), "{mixed}");
+    assert!(
+        mixed.contains("createPlainStore as _$createPlainStore,"),
+        "{mixed}"
+    );
+    assert!(
+        mixed.contains("createPlainStore as _$createPlainStore2"),
+        "{mixed}"
+    );
     assert!(mixed.contains("_$createPlainStore2({ n: 1 })"), "{mixed}");
 }
 
@@ -380,9 +390,18 @@ fn async_bodies_are_async_functions_or_stay_with_the_driver() {
     );
     // Memo refusals: an `attempt` in a `try`, a read after the first
     // `attempt`, an `attempt` in a loop — each keeps its generator.
-    assert!(flat.contains("const tried = _$createMemo(_$$(function* () {"), "{out}");
-    assert!(flat.contains("const late = _$createMemo(_$$(function* () {"), "{out}");
-    assert!(flat.contains("const looped = _$createMemo(_$$(function* () {"), "{out}");
+    assert!(
+        flat.contains("const tried = _$createMemo(_$$(function* () {"),
+        "{out}"
+    );
+    assert!(
+        flat.contains("const late = _$createMemo(_$$(function* () {"),
+        "{out}"
+    );
+    assert!(
+        flat.contains("const looped = _$createMemo(_$$(function* () {"),
+        "{out}"
+    );
     // An event: `try` around an attempt is fine (no run is ever superseded),
     // `raise` is a `throw`, `return v` reports through the run.
     assert!(
@@ -429,7 +448,10 @@ fn context_reads_and_helpers_lower_in_setups() {
         ),
         "{out}"
     );
-    assert!(!out.contains("function*  useCtx") && !out.contains("_$perform"), "{out}");
+    assert!(
+        !out.contains("function*  useCtx") && !out.contains("_$perform"),
+        "{out}"
+    );
     // An exported helper, or a context the compiler cannot prove, keeps `perform`.
     let kept = dom(r#"import { $component, createContext } from "solid-js";
 import { Theme } from "./theme";
@@ -457,16 +479,21 @@ fn view_reads_are_direct_in_computations() {
     );
     assert!(flat.contains("return ((s) => s.x)(ctx);"), "{out}");
     // A prop getter may run with the guard up: `readAccessor` / `readSelected`.
-    let getters = dom(r#"import { $component, $signal, readStore, Show } from "solid-js";
+    let getters = dom(
+        r#"import { $component, $signal, readStore, Show } from "solid-js";
 export const C = $component(function* (props) {
   const [n] = yield* $signal(0);
   return function* () {
     return <Show when={yield* n}><b title={yield* readStore(props.items, s => s.length)} /></Show>;
   };
 });
-"#);
+"#,
+    );
     let g = self::flat(&getters);
-    assert!(g.contains("get when() { return _$readAccessor(n); }"), "{getters}");
+    assert!(
+        g.contains("get when() { return _$readAccessor(n); }"),
+        "{getters}"
+    );
     assert!(!getters.contains("_$perform"), "{getters}");
     // A view returning a `solid-js` flow component is proven SYNC.
     assert!(g.contains("syncBlock as _$$"), "{getters}");

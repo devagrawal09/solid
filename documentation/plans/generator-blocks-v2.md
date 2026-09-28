@@ -203,8 +203,10 @@ v2 forms into `$(function* …)` blocks, which that pass lowers to call form (`y
   / `$store` / `$memo` / `$effect` calls create, `$cleanup` / `$flush` / `raise` /
   `attempt` are themselves, a call of a `$signal` / `$store` setter writes, and a read
   of a `$signal` / `$memo` accessor or a props path is a read setup may not do;
-- in memo and event bodies an `attempt` may be async, so a body that attempts stays a
-  generator for the runtime driver. Effect, setup and view bodies lower fully.
+- in memo and event bodies an `attempt` may be async, so on the server a body that
+  attempts stays a generator for the runtime driver; on the client it compiles to an
+  `async function` run by `asyncBody` when every other operation is erased (else the
+  generator is restored exactly). Effect, setup and view bodies lower fully.
 
 After lowering, the proof-driven host fusion runs on the v2 bodies by default (a `$memo`
 in a setup is `createMemo(fn)`, a split effect's compute a plain function, a view hole
@@ -216,8 +218,13 @@ escapes), a split effect whose `$cleanup`s are top-level statements becomes
 `createEffect(compute, half)` returning its cleanup, `$event` and setup blocks with no
 operation left lose their block (`$eventCompiled(fn)`, `$componentCompiled(fn)`), and a
 module whose every block is lowered and proven synchronous imports `syncBlock` instead
-of `$`, so it does not retain the generator driver. `hostFusion: false` turns all of it
-off. See [blocks-v2-performance.md](./blocks-v2-performance.md), section 9.
+of `$`, so it does not retain the generator driver. The same pass compiles memo and
+event bodies that wait to `async function`s (`asyncBody`), setup context reads and
+module-local helper generators that only read contexts to direct `readContext` calls,
+`$settled` / `onSettled(function* …)` bodies to `onSettled(fn)`, and the view reads the
+fusion left (attribute holes, prop getters) to `readAccessor` / `readSelected` — plain
+calls inside the computations the JSX transform creates. `hostFusion: false` turns all
+of it off. See [blocks-v2-performance.md](./blocks-v2-performance.md), sections 9–10.
 
 ## Build plan
 

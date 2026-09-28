@@ -460,7 +460,11 @@ fn build_plan(
                 let first = awaits.iter().map(|span| span.start).min().unwrap_or(0);
                 let params_ok = function.params.rest.is_none()
                     && function.params.items.len() <= 1
-                    && function.params.items.iter().all(|param| param.initializer.is_none());
+                    && function
+                        .params
+                        .items
+                        .iter()
+                        .all(|param| param.initializer.is_none());
                 let ok = yields.lowerable
                     && !yields.async_refused
                     && !yields.has_jsx
@@ -951,7 +955,11 @@ impl<'a> VisitMut<'a> for Rewriter<'a> {
         let ast = AstBuilder::new(self.allocator);
         match expression {
             Expression::CallExpression(call) if self.plan.calls.contains(&call.span) => {
-                let is_async = self.plan.async_calls.iter().any(|(span, _)| *span == call.span);
+                let is_async = self
+                    .plan
+                    .async_calls
+                    .iter()
+                    .any(|(span, _)| *span == call.span);
                 if let Argument::FunctionExpression(function) = &mut call.arguments[0] {
                     function.generator = false;
                     function.r#async = is_async;
@@ -1176,7 +1184,12 @@ fn async_attempt<'a>(
     let builder = oxc_ast::builder::AstBuilder::new(allocator);
     let test = run_call(allocator, synth, "t", arguments);
     let awaited = Expression::new_await_expression(synth, run_member(allocator, "p"), &builder);
-    let resumed = run_call(allocator, synth, "r", ast.vec1(expression_to_argument(awaited)));
+    let resumed = run_call(
+        allocator,
+        synth,
+        "r",
+        ast.vec1(expression_to_argument(awaited)),
+    );
     ast.expression_parenthesized(
         span,
         ast.expression_conditional(synth, test, resumed, run_member(allocator, "v")),
@@ -2592,7 +2605,10 @@ const b = $(function* () { const u = yield* attempt(() => fetchUser(1)); return 
 "#)
         .unwrap();
         assert!(fine.contains("_$perform(count)"), "{fine}");
-        assert!(fine.contains("yield* attempt(() => fetchUser(1))"), "{fine}");
+        assert!(
+            fine.contains("yield* attempt(() => fetchUser(1))"),
+            "{fine}"
+        );
 
         // Nested functions own their throws.
         let nested = ssr(r#"import { $ } from "solid-js";

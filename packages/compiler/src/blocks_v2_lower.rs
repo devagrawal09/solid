@@ -57,12 +57,35 @@
 //!    (the block wrapper without the driver): a module compiled this way does
 //!    not retain the generator driver (`drive`, `step`, `settle`, `resume`).
 //!
+//! 5. **Contexts and helper generators.** In a setup, `_$perform(Ctx)` of a
+//!    binding proven to be a context (`const Ctx = createContext(…)` from a
+//!    runtime module) is `_$readContext(Ctx)`: `perform` steps the context's
+//!    iterator and performs its one context operation, which the host rules
+//!    already admitted. A module-local `function*` helper whose every
+//!    `yield*` reads a proven context and whose every reference is
+//!    `_$perform(helper(…))` directly in a setup becomes a plain function
+//!    (`yield* Ctx` → `_$readContext(Ctx)`), called directly.
+//! 6. **Async bodies.** A memo / event body the generator pass compiled to an
+//!    `async function` (`generators.rs`, "async v2 bodies") is erased like a
+//!    synchronous one — `$event(_$$(fn))` → `$eventCompiled(_$asyncBody(fn))`,
+//!    `createMemo(_$$(fn))` → `createMemo(_$asyncBody(fn))` — when the same
+//!    body check passes; otherwise its generator is restored exactly
+//!    (`restore_async_generators`) and the driver runs it as before.
+//! 7. **Settled bodies.** `settledBlock(_$$(fn, SYNC))` whose body passes the
+//!    effect-half conditions is `onSettled(fn')` with the cleanups returned.
+//! 8. **What is left of `perform`.** `_$perform(acc)` of a proven accessor is
+//!    `_$readAccessor(acc)`, `_$perform(readStore(s, sel))` is
+//!    `_$readSelected(s, sel)` — `perform`'s own result for those operands —
+//!    and, after the JSX transform, plain calls where the transform put them
+//!    inside a computation (`fuse_computation_reads`).
+//!
 //! Only SYNC-flagged blocks are erased, and only in DOM output: a flagged
 //! `$` call passed to `$component` / `$event` is never wrapped in a
 //! hydration id scope (`block_scope.rs`; flagged views are, on both sides,
 //! as `$` or `syncBlock`), so erasing it on the client alone keeps hydration
 //! ids aligned with the server, and every primitive is still created in the
-//! same order.
+//! same order. An erased effect half or settled body, and every async body,
+//! has no JSX: a block with JSX is scoped on both sides and never erased.
 use std::collections::{HashMap, HashSet};
 
 use oxc_allocator::Allocator;
@@ -342,7 +365,14 @@ fn lower_operations<'a>(allocator: &'a Allocator, program: &mut Program<'a>, v2:
             .semantic;
         let names = Names::new(program);
         let contexts = context_symbols(program, semantic.scoping(), &names);
-        let helpers = lowerable_helpers(program, semantic.scoping(), semantic.nodes(), &names, v2, &contexts);
+        let helpers = lowerable_helpers(
+            program,
+            semantic.scoping(),
+            semantic.nodes(),
+            &names,
+            v2,
+            &contexts,
+        );
         let mut collector = OpsCollector {
             scoping: semantic.scoping(),
             nodes: semantic.nodes(),
@@ -1540,7 +1570,11 @@ fn lowerable_helpers(
 /// added parameters dropped. (What the client lowering already did to the
 /// body — setter writes as calls, `raise` as `throw` — means the same under
 /// the driver.)
-fn restore_async_generators<'a>(allocator: &'a Allocator, program: &mut Program<'a>, v2: &V2Bodies) {
+fn restore_async_generators<'a>(
+    allocator: &'a Allocator,
+    program: &mut Program<'a>,
+    v2: &V2Bodies,
+) {
     let Some(attempt) = runtime_imports(program)
         .into_iter()
         .find(|i| i.imported == "attempt")
@@ -1583,7 +1617,12 @@ fn restore_generator<'a>(allocator: &'a Allocator, function: &mut Function<'a>, 
     if function.params.items.last().and_then(param_name).as_deref() == Some(ASYNC_RUN_PARAM) {
         function.params.items.pop();
         if function.params.items.len() == 1
-            && function.params.items.first().and_then(param_name).as_deref()
+            && function
+                .params
+                .items
+                .first()
+                .and_then(param_name)
+                .as_deref()
                 == Some(ASYNC_INPUT_PARAM)
         {
             function.params.items.pop();
@@ -1626,7 +1665,10 @@ impl<'a> VisitMut<'a> for Restorer<'a, '_> {
     // Nested functions are their own bodies (their `_$perform`s, if any,
     // belong to blocks of their own).
     fn visit_function(&mut self, _: &mut Function<'a>, _: ScopeFlags) {}
-    fn visit_arrow_function_expression(&mut self, _: &mut oxc_ast::ast::ArrowFunctionExpression<'a>) {
+    fn visit_arrow_function_expression(
+        &mut self,
+        _: &mut oxc_ast::ast::ArrowFunctionExpression<'a>,
+    ) {
     }
     fn visit_class(&mut self, _: &mut oxc_ast::ast::Class<'a>) {}
 
@@ -1657,7 +1699,12 @@ impl<'a> VisitMut<'a> for Restorer<'a, '_> {
                     arguments,
                     false,
                 );
-                Some(Expression::new_yield_expression(span, true, Some(call), &builder))
+                Some(Expression::new_yield_expression(
+                    span,
+                    true,
+                    Some(call),
+                    &builder,
+                ))
             }
             // `_$a.ret(v)` → `v`.
             Expression::CallExpression(call)
@@ -1674,8 +1721,9 @@ impl<'a> VisitMut<'a> for Restorer<'a, '_> {
             {
                 let span = call.span;
                 let argument = call.arguments.pop().expect("checked: one argument");
-                argument_to_expression(argument)
-                    .map(|operand| Expression::new_yield_expression(span, true, Some(operand), &builder))
+                argument_to_expression(argument).map(|operand| {
+                    Expression::new_yield_expression(span, true, Some(operand), &builder)
+                })
             }
             // `_$readPathK(root, k…)` / `_$readPathN(root, [k…])` → `yield* root[k]…`.
             Expression::CallExpression(call)
@@ -1700,7 +1748,9 @@ impl<'a> VisitMut<'a> for Restorer<'a, '_> {
                     }
                 }
                 root.map(|root| {
-                    let chain = keys.into_iter().fold(root, |object, key| member(self.allocator, object, key));
+                    let chain = keys
+                        .into_iter()
+                        .fold(root, |object, key| member(self.allocator, object, key));
                     Expression::new_yield_expression(span, true, Some(chain), &builder)
                 })
             }
@@ -1714,7 +1764,11 @@ impl<'a> VisitMut<'a> for Restorer<'a, '_> {
 }
 
 /// `object[key]`, as `object.key` when the key is an identifier-name string.
-fn member<'a>(allocator: &'a Allocator, object: Expression<'a>, key: Expression<'a>) -> Expression<'a> {
+fn member<'a>(
+    allocator: &'a Allocator,
+    object: Expression<'a>,
+    key: Expression<'a>,
+) -> Expression<'a> {
     let ast = AstBuilder::new(allocator);
     let synth = Span::new(0, 0);
     if let Expression::StringLiteral(literal) = &key
@@ -1728,7 +1782,9 @@ fn member<'a>(allocator: &'a Allocator, object: Expression<'a>, key: Expression<
             false,
         ));
     }
-    Expression::ComputedMemberExpression(ast.alloc_computed_member_expression(synth, object, key, false))
+    Expression::ComputedMemberExpression(
+        ast.alloc_computed_member_expression(synth, object, key, false),
+    )
 }
 
 // --- 7. what is left of `perform` -------------------------------------------------------
@@ -1774,9 +1830,12 @@ fn lower_remaining_reads<'a>(allocator: &'a Allocator, program: &mut Program<'a>
                     let source = source.to_string();
                     match &call.arguments[0] {
                         Argument::Identifier(accessor)
-                            if self.context.reference_symbol(accessor).is_some_and(|symbol| {
-                                self.context.binding_origin(symbol) == Origin::Accessor
-                            }) =>
+                            if self
+                                .context
+                                .reference_symbol(accessor)
+                                .is_some_and(|symbol| {
+                                    self.context.binding_origin(symbol) == Origin::Accessor
+                                }) =>
                         {
                             let local = self.imports.local(&source, "readAccessor");
                             self.plan.insert(call.span, local);
@@ -1916,8 +1975,8 @@ pub(crate) fn fuse_computation_reads<'a>(
                 )
             {
                 let span = call.span;
-                let selector = argument_to_expression(call.arguments.pop().expect("two"))
-                    .expect("a selector");
+                let selector =
+                    argument_to_expression(call.arguments.pop().expect("two")).expect("a selector");
                 let store = call.arguments.pop().expect("two");
                 *expression = ast.expression_call(
                     span,
@@ -1953,7 +2012,9 @@ pub(crate) fn fuse_computation_reads<'a>(
         }
         fn visit_call_expression(&mut self, call: &mut CallExpression<'a>) {
             let compute = match &call.callee {
-                Expression::Identifier(callee) => self.computations.get(callee.name.as_str()).copied(),
+                Expression::Identifier(callee) => {
+                    self.computations.get(callee.name.as_str()).copied()
+                }
                 _ => None,
             };
             let Some(index) = compute else {
@@ -1969,13 +2030,13 @@ pub(crate) fn fuse_computation_reads<'a>(
                     );
                 if is_compute {
                     // The compute function itself is depth 1.
-                    let prev = std::mem::replace(&mut self.depth, Some(0));
+                    let prev = self.depth.replace(0);
                     self.visit_argument(argument);
                     self.depth = prev;
                 } else {
                     // Anything else (an apply function, a nested call) is
                     // not a compute's own depth.
-                    let prev = std::mem::replace(&mut self.depth, None);
+                    let prev = self.depth.take();
                     self.visit_argument(argument);
                     self.depth = prev;
                 }
