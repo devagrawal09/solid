@@ -773,6 +773,100 @@ export const App = $component(function* () {
   ]
 };
 
+/**
+ * An `<Errored>` inside a live region: each row of a `For` over a store keeps
+ * its own client boundary, adopted for the server's rows and created with a
+ * row the client adds (a row created failing shows its fallback at once); a
+ * later write that makes the failing source succeed brings the content back.
+ */
+export const islandsErroredRows: Scenario = {
+  name: "islands-errored-rows",
+  covers: [
+    "client error boundaries inside a live region (adopted and fresh rows)",
+    "a row created failing shows its fallback",
+    "a recovering source restores the row's content"
+  ],
+  entry: { component: "App" },
+  sources: {
+    reference: `
+import { createMemo, createStore, Errored, For } from "solid-js";
+function Cell(props) {
+  const v = createMemo(() => {
+    if (props.v < 0) throw new Error("negative " + props.v);
+    return props.v;
+  });
+  return <b>{v()}</b>;
+}
+export function App() {
+  const [s, setS] = createStore({ items: [{ id: 1, v: 1 }, { id: 2, v: 2 }] });
+  return (
+    <main>
+      <ul>
+        <For each={s.items}>
+          {item => (
+            <li>
+              <Errored fallback={err => <em>{String(err())}</em>}>
+                <Cell v={item.v} />
+              </Errored>
+            </li>
+          )}
+        </For>
+      </ul>
+      <button class="neg" onClick={() => setS(d => { d.items[0].v = -1; })}>neg</button>
+      <button class="add" onClick={() => setS(d => { d.items.push({ id: 3, v: -3 }); })}>add</button>
+      <button class="fix" onClick={() => setS(d => { d.items[0].v = 5; })}>fix</button>
+    </main>
+  );
+}
+`,
+    islands: `
+import { $component, $event, $memo, $store, Errored, For } from "solid-js";
+const Cell = $component(function* (props) {
+  const v = yield* $memo(function* () {
+    const n = yield* props.v;
+    if (n < 0) throw new Error("negative " + n);
+    return n;
+  });
+  return function* () {
+    return <b>{yield* v}</b>;
+  };
+});
+export const App = $component(function* () {
+  const [s, setS] = yield* $store({ items: [{ id: 1, v: 1 }, { id: 2, v: 2 }] });
+  const neg = $event(function* () { setS(d => { d.items[0].v = -1; }); });
+  const add = $event(function* () { setS(d => { d.items.push({ id: 3, v: -3 }); }); });
+  const fix = $event(function* () { setS(d => { d.items[0].v = 5; }); });
+  return function* () {
+    return (
+      <main>
+        <ul>
+          <For each={yield* s.items}>
+            {item => (
+              <li>
+                <Errored fallback={err => <em>{String(err())}</em>}>
+                  <Cell v={item.v} />
+                </Errored>
+              </li>
+            )}
+          </For>
+        </ul>
+        <button class="neg" onClick={neg}>neg</button>
+        <button class="add" onClick={add}>add</button>
+        <button class="fix" onClick={fix}>fix</button>
+      </main>
+    );
+  };
+});
+`
+  },
+  steps: [
+    { name: "initial", run: ({ html }) => html() },
+    step("neg (row 1 fails)", ctx => ctx.click(".neg")),
+    step("add (a row created failing)", ctx => ctx.click(".add")),
+    step("fix (row 1 recovers)", ctx => ctx.click(".fix"))
+  ]
+};
+
 export const islandsScenarios = [
   islandsList,
   islandsStream,
@@ -780,5 +874,6 @@ export const islandsScenarios = [
   islandsAsync,
   islandsOptimistic,
   islandsModules,
-  islandsErrored
+  islandsErrored,
+  islandsErroredRows
 ];

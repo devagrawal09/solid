@@ -1508,13 +1508,15 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                         m.comps[*c].name
                     ));
                     bump(&mut own, *c, 2);
-                    // Content the client creates under a boundary needs a
-                    // client boundary object (its fallback while pending, its
-                    // error fallback): not compiled yet.
-                    unsupported.push(format!(
-                        "`{}`: <{b}> inside a live region (no client boundary yet)",
-                        m.comps[*c].name
-                    ));
+                    // An `<Errored>` there is a client error boundary around
+                    // the content the client adopts or creates; a `<Loading>`
+                    // would need a client pending fallback: not compiled yet.
+                    if b == "Loading" {
+                        unsupported.push(format!(
+                            "`{}`: <Loading> inside a live region (no client pending fallback yet)",
+                            m.comps[*c].name
+                        ));
+                    }
                 }
             }
             for item in &m.comps[*c].setup {

@@ -187,6 +187,9 @@ struct Ce<'x, 'a> {
     checks: Vec<(String, String, String)>,
     /// Client error boundaries: (scope of their content, content slots).
     bounds: Vec<(usize, Vec<Slot<'a>>)>,
+    /// Emitting a client-built `<Errored>` fallback: its holes track (the
+    /// error accessor commits after the fallback is built).
+    in_fallback: bool,
 }
 
 const HELPERS: &[(&str, &str)] = &[
@@ -340,6 +343,7 @@ pub(crate) fn emit_group<'a>(
         stmt_in_region: false,
         checks: Vec::new(),
         bounds: Vec::new(),
+        in_fallback: false,
     };
     ce.run()
 }
@@ -987,9 +991,11 @@ impl<'x, 'a> Ce<'x, 'a> {
                 out
             };
             let mut checked: BTreeSet<&str> = BTreeSet::new();
+            // Boundaries in the activation scope (not in fresh content).
             let boundary_navs: Vec<&String> = self
                 .bounds
                 .iter()
+                .filter(|(sc, _)| !self.scopes[*sc].builder)
                 .flat_map(|(sc, _)| self.scopes[*sc].nav.iter())
                 .collect();
             for line in self.scopes[0].nav.iter().chain(boundary_navs) {
@@ -1861,7 +1867,7 @@ impl<'x, 'a> Ce<'x, 'a> {
                         continue;
                     }
                     let comp = self.insts[inst].comp;
-                    let live = self.a.is_live_site(comp, e.span().start);
+                    let live = self.site_live(comp, e.span().start);
                     let refs = super::graph::refs_expr(self.m, self.m.comps[comp].props, e);
                     if refs.has_jsx {
                         if live {
@@ -1941,21 +1947,18 @@ impl<'x, 'a> Ce<'x, 'a> {
                     out.push(Slot::Opaque(sh.0, sh.1));
                 }
             }
-            Tag::Builtin(b)
-                if b == "Errored"
-                    && self.t2
-                    && !self.scopes[self.cur].builder
-                    && self.boundary_live(comp, el) =>
-            {
+            Tag::Builtin(b) if b == "Errored" && self.t2 && self.boundary_live(comp, el) => {
                 // Its content activates inside a client error boundary: a
-                // scope of its own (the members it renders set up there).
+                // scope of its own (the members it renders set up there),
+                // adopted or fresh as its enclosing scope is.
                 let kids = jsx::children(&el.children)?;
                 let saved = self.cur;
+                let builder = self.scopes[self.cur].builder;
                 self.scopes.push(Scope {
                     nav: vec![],
                     buckets: HashMap::new(),
                     order: vec![],
-                    builder: false,
+                    builder,
                 });
                 let bscope = self.scopes.len() - 1;
                 self.cur = bscope;
@@ -2130,7 +2133,15 @@ impl<'x, 'a> Ce<'x, 'a> {
         let text = self.translate(caller, extra, |tx, env| tx.expr(env, e))?;
         let reads = super::graph::refs_expr(self.m, self.m.comps[self.insts[caller].comp].props, e);
         let var = self.fresh("$p");
-        let has_read = self.m.text(e.span()).contains("yield*") || !reads.props.is_empty();
+        // A read (`yield*`, a prop, or a value over a store — a row's
+        // `item.v`) is a getter; anything else is evaluated once.
+        let has_read = self.m.text(e.span()).contains("yield*")
+            || !reads.props.is_empty()
+            || !self
+                .a
+                .live_reads(self.insts[caller].comp, &reads)
+                .0
+                .is_empty();
         let line = if has_read {
             format!("const {var} = () => {text};")
         } else {
@@ -2306,17 +2317,28 @@ impl<'x, 'a> Ce<'x, 'a> {
 
     /// `parent`: the container element's var (None = the island root level).
     fn container(&mut self, parent: Option<String>, slots: &[Slot<'a>]) -> R<()> {
-        self.container_at(parent, slots, 0, None)
+        self.container_at(parent, slots, 0, None, 0)
     }
 
-    /// Slots laid out in `parent` after `base` elements; marker pairs counted
-    /// after the node `after` (a boundary's start marker) when given.
+    /// Inert-hole placeholders (`<!--!-->`, fresh content) a slot holds.
+    fn placeholders(&self, s: &Slot<'a>) -> usize {
+        match s {
+            Slot::Hole(_, _, false) => 1,
+            Slot::Boundary(_, _, bi) => self.bounds[*bi].1.iter().map(|x| self.placeholders(x)).sum(),
+            _ => 0,
+        }
+    }
+
+    /// Slots laid out in `parent` after `base` elements (and `ph_base`
+    /// placeholders); marker pairs counted after the node `after` (a
+    /// boundary's start marker) when given.
     fn container_at(
         &mut self,
         parent: Option<String>,
         slots: &[Slot<'a>],
         base: usize,
         after_node: Option<String>,
+        ph_base: usize,
     ) -> R<()> {
         // Element indexes and pair indexes, from the start where possible.
         let n = slots.len();
@@ -2421,10 +2443,8 @@ impl<'x, 'a> Ce<'x, 'a> {
                         self.text_hole(e, inst, true, TextTarget::Pair(end))?;
                     } else if self.scopes[self.cur].builder {
                         // Inert hole in fresh content: a placeholder.
-                        let k = slots[..i]
-                            .iter()
-                            .filter(|s| matches!(s, Slot::Hole(_, _, false)))
-                            .count();
+                        let k = ph_base
+                            + slots[..i].iter().map(|s| self.placeholders(s)).sum::<usize>();
                         let p = parent
                             .clone()
                             .ok_or("inert hole at a builder's root level")?;
@@ -2465,7 +2485,8 @@ impl<'x, 'a> Ce<'x, 'a> {
                     let start = self.fresh("$bs");
                     self.helpers.insert("$start");
                     self.scope_nav(format!("const {start} = $start({end});"));
-                    let r = self.container_at(parent.clone(), &inner, before, Some(start));
+                    let ph = ph_base + slots[..i].iter().map(|s| self.placeholders(s)).sum::<usize>();
+                    let r = self.container_at(parent.clone(), &inner, before, Some(start), ph);
                     self.cur = saved;
                     r?;
                     self.boundary(el, inst, bscope, end)?;
@@ -2474,6 +2495,11 @@ impl<'x, 'a> Ce<'x, 'a> {
             }
         }
         Ok(())
+    }
+
+    /// A live hole or attribute (or any, inside a client-built fallback).
+    fn site_live(&self, comp: usize, start: u32) -> bool {
+        self.in_fallback || self.a.is_live_site(comp, start)
     }
 
     /// An `<Errored>` over live content whose sites belong to this group
@@ -2554,6 +2580,7 @@ impl<'x, 'a> Ce<'x, 'a> {
         });
         self.cur = self.scopes.len() - 1;
         let comp = self.insts[inst].comp;
+        let was = std::mem::replace(&mut self.in_fallback, true);
         let r = (|| -> R<(usize, String, String)> {
             let tpl = self.template_html(root, comp)?;
             let ti = self.templates.len();
@@ -2564,6 +2591,7 @@ impl<'x, 'a> Ce<'x, 'a> {
             let nav = self.scopes[self.cur].nav.join("\n");
             Ok((ti, nav, body))
         })();
+        self.in_fallback = was;
         self.cur = saved;
         let (ti, nav, body) = r?;
         Ok(format!(
@@ -2673,7 +2701,7 @@ impl<'x, 'a> Ce<'x, 'a> {
             if jsx::static_child(e).is_some() || at.name == "ref" {
                 continue;
             }
-            let live = self.a.is_live_site(comp, e.span().start);
+            let live = self.site_live(comp, e.span().start);
             if !live && !fresh {
                 continue;
             }
@@ -3086,14 +3114,21 @@ impl<'x, 'a> Ce<'x, 'a> {
         }
         let sole =
             kids.len() == 1 && matches!(kids[0], Child::Expr(e) if jsx::static_child(e).is_none());
-        for k in &kids {
+        self.tpl_kids(&kids, comp, out, sole)?;
+        let _ = write!(out, "</{tag}>");
+        Ok(())
+    }
+
+    /// Template markup of fresh content's children.
+    fn tpl_kids(&mut self, kids: &[Child<'a>], comp: usize, out: &mut String, sole: bool) -> R<()> {
+        for k in kids {
             match *k {
                 Child::Text(sp) => out.push_str(&jsx::esc_text(&jsx::jsx_text(self.m, sp))),
                 Child::Expr(e) => {
                     if let Some(s) = jsx::static_child(e) {
                         out.push_str(&jsx::esc_text(&s));
                     } else if sole {
-                    } else if self.a.is_live_site(comp, e.span().start) {
+                    } else if self.site_live(comp, e.span().start) {
                         out.push_str("<!--$--><!--/-->");
                     } else {
                         out.push_str("<!--!-->");
@@ -3103,6 +3138,19 @@ impl<'x, 'a> Ce<'x, 'a> {
                     Tag::Intrinsic(_) => self.tpl_el(c, comp, out)?,
                     Tag::Builtin(b) if b == "Show" || b == "For" => {
                         out.push_str("<!--$--><!--/-->")
+                    }
+                    // A client error boundary's region; an inert one is
+                    // its content in place.
+                    Tag::Builtin(b) if b == "Errored" => {
+                        let ks = jsx::children(&c.children)?;
+                        let live = self.t2 && self.boundary_live(comp, c);
+                        if live {
+                            out.push_str("<!--$-->");
+                        }
+                        self.tpl_kids(&ks, comp, out, false)?;
+                        if live {
+                            out.push_str("<!--/-->");
+                        }
                     }
                     Tag::Comp(k) => {
                         // Inlined in fresh content: its view's static markup.
@@ -3121,7 +3169,6 @@ impl<'x, 'a> Ce<'x, 'a> {
                 Child::Fragment(_) => return Err("fragment in fresh island content".into()),
             }
         }
-        let _ = write!(out, "</{tag}>");
         Ok(())
     }
 
