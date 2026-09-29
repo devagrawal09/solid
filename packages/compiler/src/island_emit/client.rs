@@ -42,6 +42,11 @@ pub(crate) struct ClientOpts {
     /// island's static addresses on the server markup and reports every node
     /// that is not what the client code expects.
     pub verify: bool,
+    /// The frames applier (an island frame's driver imports it lazily).
+    pub frames_module: String,
+    /// `activate(anchor, state)` and a state getter on the anchor (keyed
+    /// islands keep their state across a frame's refetch).
+    pub keyed_state: bool,
 }
 
 pub(crate) struct GroupCode {
@@ -58,8 +63,10 @@ pub(crate) struct GroupCode {
     pub lazy_ok: bool,
     /// The anchor element's subtree may contain other islands' anchors.
     pub nests: bool,
-    /// Module-level mutable declarations the chunk copies (by top index).
+    /// Module-level declarations the chunk copies (by top index).
     pub mutable_top: Vec<usize>,
+    /// The chunk takes and exposes keyed state.
+    pub transplant: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -213,6 +220,12 @@ struct Ce<'x, 'a> {
     /// Per serialized root prop: the paths client code reads (`None`: the
     /// whole value).
     prop_paths: HashMap<String, Option<BTreeSet<Vec<String>>>>,
+    /// Keyed state: each plain cell's current-value expression, in the
+    /// order `activate(anchor, state)` reads them; `None` once the island
+    /// holds state that cannot move (stores, regions).
+    transplant: Option<Vec<String>>,
+    /// An island frame's driver is emitted (`$frame`).
+    frame_driver: bool,
 }
 
 const HELPERS: &[(&str, &str)] = &[
@@ -379,6 +392,8 @@ pub(crate) fn emit_group<'a>(
         structs: Vec::new(),
         used: HashMap::new(),
         prop_paths: HashMap::new(),
+        transplant: opts.keyed_state.then(Vec::new),
+        frame_driver: false,
     };
     ce.run()
 }
@@ -1050,7 +1065,8 @@ impl<'x, 'a> Ce<'x, 'a> {
         let mut imports: Vec<String> = Vec::new();
         if tier == 0 {
             {
-                let mut names = vec!["cell as $cell".to_string(), "hole as $hole".to_string()];
+                let hole = if self.transplant.is_some() { "hole as $hole0" } else { "hole as $hole" };
+                let mut names = vec!["cell as $cell".to_string(), hole.to_string()];
                 if self.rt.contains("set") {
                     names.push("set as $set".into());
                 }
@@ -1211,16 +1227,46 @@ impl<'x, 'a> Ce<'x, 'a> {
             v.push_str("} catch (err) { $e.push(\"the static walk failed: \" + err.message); }\nreturn $e;\n}\n");
             out.push_str(&v);
         }
+        if self.frame_driver {
+            // The frames applier loads on a frame's first refetch.
+            let _ = writeln!(
+                out,
+                "const $frame = (e, v) => import({}).then(m => m.frame(e, v));",
+                js_str(&self.opts.frames_module)
+            );
+        }
+        // Keyed state: `activate(anchor, state)` seeds the cells and applies
+        // every hole; the anchor exposes the current values.
+        let (params, st_in, st_out) = match &self.transplant {
+            Some(list) => (
+                "$a, $st",
+                if tier == 0 {
+                    "const $hole = $st ? (c, h, p) => { $hole0(c, h, p); p(h()); } : $hole0;\n"
+                        .to_string()
+                } else {
+                    String::new()
+                },
+                format!(
+                    "($a.$ss ||= {{}})[{}] = () => [{}];\n",
+                    js_str(&self.g.id),
+                    list.join(", ")
+                ),
+            ),
+            // `$st` is read by the holes' first-run skips: always a parameter.
+            None if self.opts.keyed_state => ("$a, $st", String::new(), String::new()),
+            None => ("$a", String::new(), String::new()),
+        };
+        let st_in = if tier == 0 || self.transplant.is_none() { st_in } else { String::new() };
         if tier == 0 {
             let _ = write!(
                 out,
-                "export function activate($a) {{\n{data}{nav}\n{body}\n{}}}\n",
+                "export function activate({params}) {{\n{st_in}{data}{nav}\n{body}\n{}{st_out}}}\n",
                 settled.join("\n")
             );
         } else {
             let _ = write!(
                 out,
-                "export function activate($a) {{\n{data}{nav}\nreturn $R($x => {{\n{body}\n{}return $x;\n}});\n}}\n",
+                "export function activate({params}) {{\n{data}{nav}\nreturn $R($x => {{\n{body}\n{}{st_out}return $x;\n}});\n}}\n",
                 settled.join("\n")
             );
             out.push_str("export const flush = $F;\n");
@@ -1234,6 +1280,7 @@ impl<'x, 'a> Ce<'x, 'a> {
             element_anchor: self.element_anchor,
             nests: anchor_nests(m, view),
             mutable_top: self.mutable_top.clone(),
+            transplant: self.transplant.is_some(),
             lazy_ok: self.lazy_ok
                 && self.element_anchor
                 && self.g.window_events.len() + self.g.events.len() > 0
@@ -1623,6 +1670,19 @@ impl<'x, 'a> Ce<'x, 'a> {
                         (Some(l), _) => Some(js_str(l)),
                         (None, Some(e)) => Some(self.expr(inst, &none, e)?),
                         _ => None,
+                    };
+                    // Keyed state: a transplanted value wins over the initializer.
+                    let init_text = match (&mut self.transplant, frozen, *host, self.scopes[self.cur].builder) {
+                        (Some(list), false, CellHost::Signal, false) => {
+                            let i = list.len();
+                            list.push(if t0 { format!("{gn}.v") } else { format!("{gn}()") });
+                            format!("$st ? $st[{i}] : {init_text}")
+                        }
+                        (Some(_), false, _, _) => {
+                            self.transplant = None;
+                            init_text
+                        }
+                        _ => init_text,
                     };
                     if frozen {
                         format!("const {gn} = {init_text};")
@@ -3077,6 +3137,18 @@ impl<'x, 'a> Ce<'x, 'a> {
         let attrs = jsx::attrs(el)?;
         let fresh = self.scopes[self.cur].builder;
         let none = HashMap::new();
+        // An island frame's region: the driver refetches it when the server
+        // call's arguments change (its content is server HTML: not walked).
+        if let Some(&si) = self.a.facts[comp].site_at.get(&el.span.start)
+            && let SiteKind::Frame(fi) = self.a.facts[comp].sites[si].kind
+            && self.a.group_of_site.get(&(comp, si)) == Some(&self.gi)
+        {
+            if fresh {
+                return Err("an island frame inside content the island creates".into());
+            }
+            self.frame_driver(inst, fi, var)?;
+            return Ok(());
+        }
         for at in &attrs {
             let AttrVal::Expr(e) = &at.value else {
                 continue;
@@ -3111,10 +3183,51 @@ impl<'x, 'a> Ce<'x, 'a> {
         Ok(())
     }
 
+    /// An island frame's driver: computes the server call's arguments (the
+    /// memo's statements before its `attempt`) and, when they change,
+    /// refetches the region through the lazily loaded frames applier.
+    fn frame_driver(&mut self, inst: usize, fi: usize, var: &str) -> R<()> {
+        let fr = &self.a.frames[fi];
+        let none = HashMap::new();
+        let mut body = String::new();
+        for s in fr.pre.clone() {
+            let t = self.translate(inst, &none, |tx, env| tx.stmt(env, s))?;
+            body.push_str(&t);
+            body.push('\n');
+        }
+        let mut args = Vec::new();
+        for e in fr.call_args.clone() {
+            args.push(self.expr(inst, &none, e)?);
+        }
+        let compute = format!("() => {{\n{body}return JSON.stringify([{}]);\n}}", args.join(", "));
+        let comp = self.insts[inst].comp;
+        let site = fr.site.ok_or("frame driver site")?;
+        let r = self.a.facts[comp].sites[site].refs.clone();
+        let cells = self.cells_of_refs(inst, &r);
+        self.frame_driver = true;
+        let line = if self.tier == 0 {
+            format!(
+                "$hole([{}], {compute}, v => {{ $frame({var}, v); }});",
+                cells.iter().cloned().collect::<Vec<_>>().join(", ")
+            )
+        } else {
+            format!(
+                "{{ let $k = 1; $E({compute}, v => {{ if ($k) {{ $k = 0; return; }} $frame({var}, v); }}); }}"
+            )
+        };
+        self.bucket(inst).seq.push(Seq::Line(line));
+        Ok(())
+    }
+
     fn cells_of(&self, inst: usize, e: &Expression<'a>) -> BTreeSet<String> {
         let comp = self.insts[inst].comp;
         let r = super::graph::refs_expr(self.m, self.m.comps[comp].props, e);
-        let (keys, _) = self.a.live_reads(comp, &r);
+        self.cells_of_refs(inst, &r)
+    }
+
+    fn cells_of_refs(&self, inst: usize, r: &super::graph::Refs) -> BTreeSet<String> {
+        let comp = self.insts[inst].comp;
+        let (keys, _) = self.a.live_reads(comp, r);
         keys.iter()
             .filter_map(|k| match &self.m.comps[k.0].setup[k.1] {
                 Item::Cell { get, .. } => self
@@ -3311,6 +3424,8 @@ impl<'x, 'a> Ce<'x, 'a> {
                 "0"
             } else if fresh {
                 "$f ? 0 : 1"
+            } else if self.opts.keyed_state {
+                "$st ? 0 : 1"
             } else {
                 "1"
             };
@@ -3326,6 +3441,8 @@ impl<'x, 'a> Ce<'x, 'a> {
         if self.tier == 0 {
             return Err("dynamic structure at tier 0".into());
         }
+        // A live region adopts the server's rows: its state cannot move.
+        self.transplant = None;
         let attrs = jsx::attrs(el)?;
         let is_show = matches!(jsx::tag_of(self.m, &el.opening_element.name), Tag::Builtin(ref b) if b == "Show");
         if jsx::attr(&attrs, "fallback").is_some() {
@@ -3834,6 +3951,8 @@ impl<'x, 'a> Ce<'x, 'a> {
                     "0"
                 } else if fresh {
                     "$f ? 0 : 1"
+                } else if self.opts.keyed_state {
+                    "$st ? 0 : 1"
                 } else {
                     "1"
                 };
@@ -3847,6 +3966,8 @@ impl<'x, 'a> Ce<'x, 'a> {
                     "0"
                 } else if fresh {
                     "$f ? 0 : 1"
+                } else if self.opts.keyed_state {
+                    "$st ? 0 : 1"
                 } else {
                     "1"
                 };

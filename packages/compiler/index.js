@@ -118,7 +118,8 @@ function compileIslands(code, options = {}) {
     client: result.client ?? null,
     chunks: result.chunks,
     manifest: JSON.parse(result.manifest),
-    fallback: result.fallback ?? null
+    fallback: result.fallback ?? null,
+    framesClient: result.framesClient ?? null
   };
 }
 

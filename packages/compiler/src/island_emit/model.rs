@@ -251,6 +251,9 @@ pub(crate) struct RouteDef {
 pub(crate) struct RouterDef {
     pub sym: SymbolId,
     pub routes: Vec<RouteDef>,
+    /// The `createRouter(…)` call (the server module replaces it: the
+    /// router renders through the compiled table).
+    pub init: Span,
 }
 
 pub(crate) struct Top<'a> {
@@ -600,7 +603,11 @@ pub(crate) fn build_model_with<'a>(
                                 == Some("createRouter")
                         {
                             let routes = read_routes(&m, program, c);
-                            m.router = Some(RouterDef { sym, routes });
+                            m.router = Some(RouterDef {
+                                sym,
+                                routes,
+                                init: c.span,
+                            });
                             continue;
                         }
                         if let Some(c) = call_of(init)

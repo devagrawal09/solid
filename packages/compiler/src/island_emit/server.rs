@@ -1220,6 +1220,10 @@ pub(crate) fn emit_server<'a>(
         };
         edits.push((c.replace, text));
     }
+    // The router renders through the compiled route table (`_$router`).
+    if let Some(r) = &m.router {
+        edits.push((r.init, "void 0".into()));
+    }
     let program_span = Span::new(0, m.src.len() as u32);
     let mut out = splice(m.src, program_span, edits);
     out.push('\n');

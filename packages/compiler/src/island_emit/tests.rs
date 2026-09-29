@@ -1803,3 +1803,47 @@ export default Account;
     assert!(out.fallback.is_none(), "{:?}", out.fallback);
     assert!(manifest(&out).contains(r#""tainted":true"#), "{}", manifest(&out));
 }
+
+#[test]
+fn an_island_frames_driver_refetches_the_region_through_the_lazy_applier() {
+    let out = run_frames(SEARCH);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let chunk = &out.chunks[0].code;
+    // The region is addressed statically; its content is not walked.
+    assert!(
+        chunk.contains("$hole([q], () => {\nconst s = q.v;\nreturn JSON.stringify([s]);\n}, v => { $frame($n"),
+        "{chunk}"
+    );
+    assert!(
+        chunk.contains(r#"const $frame = (e, v) => import("@solidjs/compiler/frames-client").then(m => m.frame(e, v));"#),
+        "{chunk}"
+    );
+    // No list code: the rows are server HTML.
+    assert!(!chunk.contains("$list"), "{chunk}");
+}
+
+#[test]
+fn keyed_state_seeds_cells_and_exposes_them_on_the_anchor() {
+    let out = compile_islands(
+        TOGGLE,
+        &IslandOptions {
+            filename: Some("app.tsx".into()),
+            keyed_state: true,
+            ..IslandOptions::default()
+        },
+    )
+    .unwrap();
+    let chunk = &out.chunks[0].code;
+    assert!(chunk.contains("export function activate($a, $st) {"), "{chunk}");
+    assert!(chunk.contains("const open = $cell($st ? $st[0] : true);"), "{chunk}");
+    assert!(
+        chunk.contains("const $hole = $st ? (c, h, p) => { $hole0(c, h, p); p(h()); } : $hole0;"),
+        "{chunk}"
+    );
+    assert!(chunk.contains(r#"($a.$ss ||= {})["i0"] = () => [open.v];"#), "{chunk}");
+    assert!(manifest(&out).contains(r#""transplant":true"#), "{}", manifest(&out));
+    // Without the option the chunk is unchanged.
+    let plain = run(TOGGLE);
+    assert!(plain.chunks[0].code.contains("export function activate($a) {"));
+    assert!(!plain.chunks[0].code.contains("$st"));
+}

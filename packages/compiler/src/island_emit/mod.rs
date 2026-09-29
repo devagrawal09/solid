@@ -99,6 +99,10 @@ pub struct IslandOptions {
     /// The module island chunks load the frames applier from (lazily, on a
     /// frame's first refetch).
     pub frames_module: String,
+    /// Chunks take a transplanted state (`activate(anchor, state)`) and
+    /// expose theirs, so a keyed island keeps its state across a frame's
+    /// refetch (the bundler plugin sets it when the page has frames).
+    pub keyed_state: bool,
 }
 
 /// An import specifier naming a `"use server"` module (or one exporting
@@ -130,6 +134,7 @@ impl Default for IslandOptions {
             server_imports: Vec::new(),
             server_functions_module: "@solidjs/web/server-functions".into(),
             frames_module: "@solidjs/compiler/frames-client".into(),
+            keyed_state: false,
         }
     }
 }
@@ -312,6 +317,8 @@ fn emit(
         tier1_core: opts.tier1_core,
         debug: opts.debug,
         verify: opts.verify,
+        frames_module: opts.frames_module.clone(),
+        keyed_state: opts.keyed_state,
     };
     let mut codes = Vec::new();
     let mut notes: Vec<Vec<String>> = Vec::new();
@@ -478,6 +485,10 @@ fn manifest(
         // boundary around its DOM is pending.
         w.key("waits");
         w.boolean(waits(a, g.root, streams));
+        // Keyed state: the island's cells move to its new anchor when a
+        // frame's refetch keeps its key (plain signal cells, no regions).
+        w.key("transplant");
+        w.boolean(code.transplant);
         w.key("serialized");
         w.begin_array();
         for s in &code.serial {

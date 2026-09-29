@@ -528,6 +528,19 @@ export interface CompileIslandsOptions {
    * `islandExports` summaries name).
    */
   imports?: { specifier: string; filename: string; code: string }[];
+  /**
+   * Imports naming `"use server"` modules (frames: a server call whose
+   * readers are inert becomes a compiler-derived server component).
+   * `names`: the server functions it exports (absent: every export);
+   * `tainted`: those marked `@taint` (server-only results).
+   */
+  serverImports?: { specifier: string; names?: string[]; tainted?: string[] }[];
+  /** The module frames register with (default `@solidjs/web/server-functions`). */
+  serverFunctionsModule?: string;
+  /** The module island frame drivers load the applier from (default `@solidjs/compiler/frames-client`). */
+  framesModule?: string;
+  /** Chunks take and expose keyed state (frames' keyed morph). */
+  keyedState?: boolean;
 }
 
 export interface IslandExports {
@@ -536,6 +549,12 @@ export interface IslandExports {
     kind: "component" | "factory" | "helper" | "function" | "value";
   }[];
   imports: { specifier: string; names: string[] }[];
+  /** A module-level `"use server"` directive. */
+  useServer: boolean;
+  /** Exported server functions (module or function directive). */
+  serverFunctions: string[];
+  /** Exported server functions marked `@taint`. */
+  tainted: string[];
 }
 
 /** A module's islands summary (exports by kind, relative imports). */
@@ -548,6 +567,8 @@ export interface CompileIslandsResult {
   client: string | null;
   /** One activation module per island group. */
   chunks: { id: string; code: string }[];
+  /** Route frames' argument functions (`export const $$routeArgs`), or null. */
+  framesClient: string | null;
   manifest: {
     version: 1;
     module: string | null;

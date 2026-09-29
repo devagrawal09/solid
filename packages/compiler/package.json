@@ -37,6 +37,10 @@
     "./islands-stream": {
       "types": "./islands-stream.d.ts",
       "default": "./islands-stream.js"
+    },
+    "./frames-client": {
+      "types": "./frames-client.d.ts",
+      "default": "./frames-client.mjs"
     }
   },
   "files": [
@@ -52,7 +56,9 @@
     "helpers-build.js",
     "helpers-build.d.ts",
     "islands-stream.js",
-    "islands-stream.d.ts"
+    "islands-stream.d.ts",
+    "frames-client.mjs",
+    "frames-client.d.ts"
   ],
   "scripts": {
     "build": "napi build --release --strip --manifest-path ./Cargo.toml",
