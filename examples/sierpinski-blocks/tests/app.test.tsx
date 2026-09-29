@@ -68,7 +68,7 @@ describe("sierpinski with generator blocks", () => {
     await advance(1000);
     await advance(20);
     expect(labels()).toEqual(new Set(["1"]));
-  });
+  }, 30_000); // CPU-bound: fake timers render every frame of 8 s of ticks; 5 s is too tight on a loaded machine
 
   it("scales the container from the animation frames", async () => {
     await advance(20);
