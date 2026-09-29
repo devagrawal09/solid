@@ -23,6 +23,7 @@
 //! compiles, and the manifest says why.
 mod callforms;
 mod client;
+mod dynamic;
 mod frames;
 mod graph;
 mod inline;
@@ -217,6 +218,10 @@ fn prepare(original: &str, opts: &IslandOptions, components: bool) -> Option<Str
     let a = inline::inline_imports(original, f, &opts.imports, components);
     let s1 = a.as_deref().unwrap_or(original);
     let b = callforms::rewrite(s1, f);
+    let s2 = b.as_deref().unwrap_or(s1);
+    // `<Dynamic>` over a static component: that element (before spreads,
+    // which then see an intrinsic element's spread).
+    let b = dynamic::rewrite(s2, f).or(b);
     let s2 = b.as_deref().unwrap_or(s1);
     let sp = spreads::rewrite(s2, f);
     let s2b = sp.as_deref().unwrap_or(s2);

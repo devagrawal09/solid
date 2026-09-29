@@ -1275,6 +1275,494 @@ export const App = $component(function* () {
   ]
 };
 
+/**
+ * Statements before a view's `return` that read no live state run where the
+ * view first renders (the server; the activation of a row the client
+ * creates): locals the markup reads, and a handler the island uses.
+ */
+export const islandsViewStatements: Scenario = {
+  name: "islands-view-statements",
+  covers: [
+    "view statements computing locals the markup reads",
+    "a handler declared in the view",
+    "view statements of a row component the client creates"
+  ],
+  entry: { component: "App" },
+  sources: {
+    reference: `
+import { createSignal, For } from "solid-js";
+function Row(props) {
+  const text = "#" + props.item;
+  return <li>{text}</li>;
+}
+export function App() {
+  const [n, setN] = createSignal(0);
+  const [items, setItems] = createSignal([1]);
+  const title = "count";
+  const step = 2;
+  const label = title.toUpperCase() + ":";
+  return (
+    <div>
+      <h1>{label}</h1>
+      <button class="inc" onClick={() => setN(x => x + step)}>{n()}</button>
+      <ul><For each={items()}>{item => <Row item={item} />}</For></ul>
+      <button class="add" onClick={() => setItems(l => [...l, l.length + 1])} />
+    </div>
+  );
+}
+`,
+    islands: `
+import { $component, $event, $signal, For } from "solid-js";
+const Row = $component(function* (props) {
+  return function* () {
+    const text = "#" + props.item;
+    return <li>{text}</li>;
+  };
+});
+export const App = $component(function* () {
+  const [n, setN] = yield* $signal(0);
+  const [items, setItems] = yield* $signal([1]);
+  const add = $event(function* () { setItems(l => [...l, l.length + 1]); });
+  return function* () {
+    const title = "count";
+    const step = 2;
+    const label = title.toUpperCase() + ":";
+    const bump = () => setN(x => x + step);
+    return (
+      <div>
+        <h1>{label}</h1>
+        <button class="inc" onClick={bump}>{yield* n}</button>
+        <ul><For each={yield* items}>{item => <Row item={item} />}</For></ul>
+        <button class="add" onClick={add} />
+      </div>
+    );
+  };
+});
+`
+  },
+  steps: [
+    { name: "initial", run: ({ html }) => html() },
+    step("inc (the view's handler, its step)", ctx => ctx.click(".inc")),
+    step("add (a row's view statements run on the client)", ctx => ctx.click(".add")),
+    step("inc again", ctx => ctx.click(".inc"))
+  ]
+};
+
+/**
+ * A live `<Switch>`: one region showing the first `<Match>` whose `when`
+ * holds — markup, a render callback (its `when` accessor), the fallback —
+ * adopted at activation and rebuilt when the choice changes; an inert
+ * `<Switch>` renders on the server only.
+ */
+export const islandsSwitch: Scenario = {
+  name: "islands-switch",
+  covers: [
+    "a live Switch adopted and rebuilt across its Matches and fallback",
+    "a Match render callback reading its when accessor",
+    "a live hole inside a Match branch",
+    "an inert Switch (server only)"
+  ],
+  entry: { component: "App" },
+  sources: {
+    reference: `
+import { createSignal, Match, Switch } from "solid-js";
+const KIND = "b";
+export function App() {
+  const [n, setN] = createSignal(0);
+  const [t, setT] = createSignal(0);
+  return (
+    <div>
+      <Switch fallback={<p class="many">many {t()}</p>}>
+        <Match when={n() === 0}><p class="zero">zero {t()}</p></Match>
+        <Match when={n() === 1 && "one"}>{v => <p class="one">{v()}</p>}</Match>
+      </Switch>
+      <Switch><Match when={KIND === "a"}><i>a</i></Match><Match when={KIND === "b"}><b>b</b></Match></Switch>
+      <button class="inc" onClick={() => setN(x => x + 1)} />
+      <button class="zero" onClick={() => setN(0)} />
+      <button class="tick" onClick={() => setT(x => x + 1)} />
+    </div>
+  );
+}
+`,
+    islands: `
+import { $component, $event, $signal, Match, Switch } from "solid-js";
+const KIND = "b";
+export const App = $component(function* () {
+  const [n, setN] = yield* $signal(0);
+  const [t, setT] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  const zero = $event(function* () { setN(0); });
+  const tick = $event(function* () { setT(x => x + 1); });
+  return function* () {
+    return (
+      <div>
+        <Switch fallback={<p class="many">many {yield* t}</p>}>
+          <Match when={(yield* n) === 0}><p class="zero">zero {yield* t}</p></Match>
+          <Match when={(yield* n) === 1 && "one"}>{v => <p class="one">{v()}</p>}</Match>
+        </Switch>
+        <Switch><Match when={KIND === "a"}><i>a</i></Match><Match when={KIND === "b"}><b>b</b></Match></Switch>
+        <button class="inc" onClick={inc} />
+        <button class="zero" onClick={zero} />
+        <button class="tick" onClick={tick} />
+      </div>
+    );
+  };
+});
+`
+  },
+  steps: [
+    { name: "initial", run: ({ html }) => html() },
+    step("tick (the adopted branch's hole)", ctx => ctx.click(".tick")),
+    step("inc (the callback Match)", ctx => ctx.click(".inc")),
+    step("tick", ctx => ctx.click(".tick")),
+    step("inc (the fallback)", ctx => ctx.click(".inc")),
+    step("inc (still the fallback)", ctx => ctx.click(".inc")),
+    step("tick", ctx => ctx.click(".tick")),
+    step("zero (the first Match again)", ctx => ctx.click(".zero"))
+  ]
+};
+
+/**
+ * `<For>` rows with an index: keyed rows get an index accessor that follows
+ * the row when it moves; `keyed={false}` rows are by position, with an item
+ * accessor and a number index (a fallback when empty).
+ */
+export const islandsForIndex: Scenario = {
+  name: "islands-for-index",
+  covers: [
+    "keyed rows with an index accessor (moved, prepended, removed)",
+    "keyed={false} rows by position with an item accessor",
+    "a keyed={false} list's fallback"
+  ],
+  entry: { component: "App" },
+  sources: {
+    reference: `
+import { createSignal, For } from "solid-js";
+export function App() {
+  const [l, setL] = createSignal(["a", "b"]);
+  return (
+    <div>
+      <ul class="k"><For each={l()}>{(item, i) => <li>{i()}:{item}</li>}</For></ul>
+      <ul class="u"><For each={l()} keyed={false} fallback={<li>none</li>}>{(item, i) => <li>{i}={item()}</li>}</For></ul>
+      <button class="pre" onClick={() => setL(x => ["z" + x.length, ...x])} />
+      <button class="rev" onClick={() => setL(x => [...x].reverse())} />
+      <button class="pop" onClick={() => setL(x => x.slice(0, -1))} />
+      <button class="clear" onClick={() => setL([])} />
+    </div>
+  );
+}
+`,
+    islands: `
+import { $component, $event, $signal, For } from "solid-js";
+export const App = $component(function* () {
+  const [l, setL] = yield* $signal(["a", "b"]);
+  const pre = $event(function* () { setL(x => ["z" + x.length, ...x]); });
+  const rev = $event(function* () { setL(x => [...x].reverse()); });
+  const pop = $event(function* () { setL(x => x.slice(0, -1)); });
+  const clear = $event(function* () { setL([]); });
+  return function* () {
+    return (
+      <div>
+        <ul class="k"><For each={yield* l}>{(item, i) => <li>{i()}:{item}</li>}</For></ul>
+        <ul class="u"><For each={yield* l} keyed={false} fallback={<li>none</li>}>{(item, i) => <li>{i}={item()}</li>}</For></ul>
+        <button class="pre" onClick={pre} />
+        <button class="rev" onClick={rev} />
+        <button class="pop" onClick={pop} />
+        <button class="clear" onClick={clear} />
+      </div>
+    );
+  };
+});
+`
+  },
+  steps: [
+    { name: "initial", run: ({ html }) => html() },
+    step("prepend (indexes shift)", ctx => ctx.click(".pre")),
+    step("reverse (rows move)", ctx => ctx.click(".rev")),
+    step("pop", ctx => ctx.click(".pop")),
+    step("clear (the fallback)", ctx => ctx.click(".clear")),
+    step("prepend (rows again)", ctx => ctx.click(".pre")),
+    step("prepend", ctx => ctx.click(".pre"))
+  ]
+};
+
+/**
+ * SVG inside a live region: rows the client creates are parsed in the SVG
+ * namespace, and their `class` is an attribute.
+ */
+export const islandsSvg: Scenario = {
+  name: "islands-svg",
+  covers: [
+    "SVG rows of a live For created in the SVG namespace",
+    "a dynamic class on an SVG element",
+    "a live Show inside an <svg>"
+  ],
+  entry: { component: "App" },
+  sources: {
+    reference: `
+import { createSignal, For, Show } from "solid-js";
+function Dot(props) {
+  return <circle r="1" cx={props.p} class={props.hot} />;
+}
+export function App() {
+  const [pts, setPts] = createSignal([1]);
+  const [hot, setHot] = createSignal("a");
+  const [on, setOn] = createSignal(false);
+  return (
+    <div>
+      <svg viewBox="0 0 10 10">
+        <For each={pts()}>{p => <Dot p={p} hot={hot()} />}</For>
+        <Show when={on()}><g class="on"><rect width="1" height="1" /></g></Show>
+      </svg>
+      <button class="add" onClick={() => setPts(l => [...l, l.length + 1])} />
+      <button class="heat" onClick={() => setHot(h => h + "a")} />
+      <button class="on" onClick={() => setOn(o => !o)} />
+    </div>
+  );
+}
+`,
+    islands: `
+import { $component, $event, $signal, For, Show } from "solid-js";
+const Dot = $component(function* (props) {
+  return function* () {
+    return <circle r="1" cx={props.p} class={yield* props.hot} />;
+  };
+});
+export const App = $component(function* () {
+  const [pts, setPts] = yield* $signal([1]);
+  const [hot, setHot] = yield* $signal("a");
+  const [on, setOn] = yield* $signal(false);
+  const add = $event(function* () { setPts(l => [...l, l.length + 1]); });
+  const heat = $event(function* () { setHot(h => h + "a"); });
+  const toggle = $event(function* () { setOn(o => !o); });
+  return function* () {
+    return (
+      <div>
+        <svg viewBox="0 0 10 10">
+          <For each={yield* pts}>{p => <Dot p={p} hot={hot} />}</For>
+          <Show when={yield* on}><g class="on"><rect width="1" height="1" /></g></Show>
+        </svg>
+        <button class="add" onClick={add} />
+        <button class="heat" onClick={heat} />
+        <button class="on" onClick={toggle} />
+      </div>
+    );
+  };
+});
+`
+  },
+  steps: [
+    { name: "initial", run: ({ html }) => html() },
+    step("add (a circle the client creates)", ctx => ctx.click(".add")),
+    step("heat (every circle's class)", ctx => ctx.click(".heat")),
+    step("on (a <g> the client creates)", ctx => ctx.click(".on")),
+    {
+      name: "namespaces",
+      run: ({ observe }) => {
+        const ns = [...document.querySelectorAll("circle, g.on, rect")].map(n => n.namespaceURI);
+        observe("namespaces", ns.join(" "));
+      }
+    }
+  ]
+};
+
+/**
+ * `<Dynamic>` over a statically known component: a string tag and a module
+ * component compile as the element they name (live content inside).
+ */
+export const islandsDynamic: Scenario = {
+  name: "islands-dynamic",
+  covers: [
+    "Dynamic with a string tag",
+    "Dynamic with a module component, children with a live hole"
+  ],
+  entry: { component: "App" },
+  sources: {
+    reference: `
+import { createSignal } from "solid-js";
+import { Dynamic } from "@solidjs/web";
+function Card(props) {
+  return <section class={"card " + props.tone}>{props.children}</section>;
+}
+export function App() {
+  const [n, setN] = createSignal(0);
+  return (
+    <div>
+      <Dynamic component="h2" class="t">title</Dynamic>
+      <Dynamic component={Card} tone="warm"><button class="inc" onClick={() => setN(x => x + 1)}>{n()}</button></Dynamic>
+    </div>
+  );
+}
+`,
+    islands: `
+import { $component, $event, $signal } from "solid-js";
+import { Dynamic } from "@solidjs/web";
+const Card = $component(function* (props) {
+  return function* () {
+    return <section class={"card " + props.tone}>{props.children}</section>;
+  };
+});
+export const App = $component(function* () {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    return (
+      <div>
+        <Dynamic component="h2" class="t">title</Dynamic>
+        <Dynamic component={Card} tone="warm"><button class="inc" onClick={inc}>{yield* n}</button></Dynamic>
+      </div>
+    );
+  };
+});
+`
+  },
+  steps: [
+    { name: "initial", run: ({ html }) => html() },
+    step("inc", ctx => ctx.click(".inc")),
+    step("inc", ctx => ctx.click(".inc"))
+  ]
+};
+
+/**
+ * `<Portal>`: the server renders nothing; the island builds its content at
+ * load and appends it to its mount (`document.body`), with a live hole.
+ */
+export const islandsPortal: Scenario = {
+  name: "islands-portal",
+  covers: [
+    "a Portal's content built on the client and mounted in document.body",
+    "a live hole inside the Portal",
+    "the Portal's content removed on dispose"
+  ],
+  entry: { component: "App" },
+  sources: {
+    reference: `
+import { createSignal } from "solid-js";
+import { Portal } from "@solidjs/web";
+export function App() {
+  const [n, setN] = createSignal(0);
+  return (
+    <div>
+      <button class="inc" onClick={() => setN(x => x + 1)}>inc</button>
+      <Portal><p class="modal">count {n()}</p></Portal>
+    </div>
+  );
+}
+`,
+    islands: `
+import { $component, $event, $signal } from "solid-js";
+import { Portal } from "@solidjs/web";
+export const App = $component(function* () {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    return (
+      <div>
+        <button class="inc" onClick={inc}>inc</button>
+        <Portal><p class="modal">count {yield* n}</p></Portal>
+      </div>
+    );
+  };
+});
+`
+  },
+  steps: [
+    {
+      name: "initial",
+      run: async ({ settle, html, observe }) => {
+        await settle();
+        html();
+        observe("portal", document.querySelector(".modal")?.textContent ?? null);
+      }
+    },
+    {
+      name: "inc",
+      run: ({ click, flush, observe }) => {
+        click(".inc");
+        flush();
+        observe("portal", document.querySelector(".modal")?.textContent ?? null);
+      }
+    },
+    {
+      name: "dispose",
+      run: ({ dispose, observe }) => {
+        dispose();
+        observe("portal", document.querySelector(".modal")?.textContent ?? null);
+      }
+    }
+  ]
+};
+
+/**
+ * Error routing for an island that would run at tier 0: an `<Errored>`
+ * around its live content puts it on the core with a client error boundary,
+ * so a throw in its hole shows the fallback (and a reset brings it back).
+ */
+export const islandsErroredTier0: Scenario = {
+  name: "islands-errored-tier0",
+  covers: [
+    "a throw in a hole of a would-be tier-0 island reaches its Errored fallback",
+    "reset recovers the content"
+  ],
+  entry: { component: "App" },
+  sources: {
+    reference: `
+import { createSignal, Errored } from "solid-js";
+const check = n => { if (n > 1) throw new Error("too big"); return n; };
+export function App() {
+  const [n, setN] = createSignal(0);
+  return (
+    <main>
+      <button class="inc" onClick={() => setN(x => x + 1)}>inc</button>
+      <Errored
+        fallback={(err, reset) => (
+          <p class="err">
+            {String(err())}
+            <button class="reset" onClick={() => { setN(0); reset(); }}>reset</button>
+          </p>
+        )}
+      >
+        <span class="v">{check(n())}</span>
+      </Errored>
+    </main>
+  );
+}
+`,
+    islands: `
+import { $component, $event, $signal, Errored } from "solid-js";
+const check = n => { if (n > 1) throw new Error("too big"); return n; };
+export const App = $component(function* () {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    return (
+      <main>
+        <button class="inc" onClick={inc}>inc</button>
+        <Errored
+          fallback={(err, reset) => (
+            <p class="err">
+              {String(err())}
+              <button class="reset" onClick={() => { setN(0); reset(); }}>reset</button>
+            </p>
+          )}
+        >
+          <span class="v">{check(yield* n)}</span>
+        </Errored>
+      </main>
+    );
+  };
+});
+`
+  },
+  steps: [
+    { name: "initial", run: ({ html }) => html() },
+    step("inc (1)", ctx => ctx.click(".inc")),
+    step("inc (2: the hole throws, the fallback shows)", ctx => ctx.click(".inc")),
+    step("reset (the content comes back)", ctx => ctx.click(".reset")),
+    step("inc (the content is live again)", ctx => ctx.click(".inc"))
+  ]
+};
+
 export const islandsScenarios = [
   islandsList,
   islandsSharedMember,
@@ -1289,5 +1777,12 @@ export const islandsScenarios = [
   islandsRef,
   islandsSpread,
   islandsFallback,
-  islandsLoadingRows
+  islandsLoadingRows,
+  islandsViewStatements,
+  islandsSwitch,
+  islandsForIndex,
+  islandsSvg,
+  islandsDynamic,
+  islandsPortal,
+  islandsErroredTier0
 ];

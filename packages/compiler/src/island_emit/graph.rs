@@ -61,6 +61,21 @@ pub(crate) struct Refs {
 /// Globals whose value differs between the server and the client.
 const ENV_GLOBALS: &[&str] = &["window", "document", "navigator", "Intl"];
 
+impl Refs {
+    /// Union with another expression's references.
+    pub(crate) fn join(&mut self, o: Refs) {
+        self.syms.extend(o.syms);
+        self.props.extend(o.props);
+        self.props_bare |= o.props_bare;
+        self.calls.extend(o.calls);
+        self.has_jsx |= o.has_jsx;
+        self.prevent_default |= o.prevent_default;
+        self.refreshed.extend(o.refreshed);
+        self.yielded.extend(o.yielded);
+        self.env.extend(o.env);
+    }
+}
+
 struct Walker<'m, 'a> {
     m: &'m Model<'a>,
     props: Option<SymbolId>,
@@ -287,6 +302,9 @@ pub(crate) enum SiteKind {
     /// `ref={…}` on an intrinsic element: client code that receives the
     /// element when the island activates (or its fresh content is built).
     Ref,
+    /// `<Portal>`: content the client always builds (the server renders
+    /// nothing), appended to its mount when the island activates.
+    Portal,
 }
 
 // `expr` / `regions` complete the site record for consumers of the analysis.
@@ -300,6 +318,11 @@ pub(crate) struct Site<'a> {
     pub regions: Vec<usize>,
     /// `Show` / `For`: the render callback's parameter (`item => …`).
     pub param: Option<SymbolId>,
+    /// `For`: the callback's index parameter (an accessor for keyed rows, a
+    /// number for `keyed={false}` rows).
+    pub param2: Option<SymbolId>,
+    /// `<For keyed={false}>`: rows by position, the item an accessor.
+    pub unkeyed: bool,
 }
 
 pub(crate) struct Call<'a> {
@@ -329,6 +352,9 @@ pub(crate) struct CompFacts<'a> {
     pub outlet: bool,
     /// `<Loading on={…}>` keys.
     pub boundary_on: Vec<Refs>,
+    /// Render-callback parameters of `<Match>` branches (the `when` accessor)
+    /// with the `when` expression's references.
+    pub extra_params: Vec<(SymbolId, Refs)>,
 }
 
 struct ViewWalk<'m, 'a> {
@@ -357,6 +383,8 @@ impl<'a> ViewWalk<'_, 'a> {
             refs,
             regions: self.regions.clone(),
             param: None,
+            param2: None,
+            unkeyed: false,
         });
         i
     }
@@ -600,16 +628,48 @@ impl<'a> ViewWalk<'_, 'a> {
                             self.f.issues.push(format!("<{name} {}>", a.name));
                         }
                     }
+                    // `<For keyed={false}>`: rows by position (item accessor,
+                    // index number); a key function is not compiled.
+                    let unkeyed = name == "For"
+                        && match jsx::attr(&attrs, "keyed").map(|a| &a.value) {
+                            None | Some(AttrVal::True) => false,
+                            Some(AttrVal::Expr(e))
+                                if matches!(e.without_parentheses(), Expression::BooleanLiteral(b) if !b.value) =>
+                            {
+                                true
+                            }
+                            Some(AttrVal::Expr(e))
+                                if matches!(e.without_parentheses(), Expression::BooleanLiteral(_)) =>
+                            {
+                                false
+                            }
+                            Some(_) => {
+                                self.f
+                                    .issues
+                                    .push("<For keyed={…}> other than true / false".into());
+                                false
+                            }
+                        };
                     if let Some(s) = site {
                         self.regions.push(s);
-                        // The render callback's parameter carries the input.
+                        self.f.sites[s].unkeyed = unkeyed;
+                        // The render callback's parameters carry the input.
                         if let Ok(kids) = jsx::children(&el.children)
                             && let [Child::Expr(e)] = kids.as_slice()
                             && let Some(f) = FnRef::from_expr(e)
-                            && let Some(p) = f.params().items.first()
-                            && let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &p.pattern
                         {
-                            self.f.sites[s].param = id.symbol_id.get();
+                            let id_of = |i: usize| {
+                                f.params().items.get(i).and_then(|p| match &p.pattern {
+                                    oxc_ast::ast::BindingPattern::BindingIdentifier(id) => {
+                                        id.symbol_id.get()
+                                    }
+                                    _ => None,
+                                })
+                            };
+                            self.f.sites[s].param = id_of(0);
+                            if name == "For" {
+                                self.f.sites[s].param2 = id_of(1);
+                            }
                         }
                     }
                     if let Some(fb) = jsx::attr(&attrs, "fallback") {
@@ -644,6 +704,119 @@ impl<'a> ViewWalk<'_, 'a> {
                     }
                     self.kids(&el.children);
                 }
+                "Switch" => {
+                    // One region: the first `<Match>` whose `when` is truthy
+                    // (or the fallback). Its site reads every `when` (a
+                    // later one only when the earlier ones are falsy).
+                    let kids = match jsx::children(&el.children) {
+                        Ok(k) => k,
+                        Err(e) => {
+                            self.f.issues.push(e);
+                            return;
+                        }
+                    };
+                    let mut matches = Vec::new();
+                    for k in &kids {
+                        match k {
+                            Child::Element(m)
+                                if matches!(jsx::tag_of(self.m, &m.opening_element.name), Tag::Builtin(ref b) if b == "Match") =>
+                            {
+                                matches.push(*m);
+                            }
+                            _ => self
+                                .f
+                                .issues
+                                .push("a <Switch> child other than a <Match>".into()),
+                        }
+                    }
+                    for a in &attrs {
+                        if a.name != "fallback" {
+                            self.f.issues.push(format!("<Switch {}>", a.name));
+                        }
+                    }
+                    let mut refs = Refs::default();
+                    let mut whens = Vec::new();
+                    for (i, mel) in matches.iter().enumerate() {
+                        let Ok(mattrs) = jsx::attrs(mel) else {
+                            self.f.issues.push("JSX spread attribute".into());
+                            continue;
+                        };
+                        for a in &mattrs {
+                            if a.name != "when" && a.name != "keyed" {
+                                self.f.issues.push(format!("<Match {}>", a.name));
+                            }
+                        }
+                        match jsx::attr(&mattrs, "when").map(|a| &a.value) {
+                            Some(AttrVal::Expr(e)) => {
+                                let mut r = refs_expr(self.m, self.props, e);
+                                if i > 0 {
+                                    for x in &mut r.syms {
+                                        x.1 = true;
+                                    }
+                                    for x in &mut r.props {
+                                        x.1 = true;
+                                    }
+                                }
+                                whens.push(Some(r.clone()));
+                                refs.join(r);
+                            }
+                            _ => {
+                                self.f
+                                    .issues
+                                    .push("<Match> without an expression `when`".into());
+                                whens.push(None);
+                            }
+                        }
+                    }
+                    let s = self.site(SiteKind::Show, el.span, None, refs);
+                    self.regions.push(s);
+                    for (mel, r) in matches.iter().zip(whens) {
+                        if let (Some(r), Ok(kids)) = (r, jsx::children(&mel.children))
+                            && let [Child::Expr(e)] = kids.as_slice()
+                            && let Some(f) = FnRef::from_expr(e)
+                            && let Some(p) = f.params().items.first()
+                            && let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &p.pattern
+                            && let Some(sym) = id.symbol_id.get()
+                        {
+                            self.f.extra_params.push((sym, r));
+                        }
+                        self.render_children(mel);
+                    }
+                    if let Some(fb) = jsx::attr(&attrs, "fallback") {
+                        self.attr_jsx(&fb.value);
+                    }
+                    self.regions.pop();
+                }
+                "Portal" => {
+                    // Built on the client (the server renders nothing): an
+                    // always-live site whose content is fresh.
+                    for a in &attrs {
+                        if a.name != "mount" {
+                            self.f.issues.push(format!("<Portal {}>", a.name));
+                        }
+                    }
+                    let (expr, refs) = match jsx::attr(&attrs, "mount").map(|a| &a.value) {
+                        Some(AttrVal::Expr(e)) => (Some(*e), refs_expr(self.m, self.props, e)),
+                        None => (None, Refs::default()),
+                        Some(_) => {
+                            self.f.issues.push("<Portal mount> that is not an expression".into());
+                            (None, Refs::default())
+                        }
+                    };
+                    let s = self.site(SiteKind::Portal, el.span, expr, refs);
+                    self.regions.push(s);
+                    self.kids(&el.children);
+                    self.regions.pop();
+                }
+                "Dynamic" => self.f.issues.push(
+                    "<Dynamic> over a component the compiler cannot resolve statically (a string tag, or a component bound at the module's top level, is compiled as that element)"
+                        .into(),
+                ),
+                "Match" => self.f.issues.push("<Match> outside a <Switch>".into()),
+                "Index" => self
+                    .f
+                    .issues
+                    .push("<Index> (Solid 2 has `<For keyed={false}>`)".into()),
                 other => {
                     self.f
                         .issues
@@ -982,9 +1155,13 @@ pub(crate) fn analyze_file<'a>(
                 refs: rw.out,
                 regions: vec![],
                 param: None,
+                param2: None,
+                unkeyed: false,
             });
-            w.f.issues
-                .push("statements before the view's return".into());
+            w.f.issues.push(
+                "a statement before the view's return that returns early (a conditional view)"
+                    .into(),
+            );
         }
         let mut item_refs = Vec::new();
         for (ii, item) in c.setup.iter().enumerate() {
@@ -1006,7 +1183,9 @@ pub(crate) fn analyze_file<'a>(
                         expr: None,
                         refs: r.clone(),
                         regions: vec![],
-                param: None,
+                        param: None,
+                        param2: None,
+                        unkeyed: false,
                     });
                     r
                 }
@@ -1049,7 +1228,9 @@ pub(crate) fn analyze_file<'a>(
                 continue;
             };
             let Some(init) = &d.init else { continue };
-            let Some(callee) = model_call_callee(m, init) else { continue };
+            let Some(callee) = model_call_callee(m, init) else {
+                continue;
+            };
             for s in symbols {
                 opaque.push((*s, callee.clone()));
             }
@@ -1165,7 +1346,16 @@ pub(crate) fn analyze_file<'a>(
                 let site = &a.facts[ci].sites[si];
                 let Some(p) = site.param else { continue };
                 let v = a.av_of(ci, &site.refs.clone());
-                let v = if site.kind == SiteKind::For {
+                // A row's index, and an unkeyed row's item (an accessor over
+                // the list's position), change with the list.
+                if let Some(q) = site.param2 {
+                    let iv = Av {
+                        reads: v.reads.clone(),
+                        writes: BTreeSet::new(),
+                    };
+                    changed |= a.sym_av.entry(q).or_default().join(&iv);
+                }
+                let v = if site.kind == SiteKind::For && !site.unkeyed {
                     Av {
                         reads: store_keys(m, &a, &v.reads),
                         writes: BTreeSet::new(),
@@ -1175,6 +1365,15 @@ pub(crate) fn analyze_file<'a>(
                         reads: v.reads,
                         writes: BTreeSet::new(),
                     }
+                };
+                changed |= a.sym_av.entry(p).or_default().join(&v);
+            }
+            for pi in 0..a.facts[ci].extra_params.len() {
+                let (p, r) = a.facts[ci].extra_params[pi].clone();
+                let v = a.av_of(ci, &r);
+                let v = Av {
+                    reads: v.reads,
+                    writes: BTreeSet::new(),
                 };
                 changed |= a.sym_av.entry(p).or_default().join(&v);
             }
@@ -1284,7 +1483,11 @@ pub(crate) fn analyze_file<'a>(
                 SiteKind::Handler(_) | SiteKind::Ref => a.written.extend(v.writes),
                 // A view expression that references a setter (other than as
                 // a prop of a module component, which flows) hands it out.
-                SiteKind::Text | SiteKind::Attr(_) | SiteKind::Show | SiteKind::For => {
+                SiteKind::Text
+                | SiteKind::Attr(_)
+                | SiteKind::Show
+                | SiteKind::For
+                | SiteKind::Portal => {
                     a.escaped_writes.extend(v.writes.iter().copied());
                     a.written.extend(v.writes);
                 }
@@ -1350,6 +1553,57 @@ pub(crate) fn analyze_file<'a>(
     // --- frames (compiler-derived server components) ------------------------------------
     super::frames::detect(m, &mut a, filename);
 
+    // View statements run once where the view first renders: sound only when
+    // they read no live state (a live read would re-run the whole view).
+    for (ci, c) in m.comps.iter().enumerate() {
+        // Functions (events, local functions) are values here: calling one
+        // later is not a read of the view.
+        let fns: HashSet<SymbolId> = c
+            .setup
+            .iter()
+            .filter(|it| match it {
+                Item::Event { .. } => true,
+                Item::Local {
+                    decl: LocalDecl::Func(_),
+                    ..
+                } => true,
+                Item::Local {
+                    decl: LocalDecl::Var(d),
+                    ..
+                } => d
+                    .init
+                    .as_ref()
+                    .is_some_and(|i| FnRef::from_expr(i).is_some()),
+                _ => false,
+            })
+            .flat_map(|it| it.declares())
+            .collect();
+        for ii in &c.view_items {
+            if matches!(
+                &c.setup[*ii],
+                Item::Local {
+                    decl: LocalDecl::Func(_),
+                    ..
+                }
+            ) || matches!(&c.setup[*ii], Item::Local { decl: LocalDecl::Var(d), .. } if d.init.as_ref().is_some_and(|i| FnRef::from_expr(i).is_some()))
+            {
+                continue;
+            }
+            let mut r = a.facts[ci].item_refs[*ii].clone();
+            r.syms.retain(|(s, _)| !fns.contains(s));
+            let (reads, _) = a.live_reads(ci, &r);
+            if let Some(k) = reads.iter().next() {
+                let name = match &m.comps[k.0].setup[k.1] {
+                    Item::Cell { name, .. } | Item::Memo { name, .. } => name.clone(),
+                    _ => "?".into(),
+                };
+                a.facts[ci].issues.push(format!(
+                    "a statement before the view's return reads live state (`{name}`): the whole view would re-run (read it in the markup, or in a memo)"
+                ));
+            }
+        }
+    }
+
     // --- sites and union-find ----------------------------------------------------------
     let mut index: HashMap<Key, usize> = HashMap::new();
     let mut elems: Vec<Elem> = Vec::new();
@@ -1403,7 +1657,7 @@ pub(crate) fn analyze_file<'a>(
             // (it addresses the region), even with no live arguments.
             let always = matches!(
                 s.kind,
-                SiteKind::Handler(_) | SiteKind::Effect(..) | SiteKind::Ref
+                SiteKind::Handler(_) | SiteKind::Effect(..) | SiteKind::Ref | SiteKind::Portal
             ) || matches!(s.kind, SiteKind::Frame(fi) if !a.frames[fi].refreshers.is_empty());
             // A view site reading the client environment is client-live:
             // the server's value is not final.
@@ -1507,8 +1761,7 @@ pub(crate) fn analyze_file<'a>(
                 let Some(&ej) = site_index.get(&(ci, sj)) else {
                     continue;
                 };
-                if sym_closure(m, &a.facts[ci], ci, &a.facts[ci].sites[sj].refs).contains(&target)
-                {
+                if sym_closure(m, &a.facts[ci], ci, &a.facts[ci].sites[sj].refs).contains(&target) {
                     union(&mut parent, e, ej);
                 }
             }
@@ -1640,7 +1893,10 @@ pub(crate) fn analyze_file<'a>(
                 let Elem::Site(ci, si) = elems[*e] else {
                     continue;
                 };
-                if !matches!(a.facts[ci].sites[si].kind, SiteKind::Show | SiteKind::For) {
+                if !matches!(
+                    a.facts[ci].sites[si].kind,
+                    SiteKind::Show | SiteKind::For | SiteKind::Portal
+                ) {
                     continue;
                 }
                 // Components rendered inside this live region.
@@ -1822,6 +2078,18 @@ pub(crate) fn analyze_file<'a>(
                     prevent_default |= site.refs.prevent_default
                         || handler_prevents(m, a.sym_av_event(*c, &site.refs));
                 }
+                SiteKind::Portal => {
+                    t1.push(format!(
+                        "`{}`: <Portal> (content the client builds)",
+                        m.comps[*c].name
+                    ));
+                    bump(&mut own, *c, 1);
+                    hot = true;
+                    load_why.push(format!(
+                        "`{}`: a <Portal> (the server renders nothing; the client builds it at load)",
+                        m.comps[*c].name
+                    ));
+                }
                 SiteKind::Show | SiteKind::For => {
                     t1.push(format!(
                         "`{}`: <{}> over a live input (dynamic structure)",
@@ -1889,7 +2157,8 @@ pub(crate) fn analyze_file<'a>(
         }
         for c in &members {
             for (ii, item) in m.comps[*c].setup.iter().enumerate() {
-                if matches!(item, Item::Memo { is_async: true, .. }) && !a.live.contains(&(*c, ii)) {
+                if matches!(item, Item::Memo { is_async: true, .. }) && !a.live.contains(&(*c, ii))
+                {
                     continue;
                 }
                 let r = &a.facts[*c].item_refs[ii];
@@ -1941,6 +2210,28 @@ pub(crate) fn analyze_file<'a>(
                     // the content the client adopts or creates.
                     t2.push(format!(
                         "`{}`: <{b}> inside a live region",
+                        m.comps[*c].name
+                    ));
+                    bump(&mut own, *c, 2);
+                    continue;
+                }
+                // Around the island's live content (its sites, or a member
+                // it renders): a throw there must reach its fallback. Only
+                // the core routes errors (the kernel and the t0 helper let a
+                // throw escape), so the group runs on it with a client error
+                // boundary there.
+                let inside = |sp: Span| span.start <= sp.start && sp.end <= span.end;
+                let wraps_sites = sites
+                    .iter()
+                    .any(|(c2, s2)| c2 == c && inside(a.facts[*c2].sites[*s2].span));
+                let wraps_members = a.facts[*c].calls.iter().any(|call| {
+                    inside(call.span)
+                        && matches!(call.tag, Tag::Comp(k) if members.contains(&k)
+                            || reach(k, &a.facts).iter().any(|x| members.contains(x)))
+                });
+                if wraps_sites || wraps_members {
+                    t2.push(format!(
+                        "`{}`: <Errored> around the island's live content (client error routing: the full core)",
                         m.comps[*c].name
                     ));
                     bump(&mut own, *c, 2);
@@ -2315,7 +2606,9 @@ pub(crate) fn ref_target(
             symbols,
             ..
         } if symbols.contains(&s)
-            && d.init.as_ref().is_none_or(|i| FnRef::from_expr(i).is_none()) =>
+            && d.init
+                .as_ref()
+                .is_none_or(|i| FnRef::from_expr(i).is_none()) =>
         {
             Some(s)
         }

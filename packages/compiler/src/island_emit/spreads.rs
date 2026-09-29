@@ -85,8 +85,7 @@ impl<'a> Visit<'a> for Collect<'_, 'a> {
         let e: &'a JSXElement<'a> = unsafe { &*(e as *const JSXElement<'a>) };
         match &e.opening_element.name {
             JSXElementName::Identifier(_) => {
-                if e
-                    .opening_element
+                if e.opening_element
                     .attributes
                     .iter()
                     .any(|a| matches!(a, JSXAttributeItem::SpreadAttribute(_)))
@@ -247,7 +246,10 @@ fn rewrite_element<'a>(
                     attrs.push_str(&format!(" {k}={{{read}}}"));
                     spread_keys.push(k);
                 }
-                if kids && !has_children(&el.children) && !crate::shared::utils::is_void_element(&tag.name) {
+                if kids
+                    && !has_children(&el.children)
+                    && !crate::shared::utils::is_void_element(&tag.name)
+                {
                     children = Some(format!("{{{p}.children}}"));
                 }
             }
