@@ -1018,29 +1018,33 @@ function solidCapabilities(options = {}) {
         JSON.stringify({ modules: modules.map(m => m.rel).sort(), features }, null, 2)
       );
     },
-    async load(id) {
+    load(id) {
       if (id === FRAMES_ID) return framesFeaturesModuleSource(framesDecision.features);
       if (id.startsWith(FEATURES_ID))
         return featuresModuleSource(decision.features, id.slice(FEATURES_ID.length));
       // The runtime tree's own modules carry the switches inlined as marked
       // literals (scripts/inline-features.mjs): rewrite the ones the proof
       // turned off. In `load`, ahead of any plugin that could re-print the
-      // module and drop the marker comments.
+      // module and drop the marker comments. (Synchronous up to here: the
+      // virtual modules above are loaded without awaiting.)
       if (!featureSlicing || !decision?.features || id.startsWith("\0")) return null;
       if (stripQuery(id) !== id || !RUNTIME_TREE_RE.test(id)) return null;
       if (packageOf(id)?.name !== RUNTIME_PACKAGE) return null;
-      await refineFeatures(this);
-      if (FEATURE_SWITCHES.every(f => decision.features[f].on)) return null;
-      let code;
-      try {
-        code = fs.readFileSync(id, "utf8");
-      } catch {
-        return null;
-      }
-      const sliced = sliceFeatureLiterals(code, decision.features);
-      return sliced === null ? null : { code: sliced, map: null };
+      return loadTreeModule(this, id);
     }
   };
+  async function loadTreeModule(ctx, id) {
+    await refineFeatures(ctx);
+    if (FEATURE_SWITCHES.every(f => decision.features[f].on)) return null;
+    let code;
+    try {
+      code = fs.readFileSync(id, "utf8");
+    } catch {
+      return null;
+    }
+    const sliced = sliceFeatureLiterals(code, decision.features);
+    return sliced === null ? null : { code: sliced, map: null };
+  }
 }
 
 module.exports = {
