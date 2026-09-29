@@ -95,12 +95,12 @@ for (const flavor of ["h", "html"] as const) {
       const p = root.querySelector("p")!;
       const input = root.querySelector("input")!;
       input.value = "typed";
-      expect(p.textContent).toBe("Hello Ada 1");
+      expect(p.textContent!.trim()).toBe("Hello Ada 1");
       for (let i = 0; i < 3; i++) {
         inc();
         flush();
       }
-      expect(p.textContent).toBe("Hello Ada 4");
+      expect(p.textContent!.trim()).toBe("Hello Ada 4");
       expect(p.className).toBe("big");
       expect(root.querySelector("p")).toBe(p);
       expect(root.querySelector("input")).toBe(input);

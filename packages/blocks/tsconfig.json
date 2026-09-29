@@ -12,7 +12,7 @@
       "@solidjs/blocks": ["./src/index.ts"],
       "@solidjs/blocks/h": ["./src/h.ts"],
       "@solidjs/blocks/html": ["./src/html.ts"],
-      "@solidjs/blocks/jsx-runtime": ["./jsx/jsx.d.ts"]
+      "@solidjs/blocks/jsx-runtime": ["./jsx/jsx-runtime.d.ts"]
     }
   },
   "include": ["./src", "./test"]

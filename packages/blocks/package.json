@@ -57,10 +57,12 @@
       "default": "./dist/html.js"
     },
     "./jsx-runtime": {
-      "types": "./jsx/jsx.d.ts"
+      "types": "./jsx/jsx-runtime.d.ts",
+      "default": "./dist/jsx-runtime.js"
     },
     "./jsx-dev-runtime": {
-      "types": "./jsx/jsx.d.ts"
+      "types": "./jsx/jsx-runtime.d.ts",
+      "default": "./dist/jsx-runtime.js"
     },
     "./package.json": "./package.json"
   },

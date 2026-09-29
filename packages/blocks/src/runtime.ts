@@ -110,9 +110,18 @@ const HOST_NAMES = [
 ];
 
 let host: Host = NONE;
-/** The running view's top-level reads (null outside a view's first run). */
-let viewReads: unknown[] | null = null;
+/** Set while a view's first run is at its top level (not in a hole, not in a child's setup). */
 let viewRunning = false;
+/**
+ * Thrown by a read at a view's top level during its first run: the run is
+ * abandoned before the read happens, and the view re-renders as a whole in
+ * a memo from then on. Aborting (rather than reading untracked and then
+ * subscribing) matters for async: an untracked read of a pending source
+ * would register the computation that created the component (a `Loading`'s
+ * content, a thunk render) as waiting on it, and that computation would
+ * re-run — re-creating the component — when the source resolves.
+ */
+const WHOLE_VIEW = { wholeView: true };
 /** Cleanups of the running effect run (null outside an effect). */
 let cleanupSink: (() => void)[] | null = null;
 /** Set while a memo runs after its first async `attempt`. */
@@ -140,7 +149,7 @@ function checkRead(): void {
 /** Perform the read a readable stands for (tracked in the running computation). */
 function readOf(x: any): unknown {
   if (__DEV__) checkRead();
-  if (viewRunning && viewReads !== null && getObserver() === null) viewReads.push(x);
+  if (viewRunning && getObserver() === null) throw WHOLE_VIEW;
   const r = x[READ];
   return r === PATH_READ ? readPath(x[PATH_TARGET]) : r.call(x);
 }
@@ -758,36 +767,24 @@ function warnWholeView(): void {
  */
 export function renderView(viewFn: () => Generator<unknown, unknown, unknown>): unknown {
   if (__SERVER__) return runAs(VIEW, () => drive(viewFn(), SYNC_RUN));
-  const prevReads = viewReads;
   const prevRunning = viewRunning;
   const prev = host;
-  const reads: unknown[] = [];
-  viewReads = reads;
   viewRunning = true;
   host = VIEW;
   let value: unknown;
-  let failed: unknown = undefined;
-  let didFail = false;
+  let whole = false;
   try {
     value = drive(viewFn(), SYNC_RUN);
   } catch (e) {
-    didFail = true;
-    failed = e;
+    if (e !== WHOLE_VIEW) throw e;
+    whole = true;
   } finally {
-    viewReads = prevReads;
     viewRunning = prevRunning;
     host = prev;
   }
-  if (!didFail && reads.length === 0) return value;
-  if (didFail && !(failed instanceof NotReadyError)) throw failed;
+  if (!whole) return value;
   if (__DEV__) warnWholeView();
-  let first = !didFail;
-  const whole: any = createMemo(() => {
-    if (first) {
-      first = false;
-      for (let i = 0; i < reads.length; i++) readOf(reads[i]);
-      return value;
-    }
+  const view: any = createMemo(() => {
     const prevRunning = viewRunning;
     viewRunning = false;
     try {
@@ -796,8 +793,8 @@ export function renderView(viewFn: () => Generator<unknown, unknown, unknown>): 
       viewRunning = prevRunning;
     }
   });
-  whole[VIEW_MARK] = true;
-  return whole;
+  view[VIEW_MARK] = true;
+  return view;
 }
 
 /**

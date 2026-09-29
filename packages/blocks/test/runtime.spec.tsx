@@ -130,7 +130,9 @@ describe("views are fine-grained", () => {
     set(2);
     flush();
     expect(root.textContent).toBe("2");
-    expect(runs).toBe(2);
+    // the first run stops at its first top-level read; the view then runs
+    // whole, once per change
+    expect(runs).toBe(3);
     expect(warn.mock.calls.some(c => String(c[0]).includes("VIEW_READS_OUTSIDE_JSX"))).toBe(true);
     warn.mockRestore();
   });

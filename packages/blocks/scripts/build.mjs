@@ -16,7 +16,8 @@ const variants = [
   { entry: "src/h.ts", out: "dist/h.js", dev: false, server: false },
   { entry: "src/h.ts", out: "dist/h.dev.js", dev: true, server: false },
   { entry: "src/html.ts", out: "dist/html.js", dev: false, server: false },
-  { entry: "src/html.ts", out: "dist/html.dev.js", dev: true, server: false }
+  { entry: "src/html.ts", out: "dist/html.dev.js", dev: true, server: false },
+  { entry: "src/jsx-runtime.ts", out: "dist/jsx-runtime.js", dev: false, server: false }
 ];
 
 import { existsSync } from "node:fs";
