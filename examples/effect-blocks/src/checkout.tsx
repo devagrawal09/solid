@@ -62,7 +62,7 @@ const INITIAL_CART: CartItem[] = [
  * `<Loading>`; a view that reads a pending source is pending itself, so the
  * list is its own component and the boundary receives it.
  */
-const Orders = $component(function* (
+const Orders = $component(function* Orders(
   props: TypedProps<{ orders: Source<Order[], true, never> }, "Orders">
 ) {
   return function* () {
@@ -92,7 +92,7 @@ const Orders = $component(function* (
   };
 });
 
-export const Checkout = $component(function* () {
+export const Checkout = $component(function* Checkout() {
   const [cart, setCart] = yield* $store<CartItem[]>(INITIAL_CART.map(i => ({ ...i })));
   // The optimistic orders store fetches asynchronously: read through
   // `paths`, stated pending (the fetch is not expected to fail here).

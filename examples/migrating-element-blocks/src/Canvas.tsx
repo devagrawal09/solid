@@ -1,7 +1,7 @@
 import { $cleanup, $component, $settled } from "@solidjs/blocks";
 import { CANVAS_H, CANVAS_W, createLogoCanvasPainter, REVEAL_MS } from "./logoCanvas";
 
-export const Canvas = $component(function* () {
+export const Canvas = $component(function* Canvas() {
   let el!: HTMLCanvasElement;
   let painter!: ReturnType<typeof createLogoCanvasPainter>;
 

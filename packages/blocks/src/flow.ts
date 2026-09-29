@@ -20,9 +20,10 @@ import {
   Repeat as SolidRepeat,
   Show as SolidShow,
   Switch as SolidSwitch,
+  untrack,
   type Accessor
 } from "solid-js";
-import { BODY, BOUNDARY, READ, isRowBlock, rowArg, runRow, through } from "./runtime.js";
+import { BODY, BOUNDARY, READ, VIEW_MARK, isRowBlock, rowArg, runRow, through } from "./runtime.js";
 import type { Element } from "./element.js";
 import type {
   COMPONENT,
@@ -214,19 +215,71 @@ function MatchBlocks(props: any): any {
 
 // --- boundaries ---------------------------------------------------------------------------------
 
+declare const __DEV__: boolean;
+
+/** Whether a value is an `h` / automatic-`jsx` element thunk (built where it is inserted). */
+function isElementThunk(value: any): boolean {
+  const symbols = Object.getOwnPropertySymbols(value);
+  for (let i = 0; i < symbols.length; i++)
+    if (symbols[i].description === "hyper-element") return true;
+  return false;
+}
+
+/** Content that was built before the boundary: a component's DOM. */
+function isBuilt(value: any): boolean {
+  if (value == null) return false;
+  if (Array.isArray(value)) return value.some(isBuilt);
+  return typeof Node !== "undefined" && value instanceof Node;
+}
+
+/**
+ * A boundary's content. JSX children arrive as a getter (built inside the
+ * boundary, and again after a reset). In the call form the content is what
+ * the caller passed: `children: () => UserCard({ user })` is built inside
+ * the boundary; `children: UserCard({ user })` was built before it — its
+ * pending reads and failures reach the boundary above instead — and is a
+ * dev error. (`h` output is built where it is inserted: either is fine.)
+ */
+function content(props: any, name: string): () => unknown {
+  const d = Object.getOwnPropertyDescriptor(props, "children");
+  if (!d || d.get) return () => props.children;
+  const v = d.value;
+  if (
+    typeof v === "function" &&
+    v[READ] === undefined &&
+    v[VIEW_MARK] !== true &&
+    !isElementThunk(v)
+  )
+    return v;
+  if (__DEV__ && isBuilt(v))
+    throw new Error(
+      `[BOUNDARY_CONTENT_BUILT] ${name}'s content was built before the boundary: pass it as a function (\`children: () => View()\`) or use the tag form.`
+    );
+  return () => v;
+}
+
 /**
  * Handles pending below it. Tag form takes settled or pending children
  * (`<Loading fallback={…}>{UserCard({ user })}</Loading>`); it returns a
  * view without pending, so failures still have to be handled above.
+ * `on` may be a source (`Loading({ on: props.room, … })`): it is read where
+ * Solid's `Loading` reads it, so the call form keys the boundary too.
  */
 function LoadingBlocks(props: { fallback?: Element; on?: unknown; children: Element }): SettledView;
 function LoadingBlocks<P extends boolean, E>(props: {
   fallback?: Element;
   on?: unknown;
-  children: View<P, E> | readonly View<P, E>[];
+  children: View<P, E> | readonly View<P, E>[] | (() => View<P, E> | readonly View<P, E>[]);
 }): View<false, E>;
 function LoadingBlocks(props: any): any {
-  return SolidLoading(props);
+  const children = content(props, "Loading");
+  // `on` may be a source: every other prop is read through where it is read
+  const out: any = {};
+  for (const key of Object.keys(props))
+    if (key !== "children")
+      Object.defineProperty(out, key, { get: () => through(props[key]), enumerable: true });
+  Object.defineProperty(out, "children", { get: children, enumerable: true });
+  return SolidLoading(out);
 }
 
 /**
@@ -240,9 +293,10 @@ function ErroredBlocks(props: {
 }): SettledView;
 function ErroredBlocks<P extends boolean, E>(props: {
   fallback: Element | ((error: Accessor<E>, reset: () => void) => Element);
-  children: View<P, E> | readonly View<P, E>[];
+  children: View<P, E> | readonly View<P, E>[] | (() => View<P, E> | readonly View<P, E>[]);
 }): View<P, never>;
 function ErroredBlocks(props: any): any {
+  const children = content(props, "Errored");
   const fallback = props.fallback as any;
   const adapted =
     typeof fallback === "function" && (isRowBlock(fallback) || fallback[BODY] !== undefined)
@@ -257,16 +311,31 @@ function ErroredBlocks(props: any): any {
       return createComponent(BOUNDARY as any, {
         value: true,
         get children() {
-          return props.children;
+          return children();
         }
       });
     }
   } as any) as any;
 }
 
-export const For: typeof ForBlocks & Branded = ForBlocks as any;
-export const Repeat: typeof RepeatBlocks & Branded = RepeatBlocks as any;
-export const Show: typeof ShowBlocks & Branded = ShowBlocks as any;
-export const Match: typeof MatchBlocks & Branded = MatchBlocks as any;
-export const Loading: typeof LoadingBlocks & Branded = LoadingBlocks as any;
-export const Errored: typeof ErroredBlocks & Branded = ErroredBlocks as any;
+/**
+ * Created untracked, as a JSX tag is (`createComponent`): called inside a
+ * view's hole (`{yield* Loading({ … })}`), a flow control's creation must
+ * not subscribe the hole — the hole would re-create it, and its content, on
+ * every change the flow control reads.
+ */
+function untracked(fn: (props: any) => any): any {
+  return (props: any) => {
+    const out = untrack(() => fn(props));
+    // its output is a view: `yield*` / `perform` passes it on unread
+    if (typeof out === "function") out[VIEW_MARK] = true;
+    return out;
+  };
+}
+
+export const For: typeof ForBlocks & Branded = untracked(ForBlocks);
+export const Repeat: typeof RepeatBlocks & Branded = untracked(RepeatBlocks);
+export const Show: typeof ShowBlocks & Branded = untracked(ShowBlocks);
+export const Match: typeof MatchBlocks & Branded = untracked(MatchBlocks);
+export const Loading: typeof LoadingBlocks & Branded = untracked(LoadingBlocks);
+export const Errored: typeof ErroredBlocks & Branded = untracked(ErroredBlocks);

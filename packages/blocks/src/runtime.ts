@@ -135,7 +135,10 @@ function devError(code: string, message: string): Error {
 }
 
 function checkRead(): void {
-  if (host === SETUP)
+  // A setup runs untracked. A tracked read while the host is a setup belongs
+  // to a plain Solid computation the setup created (a `dynamic`, a derived
+  // store) running its first pass: that read is the computation's own.
+  if (host === SETUP && getObserver() === null)
     throw devError(
       "READ_IN_SETUP",
       "a setup creates; it does not read. Read in the view, a $memo or an $effect (or take a value with $snapshot)."
@@ -465,7 +468,9 @@ export function $store<T extends object>(
   }) as any;
 }
 
-type MemoValue<R> = R extends PromiseLike<infer U> ? U : R extends AsyncIterable<infer U> ? U : R;
+/** A memo's value: a promise's, an async iterable's latest — or a promise of an iterable's (Solid flattens one level). */
+type MemoValue<R> = R extends PromiseLike<infer U> ? IteratedValue<U> : IteratedValue<R>;
+type IteratedValue<R> = R extends AsyncIterable<infer U> ? U : R;
 type MemoPending<Y, R> =
   PendingOf<Y> extends true ? true : R extends PromiseLike<any> | AsyncIterable<any> ? true : false;
 /** A memo that returns a promise or an async iterable may fail with anything it rejects with. */
@@ -870,6 +875,9 @@ export function $component<
     });
   };
   component[COMPONENT_MARK] = true;
+  // Dev owner labels (`in <App> › <Card> › …`) use the component's name: a
+  // named setup (`$component(function* Card(props) {…})`) names it.
+  if (body.name) Object.defineProperty(component, "name", { value: body.name });
   return component;
 }
 

@@ -11,7 +11,7 @@ type Tab = "typeahead" | "checkout";
 // blocks read it through `paths`.
 const log = paths(logEntries);
 
-const LogPanel = $component(function* () {
+const LogPanel = $component(function* LogPanel() {
   const clear = $event(function* () {
     clearLog();
   });
@@ -50,7 +50,7 @@ const LogPanel = $component(function* () {
   };
 });
 
-export const App = $component(function* () {
+export const App = $component(function* App() {
   const [tab, setTab] = yield* $signal<Tab>("typeahead");
   const showTypeahead = $event(function* () {
     setTab("typeahead");

@@ -17,6 +17,7 @@ import {
   $signal,
   $snapshot,
   $store,
+  accessor,
   attempt,
   createContext,
   Errored,
@@ -34,7 +35,11 @@ import {
   Switch,
   type TypedProps
 } from "@solidjs/blocks";
-import { createSignal as plainSignal, createStore as plainStore } from "solid-js";
+import {
+  createMemo as plainMemo,
+  createSignal as plainSignal,
+  createStore as plainStore
+} from "solid-js";
 
 declare const __DEV__: boolean;
 /** Dev-only checks (warnings, dev errors) are skipped against production builds. */
@@ -139,6 +144,23 @@ describe("views are fine-grained", () => {
     expect(runs).toBe(3);
     expect(warn.mock.calls.some(c => String(c[0]).includes("VIEW_READS_OUTSIDE_JSX"))).toBe(true);
     warn.mockRestore();
+  });
+});
+
+describe("components", () => {
+  it("a named setup names the component (dev owner labels)", () => {
+    const Greeting = $component(function* Greeting() {
+      return function* () {
+        return <b>hi</b>;
+      };
+    });
+    const Anonymous = $component(function* () {
+      return function* () {
+        return <b>hi</b>;
+      };
+    });
+    expect(Greeting.name).toBe("Greeting");
+    expect(Anonymous.name).toBe("component");
   });
 });
 
@@ -647,6 +669,153 @@ describe("flow controls keep children lazy", () => {
     flush();
     expect(built).toBe(1);
     expect(root.textContent).toBe("c");
+  });
+});
+
+describe("plain Solid computations created in a setup", () => {
+  it("read sources in their own first pass (their reads are theirs, not the setup's)", () => {
+    let doubled!: () => number;
+    const Child = $component(function* (props: TypedProps<{ n: number }>) {
+      const n = accessor(props.n);
+      const m = plainMemo(() => n() * 2);
+      doubled = m;
+      // the memo's first pass runs here, while the host is the setup
+      m();
+      return function* () {
+        return <b>{m()}</b>;
+      };
+    });
+    const [n, setN] = plainSignal(2);
+    mount(() => <Child n={n()} />);
+    expect(root.textContent).toBe("4");
+    setN(3);
+    flush();
+    expect(root.textContent).toBe("6");
+    expect(doubled()).toBe(6);
+  });
+
+  devIt("the setup's own read is still an error", () => {
+    const Child = $component(function* (props: TypedProps<{ n: number }>) {
+      accessor(props.n)();
+      return function* () {
+        return <b />;
+      };
+    });
+    expect(() => createRoot(() => Child({ n: 1 }))).toThrow("[READ_IN_SETUP]");
+  });
+});
+
+describe("Loading on a source", () => {
+  it("the call form's `on` may be a source: a new key shows the fallback", async () => {
+    const [key, setKey] = plainSignal("a");
+    const resolvers: Record<string, (v: string) => void> = {};
+    const Page = $component(function* () {
+      const k = read(key);
+      const v = yield* $memo(function* () {
+        const at = yield* k;
+        return yield* attempt(() => new Promise<string>(r => (resolvers[at] = r)));
+      });
+      const Content = $component(function* () {
+        return function* () {
+          return <b>{perform(v)}</b>;
+        };
+      });
+      return function* () {
+        return (
+          <div>{perform(Loading({ on: k, fallback: <i>wait</i>, children: () => Content() }))}</div>
+        );
+      };
+    });
+    mount(Page);
+    expect(root.textContent).toBe("wait");
+    resolvers.a("A");
+    await settle();
+    expect(root.textContent).toBe("A");
+    setKey("b");
+    flush();
+    // a different key is different content: the fallback, not the stale "A"
+    expect(root.textContent).toBe("wait");
+    resolvers.b("B");
+    await settle();
+    expect(root.textContent).toBe("B");
+  });
+});
+
+describe("boundaries in call form", () => {
+  // `<Loading>{X()}</Loading>` gets its children as a getter; the call form
+  // gets what the caller built. A component called in the argument list is
+  // built before the boundary exists — its pending reads would reach the
+  // boundary above — so the call form takes its content as a function.
+  function pendingView() {
+    let resolve!: (v: string) => void;
+    const Pending = $component(function* () {
+      const v = yield* $memo(function* () {
+        return yield* attempt(() => new Promise<string>(r => (resolve = r)));
+      });
+      return function* () {
+        return <b>{perform(v)}</b>;
+      };
+    });
+    return { Pending, resolve: (v: string) => resolve(v) };
+  }
+
+  it("Loading({ children: () => View }) builds the content inside the boundary", async () => {
+    const { Pending, resolve } = pendingView();
+    const Page = $component(function* () {
+      return function* () {
+        return (
+          <div>
+            <p>shell</p>
+            {perform(Loading({ fallback: <i>inner</i>, children: () => Pending() }))}
+          </div>
+        );
+      };
+    });
+    mount(() => <Loading fallback={<i>outer</i>}>{Page()}</Loading>);
+    expect(root.textContent).toBe("shellinner");
+    resolve("done");
+    await settle();
+    expect(root.textContent).toBe("shelldone");
+  });
+
+  it("Errored({ children: () => View }) too", async () => {
+    const Failing = $component(function* () {
+      const v = yield* $memo(function* () {
+        return yield* raise(new Error("nope"));
+      });
+      return function* () {
+        return <b>{perform(v)}</b>;
+      };
+    });
+    const Page = $component(function* () {
+      return function* () {
+        return (
+          <div>
+            {perform(
+              Errored({
+                fallback: (e: () => unknown) => <i>{String((e() as Error).message)}</i>,
+                children: () => Failing()
+              })
+            )}
+          </div>
+        );
+      };
+    });
+    mount(() => <Errored fallback={<i>outer</i>}>{Page()}</Errored>);
+    expect(root.textContent).toBe("nope");
+  });
+
+  devIt("content built before the boundary is a dev error", () => {
+    const { Pending } = pendingView();
+    expect(() =>
+      createRoot(dispose => {
+        try {
+          Loading({ fallback: "…", children: Pending() });
+        } finally {
+          dispose();
+        }
+      })
+    ).toThrow("[BOUNDARY_CONTENT_BUILT]");
   });
 });
 

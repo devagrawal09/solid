@@ -39,7 +39,7 @@ function* useTodos() {
 type Input = InputEvent & { currentTarget: HTMLInputElement };
 type Key = KeyboardEvent & { currentTarget: HTMLInputElement };
 
-const Header = $component(function* () {
+const Header = $component(function* Header() {
   const [, { addTodo }] = yield* useTodos();
   const submit = $event(function* (e: Key) {
     if (e.key !== "Enter") return;
@@ -59,7 +59,7 @@ const Header = $component(function* () {
   };
 });
 
-const TodoItem = $component(function* (props: TypedProps<{ todo: Todo }, "TodoItem">) {
+const TodoItem = $component(function* TodoItem(props: TypedProps<{ todo: Todo }, "TodoItem">) {
   const [, { toggleTodo, removeTodo, retryTodo }] = yield* useTodos();
   const toggle = $event(function* (e: Input) {
     toggleTodo(yield* props.todo.id, e.currentTarget.checked);
@@ -106,7 +106,9 @@ const TodoItem = $component(function* (props: TypedProps<{ todo: Todo }, "TodoIt
   };
 });
 
-const MainSection = $component(function* (props: TypedProps<{ filter: Filter }, "MainSection">) {
+const MainSection = $component(function* MainSection(
+  props: TypedProps<{ filter: Filter }, "MainSection">
+) {
   const [todos, { toggleAll }] = yield* useTodos();
   const filtered = $(function* () {
     const f = yield* props.filter;
@@ -145,7 +147,7 @@ const MainSection = $component(function* (props: TypedProps<{ filter: Filter }, 
   };
 });
 
-const Footer = $component(function* (props: TypedProps<{ filter: Filter }, "Footer">) {
+const Footer = $component(function* Footer(props: TypedProps<{ filter: Filter }, "Footer">) {
   const [todos, { clearCompleted }] = yield* useTodos();
   const remaining = $(function* () {
     return yield* readStore(todos, t => t.filter(x => !x.completed).length);
@@ -191,7 +193,7 @@ const Footer = $component(function* (props: TypedProps<{ filter: Filter }, "Foot
   };
 });
 
-export const App = $component(function* () {
+export const App = $component(function* App() {
   const filter = read(createHashFilter());
   return function* () {
     return (

@@ -168,13 +168,23 @@ type Opaque =
  * opaque values stop the path.
  */
 export type Path<T, P extends boolean = false, E = never> = Source<T, P, E> &
-  ([T] extends [Opaque]
-    ? unknown
-    : T extends readonly (infer U)[]
-      ? { readonly [n: number]: Path<U, P, E>; readonly length: Source<number, P, E> }
-      : T extends object
-        ? { readonly [K in keyof T]-?: Path<T[K], P, E> }
-        : unknown);
+  PathKeys<NonNullable<T>, Nullish<T>, P, E>;
+/**
+ * The keys of a path. Through a nullable value a key may read `undefined`
+ * (the read stops at the `null`); a key holding a source reads through it
+ * and takes on its coloring (a context value `{ status: Source<Status> }`).
+ */
+type PathKeys<T, N, P extends boolean, E> = [T] extends [Opaque]
+  ? unknown
+  : T extends readonly (infer U)[]
+    ? { readonly [n: number]: Path<U | N, P, E>; readonly length: Source<number | N, P, E> }
+    : T extends object
+      ? { readonly [K in keyof T]-?: PathThrough<T[K], N, P, E> }
+      : unknown;
+type Nullish<T> = [Extract<T, null | undefined>] extends [never] ? never : undefined;
+type PathThrough<V, N, P extends boolean, E> = [V] extends [Source<infer U, infer P2, infer E2>]
+  ? Path<U | N, P | P2, E | E2>
+  : Path<V | N, P, E>;
 
 /** A value read through: a source's value, else the value itself. */
 export type ReadThrough<V> = V extends Source<infer T, any, any> ? T : V;
@@ -237,9 +247,16 @@ export type TypedProps<P, K extends string = never> = {
   >;
 } & { readonly [PROPS]?: (props: P) => P };
 
-/** What callers may pass for each prop: the value, or a source of it. */
+/**
+ * What callers may pass for each prop: the value, or a source of it. A prop
+ * declared as a source (`who: Source<Presence, true, unknown>`) states the
+ * coloring its readers handle: callers pass its value or any source within
+ * that coloring (a settled one included).
+ */
 export type PropsInput<P> = {
-  [N in keyof P]: P[N] | Source<P[N], boolean, any>;
+  [N in keyof P]: [P[N]] extends [Source<infer T, infer Pd, infer E>]
+    ? T | Source<T, Pd extends true ? boolean : false, E>
+    : P[N] | Source<P[N], boolean, any>;
 };
 
 /** The props type a `TypedProps` annotation declares. */

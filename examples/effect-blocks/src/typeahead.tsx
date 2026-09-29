@@ -31,7 +31,7 @@ function formatDownloads(n: number) {
   return String(n);
 }
 
-const Results = $component(function* (
+const Results = $component(function* Results(
   props: TypedProps<{ results: Source<Package[], boolean, unknown>; query: string }, "Results">
 ) {
   // Solid's `latest` / `isPending`, as sources: stale while revalidating.
@@ -71,7 +71,7 @@ const Results = $component(function* (
   };
 });
 
-export const Typeahead = $component(function* () {
+export const Typeahead = $component(function* Typeahead() {
   const [query, setQuery] = yield* $signal("");
 
   // The whole data layer. searchPackages carries retry w/ backoff, timeout,

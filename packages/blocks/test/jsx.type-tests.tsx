@@ -135,7 +135,10 @@ export const bad1 = <Pending id="1" />;
 // @ts-expect-error a pending view is not an element
 export const bad2 = <div>{Pending({ id: "1" })}</div>;
 export const ok2 = <Loading fallback={<p>…</p>}>{Pending({ id: "1" })}</Loading>;
-export const ok3 = <div>{Loading({ fallback: <p>…</p>, children: Pending({ id: "1" }) })}</div>;
+// the call form takes its content as a function (built inside the boundary)
+export const ok3 = (
+  <div>{Loading({ fallback: <p>…</p>, children: () => Pending({ id: "1" }) })}</div>
+);
 // @ts-expect-error Loading handles pending, not NotFound
 export const bad3 = <Loading>{Fallible({ id: "1" })}</Loading>;
 export const ok4 = (
@@ -152,7 +155,9 @@ export const Parent = $component(function* () {
 });
 // @ts-expect-error Parent inherits Fallible's pending and failures
 export const bad4 = <Parent />;
-export const ok5 = <Errored fallback={<p>error</p>}>{Loading({ children: Parent() })}</Errored>;
+export const ok5 = (
+  <Errored fallback={<p>error</p>}>{Loading({ children: () => Parent() })}</Errored>
+);
 
 // the root must be settled
 const ok5Root = $component(function* () {
@@ -276,11 +281,61 @@ export const Rows = $component(function* () {
         <For each={comments}>
           {function* (c) {
             return function* () {
-              return <li>{Loading({ children: Pending({ id: String(yield* c.id) }) })}</li>;
+              return <li>{Loading({ children: () => Pending({ id: c.text }) })}</li>;
             };
           }}
         </For>
       </ul>
     );
+  };
+});
+
+// --- paths through nullable values and nested sources --------------------------------------------
+export const Nullable = $component(function* (props: TypedProps<{ me: { name: string } | null }>) {
+  return function* () {
+    // through a nullable object a key may read `undefined`
+    const name: Source<string | undefined> = props.me.name;
+    return <b>{yield* name}</b>;
+  };
+});
+declare const wire: { status: Source<"on" | "off", true, NotFound> };
+// a key holding a source reads through it, with its coloring
+export const Through = $component(function* (props: TypedProps<{ wire: typeof wire }>) {
+  return function* () {
+    const status: Source<"on" | "off", boolean, NotFound> = props.wire.status;
+    return <b>{yield* status}</b>;
+  };
+});
+// @ts-expect-error the status may be pending and fail: so may Through's view
+export const bad6 = <Through wire={wire} />;
+
+// --- a prop declared as a source states the coloring its readers handle ----------------------------
+export const Declared = $component(function* (
+  props: TypedProps<{ user: Source<{ name: string }, true, unknown> }>
+) {
+  return function* () {
+    return <b>{(yield* props.user).name}</b>;
+  };
+});
+declare const settledUser: Source<{ name: string }>;
+// callers pass any source within it (a settled one too) or the value
+export const ok6 = (
+  <Errored fallback="!">{Loading({ children: () => Declared({ user: settledUser }) })}</Errored>
+);
+export const ok7 = (
+  <Errored fallback="!">{Loading({ children: () => Declared({ user: { name: "a" } }) })}</Errored>
+);
+// @ts-expect-error a declared source's reads are pending and may fail
+export const bad7 = <Declared user={settledUser} />;
+
+// --- a memo over a promise of a stream is the stream's values (Solid flattens one level) ---------
+declare function stream(): Promise<AsyncIterable<number>>;
+export const Streamed = $component(function* () {
+  const n = yield* $memo(function* () {
+    return stream();
+  });
+  const typed: Source<number, true, unknown> = n;
+  return function* () {
+    return <b>{yield* typed}</b>;
   };
 });

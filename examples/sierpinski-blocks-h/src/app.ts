@@ -35,7 +35,7 @@ type TriangleProps = {
 
 const TARGET = 25;
 
-export const TriangleDemo = $component(function* () {
+export const TriangleDemo = $component(function* TriangleDemo() {
   const [elapsed, setElapsed] = yield* $signal(0);
   const [seconds, setSeconds] = yield* $signal(0);
   const scale = yield* $memo(function* () {
@@ -65,7 +65,7 @@ export const TriangleDemo = $component(function* () {
   };
 });
 
-const Container = $component(function* (
+const Container = $component(function* Container(
   props: TypedProps<{ scale: number; seconds: number }, "Container">
 ) {
   return function* () {
@@ -86,7 +86,8 @@ const Container = $component(function* (
 
 // A recursive component needs its type spelled out (TypeScript cannot infer
 // a const its own initializer references): a triangle may be pending — its
-// branches read an async memo.
+// branches read an async memo. Its setup is left unnamed: a named setup
+// (`function* Triangle`) would shadow the component inside its own body.
 const Triangle: Component<TriangleProps, true, never> = $component(function* (
   props: TypedProps<TriangleProps, "Triangle">
 ) {
@@ -129,7 +130,7 @@ const Triangle: Component<TriangleProps, true, never> = $component(function* (
   };
 });
 
-const Dot = $component(function* (props: TypedProps<TriangleProps, "Dot">) {
+const Dot = $component(function* Dot(props: TypedProps<TriangleProps, "Dot">) {
   const x = yield* $snapshot(props.x);
   const y = yield* $snapshot(props.y);
   const s = yield* $snapshot(props.s);

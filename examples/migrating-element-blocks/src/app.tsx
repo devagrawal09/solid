@@ -18,7 +18,7 @@ function slotClass(s: Slot): string {
   return `slot-${s}`;
 }
 
-export const App = $component(function* () {
+export const App = $component(function* App() {
   const [slot, setSlot] = yield* $signal<Slot>("hero");
 
   // Left panel — the `<Canvas />` JSX is evaluated once and stored in a
