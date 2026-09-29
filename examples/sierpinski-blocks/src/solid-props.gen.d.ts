@@ -6,17 +6,17 @@
 export {};
 declare module "@solidjs/blocks" {
   interface PropColors {
-    Container: {
+    "Container": {
       scale: { pending: false; fails: never; live: true; static: false };
       seconds: { pending: false; fails: never; live: true; static: false };
     };
-    Dot: {
+    "Dot": {
       children: { pending: true; fails: never; live: true; static: false };
       s: { pending: false; fails: never; live: false; static: true };
       x: { pending: false; fails: never; live: true; static: false };
       y: { pending: false; fails: never; live: true; static: false };
     };
-    Triangle: {
+    "Triangle": {
       children: { pending: true; fails: never; live: true; static: false };
       s: { pending: false; fails: never; live: true; static: false };
       x: { pending: false; fails: never; live: true; static: false };
