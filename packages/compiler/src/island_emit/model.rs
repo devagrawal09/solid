@@ -96,6 +96,8 @@ pub(crate) enum Item<'a> {
         /// A probe host's literal label (`h.signal("open", …)`), passed to
         /// tier-0 cells so instrumented builds can trace them.
         label: Option<String>,
+        /// A probe host's computed label (`h.signal("open " + row.id, …)`).
+        label_expr: Option<&'a Expression<'a>>,
         name: String,
         span: Span,
     },
@@ -191,6 +193,9 @@ impl<'a> Item<'a> {
 pub(crate) struct Comp<'a> {
     pub name: String,
     pub sym: Option<SymbolId>,
+    /// Exported (rendered by other modules too: those are their instances;
+    /// the partition dominates over this module's render sites only).
+    #[allow(dead_code)]
     pub exported: bool,
     /// `$component(…)` block component (true) or a plain function component.
     pub block: bool,
@@ -953,7 +958,11 @@ fn read_declarator<'a>(
                     .skip(init_arg + 1)
                     .filter_map(|a| a.as_expression())
                     .collect(),
-                label: probe.flatten(),
+                label: probe.clone().flatten(),
+                label_expr: match probe {
+                    Some(None) => arg_expr(call, 0),
+                    _ => None,
+                },
                 name: m.sym_name(get).to_string(),
                 span,
             });

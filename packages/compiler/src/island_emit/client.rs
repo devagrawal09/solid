@@ -156,6 +156,10 @@ enum Slot<'a> {
     /// slots (`Ce::bounds[i]`), laid out in place between a marker pair,
     /// activated inside a client error boundary.
     Boundary(&'a JSXElement<'a>, usize, usize),
+    /// A structural region (`Analysis::structural`): a `<Show>` / `<For>`
+    /// over server data holding the island's sites or members, between a
+    /// marker pair; the island adopts its branch / rows in place.
+    Struct(&'a JSXElement<'a>, usize),
 }
 
 struct Ce<'x, 'a> {
@@ -195,6 +199,13 @@ struct Ce<'x, 'a> {
     /// Emitting a client-built `<Errored>` fallback: its holes track (the
     /// error accessor commits after the fallback is built).
     in_fallback: bool,
+    /// Structural row functions being emitted: (the `<For>`'s span, the
+    /// component it is in, the function's name). A scope that renders itself
+    /// in such a `<For>` reuses the function (every level runs it).
+    structs: Vec<(Span, usize, String)>,
+    /// Per member component: the props its code in this island uses (a
+    /// prop only handed on to another island's component is not bound).
+    used: HashMap<usize, BTreeSet<String>>,
 }
 
 const HELPERS: &[(&str, &str)] = &[
@@ -232,13 +243,15 @@ const HELPERS: &[(&str, &str)] = &[
     ),
     (
         "$show",
-        "const $show = (e, w, b) => { let d; $E(() => !!w(), (on, p) => { if (p === undefined) { if (on) $R(x => { d = x; const n = e.previousSibling; b(w, n.nodeType === 1 ? n : null) }); return; } if (on === p) return; if (on) $R(x => { d = x; e.before(b(w, null)); }); else { d(); d = undefined; const s = $start(e); while (s.nextSibling !== e) s.nextSibling.remove(); } }); };",
+        // Content created after activation is owned by the island (its
+        // cleanups run when the island is disposed).
+        "const $show = (e, w, b) => { let d; const o = $O(); $E(() => !!w(), (on, p) => { if (p === undefined) { if (on) $R(x => { d = x; const n = e.previousSibling; b(w, n.nodeType === 1 ? n : null) }); return; } if (on === p) return; if (on) $W(o, () => $R(x => { d = x; e.before(b(w, null)); })); else { d(); d = undefined; const s = $start(e); while (s.nextSibling !== e) s.nextSibling.remove(); } }); };",
     ),
     (
         "$list",
         // Keyed rows; `plain` rows create no reactive work, so they get no root.
         // The input is copied in the compute (a store array tracks its items).
-        "const $list = (e, each, row, plain) => { let rows = new Map(); const mk = plain ? (it, n) => ({ n: row(it, n) }) : (it, n) => $R(d => ({ n: row(it, n), d })); $E(() => { const l = each(); return l ? Array.from(l) : []; }, (items, p) => { if (p === undefined) { let n = $start(e).nextSibling; for (const it of items) { while (n.nodeType !== 1) n = n.nextSibling; const r = mk(it, n); rows.set(it, r); n = r.n.nextSibling; } return; } const next = new Map(); for (const it of items) next.set(it, rows.get(it) || mk(it, null)); for (const [it, r] of rows) if (!next.has(it)) { r.d && r.d(); r.n.remove(); } let c = $start(e).nextSibling; for (const r of next.values()) { if (r.n === c) c = c.nextSibling; else e.parentNode.insertBefore(r.n, c); } rows = next; }); };",
+        "const $list = (e, each, row, plain) => { let rows = new Map(); const o = $O(); const mk = plain ? (it, n) => ({ n: row(it, n) }) : (it, n) => $W(o, () => $R(d => ({ n: row(it, n), d }))); $E(() => { const l = each(); return l ? Array.from(l) : []; }, (items, p) => { if (p === undefined) { let n = $start(e).nextSibling; for (const it of items) { while (n.nodeType !== 1) n = n.nextSibling; const r = mk(it, n); rows.set(it, r); n = r.n.nextSibling; } return; } const next = new Map(); for (const it of items) next.set(it, rows.get(it) || mk(it, null)); for (const [it, r] of rows) if (!next.has(it)) { r.d && r.d(); r.n.remove(); } let c = $start(e).nextSibling; for (const r of next.values()) { if (r.n === c) c = c.nextSibling; else e.parentNode.insertBefore(r.n, c); } rows = next; }); };",
     ),
     (
         "$err",
@@ -247,6 +260,12 @@ const HELPERS: &[(&str, &str)] = &[
         // still bound) and shows the fallback; a reset that recovers puts the
         // same content back.
         "const $err = (e, content, fb) => { let kept, shown; const acc = $$createErrorBoundary(() => ($U(content), 1), (err, reset) => [err, reset]); $E(acc, v => { if (v === 1) { if (kept) { shown.remove(); for (const n of kept) e.before(n); kept = shown = undefined; } return; } if (!kept) { kept = []; for (let n = $start(e).nextSibling; n !== e; n = n.nextSibling) kept.push(n); for (const n of kept) n.remove(); } else shown.remove(); shown = fb(v[0], v[1]); e.before(shown); }); };",
+    ),
+    (
+        "$rows",
+        // Structural rows (a `<For>` over server data inside an island): the
+        // server's row elements, in order, each activated by `row(item, node)`.
+        "const $rows = (e, l, row) => { let n = $start(e).nextSibling; if (l) for (const it of l) { while (n.nodeType !== 1) n = n.nextSibling; row(it, n); n = n.nextSibling; } };",
     ),
     (
         "$cls",
@@ -278,6 +297,7 @@ fn helper_deps(h: &str) -> &'static [&'static str] {
         "$show" => &["$start"],
         "$list" => &["$start"],
         "$err" => &["$start"],
+        "$rows" => &["$start"],
         _ => &[],
     }
 }
@@ -349,6 +369,8 @@ pub(crate) fn emit_group<'a>(
         checks: Vec::new(),
         bounds: Vec::new(),
         in_fallback: false,
+        structs: Vec::new(),
+        used: HashMap::new(),
     };
     ce.run()
 }
@@ -777,7 +799,23 @@ impl<'x, 'a> Ce<'x, 'a> {
             let r = f(&tx, &env);
             (r, env.uses.into_inner())
         };
-        let out = res?;
+        let mut out = res?;
+        // A server-authoritative async memo of the island's root read by its
+        // client code (a structural list over it): its settled value,
+        // serialized on the anchor.
+        while let Some(i) = out.find("__SERVER_MEMO_") {
+            let rest = &out[i + "__SERVER_MEMO_".len()..];
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            let Ok(ii) = digits.parse::<usize>() else { break };
+            let Item::Memo { sym, .. } = &self.m.comps[self.g.root].setup[ii] else { break };
+            let n = self.m.sym_name(*sym).to_string();
+            let s = Serial::Cell(ii);
+            if !self.serial.contains(&s) {
+                self.serial.push(s);
+            }
+            let end = i + "__SERVER_MEMO_".len() + digits.len() + 2;
+            out.replace_range(i..end, &format!("$d[{}]", js_str(&format!("${n}"))));
+        }
         if let Some(i) = out.find("__SERVER_VALUE_") {
             let name: String = out[i + "__SERVER_VALUE_".len()..]
                 .chars()
@@ -826,8 +864,86 @@ impl<'x, 'a> Ce<'x, 'a> {
         s.buckets.entry(inst).or_default()
     }
 
+    /// The props each member's code in this island uses: read by its sites
+    /// or setup items, used in a call's props, or handed on unchanged
+    /// (`attr={props.x}`) to a member that uses `attr` (a fixpoint over
+    /// recursive members).
+    fn used_props(&self) -> HashMap<usize, BTreeSet<String>> {
+        let mut used: HashMap<usize, BTreeSet<String>> = HashMap::new();
+        // Forwarding edges: (member, its prop) ← (callee, callee's prop).
+        let mut edges: Vec<(usize, String, usize, String)> = Vec::new();
+        for &c in &self.g.members {
+            let f = &self.a.facts[c];
+            let set = used.entry(c).or_default();
+            for site in &f.sites {
+                set.extend(site.refs.props.iter().map(|(n, _)| n.clone()));
+                if site.refs.props_bare {
+                    set.insert("*".into());
+                }
+            }
+            for r in &f.item_refs {
+                set.extend(r.props.iter().map(|(n, _)| n.clone()));
+                if r.props_bare {
+                    set.insert("*".into());
+                }
+            }
+            let props = self.m.comps[c].props;
+            for call in &f.calls {
+                for (attr, e) in &call.props {
+                    let Some(e) = e else { continue };
+                    if let Tag::Comp(k) = call.tag
+                        && self.g.members.contains(&k)
+                        && let Expression::StaticMemberExpression(me) = e.without_parentheses()
+                        && props.is_some()
+                        && self.m.symbol_of_expr(&me.object) == props
+                    {
+                        edges.push((c, me.property.name.to_string(), k, attr.clone()));
+                        continue;
+                    }
+                    if !matches!(call.tag, Tag::Comp(k) if self.g.members.contains(&k)) {
+                        // Another island's component (rendered as it is), or
+                        // one inlined for its slot: handed on, not used here.
+                        if let Tag::Comp(k) = call.tag
+                            && self.a.root_of.get(&k).is_some_and(|gs| !gs.contains(&self.gi))
+                        {
+                            continue;
+                        }
+                    }
+                    let r = super::graph::refs_expr(self.m, props, e);
+                    set.extend(r.props.iter().map(|(n, _)| n.clone()));
+                    if r.props_bare {
+                        set.insert("*".into());
+                    }
+                }
+            }
+        }
+        loop {
+            let mut changed = false;
+            for (c, x, k, attr) in &edges {
+                let callee_uses = used
+                    .get(k)
+                    .is_some_and(|u| u.contains(attr) || u.contains("*"));
+                if callee_uses && used.get_mut(c).is_some_and(|u| u.insert(x.clone())) {
+                    changed = true;
+                }
+            }
+            if !changed {
+                break used;
+            }
+        }
+    }
+
+    /// Does member `k`'s code use prop `name`?
+    fn uses_prop(&self, k: usize, name: &str) -> bool {
+        match self.used.get(&k) {
+            Some(u) => u.contains(name) || u.contains("*"),
+            None => true,
+        }
+    }
+
     fn run(mut self) -> R<GroupCode> {
         let root = self.g.root;
+        self.used = self.used_props();
         let m = self.m;
         let comp = &m.comps[root];
         let view = comp.view.ok_or("the island root has no view")?;
@@ -899,6 +1015,10 @@ impl<'x, 'a> Ce<'x, 'a> {
                 "createRenderEffect as $E".to_string(),
                 "flush as $F".to_string(),
             ];
+            if self.helpers.contains("$list") || self.helpers.contains("$show") {
+                names.push("getOwner as $O".into());
+                names.push("runWithOwner as $W".into());
+            }
             for (r, alias) in [
                 ("createSignal", "$S"),
                 ("createMemo", "$M"),
@@ -1230,7 +1350,12 @@ impl<'x, 'a> Ce<'x, 'a> {
             }
         }
         for call in &f.calls {
-            for (_, e) in &call.props {
+            for (attr, e) in &call.props {
+                if let Tag::Comp(k) = call.tag
+                    && !self.uses_prop(k, attr)
+                {
+                    continue;
+                }
                 if let Some(e) = e {
                     syms.extend(
                         super::graph::refs_expr(self.m, c.props, e)
@@ -1337,7 +1462,15 @@ impl<'x, 'a> Ce<'x, 'a> {
                 Item::Memo { sym, is_async, .. } => {
                     // A server-authoritative async memo has no client value:
                     // client code that reads it is refused (`translate`).
-                    let n = if *is_async && !self.a.live.contains(&(comp, ii)) {
+                    let server = *is_async && !self.a.live.contains(&(comp, ii));
+                    if server && self.insts[inst].root {
+                        // Its settled value, serialized when read (`translate`).
+                        self.insts[inst]
+                            .names
+                            .insert(*sym, (format!("__SERVER_MEMO_{ii}__"), Kind::Val));
+                        continue;
+                    }
+                    let n = if server {
                         format!("__SERVER_VALUE_{}", self.m.sym_name(*sym))
                     } else {
                         self.name_for(inst, *sym)
@@ -1384,9 +1517,13 @@ impl<'x, 'a> Ce<'x, 'a> {
                     init,
                     host,
                     label,
+                    label_expr,
                     ..
                 } => {
-                    if *host != CellHost::Signal && !self.t2 {
+                    // A store nothing writes (after a keyed split, its rows
+                    // own their keys) is a plain value: its initial state.
+                    let frozen = *host == CellHost::Store && !self.a.live.contains(&(comp, ii));
+                    if *host != CellHost::Signal && !self.t2 && !frozen {
                         return Err("store / optimistic cell below tier 2".into());
                     }
                     let gn = self.insts[inst].names[get].0.clone();
@@ -1415,11 +1552,18 @@ impl<'x, 'a> Ce<'x, 'a> {
                             }
                         }
                     };
-                    if t0 {
-                        match (self.opts.debug, label) {
-                            (true, Some(l)) => {
-                                format!("const {gn} = $cell({init_text}, {});", js_str(l))
-                            }
+                    // A computed probe label (instrumented builds): translated
+                    // where the cell is created (a row's label from its item).
+                    let label_text = match (label, label_expr) {
+                        (Some(l), _) => Some(js_str(l)),
+                        (None, Some(e)) => Some(self.expr(inst, &none, e)?),
+                        _ => None,
+                    };
+                    if frozen {
+                        format!("const {gn} = {init_text};")
+                    } else if t0 {
+                        match (self.opts.debug, &label_text) {
+                            (true, Some(l)) => format!("const {gn} = $cell({init_text}, {l});"),
                             _ => format!("const {gn} = $cell({init_text});"),
                         }
                     } else {
@@ -1431,11 +1575,11 @@ impl<'x, 'a> Ce<'x, 'a> {
                             // A plain store (the core's; `$store` lowers to it).
                             self.core.insert("createPlainStore".into());
                             format!("const {pat} = $$createPlainStore({init_text});")
-                        } else if let Some(l) = label {
+                        } else if let Some(l) = &label_text {
                             // Probe host (instrumented builds): keep the host call.
                             let callee = self.probe_callee(ii, comp)?;
                             self.top_syms.extend(callee.1);
-                            format!("const {pat} = {}({}, {init_text});", callee.0, js_str(l))
+                            format!("const {pat} = {}({l}, {init_text});", callee.0)
                         } else {
                             self.rt.insert("createSignal");
                             format!("const {pat} = $S({init_text});")
@@ -2037,6 +2181,10 @@ impl<'x, 'a> Ce<'x, 'a> {
                     out.push(Slot::Opaque(None, Some(1)));
                 } else if live {
                     out.push(Slot::Region(el, inst, true));
+                } else if let Some(AttrVal::Expr(e)) = jsx::attr(&attrs, input).map(|a| &a.value)
+                    && self.a.structural.get(&(comp, e.span().start)) == Some(&self.gi)
+                {
+                    out.push(Slot::Struct(el, inst));
                 } else {
                     if self.span_has_group_sites(comp, el.span) {
                         return Err(format!("island sites inside a <{b}> over server values"));
@@ -2162,6 +2310,9 @@ impl<'x, 'a> Ce<'x, 'a> {
         let mut props = HashMap::new();
         let none = HashMap::new();
         for at in &attrs {
+            if at.name != "children" && !self.uses_prop(k, &at.name) {
+                continue;
+            }
             let b = match &at.value {
                 AttrVal::True => PBind::Val("true".into()),
                 AttrVal::Str(s) => PBind::Val(js_str(s)),
@@ -2405,6 +2556,7 @@ impl<'x, 'a> Ce<'x, 'a> {
             Slot::Text => (Some(0), Some(0)),
             Slot::Hole(_, _, live, _) => (Some(0), Some(usize::from(*live))),
             Slot::Region(_, _, live) => (None, Some(usize::from(*live))),
+            Slot::Struct(..) => (None, Some(1)),
             Slot::Opaque(e, p) => (*e, *p),
             // Its content's elements, in place; one marker pair around it.
             Slot::Boundary(_, _, bi) => (
@@ -2571,6 +2723,12 @@ impl<'x, 'a> Ce<'x, 'a> {
                     let k = pairs_in(0, i).ok_or("a region after a variable region")?;
                     let end = self.marker_at(&parent, k, &after_node);
                     self.region(el, inst, end)?;
+                }
+                Slot::Struct(el, inst) => {
+                    let k = pairs_in(0, i).ok_or("a region after a variable region")?;
+                    let end = self.marker_at(&parent, k, &after_node);
+                    let before = elems_in(0, i).map(|b| b + base);
+                    self.structure(el, inst, end, parent.clone(), before)?;
                 }
                 Slot::Boundary(el, inst, bi) => {
                     let k = pairs_in(0, i).ok_or("a boundary after a variable region")?;
@@ -2817,6 +2975,12 @@ impl<'x, 'a> Ce<'x, 'a> {
         }
         let comp = self.insts[inst].comp;
         if self.span_has_group_sites(comp, el.span) {
+            return true;
+        }
+        // A structural region of this island inside (its rows' members).
+        if self.a.structural.iter().any(|((c, at), g)| {
+            *c == comp && *g == self.gi && el.span.start <= *at && *at < el.span.end
+        }) {
             return true;
         }
         // Inlined members rendered inside (through components or slots).
@@ -3218,6 +3382,136 @@ impl<'x, 'a> Ce<'x, 'a> {
                 format!("$list({end}, () => {input_text}, {builder}, 1);")
             }
         };
+        self.bucket(inst).seq.push(Seq::Line(line));
+        Ok(())
+    }
+
+    /// A structural region: a `<Show>` / `<For>` over server data that holds
+    /// this island's sites or members. Its input never changes, so nothing
+    /// is re-rendered: a branch's content is activated in place when its
+    /// condition holds, a list's rows are activated one by one on the
+    /// server's row elements by a row function (a recursive row scope calls
+    /// the same function for its own rows).
+    fn structure(
+        &mut self,
+        el: &'a JSXElement<'a>,
+        inst: usize,
+        end: String,
+        parent: Option<String>,
+        before: Option<usize>,
+    ) -> R<()> {
+        let attrs = jsx::attrs(el)?;
+        let is_show = matches!(jsx::tag_of(self.m, &el.opening_element.name), Tag::Builtin(ref b) if b == "Show");
+        let input = if is_show { "when" } else { "each" };
+        let Some(AttrVal::Expr(input_expr)) = jsx::attr(&attrs, input).map(|a| &a.value) else {
+            return Err("region input".into());
+        };
+        let none = HashMap::new();
+        let input_text = self.expr(inst, &none, input_expr)?;
+        let kids = jsx::children(&el.children)?;
+        let comp = self.insts[inst].comp;
+        let saved = self.cur;
+        if is_show {
+            if kids
+                .iter()
+                .any(|k| matches!(k, Child::Expr(e) if FnRef::from_expr(e).is_some()))
+            {
+                return Err("a <Show> render callback over server data inside an island".into());
+            }
+            let before = before.ok_or("an island's <Show> after a variable-size region")?;
+            self.scopes.push(Scope {
+                nav: vec![],
+                buckets: HashMap::new(),
+                order: vec![],
+                builder: false,
+            });
+            let sc = self.scopes.len() - 1;
+            self.cur = sc;
+            self.helpers.insert("$start");
+            let start = self.fresh("$s");
+            self.scope_nav(format!("const {start} = $start({end});"));
+            let mut slots = Vec::new();
+            let r = self
+                .flatten(&kids, inst, &mut slots)
+                .and_then(|_| self.container_at(parent, &slots, before, Some(start), 0));
+            let body = self.assemble(sc, inst);
+            let nav = self.scopes[sc].nav.join("\n");
+            self.cur = saved;
+            r?;
+            self.bucket(inst)
+                .seq
+                .push(Seq::Line(format!("if ({input_text}) {{\n{nav}\n{body}}}")));
+            return Ok(());
+        }
+        // A list: one row function.
+        self.helpers.insert("$rows");
+        if let Some((_, _, name)) = self
+            .structs
+            .iter()
+            .find(|(sp, c, _)| *sp == el.span && *c == comp)
+        {
+            // This scope's own rows at a deeper level (the partitioner
+            // checked the props are handed on unchanged).
+            let line = format!("$rows({end}, {input_text}, {name});");
+            self.bucket(inst).seq.push(Seq::Line(line));
+            return Ok(());
+        }
+        let [Child::Expr(f)] = kids.as_slice() else {
+            return Err("<For> children must be one callback".into());
+        };
+        let Some(f) = FnRef::from_expr(f) else {
+            return Err("<For> children must be a callback".into());
+        };
+        if f.params().items.len() > 1 {
+            return Err("<For> callback with an index".into());
+        }
+        let p = f.params().items.first().and_then(|p| match &p.pattern {
+            BindingPattern::BindingIdentifier(id) => id.symbol_id.get(),
+            _ => None,
+        });
+        let Some(root) = fn_root(f) else {
+            return Err("<For> callback must return JSX".into());
+        };
+        let child = match root {
+            Root::Element(e) => Child::Element(e),
+            Root::Fragment(fr) => Child::Fragment(fr),
+        };
+        let name = self.fresh("$r");
+        let item = match p {
+            Some(p) => {
+                let n = format!("{}{}", self.m.sym_name(p), self.fresh("$"));
+                self.insts[inst].names.insert(p, (n.clone(), Kind::Val));
+                n
+            }
+            None => "_".to_string(),
+        };
+        self.structs.push((el.span, comp, name.clone()));
+        self.scopes.push(Scope {
+            nav: vec![],
+            buckets: HashMap::new(),
+            order: vec![],
+            builder: false,
+        });
+        let sc = self.scopes.len() - 1;
+        self.cur = sc;
+        let mut slots = Vec::new();
+        let r = (|| -> R<()> {
+            self.flatten(&[child], inst, &mut slots)?;
+            let elems: Vec<&Slot<'a>> = slots.iter().filter(|s| !matches!(s, Slot::Text)).collect();
+            let [Slot::Elem(root_el, root_inst)] = elems.as_slice() else {
+                return Err("an island's rows over server data must be one element each".into());
+            };
+            let (root_el, root_inst) = (*root_el, *root_inst);
+            self.element(root_el, root_inst, "$x")
+        })();
+        let body = self.assemble(sc, inst);
+        let nav = self.scopes[sc].nav.join("\n");
+        self.cur = saved;
+        self.structs.pop();
+        r?;
+        let line = format!(
+            "const {name} = ({item}, $x) => {{\n{nav}\n{body}}};\n$rows({end}, {input_text}, {name});"
+        );
         self.bucket(inst).seq.push(Seq::Line(line));
         Ok(())
     }

@@ -667,6 +667,11 @@ pub(crate) struct Analysis<'a> {
     pub group_of_key: HashMap<Key, usize>,
     /// Components rooting a group.
     pub root_of: HashMap<usize, Vec<usize>>,
+    /// Structural regions: a `<Show>` / `<For>` over server data (not live)
+    /// whose content holds an island's sites or renders its members (a row
+    /// scope, a recursive thread). The server marks them; the island adopts
+    /// their rows. (comp, input span start) → group.
+    pub structural: HashMap<(usize, u32), usize>,
     pub callers: Vec<BTreeSet<usize>>,
     pub issues: Vec<String>,
 }
@@ -939,6 +944,7 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
         group_of_site: HashMap::new(),
         group_of_key: HashMap::new(),
         root_of: HashMap::new(),
+        structural: HashMap::new(),
         callers: vec![BTreeSet::new(); n],
         issues: m.issues.clone(),
     };
@@ -1215,17 +1221,22 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
         }
     }
 
-    // Dominance: `dominated[c]` = components rendered only under c.
-    let exported: Vec<bool> = m.comps.iter().map(|c| c.exported).collect();
+    // Dominance over the render sites of this module: `dominated[c]` =
+    // scopes rendered only under c. An export is another render site, in
+    // another module: the instances it renders are that module's (its own
+    // compile inlines the component when it hands it live state), while the
+    // instances rendered here under c are c's island members.
     let dominated = |c: usize, callers: &Vec<BTreeSet<usize>>| -> HashSet<usize> {
         let mut d: HashSet<usize> = HashSet::new();
         loop {
             let mut changed = false;
-            for x in 0..n {
-                if x == c || d.contains(&x) || exported[x] || callers[x].is_empty() {
+            for (x, cx) in callers.iter().enumerate().take(n) {
+                if x == c || d.contains(&x) || cx.is_empty() {
                     continue;
                 }
-                if callers[x].iter().all(|p| *p == c || d.contains(p)) {
+                // A scope rendering itself (a recursive row) is dominated
+                // by whoever renders its first instance.
+                if cx.iter().all(|p| *p == c || *p == x || d.contains(p)) {
                     d.insert(x);
                     changed = true;
                 }
@@ -1354,11 +1365,10 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
         let mut members: Vec<usize> = vec![root];
         members.extend(comps.iter().copied().filter(|c| *c != root));
         for c in &members {
-            if reach(*c, &a.facts).contains(c) {
-                unsupported.push(format!(
-                    "`{}` renders itself (recursion inside an island)",
-                    m.comps[*c].name
-                ));
+            if reach(*c, &a.facts).contains(c)
+                && let Some(why) = recursion_refused(m, &a, *c, &|y| reach(y, &a.facts))
+            {
+                unsupported.push(why);
             }
             for issue in &a.facts[*c].issues {
                 unsupported.push(format!("`{}`: {issue}", m.comps[*c].name));
@@ -1574,6 +1584,25 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
             a.group_of_key.insert(*k, gi);
         }
         a.root_of.entry(root).or_default().push(gi);
+        // Regions over server data the island reaches into (its sites, or
+        // members it renders there): the server marks them, the island
+        // adopts their rows / branch in place.
+        for c in &members {
+            for (si, site) in a.facts[*c].sites.iter().enumerate() {
+                if !matches!(site.kind, SiteKind::Show | SiteKind::For) || a.site_live[*c][si] {
+                    continue;
+                }
+                let reaches = sites.iter().any(|(c2, s2)| {
+                    c2 == c && a.facts[*c].sites[*s2].regions.contains(&si)
+                }) || a.facts[*c].calls.iter().any(|call| {
+                    call.regions.contains(&si)
+                        && matches!(call.tag, Tag::Comp(y) if members.contains(&y))
+                });
+                if reaches {
+                    a.structural.insert((*c, site.span.start), gi);
+                }
+            }
+        }
         let _ = key_is_memo;
         a.groups.push(Group {
             id: format!("{id_prefix}{}", base36(gi)),
@@ -1592,6 +1621,60 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
         });
     }
     a
+}
+
+/// Why an island member that renders itself cannot be compiled, if it
+/// cannot: each recursive render must sit in a `<For>` over server data (a
+/// structural region, adopted row by row) and hand its props on unchanged
+/// (the row's own item aside), so every level runs the same row code.
+fn recursion_refused(
+    m: &Model<'_>,
+    a: &Analysis<'_>,
+    c: usize,
+    reach: &dyn Fn(usize) -> HashSet<usize>,
+) -> Option<String> {
+    let name = &m.comps[c].name;
+    for call in &a.facts[c].calls {
+        let Tag::Comp(y) = call.tag else { continue };
+        if y != c && !reach(y).contains(&c) {
+            continue;
+        }
+        if y != c {
+            return Some(format!(
+                "`{name}` renders itself through another component (recursion inside an island)"
+            ));
+        }
+        if call.regions.iter().any(|r| a.site_live[c][*r]) {
+            return Some(format!(
+                "`{name}` renders itself inside a live region (recursion inside an island)"
+            ));
+        }
+        let Some(row) = call
+            .regions
+            .iter()
+            .rev()
+            .find(|r| a.facts[c].sites[**r].kind == SiteKind::For)
+        else {
+            return Some(format!(
+                "`{name}` renders itself outside a <For> (recursion inside an island)"
+            ));
+        };
+        let param = a.facts[c].sites[*row].param;
+        let props = m.comps[c].props;
+        let forwarded = call.props.iter().all(|(n, e)| match e.map(|e| e.without_parentheses()) {
+            Some(Expression::Identifier(id)) => param.is_some() && m.symbol_of(id) == param,
+            Some(Expression::StaticMemberExpression(s)) => {
+                s.property.name == n.as_str() && props.is_some() && m.symbol_of_expr(&s.object) == props
+            }
+            _ => false,
+        });
+        if !forwarded {
+            return Some(format!(
+                "`{name}` renders itself with props that change per level (recursion inside an island: every level runs the same row code)"
+            ));
+        }
+    }
+    None
 }
 
 impl Analysis<'_> {

@@ -27,6 +27,7 @@ mod graph;
 mod inline;
 mod jsx;
 mod model;
+mod scopes;
 mod server;
 mod store_paths;
 mod tx;
@@ -176,7 +177,16 @@ fn prepare(original: &str, opts: &IslandOptions, components: bool) -> Option<Str
     let b = callforms::rewrite(s1, f);
     let s2 = b.as_deref().unwrap_or(s1);
     let c = inline::inline_calls(s2, f);
-    c.or(b).or(a)
+    let s3 = c.as_deref().unwrap_or(s2);
+    // Scopes: row blocks become components the partitioner sees.
+    let d = scopes::extract_rows(s3, f);
+    let s4 = d.as_deref().unwrap_or(s3);
+    // A store map rows read and write only at their own key: a cell per row.
+    let e = scopes::split_keyed_stores(s4, f);
+    let s5 = e.as_deref().unwrap_or(s4);
+    // Helper generators (one `return` of an expression) read at their sites.
+    let g = scopes::inline_helpers(s5, f);
+    g.or(e).or(d).or(c).or(b).or(a)
 }
 
 fn compile_pass(
@@ -184,8 +194,27 @@ fn compile_pass(
     opts: &IslandOptions,
     components: bool,
 ) -> Result<IslandsOutput, CompileError> {
-    let rewritten = prepare(original, opts, components);
+    let prepared = prepare(original, opts, components);
+    let probe_pairs: Vec<(String, String)> = opts
+        .probe_hosts
+        .iter()
+        .filter_map(|h| {
+            h.split_once('.')
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+        })
+        .collect();
+    // Scopes: an island whose state and sites sit in one branch over server
+    // data is rooted at the branch (analysis-guided, on the prepared source).
+    let sunk = scopes::sink_into_branches(
+        prepared.as_deref().unwrap_or(original),
+        opts.filename.as_deref(),
+        &probe_pairs,
+    );
+    let rewritten = sunk.or(prepared);
     let source = rewritten.as_deref().unwrap_or(original);
+    if std::env::var_os("SOLID_ISLANDS_DUMP_SOURCE").is_some() {
+        eprintln!("--- islands source ({})\n{source}", opts.filename.as_deref().unwrap_or("?"));
+    }
     let allocator = Allocator::default();
     let source_type = source_type_for_filename(opts.filename.as_deref())?;
     let program = parse_program(&allocator, source, source_type)?;

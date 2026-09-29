@@ -501,7 +501,10 @@ impl<'x, 'a> Se<'x, 'a> {
                         else {
                             return Err(format!("<{b}> without `{input}`"));
                         };
-                        let live = self.a.is_live_site(comp, ie.span().start);
+                        // A live region, or a structural one (over server
+                        // data, holding an island's rows): marked.
+                        let live = self.a.is_live_site(comp, ie.span().start)
+                            || self.a.structural.contains_key(&(comp, ie.span().start));
                         let iv = self.expr(comp, ie)?;
                         let fb = self.fallback(comp, &attrs)?;
                         let kids = jsx::children(&el.children)?;
