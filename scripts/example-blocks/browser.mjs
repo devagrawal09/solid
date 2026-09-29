@@ -15,6 +15,7 @@
 //       | "server" (run `node <server>` with PORT set; build it first)
 //       | "dev"    (run the example's `vite` dev server: the dev tier)
 //   server?: "server.js"            (mode "server")
+//   serverImport?: "tests/…mjs"      (mode "server": `node --import` for both servers)
 //   dist?: "dist" | "csr/dist"      (mode "static"; the directory to serve)
 //   clock?: boolean                  (install Playwright's fake clock, paused, at load)
 //   init?: async page => void        (before the first step: init scripts, …)
@@ -81,7 +82,18 @@ async function startServer(dir, port, dev) {
     : [spec.server ?? "server.js"];
   const child = spawn(process.execPath, args, {
     cwd: dir,
-    env: { ...process.env, PORT: String(port), NODE_ENV: dev ? "development" : "production" },
+    env: {
+      ...process.env,
+      PORT: String(port),
+      NODE_ENV: dev ? "development" : "production",
+      // A module both servers are started with (e.g. a `fetch` stub serving
+      // fixtures), resolved against the twin's directory.
+      ...(spec.serverImport
+        ? {
+            NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(join(twinDir, spec.serverImport)).href}`
+          }
+        : {})
+    },
     stdio: ["ignore", "pipe", "pipe"]
   });
   let log = "";
@@ -103,6 +115,8 @@ async function startServer(dir, port, dev) {
 
 async function run(dir, browser, port) {
   const page = await browser.newPage();
+  page.setDefaultTimeout(15000);
+  page.setDefaultNavigationTimeout(20000);
   const problems = [];
   page.on("console", msg => {
     const text = msg.text();
@@ -140,7 +154,16 @@ async function run(dir, browser, port) {
   const ctx = { base };
   try {
     for (const [label, step] of spec.steps) {
-      await step(page, ctx);
+      try {
+        if (process.env.VERBOSE) console.error(`  ${dir.split("/").pop()}: ${label}`);
+        await step(page, ctx);
+      } catch (error) {
+        // A step that cannot run (a missing element, a hung navigation) is a
+        // difference in itself; the rest of the script depends on it.
+        problems.push(`step "${label}" failed: ${String(error.message).split("\n")[0]}`);
+        snapshots.push([label, `<step failed: ${String(error.message).split("\n")[0]}>`]);
+        break;
+      }
       const html = spec.snapshot
         ? await spec.snapshot(page)
         : await page.evaluate(
@@ -181,17 +204,19 @@ try {
       twin.snapshots.map(([label, html]) => `== ${label}\n${html}`).join("\n")
     );
   }
-  for (let i = 0; i < original.snapshots.length; i++) {
-    const [label, a] = original.snapshots[i];
+  const steps = Math.max(original.snapshots.length, twin.snapshots.length);
+  for (let i = 0; i < steps; i++) {
+    const label = (original.snapshots[i] ?? twin.snapshots[i])[0];
+    const a = original.snapshots[i]?.[1];
     const b = twin.snapshots[i]?.[1];
     if (a === b) {
-      console.log(`ok   ${label} (${a.length} chars)`);
+      console.log(`ok   ${label} (${a?.length} chars)`);
     } else {
       failed = true;
       let at = 0;
-      while (at < a.length && a[at] === b?.[at]) at++;
+      while (a && at < a.length && a[at] === b?.[at]) at++;
       console.log(`FAIL ${label}: DOM differs at ${at}`);
-      console.log(`     original: …${a.slice(Math.max(0, at - 120), at + 200)}`);
+      console.log(`     original: …${a?.slice(Math.max(0, at - 120), at + 200)}`);
       console.log(`     twin:     …${b?.slice(Math.max(0, at - 120), at + 200)}`);
     }
   }
