@@ -7,7 +7,8 @@ import { createLinker } from "../src/index.js";
 import path from "node:path";
 
 const args = process.argv.slice(2);
-const opts = { dirs: [], alias: {}, publicModules: [] };
+// No --alias: the tsconfig.json `paths` of the root are the aliases.
+const opts = { dirs: [], alias: undefined, publicModules: [] };
 let check = false;
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
@@ -17,7 +18,7 @@ for (let i = 0; i < args.length; i++) {
   else if (a === "--dir") opts.dirs.push(args[++i]);
   else if (a === "--alias") {
     const [k, v] = args[++i].split("=");
-    opts.alias[k] = v;
+    (opts.alias ||= {})[k] = v;
   } else if (a === "--public") opts.publicModules.push(args[++i]);
   else if (a === "--help" || a === "-h") {
     console.log(

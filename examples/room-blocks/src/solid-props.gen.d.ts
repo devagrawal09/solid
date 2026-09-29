@@ -45,6 +45,8 @@ declare module "@solidjs/blocks" {
     "Header": {
       room: { pending: false; fails: never; live: true; static: false };
     };
+    "IdentityProvider": {
+    };
     "Joined": {
       joined: { pending: false; fails: never; live: true; static: false };
       me: { pending: false; fails: never; live: true; static: false };
@@ -65,6 +67,10 @@ declare module "@solidjs/blocks" {
     "Panel": {
       me: { pending: false; fails: never; live: true; static: false };
       room: { pending: false; fails: never; live: true; static: false };
+      wire: { pending: false; fails: never; live: true; static: false };
+    };
+    "StatusPill": {
+      label: { pending: false; fails: never; live: false; static: true };
       wire: { pending: false; fails: never; live: true; static: false };
     };
     "Summary": {

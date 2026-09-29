@@ -23,6 +23,43 @@ function hashOf(text) {
   return createHash("sha1").update(text).digest("hex");
 }
 
+/**
+ * Module prefixes from the project's tsconfig.json `compilerOptions.paths`
+ * (`"~/*": ["./src/*"]` → `{ "~": "<root>/src" }`): the aliases the code
+ * imports through, so a render site `<Story />` imported from
+ * `~/components/story` reaches its component. Only `prefix/*` → `dir/*`
+ * entries (the first target) are used; tsconfig's comments and trailing
+ * commas are tolerated.
+ */
+export function tsconfigAliases(root) {
+  let text;
+  try {
+    text = readFileSync(path.join(root, "tsconfig.json"), "utf8");
+  } catch {
+    return {};
+  }
+  let config;
+  try {
+    config = JSON.parse(
+      text
+        .replace(/("(?:[^"\\]|\\.)*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (m, str) => str || "")
+        .replace(/,(\s*[}\]])/g, "$1")
+    );
+  } catch {
+    return {};
+  }
+  const options = (config && config.compilerOptions) || {};
+  const base = path.resolve(root, options.baseUrl || ".");
+  const out = {};
+  for (const [pattern, targets] of Object.entries(options.paths || {})) {
+    if (!pattern.endsWith("/*") || !Array.isArray(targets) || !targets[0]) continue;
+    const target = targets[0];
+    if (!target.endsWith("/*")) continue;
+    out[pattern.slice(0, -2)] = path.resolve(base, target.slice(0, -2));
+  }
+  return out;
+}
+
 function walk(dir, out) {
   let entries;
   try {
@@ -43,7 +80,8 @@ function walk(dir, out) {
  *   root?: string,           project root (default: cwd)
  *   dirs?: string[],         source directories under root (default ["src"])
  *   out?: string,            generated file (default "src/solid-props.gen.d.ts")
- *   alias?: Record<string,string>, module prefixes resolved to directories (e.g. { "~": "src" })
+ *   alias?: Record<string,string>, module prefixes resolved to directories (e.g. { "~": "src" });
+ *                            default: the tsconfig.json `paths` of root
  *   publicModules?: string[],  modules whose exports have callers beyond the project
  *   summarize?: (code: string, filename: string) => object
  * }} options
@@ -52,9 +90,9 @@ export function createLinker(options = {}) {
   const root = path.resolve(options.root || process.cwd());
   const dirs = (options.dirs || ["src"]).map(d => path.resolve(root, d));
   const out = path.resolve(root, options.out || "src/solid-props.gen.d.ts");
-  const alias = Object.fromEntries(
-    Object.entries(options.alias || {}).map(([k, v]) => [k, path.resolve(root, v)])
-  );
+  const alias = options.alias
+    ? Object.fromEntries(Object.entries(options.alias).map(([k, v]) => [k, path.resolve(root, v)]))
+    : tsconfigAliases(root);
   const publicModules = new Set((options.publicModules || []).map(p => path.resolve(root, p)));
   const summarize =
     options.summarize ||

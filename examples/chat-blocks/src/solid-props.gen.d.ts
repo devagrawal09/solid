@@ -20,6 +20,11 @@ declare module "@solidjs/blocks" {
     "Meter": {
       usage: { pending: false; fails: never; live: true; static: false };
     };
+    "Status": {
+      progress: { pending: false; fails: never; live: true; static: false };
+      stats: { pending: false; fails: never; live: true; static: false };
+      usage: { pending: false; fails: never; live: true; static: false };
+    };
     "Ticker": {
       progress: { pending: false; fails: never; live: true; static: false };
     };

@@ -93,6 +93,39 @@ describe("the graph", () => {
   });
 });
 
+describe("module aliases", () => {
+  it("a render site importing through a tsconfig `paths` alias reaches its component", () => {
+    const dir = project("gap");
+    // Parent imports UserCard through `~/…` instead of a relative path
+    const parent = path.join(dir, "src/Parent.tsx");
+    const code = readFileSync(parent, "utf8");
+    expect(code).toContain('from "./UserCard"');
+    writeFileSync(parent, code.replace('from "./UserCard"', 'from "~/UserCard"'));
+    const tsconfig = path.join(dir, "tsconfig.json");
+    // a tsconfig with comments and a trailing comma, as editors write them
+    writeFileSync(
+      tsconfig,
+      readFileSync(tsconfig, "utf8").replace(
+        '"types": []',
+        '"types": [],\n    // the app\'s alias\n    "paths": { "~/*": ["./src/*"], },'
+      )
+    );
+    const { text } = createLinker({ root: dir }).scan().generate();
+    expect(text).toMatch(/"UserCard": \{\n\s+user: \{ pending: true;/);
+    // an explicit alias option replaces the tsconfig's
+    const { text: none } = createLinker({ root: dir, alias: {} }).scan().generate();
+    expect(none).not.toContain('"UserCard": {');
+    // and the CLI reads the tsconfig too
+    const cli = spawnSync(process.execPath, [path.join(here, "../bin/solid-link.js")], {
+      cwd: dir
+    });
+    expect(cli.status).toBe(0);
+    expect(readFileSync(path.join(dir, "src/solid-props.gen.d.ts"), "utf8")).toContain(
+      '"UserCard": {'
+    );
+  });
+});
+
 describe("staleness and incremental updates", () => {
   it("check() and `solid-link --check` fail when the committed file is stale", () => {
     const dir = project("gap");
