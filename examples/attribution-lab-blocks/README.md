@@ -19,7 +19,7 @@ are the original's suites, unchanged, run against the twin's components: every
 diagnostic, cause chain, waterfall and interaction record the original
 asserts, the twin produces. `tests/parity.test.tsx` drives the whole lab
 (every card, both variants, clear & re-arm) against both apps and compares the
-DOM — cards and evidence panel — after all 36 steps.
+DOM — cards and evidence panel — after every one of its 39 steps.
 
 ## Porting notes
 
