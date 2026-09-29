@@ -168,6 +168,23 @@ pub struct CompileIslandsOptions {
     pub module_name: Option<String>,
     /// Sources of relatively imported modules to inline (cross-module).
     pub imports: Option<Vec<IslandImport>>,
+    /// Imports naming `"use server"` modules (frames: compiler-derived
+    /// server components).
+    pub server_imports: Option<Vec<IslandServerImport>>,
+    /// The module frames register with (default `@solidjs/web/server-functions`).
+    pub server_functions_module: Option<String>,
+    /// The module island chunks load the frames applier from.
+    pub frames_module: Option<String>,
+}
+
+#[napi(object)]
+#[derive(Clone)]
+pub struct IslandServerImport {
+    pub specifier: String,
+    /// Server functions it exports (absent: every export).
+    pub names: Option<Vec<String>>,
+    /// Exports marked `@taint`.
+    pub tainted: Option<Vec<String>>,
 }
 
 #[napi(object)]
@@ -206,6 +223,8 @@ pub struct CompileIslandsResult {
     pub chunks: Vec<IslandChunkResult>,
     pub manifest: String,
     pub fallback: Option<String>,
+    /// Route frames' argument functions (the navigation runtime's table).
+    pub frames_client: Option<String>,
 }
 
 /// Compiled islands (documentation/plans/ssr-hydration-redesign.md,
@@ -237,6 +256,20 @@ pub fn compile_islands(code: String, options: Option<CompileIslandsOptions>) -> 
                 code: i.code,
             })
             .collect(),
+        server_imports: o
+            .server_imports
+            .unwrap_or_default()
+            .into_iter()
+            .map(|i| crate::ServerImport {
+                specifier: i.specifier,
+                names: i.names,
+                tainted: i.tainted.unwrap_or_default(),
+            })
+            .collect(),
+        server_functions_module: o
+            .server_functions_module
+            .unwrap_or(d.server_functions_module),
+        frames_module: o.frames_module.unwrap_or(d.frames_module),
     };
     let out = crate::compile_islands(&code, &opts).map_err(|error| Error::from_reason(error.to_string()))?;
     Ok(CompileIslandsResult {
@@ -245,6 +278,7 @@ pub fn compile_islands(code: String, options: Option<CompileIslandsOptions>) -> 
         chunks: out.chunks.into_iter().map(|c| IslandChunkResult { id: c.id, code: c.code }).collect(),
         manifest: out.manifest,
         fallback: out.fallback,
+        frames_client: out.frames_client,
     })
 }
 

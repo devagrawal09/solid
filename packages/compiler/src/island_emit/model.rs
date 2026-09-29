@@ -107,6 +107,9 @@ pub(crate) enum Item<'a> {
         is_async: bool,
         name: String,
         span: Span,
+        /// `// @frame prefer: "client"` before the declaration: never a
+        /// server frame (the subtree stays client code).
+        prefer_client: bool,
     },
     Event {
         sym: SymbolId,
@@ -214,6 +217,40 @@ pub(crate) struct Comp<'a> {
     /// The setup function (a `$component`'s generator, or the plain
     /// component function): its statements are the setup.
     pub body_fn: Option<FnRef<'a>>,
+    /// Its props are a router's (`props: RouteProps<…>` /
+    /// `RouteSectionProps` from `@solidjs/router`): route params and the
+    /// location change on the client (navigation), so a server call over
+    /// them is a frame.
+    pub route_props: bool,
+    /// `// @frame prefer: "client"` on the component: none of its server
+    /// calls becomes a frame.
+    pub prefer_client: bool,
+}
+
+/// A server function the module calls (imported from a `"use server"`
+/// module, or declared here with the directive).
+pub(crate) struct ServerFn {
+    pub name: String,
+    /// Marked server-only (`/** @taint */`): its result must never be
+    /// serialized to the client.
+    pub tainted: bool,
+}
+
+/// `createRouter({ routes: [defineRoute({ path, component, preload })] })`
+/// from `@solidjs/router`: the route table navigation compiles from.
+pub(crate) struct RouteDef {
+    pub paths: Vec<String>,
+    /// The component binding (usually a default import of a route module).
+    pub comp: Option<SymbolId>,
+    pub comp_name: String,
+    /// The module the component is imported from, when it is.
+    pub module: Option<String>,
+    pub preload: bool,
+}
+
+pub(crate) struct RouterDef {
+    pub sym: SymbolId,
+    pub routes: Vec<RouteDef>,
 }
 
 pub(crate) struct Top<'a> {
@@ -239,6 +276,12 @@ pub(crate) struct Model<'a> {
     /// Probe cell hosts (`object.method`), e.g. `h.signal`.
     pub probe_hosts: Vec<(String, String)>,
     pub issues: Vec<String>,
+    /// Server functions (by local binding).
+    pub server_fns: HashMap<SymbolId, ServerFn>,
+    /// The module's router (`createRouter` from `@solidjs/router`).
+    pub router: Option<RouterDef>,
+    /// Names imported from `@solidjs/router` (any kind), local → imported.
+    pub router_imports: HashMap<String, String>,
 }
 
 impl<'a> Model<'a> {
@@ -394,7 +437,71 @@ pub(crate) fn build_model_with<'a>(
         top_of: HashMap::new(),
         probe_hosts,
         issues: Vec::new(),
+        server_fns: HashMap::new(),
+        router: None,
+        router_imports: HashMap::new(),
     };
+    for stmt in &program.body {
+        if let Statement::ImportDeclaration(import) = stmt
+            && import.source.value == "@solidjs/router"
+        {
+            for sp in import.specifiers.iter().flatten() {
+                if let ImportDeclarationSpecifier::ImportSpecifier(s) = sp {
+                    m.router_imports
+                        .insert(s.local.name.to_string(), s.imported.name().to_string());
+                }
+            }
+        }
+    }
+    // Functions declared here with a `"use server"` directive.
+    let module_server = program
+        .directives
+        .iter()
+        .any(|d| d.directive.as_str() == "use server");
+    for stmt in &program.body {
+        let (decl, lead_end) = match stmt {
+            Statement::ExportDeclaration(e) => (Some(&e.declaration), e.span.start),
+            s => (s.as_declaration(), s.span().start),
+        };
+        let tainted = taint_pragma(leading_text(src, lead_end));
+        match decl {
+            Some(Declaration::FunctionDeclaration(f)) => {
+                if (module_server || fn_directive(f.body.as_deref()))
+                    && let Some(id) = &f.id
+                    && let Some(sym) = id.symbol_id.get()
+                {
+                    m.server_fns.insert(
+                        sym,
+                        ServerFn {
+                            name: id.name.to_string(),
+                            tainted,
+                        },
+                    );
+                }
+            }
+            Some(Declaration::VariableDeclaration(v)) => {
+                for d in &v.declarations {
+                    let Some(sym) = single_id(&d.id) else { continue };
+                    let Some(init) = &d.init else { continue };
+                    let body = match FnRef::from_expr(init) {
+                        Some(FnRef::Func(f)) => fn_directive(f.body.as_deref()),
+                        Some(FnRef::Arrow(a)) => fn_directive(a.body.as_function_body()),
+                        None => false,
+                    };
+                    if module_server || body {
+                        m.server_fns.insert(
+                            sym,
+                            ServerFn {
+                                name: m.scoping.symbol_name(sym).to_string(),
+                                tainted,
+                            },
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
     for c in contexts {
         m.contexts.insert(*c, None);
     }
@@ -488,6 +595,15 @@ pub(crate) fn build_model_with<'a>(
                     if let Some(sym) = single_id(&d.id) {
                         let name = m.sym_name(sym).to_string();
                         if let Some(c) = call_of(init)
+                            && let Expression::Identifier(callee) = c.callee.without_parentheses()
+                            && m.router_imports.get(callee.name.as_str()).map(String::as_str)
+                                == Some("createRouter")
+                        {
+                            let routes = read_routes(&m, program, c);
+                            m.router = Some(RouterDef { sym, routes });
+                            continue;
+                        }
+                        if let Some(c) = call_of(init)
                             && m.runtime_name(&c.callee) == Some("createContext")
                         {
                             m.contexts.insert(sym, arg_expr(c, 0));
@@ -556,6 +672,7 @@ pub(crate) fn build_model_with<'a>(
         if let Some(ci) = comp {
             let lead = &src[prev_end as usize..stmt.span().start as usize];
             m.comps[ci].prefetch = prefetch_pragma(lead);
+            m.comps[ci].prefer_client = prefer_client_pragma(lead);
         }
         prev_end = stmt.span().end;
         m.top.push(Top {
@@ -643,6 +760,8 @@ fn read_component_expr<'a>(
         issues: Vec::new(),
         prefetch: None,
         body_fn: Some(FnRef::Func(f)),
+        route_props: route_props(m, &f.params),
+        prefer_client: false,
     };
     if f.params.items.len() > 1
         || f.params
@@ -728,6 +847,8 @@ fn read_plain_component<'a>(
         issues: Vec::new(),
         prefetch: None,
         body_fn: Some(f),
+        route_props: route_props(m, f.params()),
+        prefer_client: false,
     };
     if f.is_concise() {
         if let Some(e) = f.concise() {
@@ -980,6 +1101,7 @@ fn read_declarator<'a>(
                         is_async,
                         name: m.sym_name(sym).to_string(),
                         span,
+                        prefer_client: prefer_client_pragma(leading_text(m.src, span.start)),
                     });
                     return;
                 }
@@ -1010,4 +1132,168 @@ fn read_declarator<'a>(
         symbols,
         span,
     });
+}
+
+
+/// Server functions imported from `"use server"` modules.
+pub(crate) fn bind_server_imports(
+    m: &mut Model<'_>,
+    program: &Program<'_>,
+    imports: &[super::ServerImport],
+) {
+    for stmt in &program.body {
+        let Statement::ImportDeclaration(i) = stmt else {
+            continue;
+        };
+        let Some(si) = imports.iter().find(|x| x.specifier == i.source.value.as_str()) else {
+            continue;
+        };
+        for sp in i.specifiers.iter().flatten() {
+            let (imported, local) = match sp {
+                ImportDeclarationSpecifier::ImportSpecifier(s) => {
+                    (s.imported.name().to_string(), &s.local)
+                }
+                ImportDeclarationSpecifier::ImportDefaultSpecifier(s) => ("default".into(), &s.local),
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => continue,
+            };
+            if si.names.as_ref().is_some_and(|n| !n.contains(&imported)) {
+                continue;
+            }
+            if let Some(sym) = local.symbol_id.get() {
+                m.server_fns.insert(
+                    sym,
+                    ServerFn {
+                        tainted: si.tainted.contains(&imported),
+                        name: imported,
+                    },
+                );
+            }
+        }
+    }
+}
+
+/// The source between the previous statement (or block start) and `start`:
+/// where a declaration's leading comments are.
+pub(crate) fn leading_text(src: &str, start: u32) -> &str {
+    let before = &src[..start as usize];
+    let from = before.rfind([';', '{', '}']).map_or(0, |i| i + 1);
+    &before[from..]
+}
+
+/// `@frame prefer: "client"` (or `'client'`) in a leading comment.
+pub(crate) fn prefer_client_pragma(lead: &str) -> bool {
+    lead.find("@frame").is_some_and(|i| {
+        let rest = &lead[i..];
+        let line = rest.split(['\n', '*']).next().unwrap_or(rest);
+        line.contains("prefer") && line.contains("client")
+    })
+}
+
+/// `@taint` in a leading comment of a server function: its result is
+/// server-only (a build error when an island would serialize it).
+pub(crate) fn taint_pragma(lead: &str) -> bool {
+    lead.contains("@taint")
+}
+
+fn fn_directive(body: Option<&oxc_ast::ast::FunctionBody<'_>>) -> bool {
+    body.is_some_and(|b| b.directives.iter().any(|d| d.directive.as_str() == "use server"))
+}
+
+/// Props typed as a router's (`RouteProps<…>`, `RouteSectionProps<…>`).
+fn route_props(m: &Model<'_>, params: &FormalParameters<'_>) -> bool {
+    let Some(p) = params.items.first() else {
+        return false;
+    };
+    let Some(t) = &p.type_annotation else {
+        return false;
+    };
+    let oxc_ast::ast::TSType::TSTypeReference(r) = &t.type_annotation else {
+        return false;
+    };
+    let oxc_ast::ast::TSTypeName::IdentifierReference(id) = &r.type_name else {
+        return false;
+    };
+    matches!(
+        m.router_imports.get(id.name.as_str()).map(String::as_str),
+        Some("RouteProps" | "RouteSectionProps")
+    )
+}
+
+/// The routes of `createRouter({ routes: [defineRoute({ … }) | { … }] })`.
+fn read_routes<'a>(
+    m: &Model<'a>,
+    program: &'a Program<'a>,
+    call: &'a CallExpression<'a>,
+) -> Vec<RouteDef> {
+    use oxc_ast::ast::{ArrayExpressionElement, ObjectPropertyKind, PropertyKey};
+    let mut out = Vec::new();
+    let Some(Expression::ObjectExpression(o)) = arg_expr(call, 0).map(|e| e.without_parentheses())
+    else {
+        return out;
+    };
+    let prop = |o: &'a oxc_ast::ast::ObjectExpression<'a>, name: &str| {
+        o.properties.iter().find_map(|p| match p {
+            ObjectPropertyKind::ObjectProperty(p)
+                if matches!(&p.key, PropertyKey::StaticIdentifier(k) if k.name == name) =>
+            {
+                Some(&p.value)
+            }
+            _ => None,
+        })
+    };
+    let Some(Expression::ArrayExpression(routes)) = prop(o, "routes").map(|e| e.without_parentheses())
+    else {
+        return out;
+    };
+    for el in &routes.elements {
+        let Some(e) = (match el {
+            ArrayExpressionElement::SpreadElement(_) | ArrayExpressionElement::Elision(_) => None,
+            e => e.as_expression(),
+        }) else {
+            continue;
+        };
+        let def = match e.without_parentheses() {
+            Expression::CallExpression(c) => match arg_expr(c, 0).map(|e| e.without_parentheses()) {
+                Some(Expression::ObjectExpression(o)) => o,
+                _ => continue,
+            },
+            Expression::ObjectExpression(o) => o,
+            _ => continue,
+        };
+        let mut paths = Vec::new();
+        match prop(def, "path").map(|e| e.without_parentheses()) {
+            Some(Expression::StringLiteral(s)) => paths.push(s.value.to_string()),
+            Some(Expression::ArrayExpression(a)) => {
+                for x in &a.elements {
+                    if let Some(Expression::StringLiteral(s)) = x.as_expression() {
+                        paths.push(s.value.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+        let (comp, comp_name) = match prop(def, "component").map(|e| e.without_parentheses()) {
+            Some(Expression::Identifier(id)) => (m.symbol_of(id), id.name.to_string()),
+            _ => (None, String::new()),
+        };
+        let module = comp.and_then(|s| {
+            program.body.iter().find_map(|st| match st {
+                Statement::ImportDeclaration(i) => i
+                    .specifiers
+                    .iter()
+                    .flatten()
+                    .any(|sp| sp.local().symbol_id.get() == Some(s))
+                    .then(|| i.source.value.to_string()),
+                _ => None,
+            })
+        });
+        out.push(RouteDef {
+            paths,
+            comp,
+            comp_name,
+            module,
+            preload: prop(def, "preload").is_some(),
+        });
+    }
+    out
 }

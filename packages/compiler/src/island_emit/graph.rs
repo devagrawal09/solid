@@ -214,6 +214,21 @@ pub(crate) fn refs_fn<'a>(m: &Model<'a>, props: Option<SymbolId>, f: FnRef<'a>) 
     w.out
 }
 
+pub(crate) fn refs_stmt_props<'a>(
+    m: &Model<'a>,
+    props: Option<SymbolId>,
+    s: &oxc_ast::ast::Statement<'a>,
+) -> Refs {
+    let mut w = Walker {
+        m,
+        props,
+        out: Refs::default(),
+        cond: 0,
+    };
+    w.visit_statement(s);
+    w.out
+}
+
 pub(crate) fn refs_stmt<'a>(m: &Model<'a>, s: &oxc_ast::ast::Statement<'a>) -> Refs {
     let mut w = Walker {
         m,
@@ -257,6 +272,9 @@ pub(crate) enum SiteKind {
     For,
     /// A setup effect (`$effect`) or settled body; item index.
     Effect(usize, bool),
+    /// An island frame's driver (index in `Analysis::frames`): its span is
+    /// the frame region; it refetches the region when its arguments change.
+    Frame(usize),
 }
 
 // `expr` / `regions` complete the site record for consumers of the analysis.
@@ -292,6 +310,11 @@ pub(crate) struct CompFacts<'a> {
     pub item_refs: Vec<Refs>,
     /// `props.children` rendered as a child (a pass-through slot).
     pub slot: bool,
+    /// A `<Router>` element's span (the module's router renders here).
+    pub router: Option<Span>,
+    /// The router layout renders its outlet (`props.children` of its
+    /// render callback).
+    pub outlet: bool,
 }
 
 struct ViewWalk<'m, 'a> {
@@ -299,6 +322,8 @@ struct ViewWalk<'m, 'a> {
     props: Option<SymbolId>,
     f: CompFacts<'a>,
     regions: Vec<usize>,
+    /// The router layout callback's parameter (its `.children` is the outlet).
+    outlet: Option<SymbolId>,
 }
 
 impl<'a> ViewWalk<'_, 'a> {
@@ -330,6 +355,14 @@ impl<'a> ViewWalk<'_, 'a> {
             && self.m.symbol_of(id) == self.props
         {
             self.f.slot = true;
+            return;
+        }
+        if let Expression::StaticMemberExpression(me) = e.without_parentheses()
+            && me.property.name == "children"
+            && self.outlet.is_some()
+            && self.m.symbol_of_expr(&me.object) == self.outlet
+        {
+            self.f.outlet = true;
             return;
         }
         let refs = refs_expr(self.m, self.props, e);
@@ -602,6 +635,28 @@ impl<'a> ViewWalk<'_, 'a> {
                 self.f.providers.push((ctx, value));
                 self.kids(&el.children);
             }
+            Tag::Router => {
+                // The layout: a render callback whose `props.children` is
+                // the outlet (the matched route renders there).
+                self.f.router = Some(el.span);
+                let callback = jsx::children(&el.children).ok().and_then(|ks| match ks.as_slice() {
+                    [Child::Expr(e)] => FnRef::from_expr(e),
+                    _ => None,
+                });
+                let Some(f) = callback else {
+                    self.f
+                        .issues
+                        .push("a <Router> without a layout callback `{props => …}`".into());
+                    return;
+                };
+                let saved = self.outlet;
+                self.outlet = f.params().items.first().and_then(|p| match &p.pattern {
+                    oxc_ast::ast::BindingPattern::BindingIdentifier(id) => id.symbol_id.get(),
+                    _ => None,
+                });
+                self.fn_body(f);
+                self.outlet = saved;
+            }
             tag @ (Tag::Comp(_) | Tag::Opaque(_)) => {
                 let mut props = Vec::new();
                 for a in &attrs {
@@ -715,6 +770,10 @@ pub(crate) struct Analysis<'a> {
     pub env_props: HashMap<(usize, String), String>,
     /// View sites that read the client environment (client-live).
     pub env_sites: HashMap<(usize, usize), String>,
+    /// Compiler-derived server components (frames.rs).
+    pub frames: Vec<super::frames::Frame<'a>>,
+    /// Server calls over client inputs that are not frames, with the reason.
+    pub frame_rejects: Vec<super::frames::Reject>,
 }
 
 impl<'a> Analysis<'a> {
@@ -857,6 +916,14 @@ fn key_is_memo(m: &Model<'_>, k: Key) -> bool {
 }
 
 pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
+    analyze_file(m, id_prefix, None)
+}
+
+pub(crate) fn analyze_file<'a>(
+    m: &Model<'a>,
+    id_prefix: &str,
+    filename: Option<&str>,
+) -> Analysis<'a> {
     let n = m.comps.len();
     let mut facts: Vec<CompFacts<'a>> = Vec::with_capacity(n);
     for c in &m.comps {
@@ -865,6 +932,7 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
             props: c.props,
             f: CompFacts::default(),
             regions: vec![],
+            outlet: None,
         };
         if let Some(v) = c.view {
             w.root(v);
@@ -1023,6 +1091,8 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
         env_syms: HashMap::new(),
         env_props: HashMap::new(),
         env_sites: HashMap::new(),
+        frames: Vec::new(),
+        frame_rejects: Vec::new(),
     };
     loop {
         let mut changed = false;
@@ -1190,7 +1260,7 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                     a.escaped_writes.extend(v.writes.iter().copied());
                     a.written.extend(v.writes);
                 }
-                SiteKind::Effect(..) => {}
+                SiteKind::Effect(..) | SiteKind::Frame(_) => {}
             }
         }
         // Setters handed to components outside the module escape: whoever
@@ -1248,6 +1318,9 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
             break;
         }
     }
+
+    // --- frames (compiler-derived server components) ------------------------------------
+    super::frames::detect(m, &mut a, filename);
 
     // --- sites and union-find ----------------------------------------------------------
     let mut index: HashMap<Key, usize> = HashMap::new();
@@ -1599,6 +1672,8 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                 }
             }
             match &site.kind {
+                // A frame driver: a hole whose apply refetches the region.
+                SiteKind::Frame(_) => {}
                 SiteKind::Handler(ev) => {
                     events.insert(ev.clone());
                     prevent_default |= site.refs.prevent_default

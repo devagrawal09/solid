@@ -2335,6 +2335,12 @@ impl<'x, 'a> Ce<'x, 'a> {
                 }
                 out.push(Slot::Opaque(None, None));
             }
+            Tag::Router => {
+                if self.span_has_group_sites(comp, el.span) {
+                    return Err("island sites inside a <Router> layout".into());
+                }
+                out.push(Slot::Opaque(None, None));
+            }
         }
         Ok(())
     }

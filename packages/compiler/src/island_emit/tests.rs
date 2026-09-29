@@ -331,7 +331,7 @@ export const App = $component(function* () {
     assert!(chunk.contains("const $c1 = [count, inc];"), "{chunk}");
     assert!(chunk.contains("= $c1;"), "{chunk}");
     // The anchor goes through the provider to its first element.
-    assert!(out.server.contains("<div data-i=\"i0\">"), "{}", out.server);
+    assert!(out.server.contains("<div data-i=\"i0\"${_$k(_$p, $c)}>"), "{}", out.server);
 }
 
 #[test]
@@ -1540,4 +1540,266 @@ export const Page = $component(function* (props) {
     let m = manifest(&out);
     assert!(m.contains(r#""serialized":["props.item"]"#), "{m}");
     assert!(!out.server.contains("_$pp("), "{}", out.server);
+}
+
+// --- frames: compiler-derived server components -----------------------------------------
+
+fn run_frames(src: &str) -> IslandsOutput {
+    compile_islands(
+        src,
+        &IslandOptions {
+            filename: Some("routes/story.tsx".into()),
+            server_imports: vec![ServerImport {
+                specifier: "../lib/hn".into(),
+                names: None,
+                tainted: vec!["getSecret".into()],
+            }],
+            ..IslandOptions::default()
+        },
+    )
+    .expect("compiles")
+}
+
+const STORY_ROUTE: &str = r#"
+import { $component, $event, $memo, $signal, attempt, For, Show } from "solid-js";
+import type { RouteProps } from "@solidjs/router";
+import { getStory } from "../lib/hn";
+const Toggle = $component(function* (props) {
+  const [open, setOpen] = yield* $signal(true);
+  const toggle = $event(function* () { setOpen(o => !o); });
+  return function* () {
+    return (
+      <>
+        <div class={["toggle", { open: yield* open }]}>
+          <a onClick={toggle}>{(yield* open) ? "[-]" : "[+] comments collapsed"}</a>
+        </div>
+        <ul class="comment-children" style={{ display: (yield* open) ? "block" : "none" }}>
+          {props.children}
+        </ul>
+      </>
+    );
+  };
+});
+const Comment = $component(function* (props) {
+  return function* () {
+    return (
+      <li class="comment">
+        <div class="by">{yield* props.comment.user}</div>
+        <Show when={(yield* props.comment.comments).length}>
+          <Toggle>
+            <For each={yield* props.comment.comments}>{c => <Comment comment={c} />}</For>
+          </Toggle>
+        </Show>
+      </li>
+    );
+  };
+});
+const Story = $component(function* (props: RouteProps<"/stories/:id">) {
+  const story = yield* $memo(function* () {
+    const id = yield* props.params.id;
+    return yield* attempt(() => getStory(id));
+  });
+  return function* () {
+    return (
+      <div class="item-view">
+        <h1>{(yield* story).title}</h1>
+        <ul><For each={(yield* story).comments}>{c => <Comment comment={c} />}</For></ul>
+      </div>
+    );
+  };
+});
+export default Story;
+"#;
+
+#[test]
+fn a_route_components_server_call_is_a_frame() {
+    let out = run_frames(STORY_ROUTE);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains(r#""frames":[{"id":"Story-"#), "{m}");
+    assert!(m.contains(r#""driver":"route""#), "{m}");
+    assert!(m.contains(r#""arguments":["id"]"#), "{m}");
+    assert!(m.contains(r#""argumentsFrom":["props.params"]"#), "{m}");
+    assert!(m.contains(r#""serverFunctions":["getStory"]"#), "{m}");
+    // The toggle is a nested island, keyed by its server row.
+    assert!(m.contains(r#""root":"Toggle","key":"row item id""#), "{m}");
+    // Server: the region carries the frame id, the frame function renders
+    // it from the argument alone, registered and declared GET.
+    assert!(out.server.contains(r#"<div data-f="Story-"#), "{}", out.server);
+    assert!(out.server.contains("const $$frame0 = async (...$a) => {"), "{}", out.server);
+    assert!(out.server.contains("const id = $a[0];"), "{}", out.server);
+    assert!(out.server.contains("(await getStory(...$a))"), "{}", out.server);
+    assert!(out.server.contains("_$fget(_$fcsr(_$frsr("), "{}", out.server);
+    assert!(out.server.contains("from \"@solidjs/web/server-functions\""), "{}", out.server);
+    // Rows key their islands.
+    assert!(out.server.contains("_$forK($c, "), "{}", out.server);
+    assert!(out.server.contains("${_$k(props, $c)}"), "{}", out.server);
+    // The navigation runtime's argument function.
+    let fc = out.frames_client.as_deref().expect("route args");
+    assert!(fc.contains("(props) => {\nconst id = props.params.id;\nreturn [id];"), "{fc}");
+}
+
+const SEARCH: &str = r#"
+import { $component, $event, $memo, $signal, attempt, For } from "solid-js";
+import { search } from "../lib/hn";
+export const Search = $component(function* () {
+  const [q, setQ] = yield* $signal("solid");
+  const results = yield* $memo(function* () {
+    const s = yield* q;
+    return yield* attempt(() => search(s));
+  });
+  const input = $event(function* (e) { setQ(e.target.value); });
+  return function* () {
+    return (
+      <section>
+        <input value={yield* q} onInput={input} />
+        <ul class="results"><For each={yield* results}>{r => <li>{r.title}</li>}</For></ul>
+      </section>
+    );
+  };
+});
+"#;
+
+#[test]
+fn a_server_call_over_island_state_is_a_frame_driven_by_the_island() {
+    let out = run_frames(SEARCH);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains(r#""driver":"island""#), "{m}");
+    assert!(m.contains(r#""region":"<ul class=\"results\">"#), "{m}");
+    assert!(m.contains(r#""argumentsFrom":["Search.q"]"#), "{m}");
+    // The memo is never materialized on the client: the island is tier 0
+    // (no async memo), and nothing is serialized for the results.
+    assert!(m.contains(r#""tier":0"#), "{m}");
+    assert!(!m.contains("memo results"), "{m}");
+    assert!(out.server.contains(r#"<ul data-f="Search-"#), "{}", out.server);
+}
+
+#[test]
+fn prefer_client_keeps_a_server_call_over_island_state_as_client_code() {
+    let src = SEARCH.replace(
+        "  const results = yield* $memo(",
+        "  // @frame prefer: \"client\"\n  const results = yield* $memo(",
+    );
+    let out = run_frames(&src);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains(r#""frames":[]"#), "{m}");
+    assert!(m.contains(r#"prefer: \"client\""#), "{m}");
+    // Today's compile: an adopted tier-2 memo, its value serialized.
+    assert!(m.contains(r#""tier":2"#) && m.contains("memo results"), "{m}");
+}
+
+#[test]
+fn a_call_that_is_not_a_server_function_is_not_a_frame() {
+    let src = SEARCH.replace("import { search } from \"../lib/hn\";", "import { search } from \"./local\";");
+    let out = run_frames(&src);
+    let m = manifest(&out);
+    assert!(m.contains(r#""frames":[]"#), "{m}");
+    assert!(m.contains("is not a server function"), "{m}");
+}
+
+#[test]
+fn a_frame_candidate_inside_client_control_flow_stays_client_code() {
+    let out = run_frames(r#"
+import { $component, $event, $memo, $signal, attempt, For, Show } from "solid-js";
+import { search } from "../lib/hn";
+export const Search = $component(function* () {
+  const [q, setQ] = yield* $signal("solid");
+  const [shown, setShown] = yield* $signal(true);
+  const results = yield* $memo(function* () {
+    const s = yield* q;
+    return yield* attempt(() => search(s));
+  });
+  const input = $event(function* (e) { setQ(e.target.value); });
+  const flip = $event(function* () { setShown(v => !v); });
+  return function* () {
+    return (
+      <section>
+        <input value={yield* q} onInput={input} />
+        <button onClick={flip}>toggle</button>
+        <Show when={yield* shown}>
+          <ul class="results"><For each={yield* results}>{r => <li>{r.title}</li>}</For></ul>
+        </Show>
+      </section>
+    );
+  };
+});
+"#);
+    let m = manifest(&out);
+    assert!(m.contains(r#""frames":[]"#), "{m}");
+    assert!(m.contains("client control flow"), "{m}");
+}
+
+#[test]
+fn a_server_result_a_live_island_also_reads_is_not_a_frame() {
+    let out = run_frames(r#"
+import { $component, $event, $memo, $signal, attempt, For } from "solid-js";
+import { search } from "../lib/hn";
+export const Search = $component(function* () {
+  const [q, setQ] = yield* $signal("solid");
+  const [picked, setPicked] = yield* $signal(0);
+  const results = yield* $memo(function* () {
+    const s = yield* q;
+    return yield* attempt(() => search(s));
+  });
+  const input = $event(function* (e) { setQ(e.target.value); });
+  const pick = $event(function* () { setPicked(p => p + 1); });
+  return function* () {
+    return (
+      <section>
+        <input value={yield* q} onInput={input} />
+        <p onClick={pick}>{(yield* results).length + (yield* picked)} picked</p>
+        <ul class="results"><For each={yield* results}>{r => <li>{r.title}</li>}</For></ul>
+      </section>
+    );
+  };
+});
+"#);
+    let m = manifest(&out);
+    assert!(m.contains(r#""frames":[]"#), "{m}");
+    assert!(m.contains("a live island also reads it"), "{m}");
+}
+
+#[test]
+fn an_island_serializing_a_tainted_value_is_a_build_error() {
+    let err = compile_islands(
+        r#"
+import { $component, $event, $memo, $signal, attempt } from "solid-js";
+import { getSecret } from "../lib/hn";
+export const Account = $component(function* () {
+  const account = yield* $memo(function* () { return yield* attempt(() => getSecret()); });
+  const [shown, setShown] = yield* $signal(account());
+  const show = $event(function* () { setShown(yield* account); });
+  return function* () { return <p onClick={show}>{(yield* shown).email}</p>; };
+});
+"#,
+        &IslandOptions {
+            filename: Some("routes/account.tsx".into()),
+            server_imports: vec![ServerImport {
+                specifier: "../lib/hn".into(),
+                names: None,
+                tainted: vec!["getSecret".into()],
+            }],
+            ..IslandOptions::default()
+        },
+    )
+    .map(|o| o.manifest)
+    .expect_err("a build error");
+    let msg = err.to_string();
+    assert!(msg.contains("marked `@taint`"), "{msg}");
+    assert!(msg.contains("Account.account"), "{msg}");
+    // Rendered in inert markup, the same data is fine (HTML, not data).
+    let out = run_frames(r#"
+import { $component, $memo, attempt } from "solid-js";
+import type { RouteProps } from "@solidjs/router";
+import { getSecret } from "../lib/hn";
+const Account = $component(function* (props: RouteProps<"/me">) {
+  const account = yield* $memo(function* () { return yield* attempt(() => getSecret()); });
+  return function* () { return <p class="me">{(yield* account).email}</p>; };
+});
+export default Account;
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    assert!(manifest(&out).contains(r#""tainted":true"#), "{}", manifest(&out));
 }

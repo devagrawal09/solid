@@ -63,6 +63,42 @@ struct Se<'x, 'a> {
     tiers: HashMap<usize, u8>,
     /// Some island serializes a pruned prop (the `_$pp` helper is needed).
     pruned: std::cell::Cell<bool>,
+    /// An island anchor carries a key (`_$k`).
+    keys: std::cell::Cell<bool>,
+    /// The module renders its router (`_$router`).
+    router: std::cell::Cell<bool>,
+    /// The module has frames: server rows carry their item's key (`$c`).
+    keyed: bool,
+}
+
+/// Island keys: a component's `$key` prop, else the enclosing server
+/// row's item key (a path of `id`s), carried in the render context.
+pub(crate) const KEY_HELPERS: &str = r#"const _$RK = Symbol.for("solid.frames.key");
+function _$k(p, $c) { const k = p && p.$key != null ? p.$key : $c && $c.get(_$RK); return k == null ? "" : ' data-k="' + _$ea(k) + '"'; }
+function _$rk($c, x) { if (!x || typeof x !== "object" || x.id == null) return $c; const p = $c && $c.get(_$RK); return new Map($c).set(_$RK, p != null ? p + "/" + x.id : "" + x.id); }
+function _$forK($c, l, f, fb) { if (!l || !l.length) return _$e(fb); let s = ""; for (let i = 0; i < l.length; i++) s += f(l[i], () => i, _$rk($c, l[i])); return s; }
+function _$forFK($c, l, f, fb) { if (!l || !l.length) return _$e(fb); let s = ""; for (let i = 0; i < l.length; i++) s += _$e(f(l[i], () => i, _$rk($c, l[i]))); return s; }
+async function _$forAK($c, l, f, fb) { if (!l || !l.length) return _$e(fb); const r = await Promise.all(l.map((x, i) => f(x, () => i, _$rk($c, x)))); let s = ""; for (const x of r) s += _$e(x); return s; }
+"#;
+
+/// The module's router: match the request's URL (`$c`) against the route
+/// table and render the layout around the matched route in its outlet.
+pub(crate) const ROUTER_HELPERS: &str = r#"function _$match(p, path) { const a = p.split("/").filter(Boolean), b = path.split("/").filter(Boolean), params = {}; for (let i = 0; i < a.length; i++) { const s = a[i]; if (s[0] === "*") { params[s.slice(1) || "*"] = b.slice(i).join("/"); return params; } if (s[0] === ":") { const opt = s.endsWith("?"); if (b[i] === undefined) { if (opt) continue; return null; } params[s.slice(1, opt ? -1 : undefined)] = decodeURIComponent(b[i]); continue; } if (s !== b[i]) return null; } return a.length >= b.length ? params : null; }
+function _$loc(u) { return { pathname: u.pathname, search: u.search, hash: u.hash, query: Object.fromEntries(u.searchParams) }; }
+async function _$router($c, routes, layout) { const u = new URL(($c && $c.get(Symbol.for("solid.islands.url"))) || "/", "http://localhost"); let html = ""; out: for (const [paths, C] of routes) for (const p of paths) { const params = _$match(p, u.pathname); if (params) { html = await C({ params, location: _$loc(u) }, $c); break out; } } return layout({ children: { t: "<!--o-->" + html + "<!--/o-->" } }); }
+"#;
+
+/// `(c)` → `c, $i, $c`; `(c, i)` → `c, i, $c`: a keyed row callback's
+/// parameters (the row's render context last).
+fn keyed_params(params: &str) -> String {
+    let p = params.trim();
+    if p.is_empty() {
+        "_, $i, $c".into()
+    } else if p.contains(',') {
+        format!("{p}, $c")
+    } else {
+        format!("{p}, $i, $c")
+    }
 }
 
 /// `[["title"], ["by", "name"]]`.
@@ -208,6 +244,30 @@ impl<'a> Env<'a> for SEnv<'_, '_, 'a> {
     }
 }
 
+/// A frame function's environment: the memo's one `attempt` is the server
+/// call over the frame's arguments (`$a`).
+struct FrameEnv<'e, 'x, 'a> {
+    inner: SEnv<'e, 'x, 'a>,
+    callee: String,
+}
+
+impl<'a> Env<'a> for FrameEnv<'_, '_, 'a> {
+    fn read(&self, tx: &Tx<'_, 'a>, arg: &'a Expression<'a>) -> R<String> {
+        if let Expression::CallExpression(c) = arg.without_parentheses()
+            && self.inner.se.m.runtime_name(&c.callee) == Some("attempt")
+        {
+            return Ok(format!("(await {}(...$a))", self.callee));
+        }
+        self.inner.read(tx, arg)
+    }
+    fn call(&self, tx: &Tx<'_, 'a>, c: &'a oxc_ast::ast::CallExpression<'a>) -> R<Option<String>> {
+        self.inner.call(tx, c)
+    }
+    fn jsx(&self, tx: &Tx<'_, 'a>, e: &'a Expression<'a>) -> R<String> {
+        self.inner.jsx(tx, e)
+    }
+}
+
 fn tl(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('`', "\\`")
@@ -322,6 +382,12 @@ impl<'x, 'a> Se<'x, 'a> {
     }
 
     fn subtree_async(&self, span: Span, comp: usize) -> bool {
+        if self.a.facts[comp]
+            .router
+            .is_some_and(|r| span.start <= r.start && r.end <= span.end)
+        {
+            return true;
+        }
         self.a.facts[comp].calls.iter().any(|c| {
             span.start <= c.span.start
                 && c.span.end <= span.end
@@ -346,6 +412,14 @@ impl<'x, 'a> Se<'x, 'a> {
                 let _ = write!(out, "<{tag}");
                 if let Some(a) = anchor {
                     out.push_str(a);
+                }
+                if let Some(fr) = self
+                    .a
+                    .frames
+                    .iter()
+                    .find(|f| f.comp == comp && f.region.span == el.span)
+                {
+                    let _ = write!(out, " data-f=\"{}\"", fr.sid);
                 }
                 let mut content: Option<String> = None;
                 let mut pd = false;
@@ -443,6 +517,48 @@ impl<'x, 'a> Se<'x, 'a> {
                 let callee = self.m.text(el.opening_element.name.span());
                 let _ = name;
                 let _ = write!(out, "${{_$raw(await {callee}({props}, $c))}}");
+                Ok(())
+            }
+            Tag::Router => {
+                if let Some(a) = anchor {
+                    out.push_str(a);
+                }
+                let router = self.m.router.as_ref().ok_or("a <Router> without a router")?;
+                let kids = jsx::children(&el.children)?;
+                let Some(f) = (match kids.as_slice() {
+                    [Child::Expr(e)] => FnRef::from_expr(e),
+                    _ => None,
+                }) else {
+                    return Err("a <Router> without a layout callback".into());
+                };
+                let Some(body) = jsx_body(f) else {
+                    return Err("a <Router> layout that is not one JSX expression".into());
+                };
+                let params = self.tx().params(&SEnv { se: self, comp }, f)?;
+                let mut inner = String::new();
+                self.root(comp, body, &mut inner, None)?;
+                let routes: Vec<String> = router
+                    .routes
+                    .iter()
+                    .filter(|r| r.comp.is_some())
+                    .map(|r| {
+                        format!(
+                            "[[{}], {}]",
+                            r.paths
+                                .iter()
+                                .map(|p| super::client_js_str(p))
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            r.comp_name
+                        )
+                    })
+                    .collect();
+                self.router.set(true);
+                let _ = write!(
+                    out,
+                    "${{await _$router($c, [{}], async ({params}) => `{inner}`)}}",
+                    routes.join(", ")
+                );
                 Ok(())
             }
             Tag::Provider(ctx) => {
@@ -571,8 +687,30 @@ impl<'x, 'a> Se<'x, 'a> {
                                 let params = self.tx().params(&SEnv { se: self, comp }, f)?;
                                 let mut inner = String::new();
                                 self.root(comp, body, &mut inner, None)?;
-                                let _ =
-                                    write!(out, "${{_$forR({iv}, ({params}) => `{inner}`, {fb})}}");
+                                if self.keyed && !live {
+                                    // Each row's islands are keyed by its item.
+                                    let _ = write!(
+                                        out,
+                                        "${{_$forK($c, {iv}, ({}) => `{inner}`, {fb})}}",
+                                        keyed_params(&params)
+                                    );
+                                } else {
+                                    let _ = write!(
+                                        out,
+                                        "${{_$forR({iv}, ({params}) => `{inner}`, {fb})}}"
+                                    );
+                                }
+                            } else if self.keyed && !live {
+                                let params = self.tx().params(&SEnv { se: self, comp }, f)?;
+                                let body = self.tx().body(&SEnv { se: self, comp }, f)?;
+                                let body = if f.is_concise() { format!("({body})") } else { body };
+                                let asy = if is_async { "async " } else { "" };
+                                let helper = if is_async { "_$forAK" } else { "_$forFK" };
+                                let _ = write!(
+                                    out,
+                                    "${{{aw}{helper}($c, {iv}, {asy}({}) => {body}, {fb})}}",
+                                    keyed_params(&params)
+                                );
                             } else {
                                 let ft = self.func(comp, f, is_async)?;
                                 let helper = if is_async { "_$forA" } else { "_$for" };
@@ -686,6 +824,20 @@ impl<'x, 'a> Se<'x, 'a> {
         let env = SEnv { se: self, comp: ci };
         let tx = self.tx();
         for item in &c.setup {
+            body.push_str(&self.setup_line(ci, item)?);
+        }
+        for s in &c.view_stmts {
+            let _ = writeln!(body, "{}", tx.stmt(&env, s)?);
+        }
+        self.finish_component(ci, &props, body)
+    }
+
+    /// One setup item's server statement(s).
+    fn setup_line(&self, ci: usize, item: &'a Item<'a>) -> R<String> {
+        let mut body = String::new();
+        let env = SEnv { se: self, comp: ci };
+        let tx = self.tx();
+        {
             match item {
                 Item::Cell {
                     get,
@@ -769,9 +921,72 @@ impl<'x, 'a> Se<'x, 'a> {
                 }
             }
         }
-        for s in &c.view_stmts {
-            let _ = writeln!(body, "{}", tx.stmt(&env, s)?);
+        Ok(body)
+    }
+
+    /// One generated server function per frame: the region's string
+    /// template from the server call's arguments alone, registered like a
+    /// `"use server"` reference and declared `GET` (a read: its response is
+    /// the region's HTML, `x-content-raw`).
+    fn frame_functions(&self, module: &str) -> R<String> {
+        let mut out = String::new();
+        let mut regs = Vec::new();
+        for (fi, fr) in self.a.frames.iter().enumerate() {
+            let c = &self.m.comps[fr.comp];
+            let mut body = String::from("const $c = new Map();\n");
+            for (i, l) in fr.arg_locals.iter().enumerate() {
+                if let Some(s) = l {
+                    let _ = writeln!(body, "const {} = $a[{i}];", self.m.sym_name(*s));
+                }
+            }
+            for (ii, item) in c.setup.iter().enumerate() {
+                if ii == fr.memo {
+                    let Item::Memo { sym, .. } = item else {
+                        return Err("frame memo".into());
+                    };
+                    let env = FrameEnv {
+                        inner: SEnv {
+                            se: self,
+                            comp: fr.comp,
+                        },
+                        callee: fr.callee.clone(),
+                    };
+                    let ret = self.tx().expr(&env, fr.ret)?;
+                    let _ = writeln!(
+                        body,
+                        "const {} = _$v(await (async () => ({ret}))());",
+                        self.m.sym_name(*sym)
+                    );
+                    continue;
+                }
+                if fr.items.contains(&ii) {
+                    body.push_str(&self.setup_line(fr.comp, item)?);
+                }
+            }
+            let mut tpl = String::new();
+            self.element(fr.comp, fr.region, &mut tpl, None)?;
+            let _ = writeln!(
+                out,
+                "const $$frame{fi} = async (...$a) => {{\n{body}return `{tpl}`;\n}};"
+            );
+            let sid = super::client_js_str(&fr.sid);
+            regs.push(format!(
+                "{sid}: _$fget(_$fcsr(_$frsr({sid}, async (...$a) => _$fres(await $$frame{fi}(...$a)))))"
+            ));
         }
+        let _ = writeln!(
+            out,
+            "import {{ registerServerReference as _$frsr, createServerReference as _$fcsr, GET as _$fget }} from {};",
+            super::client_js_str(module)
+        );
+        out.push_str("function _$fres(h) { return new Response(h, { headers: { \"content-type\": \"text/html; charset=utf-8\", \"x-content-raw\": \"1\" } }); }\n");
+        let _ = writeln!(out, "export const $$frames = {{ {} }};", regs.join(", "));
+        Ok(out)
+    }
+
+    /// The component's function from its setup text: anchor, template.
+    fn finish_component(&self, ci: usize, props: &str, body: String) -> R<String> {
+        let c = &self.m.comps[ci];
         // Island anchor for groups rooted here.
         let mut anchor = None;
         let mut comment = None;
@@ -850,7 +1065,10 @@ impl<'x, 'a> Se<'x, 'a> {
             }
             let view = c.view.ok_or("island root without a view")?;
             if first_is_element(self.m, view) {
-                let mut a = format!(" data-i=\"{}\"", ids.join(" "));
+                // A key (`$key`, or the enclosing server row's): a frame's
+                // refetch hands the island's state to its new anchor.
+                self.keys.set(true);
+                let mut a = format!(" data-i=\"{}\"${{_$k({props}, $c)}}", ids.join(" "));
                 if !data.is_empty() {
                     let _ = write!(
                         a,
@@ -913,6 +1131,7 @@ pub(crate) fn emit_server<'a>(
     m: &Model<'a>,
     a: &Analysis<'a>,
     codes: &[(usize, GroupCode)],
+    fopts: &super::IslandOptions,
 ) -> R<(String, Vec<bool>)> {
     let n = m.comps.len();
     // Async components: async memos, or rendering an async / opaque one.
@@ -925,6 +1144,11 @@ pub(crate) fn emit_server<'a>(
                 .any(|it| matches!(it, Item::Memo { is_async: true, .. }) || it.derived())
         })
         .collect();
+    for (ci, f) in a.facts.iter().enumerate() {
+        if f.router.is_some() {
+            is_async[ci] = true;
+        }
+    }
     loop {
         let mut changed = false;
         for ci in 0..n {
@@ -971,6 +1195,9 @@ pub(crate) fn emit_server<'a>(
         streams: Default::default(),
         tiers: codes.iter().map(|(gi, c)| (*gi, c.tier)).collect(),
         pruned: Default::default(),
+        keys: Default::default(),
+        router: Default::default(),
+        keyed: !a.frames.is_empty(),
     };
     let mut edits: Vec<(Span, String)> = Vec::new();
     for (ci, c) in m.comps.iter().enumerate() {
@@ -999,6 +1226,15 @@ pub(crate) fn emit_server<'a>(
     out.push_str(SERVER_HELPERS);
     if se.pruned.get() {
         out.push_str(PRUNE_HELPER);
+    }
+    if se.keys.get() || se.keyed {
+        out.push_str(KEY_HELPERS);
+    }
+    if se.router.get() {
+        out.push_str(ROUTER_HELPERS);
+    }
+    if !a.frames.is_empty() {
+        out.push_str(&se.frame_functions(&fopts.server_functions_module)?);
     }
     let _ = refs_expr;
     let streams = se.streams.borrow();
