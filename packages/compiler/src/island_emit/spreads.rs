@@ -84,15 +84,16 @@ impl<'a> Visit<'a> for Collect<'_, 'a> {
         // Every node visited belongs to the program arena ('a); see tx.rs.
         let e: &'a JSXElement<'a> = unsafe { &*(e as *const JSXElement<'a>) };
         match &e.opening_element.name {
-            JSXElementName::Identifier(_) => {
-                if e.opening_element
+            JSXElementName::Identifier(_)
+                if e
+                    .opening_element
                     .attributes
                     .iter()
-                    .any(|a| matches!(a, JSXAttributeItem::SpreadAttribute(_)))
-                {
-                    self.elements.push(e);
-                }
+                    .any(|a| matches!(a, JSXAttributeItem::SpreadAttribute(_))) =>
+            {
+                self.elements.push(e);
             }
+            JSXElementName::Identifier(_) => {}
             JSXElementName::IdentifierReference(id) => {
                 if let Some(s) = self.m.symbol_of(id) {
                     // A closing tag's name may resolve as a reference too.

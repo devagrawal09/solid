@@ -3529,6 +3529,7 @@ impl<'x, 'a> Ce<'x, 'a> {
             .collect()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn attr_parts(
         &mut self,
         tag: &str,
