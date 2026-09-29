@@ -1,0 +1,18 @@
+{
+  "name": "blocks-example-harness",
+  "description": "Shared test and lint setup for the examples' -blocks twins: DOM normalization, the parity runner, the lint config",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./eslint": "./eslint.config.mjs"
+  },
+  "dependencies": {
+    "@solidjs/eslint-plugin-blocks": "workspace:*",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "solid-js": "workspace:*"
+  }
+}
