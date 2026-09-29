@@ -51,7 +51,15 @@ pub(crate) struct Refs {
     pub refreshed: Vec<SymbolId>,
     /// Roots of `yield*` reads (`yield* x`, `yield* x.a.b`).
     pub yielded: Vec<SymbolId>,
+    /// Reads of the client environment (`isServer`, `typeof window`,
+    /// `window.*`, `document.*`, `navigator.*`, `toLocale*`, `Intl`,
+    /// `Date.now()`, `new Date()`, `Math.random()`): the server's value is
+    /// not the client's, so a view hole reading one is client-live.
+    pub env: Vec<String>,
 }
+
+/// Globals whose value differs between the server and the client.
+const ENV_GLOBALS: &[&str] = &["window", "document", "navigator", "Intl"];
 
 struct Walker<'m, 'a> {
     m: &'m Model<'a>,
@@ -66,13 +74,40 @@ impl<'a> Visit<'a> for Walker<'_, 'a> {
             if Some(s) == self.props {
                 self.out.props_bare = true;
             } else {
+                if self.m.runtime.get(&s).is_some_and(|n| n == "isServer") {
+                    self.out.env.push("isServer".into());
+                }
                 self.out.syms.push((s, self.cond > 0));
             }
+        } else if ENV_GLOBALS.contains(&id.name.as_str()) {
+            self.out.env.push(id.name.to_string());
         }
+    }
+    fn visit_new_expression(&mut self, e: &oxc_ast::ast::NewExpression<'a>) {
+        if let Expression::Identifier(id) = &e.callee
+            && id.name == "Date"
+            && self.m.symbol_of(id).is_none()
+            && e.arguments.is_empty()
+        {
+            self.out.env.push("new Date()".into());
+        }
+        walk::walk_new_expression(self, e);
     }
     fn visit_static_member_expression(&mut self, e: &StaticMemberExpression<'a>) {
         if e.property.name == "preventDefault" {
             self.out.prevent_default = true;
+        }
+        if e.property.name.starts_with("toLocale") {
+            self.out.env.push(format!(".{}()", e.property.name));
+        }
+        if let Expression::Identifier(id) = &e.object
+            && self.m.symbol_of(id).is_none()
+            && matches!(
+                (id.name.as_str(), e.property.name.as_str()),
+                ("Date", "now") | ("Math", "random")
+            )
+        {
+            self.out.env.push(format!("{}.{}()", id.name, e.property.name));
         }
         if let Expression::Identifier(id) = &e.object
             && self.props.is_some()
@@ -120,13 +155,22 @@ impl<'a> Visit<'a> for Walker<'_, 'a> {
     fn visit_call_expression(&mut self, c: &CallExpression<'a>) {
         if let Some(n) = self.m.runtime_name(&c.callee) {
             if n == "refresh" {
+                // `refresh(x)` re-runs x's source (a write, for liveness);
+                // it does not read x's value.
+                let mut plain = true;
                 for a in &c.arguments {
-                    if let Some(s) = a.as_expression().and_then(|e| self.m.symbol_of_expr(e)) {
-                        self.out.refreshed.push(s);
+                    match a.as_expression().and_then(|e| self.m.symbol_of_expr(e)) {
+                        Some(s) => self.out.refreshed.push(s),
+                        None => plain = false,
                     }
                 }
+                self.out.calls.push(n.to_string());
+                if plain {
+                    return;
+                }
+            } else {
+                self.out.calls.push(n.to_string());
             }
-            self.out.calls.push(n.to_string());
         }
         walk::walk_call_expression(self, c);
     }
@@ -179,6 +223,21 @@ pub(crate) fn refs_fn<'a>(m: &Model<'a>, props: Option<SymbolId>, f: FnRef<'a>) 
     w.out
 }
 
+pub(crate) fn refs_stmt_props<'a>(
+    m: &Model<'a>,
+    props: Option<SymbolId>,
+    s: &oxc_ast::ast::Statement<'a>,
+) -> Refs {
+    let mut w = Walker {
+        m,
+        props,
+        out: Refs::default(),
+        cond: 0,
+    };
+    w.visit_statement(s);
+    w.out
+}
+
 pub(crate) fn refs_stmt<'a>(m: &Model<'a>, s: &oxc_ast::ast::Statement<'a>) -> Refs {
     let mut w = Walker {
         m,
@@ -222,6 +281,9 @@ pub(crate) enum SiteKind {
     For,
     /// A setup effect (`$effect`) or settled body; item index.
     Effect(usize, bool),
+    /// An island frame's driver (index in `Analysis::frames`): its span is
+    /// the frame region; it refetches the region when its arguments change.
+    Frame(usize),
 }
 
 // `expr` / `regions` complete the site record for consumers of the analysis.
@@ -257,6 +319,11 @@ pub(crate) struct CompFacts<'a> {
     pub item_refs: Vec<Refs>,
     /// `props.children` rendered as a child (a pass-through slot).
     pub slot: bool,
+    /// A `<Router>` element's span (the module's router renders here).
+    pub router: Option<Span>,
+    /// The router layout renders its outlet (`props.children` of its
+    /// render callback).
+    pub outlet: bool,
 }
 
 struct ViewWalk<'m, 'a> {
@@ -264,6 +331,8 @@ struct ViewWalk<'m, 'a> {
     props: Option<SymbolId>,
     f: CompFacts<'a>,
     regions: Vec<usize>,
+    /// The router layout callback's parameter (its `.children` is the outlet).
+    outlet: Option<SymbolId>,
 }
 
 impl<'a> ViewWalk<'_, 'a> {
@@ -295,6 +364,14 @@ impl<'a> ViewWalk<'_, 'a> {
             && self.m.symbol_of(id) == self.props
         {
             self.f.slot = true;
+            return;
+        }
+        if let Expression::StaticMemberExpression(me) = e.without_parentheses()
+            && me.property.name == "children"
+            && self.outlet.is_some()
+            && self.m.symbol_of_expr(&me.object) == self.outlet
+        {
+            self.f.outlet = true;
             return;
         }
         let refs = refs_expr(self.m, self.props, e);
@@ -567,6 +644,28 @@ impl<'a> ViewWalk<'_, 'a> {
                 self.f.providers.push((ctx, value));
                 self.kids(&el.children);
             }
+            Tag::Router => {
+                // The layout: a render callback whose `props.children` is
+                // the outlet (the matched route renders there).
+                self.f.router = Some(el.span);
+                let callback = jsx::children(&el.children).ok().and_then(|ks| match ks.as_slice() {
+                    [Child::Expr(e)] => FnRef::from_expr(e),
+                    _ => None,
+                });
+                let Some(f) = callback else {
+                    self.f
+                        .issues
+                        .push("a <Router> without a layout callback `{props => …}`".into());
+                    return;
+                };
+                let saved = self.outlet;
+                self.outlet = f.params().items.first().and_then(|p| match &p.pattern {
+                    oxc_ast::ast::BindingPattern::BindingIdentifier(id) => id.symbol_id.get(),
+                    _ => None,
+                });
+                self.fn_body(f);
+                self.outlet = saved;
+            }
             tag @ (Tag::Comp(_) | Tag::Opaque(_)) => {
                 let mut props = Vec::new();
                 for a in &attrs {
@@ -674,6 +773,16 @@ pub(crate) struct Analysis<'a> {
     pub structural: HashMap<(usize, u32), usize>,
     pub callers: Vec<BTreeSet<usize>>,
     pub issues: Vec<String>,
+    /// Setup bindings whose value reads the client environment.
+    pub env_syms: HashMap<SymbolId, String>,
+    /// Props a caller passes a client-environment value to.
+    pub env_props: HashMap<(usize, String), String>,
+    /// View sites that read the client environment (client-live).
+    pub env_sites: HashMap<(usize, usize), String>,
+    /// Compiler-derived server components (frames.rs).
+    pub frames: Vec<super::frames::Frame<'a>>,
+    /// Server calls over client inputs that are not frames, with the reason.
+    pub frame_rejects: Vec<super::frames::Reject>,
 }
 
 impl<'a> Analysis<'a> {
@@ -735,6 +844,38 @@ impl<'a> Analysis<'a> {
         }
         (out, cond)
     }
+    /// The client-environment read a site's expression depends on, if any
+    /// (directly, through a setup binding, or through a prop).
+    pub(crate) fn env_of(&self, comp: usize, r: &Refs) -> Option<String> {
+        if let Some(e) = r.env.first() {
+            return Some(e.clone());
+        }
+        for (s, _) in &r.syms {
+            if let Some(e) = self.env_syms.get(s) {
+                return Some(e.clone());
+            }
+        }
+        for (p, _) in &r.props {
+            if let Some(e) = self.env_props.get(&(comp, p.clone())) {
+                return Some(e.clone());
+            }
+        }
+        if r.props_bare {
+            for ((c, _), e) in &self.env_props {
+                if *c == comp {
+                    return Some(e.clone());
+                }
+            }
+        }
+        None
+    }
+    /// Is the site at `span_start` a client-environment read?
+    pub(crate) fn is_env_site(&self, comp: usize, span_start: u32) -> bool {
+        self.facts[comp]
+            .site_at
+            .get(&span_start)
+            .is_some_and(|i| self.env_sites.contains_key(&(comp, *i)))
+    }
     pub(crate) fn is_live_site(&self, comp: usize, span_start: u32) -> bool {
         self.facts[comp]
             .site_at
@@ -784,6 +925,14 @@ fn key_is_memo(m: &Model<'_>, k: Key) -> bool {
 }
 
 pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
+    analyze_file(m, id_prefix, None)
+}
+
+pub(crate) fn analyze_file<'a>(
+    m: &Model<'a>,
+    id_prefix: &str,
+    filename: Option<&str>,
+) -> Analysis<'a> {
     let n = m.comps.len();
     let mut facts: Vec<CompFacts<'a>> = Vec::with_capacity(n);
     for c in &m.comps {
@@ -792,6 +941,7 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
             props: c.props,
             f: CompFacts::default(),
             regions: vec![],
+            outlet: None,
         };
         if let Some(v) = c.view {
             w.root(v);
@@ -947,6 +1097,11 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
         structural: HashMap::new(),
         callers: vec![BTreeSet::new(); n],
         issues: m.issues.clone(),
+        env_syms: HashMap::new(),
+        env_props: HashMap::new(),
+        env_sites: HashMap::new(),
+        frames: Vec::new(),
+        frame_rejects: Vec::new(),
     };
     loop {
         let mut changed = false;
@@ -1024,6 +1179,48 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
             }
         }
     }
+    // Client-environment values: setup bindings (locals, memos, cell
+    // initializers) and props computed from an environment read.
+    loop {
+        let mut changed = false;
+        for (ci, c) in m.comps.iter().enumerate() {
+            for (ii, item) in c.setup.iter().enumerate() {
+                let targets: Vec<SymbolId> = match item {
+                    Item::Local { symbols, .. } => symbols.clone(),
+                    Item::Memo { sym, .. } => vec![*sym],
+                    Item::Cell { get, .. } => vec![*get],
+                    _ => continue,
+                };
+                if targets.iter().all(|t| a.env_syms.contains_key(t)) {
+                    continue;
+                }
+                if let Some(e) = a.env_of(ci, &a.facts[ci].item_refs[ii]) {
+                    for t in targets {
+                        changed |= a.env_syms.insert(t, e.clone()).is_none();
+                    }
+                }
+            }
+            for call in 0..a.facts[ci].calls.len() {
+                let Tag::Comp(child) = a.facts[ci].calls[call].tag else {
+                    continue;
+                };
+                for pi in 0..a.facts[ci].calls[call].props.len() {
+                    let (name, expr) = a.facts[ci].calls[call].props[pi].clone();
+                    let Some(e) = expr else { continue };
+                    if a.env_props.contains_key(&(child, name.clone())) {
+                        continue;
+                    }
+                    if let Some(x) = a.env_of(ci, &refs_expr(m, c.props, e)) {
+                        a.env_props.insert((child, name), x);
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
 
     // --- liveness -------------------------------------------------------------------
     for (ci, c) in m.comps.iter().enumerate() {
@@ -1072,7 +1269,7 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                     a.escaped_writes.extend(v.writes.iter().copied());
                     a.written.extend(v.writes);
                 }
-                SiteKind::Effect(..) => {}
+                SiteKind::Effect(..) | SiteKind::Frame(_) => {}
             }
         }
         // Setters handed to components outside the module escape: whoever
@@ -1131,6 +1328,9 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
         }
     }
 
+    // --- frames (compiler-derived server components) ------------------------------------
+    super::frames::detect(m, &mut a, filename);
+
     // --- sites and union-find ----------------------------------------------------------
     let mut index: HashMap<Key, usize> = HashMap::new();
     let mut elems: Vec<Elem> = Vec::new();
@@ -1180,9 +1380,22 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                 }
                 _ => reads,
             };
-            let always = matches!(s.kind, SiteKind::Handler(_) | SiteKind::Effect(..));
-            if touches.is_empty() && !always {
+            // A frame a handler refreshes belongs to that handler's island
+            // (it addresses the region), even with no live arguments.
+            let always = matches!(s.kind, SiteKind::Handler(_) | SiteKind::Effect(..))
+                || matches!(s.kind, SiteKind::Frame(fi) if !a.frames[fi].refreshers.is_empty());
+            // A view site reading the client environment is client-live:
+            // the server's value is not final.
+            let env = if always {
+                None
+            } else {
+                a.env_of(ci, &s.refs)
+            };
+            if touches.is_empty() && !always && env.is_none() {
                 continue;
+            }
+            if let Some(e) = env {
+                a.env_sites.insert((ci, si), e);
             }
             a.site_live[ci][si] = true;
             let e = elems.len();
@@ -1202,6 +1415,40 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
             if a.live.contains(&d) {
                 union(&mut parent, index[&k], index[&d]);
             }
+        }
+    }
+    // A refreshed frame joins the island of the handlers that refresh it.
+    for fi in 0..a.frames.len() {
+        let fr = &a.frames[fi];
+        let Some(fsite) = fr.site else { continue };
+        let Some(&fe) = site_index.get(&(fr.comp, fsite)) else {
+            continue;
+        };
+        for ci in 0..n {
+            for (si, s) in a.facts[ci].sites.iter().enumerate() {
+                if !matches!(s.kind, SiteKind::Handler(_)) {
+                    continue;
+                }
+                let hits = s.refs.refreshed.iter().any(|x| fr.refreshers.contains(x) || Some(*x) == fr.memo_sym)
+                    || s.refs.syms.iter().any(|(x, _)| fr.refreshers.contains(x));
+                if hits && let Some(&he) = site_index.get(&(ci, si)) {
+                    union(&mut parent, fe, he);
+                }
+            }
+        }
+    }
+    // A component's client-environment sites activate together (one
+    // island per component instead of one per hole).
+    for ci in 0..n {
+        let mut mine: Vec<usize> = a
+            .env_sites
+            .keys()
+            .filter(|(c, _)| *c == ci)
+            .filter_map(|k| site_index.get(k).copied())
+            .collect();
+        mine.sort();
+        for w in mine.windows(2) {
+            union(&mut parent, w[0], w[1]);
         }
     }
     // A component whose setup has side-effect statements must run them
@@ -1427,10 +1674,36 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
         let mut window_events = BTreeSet::new();
         let mut hot = false;
         let mut prevent_default = false;
+        let mut env_why: Vec<String> = Vec::new();
         for (c, s) in &sites {
             let site = &a.facts[*c].sites[*s];
+            if let Some(e) = a.env_sites.get(&(*c, *s)) {
+                // Computed and written on the client at load: the server's
+                // value is only the first paint.
+                hot = true;
+                env_why.push(format!(
+                    "`{}`: `{}` reads the client environment ({e}): computed on the client at load",
+                    m.comps[*c].name,
+                    super::model::short(m.text(site.span))
+                ));
+                if matches!(site.kind, SiteKind::Show | SiteKind::For) {
+                    unsupported.push(format!(
+                        "`{}`: a <Show>/<For> over the client environment ({e}) (its branch or rows would need a client rebuild at load)",
+                        m.comps[*c].name
+                    ));
+                }
+            }
             let calls: Vec<&String> = site.refs.calls.iter().collect();
+            let frames_only = !site.refs.refreshed.is_empty()
+                && site
+                    .refs
+                    .refreshed
+                    .iter()
+                    .all(|s| a.frames.iter().any(|f| f.memo_sym == Some(*s)));
             for name in &calls {
+                if name.as_str() == "refresh" && frames_only {
+                    continue;
+                }
                 if matches!(
                     name.as_str(),
                     "attempt" | "action" | "refresh" | "startTransition" | "createAsync"
@@ -1440,6 +1713,8 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                 }
             }
             match &site.kind {
+                // A frame driver: a hole whose apply refetches the region.
+                SiteKind::Frame(_) => {}
                 SiteKind::Handler(ev) => {
                     events.insert(ev.clone());
                     prevent_default |= site.refs.prevent_default
@@ -1498,8 +1773,16 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                 if matches!(item, Item::Memo { is_async: true, .. }) && !a.live.contains(&(*c, ii)) {
                     continue;
                 }
-                for (sym, _) in &a.facts[*c].item_refs[ii].syms {
+                let r = &a.facts[*c].item_refs[ii];
+                // A refresh of frames only refetches their regions (the
+                // frames applier), not the core's `refresh`.
+                let frames_only = !r.refreshed.is_empty()
+                    && r.refreshed.iter().all(|s| a.frames.iter().any(|f| f.memo_sym == Some(*s)));
+                for (sym, _) in &r.syms {
                     if let Some(n) = m.runtime.get(sym) {
+                        if frames_only && n == "refresh" {
+                            continue;
+                        }
                         core_refs.insert(n.clone());
                     }
                 }
@@ -1575,6 +1858,8 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                     .count()
             )],
         };
+        let mut why = why;
+        why.extend(env_why);
         let mut own_tiers: Vec<(usize, u8)> = members.iter().map(|c| (*c, own[c])).collect();
         own_tiers.sort();
         for (c, s) in &sites {

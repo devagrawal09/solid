@@ -39,8 +39,42 @@ import { scenarios as registered } from "./scenarios/index.js";
 import { islandsScenarios } from "./scenarios/islands.js";
 // Cross-runtime flush order (islands on different tiers, one event).
 import { islandsTierScenarios } from "./scenarios/islands-tiers.js";
+// Compiler-derived server components: env reads, pruned serialization, frames.
+import { islandsFramesScenarios } from "./scenarios/islands-frames.js";
 
-const scenarios = [...registered, ...islandsScenarios, ...islandsTierScenarios];
+const scenarios = [
+  ...registered,
+  ...islandsScenarios,
+  ...islandsTierScenarios,
+  ...islandsFramesScenarios
+];
+
+// Compiler-derived frames (scenarios with `islandsServer`): the real
+// server-functions handler (built bundle, as the other server-function specs
+// use) and the real frames applier the chunks load.
+// @ts-ignore built JS without declarations
+const serverFunctions = await import("../../server-functions/dist/server.js");
+// @ts-ignore plain ESM without declarations
+const framesClient = await import("../../../compiler/frames-client.mjs");
+serverFunctions.configureServerFunctionsServer({
+  provideEvent: (_event: unknown, fn: () => unknown) => fn()
+});
+/** Route the frames applier's requests to the server-functions handler. */
+function framesFetch() {
+  const original = globalThis.fetch;
+  globalThis.fetch = ((url: string, init: RequestInit = {}) =>
+    serverFunctions.handleServerFunctionRequest(
+      new Request("http://localhost" + url, {
+        ...init,
+        headers: {
+          ...(init.headers as any),
+          origin: "http://localhost",
+          "sec-fetch-site": "same-origin"
+        }
+      })
+    )) as typeof fetch;
+  return () => (globalThis.fetch = original);
+}
 
 const require = createRequire(import.meta.url);
 const stream = require("../../../compiler/islands-stream.js") as {
@@ -97,7 +131,7 @@ const observed = (scenario: Scenario) => {
 const normalizeHtml = (html: string) =>
   html
     .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/ data-(i|s)="[^"]*"/g, "")
+    .replace(/ data-(i|s|f|k)="[^"]*"/g, "")
     .replace(/ data-pd(="")?/g, "")
     // A dynamic class the server rendered empty (`class=""`, as the SSR
     // runtime does) vs. a client render that never set it.
@@ -187,8 +221,11 @@ async function runIslands(scenario: Scenario, source: string, minTier: number) {
   const serverModules: Record<string, unknown> = {
     "solid-js": solid,
     "@solidjs/web": web,
-    conformance: { h: probe(recorder, solid as any), NotFound, Forbidden }
+    conformance: { h: probe(recorder, solid as any), NotFound, Forbidden },
+    ...scenario.islandsServer,
+    ...(scenario.islandsServer ? { "server-functions": serverFunctions } : {})
   };
+  const unfetch = scenario.islandsServer ? framesFetch() : null;
   // The scenario's other modules, as the server bundle has them (their own
   // islands server output; cross-module inlining copied what the page needs).
   for (const [spec, code] of Object.entries(scenario.modules ?? {}))
@@ -234,6 +271,7 @@ async function runIslands(scenario: Scenario, source: string, minTier: number) {
   // A page mixing the core with the lower tiers hands its flush to the core
   // (the entry does this in islands-build.js): one batch per page flush.
   let unhost: (() => void) | null = null;
+  let landingCleanup: (() => void) | null = null;
   // Islands a `manualActivation` scenario's steps have activated so far.
   const manual = scenario.manualActivation ? new Set<string>() : null;
   /** Activate every anchor not yet active (the entry's scan, at load and on each landing). */
@@ -263,12 +301,18 @@ async function runIslands(scenario: Scenario, source: string, minTier: number) {
         RUNTIMES[island.tier === 0 ? "t0" : island.tier === 1 ? "kernel" : "core"];
       const rt: any = on === RUNTIMES.t0 ? t0i : on === RUNTIMES.kernel ? kernel : solid;
       const probeRt: any = on === RUNTIMES.core ? solid : kernel;
-      const chunk = evaluate(code, {
-        [RUNTIMES.t0]: t0i,
-        [RUNTIMES.kernel]: kernel,
-        [RUNTIMES.core]: solid,
-        conformance: { h: probe(recorder, probeRt), NotFound, Forbidden }
-      });
+      const chunk = evaluate(
+        // The frames applier loads lazily (a dynamic import the module
+        // grammar does not rewrite): hand it the injected module.
+        code.replace(/\bimport\("frames-client"\)/g, 'Promise.resolve(__import("frames-client"))'),
+        {
+          [RUNTIMES.t0]: t0i,
+          [RUNTIMES.kernel]: kernel,
+          [RUNTIMES.core]: solid,
+          conformance: { h: probe(recorder, probeRt), NotFound, Forbidden },
+          "frames-client": framesClient
+        }
+      );
       tiers.push(island.tier);
       if (rt === solid && !unhost) unhost = host(solid as any);
       if (rt.flush) flushers.add(() => rt.flush());
@@ -284,6 +328,27 @@ async function runIslands(scenario: Scenario, source: string, minTier: number) {
       activateAll();
     };
     for (const c of early.splice(0)) land(c);
+    // A frame's region landing (the frames applier's morph): keyed islands
+    // are handed their state (`$SI.act`, the islands entry's activator),
+    // then the landing event activates the new anchors.
+    const onLanding = () => {
+      activateAll();
+      flush();
+    };
+    document.addEventListener("solid-islands", onLanding);
+    (self as any).$SI = {
+      act(el: any, id: string, state: unknown) {
+        const g = groups.find(g => g.island.id === id);
+        if (!g) return;
+        (el.$i ||= {})[id] = 1;
+        const d = g.chunk.activate(el, state);
+        if (typeof d === "function") disposers.push(d);
+      }
+    };
+    landingCleanup = () => {
+      document.removeEventListener("solid-islands", onLanding);
+      delete (self as any).$SI;
+    };
     activateAll();
     flush();
     const activated = container.innerHTML;
@@ -333,6 +398,8 @@ async function runIslands(scenario: Scenario, source: string, minTier: number) {
     container.remove();
     await drain();
     unhost?.();
+    landingCleanup?.();
+    unfetch?.();
   }
 }
 
@@ -377,6 +444,10 @@ describe("compiled islands reproduce the oracle", () => {
           expect(find(key).tier, `tier of ${key}`).toBe(tier);
         for (const [key, id] of Object.entries(scenario.islandIds ?? {}))
           expect(find(key).id, `id of ${key}`).toBe(id);
+      });
+    if (scenario.islandsManifest)
+      test(`${scenario.name}: the compiler's manifest`, () => {
+        scenario.islandsManifest!(probe.manifest);
       });
     const chosen = tiers.length ? `tier ${Math.max(...tiers)}` : "no islands (inert)";
     // A load-time effect writes after the server render (as it does after
@@ -442,6 +513,7 @@ describe("dev verifier", () => {
       filename: "/scenario/app.jsx",
       probeHosts: ["h.signal"],
       verify: true,
+      ...scenario.islandsOptions,
       imports: Object.entries(scenario.modules ?? {}).map(([specifier, code]) => ({
         specifier,
         filename: `/scenario/${specifier.slice(2)}.jsx`,
@@ -451,7 +523,9 @@ describe("dev verifier", () => {
     const mods: Record<string, unknown> = {
       "solid-js": solid,
       "@solidjs/web": web,
-      conformance: { h: probe(new Recorder(), solid as any), NotFound, Forbidden }
+      conformance: { h: probe(new Recorder(), solid as any), NotFound, Forbidden },
+      ...scenario.islandsServer,
+      ...(scenario.islandsServer ? { "server-functions": serverFunctions } : {})
     };
     for (const [spec, code] of Object.entries(scenario.modules ?? {}))
       mods[spec] = evaluate(
@@ -486,7 +560,7 @@ describe("dev verifier", () => {
   for (const scenario of candidates) {
     const source = ((scenario.sources as Record<string, string | undefined>).islands ??
       scenario.sources.blocks)!;
-    if (compileFor(source, 0, scenario.modules).fallback) continue;
+    if (compileFor(source, 0, scenario.modules, scenario.islandsOptions).fallback) continue;
     test(`${scenario.name}: silent on its own server markup`, async () => {
       expect(await verifyAll(scenario, source)).toEqual([]);
     });

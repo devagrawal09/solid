@@ -1,0 +1,166 @@
+{
+  "tests": 112,
+  "featureCounts": {
+    "FULL_CODEC": 10,
+    "SLOT_DATA": 10,
+    "LIVE_PROPS": 9,
+    "ASYNC_ARGS": 6,
+    "FRAGMENTS": 14,
+    "CONTAINERS": 3,
+    "ASSETS": 4,
+    "HYDRATION_CLAIMS": 3,
+    "SINGLE_FLIGHT": 1
+  },
+  "results": [
+    {
+      "config": "−FRAGMENTS",
+      "off": [
+        "FRAGMENTS"
+      ],
+      "passed": 98,
+      "skipped": 14,
+      "regressions": [],
+      "cascades": [],
+      "sensitivity": {
+        "featureUsers": 14,
+        "failWithSwitchOff": 12
+      }
+    },
+    {
+      "config": "−ASSETS",
+      "off": [
+        "ASSETS"
+      ],
+      "passed": 108,
+      "skipped": 4,
+      "regressions": [],
+      "cascades": [],
+      "sensitivity": {
+        "featureUsers": 4,
+        "failWithSwitchOff": 3
+      }
+    },
+    {
+      "config": "−SLOT_DATA",
+      "off": [
+        "SLOT_DATA"
+      ],
+      "passed": 102,
+      "skipped": 10,
+      "regressions": [],
+      "cascades": [],
+      "sensitivity": {
+        "featureUsers": 10,
+        "failWithSwitchOff": 10
+      }
+    },
+    {
+      "config": "−ASYNC_ARGS",
+      "off": [
+        "ASYNC_ARGS"
+      ],
+      "passed": 105,
+      "skipped": 6,
+      "regressions": [],
+      "cascades": [
+        "test/hydration/adopted-fallback-residue.spec.tsx::adopted slot fill whose arg settled server-side before flush nested Loading in the fallback (the chat Status shape): no residue"
+      ],
+      "sensitivity": {
+        "featureUsers": 6,
+        "failWithSwitchOff": 6
+      }
+    },
+    {
+      "config": "−CONTAINERS",
+      "off": [
+        "CONTAINERS"
+      ],
+      "passed": 109,
+      "skipped": 3,
+      "regressions": [],
+      "cascades": [],
+      "sensitivity": {
+        "featureUsers": 3,
+        "failWithSwitchOff": 3
+      }
+    },
+    {
+      "config": "−LIVE_PROPS",
+      "off": [
+        "LIVE_PROPS"
+      ],
+      "passed": 103,
+      "skipped": 9,
+      "regressions": [],
+      "cascades": [],
+      "sensitivity": {
+        "featureUsers": 9,
+        "failWithSwitchOff": 7
+      }
+    },
+    {
+      "config": "−SINGLE_FLIGHT",
+      "off": [
+        "SINGLE_FLIGHT"
+      ],
+      "passed": 111,
+      "skipped": 1,
+      "regressions": [],
+      "cascades": [],
+      "sensitivity": {
+        "featureUsers": 1,
+        "failWithSwitchOff": 1
+      }
+    },
+    {
+      "config": "−FULL_CODEC",
+      "off": [
+        "FULL_CODEC"
+      ],
+      "passed": 102,
+      "skipped": 10,
+      "regressions": [],
+      "cascades": [],
+      "sensitivity": {
+        "featureUsers": 10,
+        "failWithSwitchOff": 10
+      }
+    },
+    {
+      "config": "−HYDRATION_CLAIMS",
+      "off": [
+        "HYDRATION_CLAIMS"
+      ],
+      "passed": 109,
+      "skipped": 3,
+      "regressions": [],
+      "cascades": [],
+      "sensitivity": {
+        "featureUsers": 3,
+        "failWithSwitchOff": 1
+      }
+    },
+    {
+      "config": "−all",
+      "off": [
+        "FRAGMENTS",
+        "ASSETS",
+        "SLOT_DATA",
+        "ASYNC_ARGS",
+        "CONTAINERS",
+        "LIVE_PROPS",
+        "SINGLE_FLIGHT",
+        "FULL_CODEC",
+        "HYDRATION_CLAIMS"
+      ],
+      "passed": 72,
+      "skipped": 40,
+      "regressions": [],
+      "cascades": [],
+      "sensitivity": {
+        "featureUsers": 40,
+        "failWithSwitchOff": 36
+      }
+    }
+  ]
+}

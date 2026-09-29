@@ -29,6 +29,17 @@ pub(crate) trait Env<'a> {
     fn props_member(&self, _tx: &Tx<'_, 'a>, _name: &str) -> R<Option<String>> {
         Ok(None)
     }
+    /// `props.name`, read as `props.name.<path…>` (the static property path
+    /// the access continues with, `name` first; `None` when the value is
+    /// used whole): lets the emitter serialize only the paths code reads.
+    fn props_member_path(
+        &self,
+        tx: &Tx<'_, 'a>,
+        name: &str,
+        _path: Option<&[String]>,
+    ) -> R<Option<String>> {
+        self.props_member(tx, name)
+    }
     /// Is `e` the `props` binding?
     fn is_props(&self, _tx: &Tx<'_, 'a>, _e: &Expression<'a>) -> bool {
         false
@@ -123,6 +134,7 @@ impl<'m, 'a> Tx<'m, 'a> {
             err: None,
             plain: 0,
             plain_fns: Default::default(),
+            paths: Default::default(),
         };
         run(&mut c);
         if let Some(e) = c.err {
@@ -143,7 +155,7 @@ impl<'m, 'a> Tx<'m, 'a> {
             Expression::JSXElement(_) | Expression::JSXFragment(_) => Ok(Some(env.jsx(self, e)?)),
             Expression::CallExpression(c) => env.call(self, c),
             Expression::StaticMemberExpression(s) if env.is_props(self, &s.object) => {
-                env.props_member(self, s.property.name.as_str())
+                env.props_member_path(self, s.property.name.as_str(), None)
             }
             Expression::Identifier(id) => Ok(env.ident(self, id)),
             // TypeScript expression wrappers: keep the expression only.
@@ -166,6 +178,50 @@ struct Collect<'t, 'm, 'a> {
     /// `yield` is the transaction dialect's await, not a block operation.
     plain: u32,
     plain_fns: std::collections::HashSet<u32>,
+    /// The static property path of each `props.x…` chain, by its start
+    /// (the outermost chain is visited first).
+    paths: std::collections::HashMap<u32, Vec<String>>,
+}
+
+impl<'a> Collect<'_, '_, 'a> {
+    /// Record the static path a `props.x.y…` chain reads (`[x, y, …]`,
+    /// cut at the first computed member or call on the way down).
+    fn note_chain(&mut self, e: &Expression<'a>) {
+        if let Some((start, path)) = props_chain(self.env, self.tx, e) {
+            self.paths.entry(start).or_insert(path);
+        }
+    }
+}
+
+/// `props.a.b[k].c` → (start, [a, b]): the static names from `props`
+/// until the first computed member.
+pub(crate) fn props_chain<'a>(
+    env: &dyn Env<'a>,
+    tx: &Tx<'_, 'a>,
+    e: &Expression<'a>,
+) -> Option<(u32, Vec<String>)> {
+    let mut names: Vec<String> = Vec::new();
+    let mut cur = e.without_parentheses();
+    let start = cur.span().start;
+    loop {
+        match cur {
+            Expression::StaticMemberExpression(s) => {
+                names.push(s.property.name.to_string());
+                cur = s.object.without_parentheses();
+            }
+            Expression::ComputedMemberExpression(c) => {
+                names.clear();
+                cur = c.object.without_parentheses();
+            }
+            Expression::Identifier(_) if env.is_props(tx, cur) => break,
+            _ => return None,
+        }
+    }
+    if names.is_empty() {
+        return None;
+    }
+    names.reverse();
+    Some((start, names))
 }
 
 /// Runtime functions whose generator argument is plain JavaScript (the
@@ -183,6 +239,26 @@ impl<'a> Visit<'a> for Collect<'_, '_, 'a> {
         let e: &'a Expression<'a> = unsafe { &*(e as *const Expression<'a>) };
         if self.plain > 0 && matches!(e, Expression::YieldExpression(_)) {
             walk::walk_expression(self, e);
+            return;
+        }
+        if matches!(
+            e,
+            Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_)
+        ) {
+            self.note_chain(e);
+        }
+        if let Expression::StaticMemberExpression(s) = e
+            && self.env.is_props(self.tx, &s.object)
+        {
+            let path = self.paths.get(&s.span.start).cloned();
+            match self
+                .env
+                .props_member_path(self.tx, s.property.name.as_str(), path.as_deref())
+            {
+                Ok(Some(r)) => self.edits.push((e.span(), r)),
+                Ok(None) => walk::walk_expression(self, e),
+                Err(x) => self.err = Some(x),
+            }
             return;
         }
         match self.tx.special(self.env, e) {
@@ -217,8 +293,42 @@ impl<'a> Visit<'a> for Collect<'_, '_, 'a> {
         }
     }
     fn visit_static_member_expression(&mut self, s: &StaticMemberExpression<'a>) {
+        // A chain visited as a member node (the root of a translated
+        // expression, or inside an optional chain): note its path first.
+        {
+            let s2: &'a StaticMemberExpression<'a> =
+                unsafe { &*(s as *const StaticMemberExpression<'a>) };
+            let mut names = vec![s2.property.name.to_string()];
+            let mut cur = s2.object.without_parentheses();
+            let mut ok = false;
+            loop {
+                match cur {
+                    Expression::StaticMemberExpression(x) => {
+                        names.push(x.property.name.to_string());
+                        cur = x.object.without_parentheses();
+                    }
+                    Expression::ComputedMemberExpression(c) => {
+                        names.clear();
+                        cur = c.object.without_parentheses();
+                    }
+                    Expression::Identifier(_) => {
+                        ok = self.env.is_props(self.tx, cur);
+                        break;
+                    }
+                    _ => break,
+                }
+            }
+            if ok && !names.is_empty() {
+                names.reverse();
+                self.paths.entry(s2.span.start).or_insert(names);
+            }
+        }
         if self.env.is_props(self.tx, &s.object) {
-            match self.env.props_member(self.tx, s.property.name.as_str()) {
+            let path = self.paths.get(&s.span.start).cloned();
+            match self
+                .env
+                .props_member_path(self.tx, s.property.name.as_str(), path.as_deref())
+            {
                 Ok(Some(r)) => self.edits.push((s.span, r)),
                 Ok(None) => {}
                 Err(x) => self.err = Some(x),

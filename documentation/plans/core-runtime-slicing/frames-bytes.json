@@ -1,0 +1,146 @@
+{
+  "rows": [
+    {
+      "config": "full (published)",
+      "off": [],
+      "min": 88409,
+      "gz": 31605,
+      "lazyCodec": true
+    },
+    {
+      "config": "−FRAGMENTS",
+      "off": [
+        "FRAGMENTS"
+      ],
+      "min": 85967,
+      "gz": 30746,
+      "lazyCodec": true
+    },
+    {
+      "config": "−ASSETS",
+      "off": [
+        "ASSETS"
+      ],
+      "min": 86287,
+      "gz": 30981,
+      "lazyCodec": true
+    },
+    {
+      "config": "−SLOT_DATA",
+      "off": [
+        "SLOT_DATA"
+      ],
+      "min": 88063,
+      "gz": 31565,
+      "lazyCodec": true
+    },
+    {
+      "config": "−ASYNC_ARGS",
+      "off": [
+        "ASYNC_ARGS"
+      ],
+      "min": 88388,
+      "gz": 31654,
+      "lazyCodec": true
+    },
+    {
+      "config": "−CONTAINERS",
+      "off": [
+        "CONTAINERS"
+      ],
+      "min": 62691,
+      "gz": 23362,
+      "lazyCodec": true
+    },
+    {
+      "config": "−LIVE_PROPS",
+      "off": [
+        "LIVE_PROPS"
+      ],
+      "min": 88207,
+      "gz": 31531,
+      "lazyCodec": true
+    },
+    {
+      "config": "−SINGLE_FLIGHT",
+      "off": [
+        "SINGLE_FLIGHT"
+      ],
+      "min": 87333,
+      "gz": 31232,
+      "lazyCodec": true
+    },
+    {
+      "config": "−FULL_CODEC",
+      "off": [
+        "FULL_CODEC"
+      ],
+      "min": 88283,
+      "gz": 31601,
+      "lazyCodec": false
+    },
+    {
+      "config": "−HYDRATION_CLAIMS",
+      "off": [
+        "HYDRATION_CLAIMS"
+      ],
+      "min": 87293,
+      "gz": 31252,
+      "lazyCodec": true
+    },
+    {
+      "config": "−all",
+      "off": [
+        "FRAGMENTS",
+        "ASSETS",
+        "SLOT_DATA",
+        "ASYNC_ARGS",
+        "CONTAINERS",
+        "LIVE_PROPS",
+        "SINGLE_FLIGHT",
+        "FULL_CODEC",
+        "HYDRATION_CLAIMS"
+      ],
+      "min": 54307,
+      "gz": 20460,
+      "lazyCodec": false
+    },
+    {
+      "config": "−ASSETS,ASYNC_ARGS,CONTAINERS,SINGLE_FLIGHT",
+      "off": [
+        "ASSETS",
+        "ASYNC_ARGS",
+        "CONTAINERS",
+        "SINGLE_FLIGHT"
+      ],
+      "min": 58887,
+      "gz": 22063,
+      "lazyCodec": true
+    },
+    {
+      "config": "−ASSETS,SINGLE_FLIGHT",
+      "off": [
+        "ASSETS",
+        "SINGLE_FLIGHT"
+      ],
+      "min": 85018,
+      "gz": 30474,
+      "lazyCodec": true
+    },
+    {
+      "config": "−ASSETS,ASYNC_ARGS,CONTAINERS",
+      "off": [
+        "ASSETS",
+        "ASYNC_ARGS",
+        "CONTAINERS"
+      ],
+      "min": 60161,
+      "gz": 22578,
+      "lazyCodec": true
+    }
+  ],
+  "lazyCodec": {
+    "min": 22523,
+    "gz": 6752
+  }
+}

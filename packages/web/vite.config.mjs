@@ -8,11 +8,12 @@ import codspeedPlugin from "@codspeed/vitest-plugin";
 
 const compiler = process.env.JSX_COMPILER === "babel" ? "babel" : "native";
 import { resolve } from "path";
+import { framesFeatureSwitches, framesSetupFiles } from "./test/setup/frames-features.mjs";
 
 const rootDir = resolve(__dirname);
 
 export default defineConfig({
-  plugins: [solidPlugin({ compiler }), codspeedPlugin()],
+  plugins: [framesFeatureSwitches(), solidPlugin({ compiler }), codspeedPlugin()],
   server: {
     port: 3000
   },
@@ -26,6 +27,8 @@ export default defineConfig({
     environment: "jsdom",
     pool: "threads",
     globals: true,
+    // Frames client switch census / slices (scripts/frames-differential.mjs).
+    setupFiles: framesSetupFiles(),
     exclude: [
       "**/node_modules/**",
       "wip_tests/**",
@@ -51,18 +54,12 @@ export default defineConfig({
       // The frames specs stub fetch/createServerReference against the
       // runtime SOURCE, so route the specifier to that same module — one
       // instance, like every from-source consumer of this seam.
-      "@solidjs/web/server-functions/client": resolve(
-        rootDir,
-        "server-functions/src/client.ts"
-      ),
+      "@solidjs/web/server-functions/client": resolve(rootDir, "server-functions/src/client.ts"),
       "@solidjs/web/serialization/decode": resolve(
         rootDir,
         "serialization/src/serializer-decode.ts"
       ),
-      "@solidjs/web/serialization": resolve(
-        rootDir,
-        "serialization/src/serializer.ts"
-      ),
+      "@solidjs/web/serialization": resolve(rootDir, "serialization/src/serializer.ts"),
       // The conformance harness's no-Solid-compiler mode (generic JSX
       // transform + hyperscript runtime); the built package, same builds.
       "@solidjs/h/jsx-runtime": resolve(rootDir, "../h/jsx-runtime/dist/jsx.js"),

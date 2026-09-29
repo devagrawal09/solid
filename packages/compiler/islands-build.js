@@ -24,6 +24,51 @@ const PREFETCH = ["load", "idle", "visible", "intent", "interaction"];
 const ENTRY = "virtual:solid-islands";
 const CHUNK = "virtual:solid-islands/chunk/";
 const HOST = "virtual:solid-islands/host";
+// Frames (compiler-derived server components): the navigation module (the
+// route table, loaded on the first client navigation) and each route
+// module's argument functions (`<file>?solid-frames-args`).
+const NAV = "virtual:solid-frames/nav";
+const ARGS = "?solid-frames-args";
+const FRAMES_CLIENT = "@solidjs/compiler/frames-client";
+const SERVER_FUNCTIONS = "@solidjs/web/server-functions";
+// A module whose first statement is the `"use server"` directive.
+const USE_SERVER = /^(?:\s|\/\/[^\n]*\n|\/\*[\s\S]*?\*\/)*(["'])use server\1/;
+
+/** A server function's build-stable id: `<name>-<hash of its module path>`. */
+function serverFunctionId(name, file, root) {
+  const rel = path.relative(root, file).split(path.sep).join("/");
+  let h = 0x811c9dc5;
+  for (let i = 0; i < rel.length; i++) h = Math.imul(h ^ rel.charCodeAt(i), 0x01000193) >>> 0;
+  return `${name}-${h.toString(36)}`;
+}
+
+/**
+ * A `"use server"` module in the client build: a client reference per
+ * server function (island code calling one reaches it over HTTP; with
+ * refreshed frames, one request brings them back — frames-client's call).
+ */
+function serverModuleClient(names, file, root) {
+  let s = `import { serverFunction as $sf } from ${JSON.stringify(FRAMES_CLIENT)};\n`;
+  for (const n of names)
+    s += `export const ${n} = $sf(${JSON.stringify(serverFunctionId(n, file, root))});\n`;
+  return s;
+}
+
+/** …and in the server build: each registered for HTTP dispatch under the same id. */
+function serverModuleRegistrations(names, file, root) {
+  let s = `\nimport { registerServerReference as $$rsr } from ${JSON.stringify(SERVER_FUNCTIONS)};\n`;
+  for (const n of names) s += `$$rsr(${JSON.stringify(serverFunctionId(n, file, root))}, ${n});\n`;
+  return s;
+}
+
+/** An island chunk's relative imports, resolved against its module (chunks are virtual). */
+function absoluteImports(code, file) {
+  if (!file) return code;
+  return code.replace(/(\bfrom\s*["'])(\.{1,2}\/[^"']+)(["'])/g, (m, a, spec, b) => {
+    const target = resolveRelative(file, spec);
+    return target ? a + target + b : m;
+  });
+}
 
 /**
  * The page-flush host module (island-runtime-tiers.md, "Cross-runtime
@@ -80,7 +125,8 @@ function islandsEntry({
   sizeOf = i => String(i.size || 0),
   verify = false,
   core = "@solidjs/signals",
-  host = HOST
+  host = HOST,
+  frames = null
 } = {}) {
   const J = JSON.stringify;
   const eager = islands.filter(i => mode === "eager" || i.activation === "load");
@@ -174,7 +220,8 @@ function islandsEntry({
     (h, n) =>
       (s += `$hydrate(() => $cc($H${n}, {}), document.querySelector(${J(h.selector || "#root")}));\n`)
   );
-  if (streams && eager.length) {
+  if (frames) s += framesEntry(islands, eager, chunk, frames);
+  if ((streams || frames) && eager.length) {
     // Activate each anchor once, now and whenever a boundary chunk lands.
     const rows = eager.map(
       (i, n) =>
@@ -195,10 +242,148 @@ function islandsEntry({
     });
   }
   s += start;
+  if (frames && frames.nav) s += navStart(frames);
   if (verify) s += verifier(islands, chunk, streams);
   if (hooks.after) s += hooks.after + "\n";
   s += "}\n";
   return s;
+}
+
+// Frames: the activator the applier uses to hand a keyed island's state to
+// its new anchor after a refetch (`self.$SI.act`), for every island of the
+// page (lazy ones load their chunk; eager ones are already imported).
+function framesEntry(islands, eager, chunk, frames) {
+  const J = JSON.stringify;
+  const rows = islands.map(i => {
+    const n = eager.indexOf(i);
+    const load =
+      n >= 0
+        ? `() => Promise.resolve({ activate: a${n}${i.tier ? `, flush: f${n}` : ""} })`
+        : `() => import(${J(chunk(i.id))})`;
+    return `${J(i.id)}: ${load}`;
+  });
+  let s = `const $SL = {\n  ${rows.join(",\n  ")}\n};\n`;
+  s += `self.$SI = { act: (el, id, st) => $SL[id] && $SL[id]().then(m => { (el.$i ||= {})[id] = 1; m.activate(el, st); m.flush && m.flush(); })${frames.nav ? ", links: $links" : ""} };\n`;
+  if (frames.nav) {
+    s += `const $nav = () => import(${J(frames.navModule || NAV)});\n`;
+    // @solidjs/router's link state: aria-current="page" on same-origin
+    // links to the location, data-active on those to it or a parent path —
+    // at load and after every navigation.
+    s += `const $cp = p => ("/" + p.split(/[?#]/, 1)[0].replace(/^\\/+/, "")).toLowerCase().replace(/\\/$/, "");\n`;
+    s += `function $links() { const l = decodeURI($cp(location.pathname)); for (const a of document.querySelectorAll("a[href]")) { if (a.target || a.hasAttribute("download") || (a.getAttribute("rel") || "").split(/\\s+/).includes("external")) continue; let u; try { u = new URL(a.getAttribute("href"), document.baseURI); } catch { continue; } if (u.origin !== location.origin) continue; const p = $cp(u.pathname), x = l === p; x || (p !== "" && l.startsWith(p + "/")) ? a.setAttribute("data-active", "") : a.removeAttribute("data-active"); x ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current"); } }\n`;
+  }
+  return s;
+}
+
+// Client navigation (inside \`start()\`): same-origin link clicks and history
+// traversal load the navigation module (route table + applier) and land the
+// route's frame in the outlet; with \`prefetch\`, link intent loads the frame
+// ahead (the routes' \`preload\`).
+function navStart(frames) {
+  let s = `$links();\ndocument.addEventListener("click", e => { if (e.defaultPrevented || e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; const a = e.target.closest && e.target.closest("a[href]"); if (!a || (a.target && a.target !== "_self") || a.hasAttribute("download") || a.origin !== location.origin || (a.pathname === location.pathname && a.search === location.search && a.hash)) return; e.preventDefault(); $nav().then(m => m.go(a.href)); });\n`;
+  s += `addEventListener("popstate", () => $nav().then(m => m.back()));\n`;
+  if (frames.prefetch)
+    s += `for (const t of ["pointerover", "focusin"]) document.addEventListener(t, e => { const a = e.target.closest && e.target.closest("a[href]"); if (a && a.origin === location.origin && !a.target) $nav().then(m => m.pre(a.href)); }, { capture: true, passive: true });\n`;
+  return s;
+}
+
+/**
+ * The navigation module: the route table (paths, the route frame's id, its
+ * argument function from the route module's \`framesClient\`) and the
+ * applier's navigation. Routes without a frame navigate with a full load.
+ */
+function navModule(routes, { client = FRAMES_CLIENT, args = f => f + ARGS } = {}) {
+  const J = JSON.stringify;
+  const files = [...new Set(routes.filter(r => r.frame && r.argsFile).map(r => r.argsFile))];
+  let s = `import { navigate, prefetch } from ${J(client)};\n`;
+  files.forEach((f, n) => (s += `import { $$routeArgs as r${n} } from ${J(args(f))};\n`));
+  const rows = routes.map(r => {
+    const n = files.indexOf(r.argsFile);
+    return r.frame && n >= 0
+      ? `[${J(r.paths)}, ${J(r.frame)}, r${n}[${J(r.frame)}]]`
+      : `[${J(r.paths)}, null, null]`;
+  });
+  s += `const R = [\n  ${rows.join(",\n  ")}\n];\n`;
+  s += `export const go = h => navigate(R, h);\nexport const back = () => navigate(R, null, { push: false });\nexport const pre = h => prefetch(R, h);\n`;
+  return s;
+}
+
+/**
+ * The page's frames report (\`.vite/solid-frames.json\`): every derived
+ * frame with its arguments, server functions and the islands its HTML
+ * carries (with how each is keyed), the candidates that are not frames and
+ * why, and the route table. Paths are relative to \`root\` and entries
+ * sorted, so the report is stable for CI diffing.
+ */
+function framesReport(collected, root) {
+  const rel = f => (f ? path.relative(root, f).split(path.sep).join("/") : null);
+  const byName = name => collected.islands.filter(i => i.root === name);
+  const frames = collected.frames
+    .map(f => {
+      const islands = [
+        ...f.islands.map(i => ({ ...i, module: rel(f.file) })),
+        ...(f.renders || []).flatMap(r =>
+          byName(r.component).map(i => ({
+            id: i.id,
+            root: i.root,
+            module: rel(i.file),
+            key: r.key,
+            transplant: !!i.transplant,
+            serialized: i.serialized
+          }))
+        )
+      ].sort((x, y) => (x.id < y.id ? -1 : 1));
+      return {
+        id: f.id,
+        module: rel(f.file),
+        root: f.root,
+        memo: f.memo,
+        region: f.region,
+        driver: f.driver,
+        arguments: f.arguments,
+        argumentsFrom: f.argumentsFrom,
+        serverFunctions: f.serverFunctions,
+        tainted: f.tainted,
+        islands,
+        public: f.public,
+        guard: f.guard
+      };
+    })
+    .sort((x, y) => (x.id < y.id ? -1 : 1));
+  return {
+    version: 1,
+    frames,
+    candidates: (collected.candidates || [])
+      .map(c => ({ ...c, module: rel(c.module) }))
+      .sort((x, y) => (x.module + x.root + x.memo < y.module + y.root + y.memo ? -1 : 1)),
+    routes: routeTable(collected).map(r => ({
+      paths: r.paths,
+      component: r.component,
+      module: rel(r.file),
+      frame: r.frame,
+      preload: r.preload,
+      guard: null
+    }))
+  };
+}
+
+/** The page's route table from the collected manifests. */
+function routeTable(collected) {
+  const out = [];
+  for (const { file, router } of collected.routers)
+    for (const r of router.routes) {
+      const target = r.module ? resolveRelative(file, r.module) : null;
+      const frame = target && collected.frames.find(f => f.file === target && f.driver === "route");
+      out.push({
+        paths: r.paths,
+        component: r.component,
+        file: target,
+        frame: frame ? frame.id : null,
+        argsFile: frame && collected.framesClient.has(target) ? target : null,
+        preload: r.preload
+      });
+    }
+  return out;
 }
 
 // The dev verifier (dev builds): every island's chunk (compiled with
@@ -277,9 +462,21 @@ class IslandsCompiler {
     idPrefix,
     compile = compileIslands,
     crossModule = true,
-    verify = false
+    verify = false,
+    keyedState = false,
+    framesModule = FRAMES_CLIENT,
+    serverFunctionsModule
   } = {}) {
-    this.options = { runtimes, tier1Core, minTier, debug, verify };
+    this.options = {
+      runtimes,
+      tier1Core,
+      minTier,
+      debug,
+      verify,
+      keyedState,
+      framesModule,
+      serverFunctionsModule
+    };
     this.compile = compile;
     this.cache = new Map();
     this.summaries = new Map();
@@ -313,6 +510,25 @@ class IslandsCompiler {
     }
     return out;
   }
+  /**
+   * Relative imports naming `"use server"` modules (their summaries say so):
+   * a server call over client inputs in this module can be a frame.
+   */
+  serverImportsFor(file, code) {
+    const out = [];
+    for (const imp of this.summary(file, code).imports || []) {
+      const target = resolveRelative(file, imp.specifier);
+      if (!target) continue;
+      const s = this.summary(target, fs.readFileSync(target, "utf8"));
+      if (!s.useServer && !(s.serverFunctions || []).length) continue;
+      out.push({
+        specifier: imp.specifier,
+        ...(s.useServer ? {} : { names: s.serverFunctions }),
+        tainted: s.tainted || []
+      });
+    }
+    return out;
+  }
   prefixFor(file) {
     let p = this.prefixes.get(file);
     if (!p) {
@@ -332,11 +548,30 @@ class IslandsCompiler {
       hit.imports.every((m, i) => m.filename === imports[i].filename && m.code === imports[i].code)
     )
       return hit.out;
-    const { runtimes, tier1Core, minTier, debug, verify } = this.options;
+    const {
+      runtimes,
+      tier1Core,
+      minTier,
+      debug,
+      verify,
+      keyedState,
+      framesModule,
+      serverFunctionsModule
+    } = this.options;
     const out = this.compile(code, {
       imports,
+      serverImports: this.serverImportsFor(file, code),
+      keyedState,
+      framesModule,
+      ...(serverFunctionsModule ? { serverFunctionsModule } : {}),
       verify,
       filename: file,
+      // Frame ids hash the module's path relative to the app root, so they
+      // are the same on every checkout (CI diffs the frames manifest).
+      moduleId: path
+        .relative(this.options.root ?? process.cwd(), file)
+        .split(path.sep)
+        .join("/"),
       idPrefix: this.prefixFor(file),
       t0Module: runtimes.t0,
       kernelModule: runtimes.kernel,
@@ -356,6 +591,10 @@ class IslandsCompiler {
     const islands = [];
     const chunks = new Map();
     const fallbacks = [];
+    const frames = [];
+    const candidates = [];
+    const framesClient = new Map();
+    const routers = [];
     let streams = false;
     const visit = file => {
       if (seen.has(file)) return;
@@ -364,6 +603,10 @@ class IslandsCompiler {
       const out = this.compileFile(file, code);
       if (out.fallback) fallbacks.push({ file, reason: out.fallback });
       if (out.manifest.streams) streams = true;
+      for (const f of out.manifest.frames || []) frames.push({ ...f, file });
+      for (const c of out.manifest.frameCandidates || []) candidates.push({ ...c, module: file });
+      if (out.framesClient) framesClient.set(file, out.framesClient);
+      if (out.manifest.router) routers.push({ file, router: out.manifest.router });
       for (const i of out.manifest.islands) {
         const c = out.chunks.find(c => c.id === i.id);
         islands.push({ ...i, file, size: c ? c.size : 0 });
@@ -375,7 +618,17 @@ class IslandsCompiler {
       }
     };
     visit(root);
-    return { islands, chunks, fallbacks, files: [...seen], streams };
+    return {
+      islands,
+      chunks,
+      fallbacks,
+      files: [...seen],
+      streams,
+      frames,
+      candidates,
+      framesClient,
+      routers
+    };
   }
 }
 
@@ -477,14 +730,29 @@ function solidIslands(options = {}) {
       // Island ids must match across the SSR and client builds: assign
       // every module's id prefix in the root's import order (a DFS), before
       // either build transforms anything in its own order.
+      compiler.options.root = config.root;
       collected = collectWithDedupe(compiler, path.resolve(config.root, root), tier1Core);
     },
     resolveId(id) {
-      if (id === ENTRY || id === ENTRY + "/auto" || id === HOST) return "\0" + id;
+      if (id === ENTRY || id === ENTRY + "/auto" || id === HOST || id === NAV) return "\0" + id;
       if (id.startsWith(CHUNK)) return "\0" + id + ".ts";
+      if (id.endsWith(ARGS)) return id;
       return null;
     },
     async load(id) {
+      if (id.endsWith(ARGS)) {
+        const rootFile = path.resolve(config.root, root);
+        collected ||= collectWithDedupe(compiler, rootFile, tier1Core);
+        return (
+          collected.framesClient.get(id.slice(0, -ARGS.length)) ??
+          "export const $$routeArgs = {};\n"
+        );
+      }
+      if (id === "\0" + NAV) {
+        const rootFile = path.resolve(config.root, root);
+        collected ||= collectWithDedupe(compiler, rootFile, tier1Core);
+        return navModule(routeTable(collected));
+      }
       if (!id.startsWith("\0virtual:solid-islands")) return null;
       const rootFile = path.resolve(config.root, root);
       collected ||= collectWithDedupe(compiler, rootFile, tier1Core);
@@ -510,16 +778,26 @@ function solidIslands(options = {}) {
           sizeOf: config.command === "build" ? sizePlaceholder : undefined,
           verify: verifying(),
           hydrate: fallbackRoots(collected, rootFile, rootExport, mount),
-          core: pageRuntimes(runtimes).core
+          core: pageRuntimes(runtimes).core,
+          frames: framesOption(collected)
         });
       }
       const chunkId = id.slice(("\0" + CHUNK).length, -3);
       const code = collected.chunks.get(chunkId);
       if (code == null) this.error(`[solid-islands] unknown island chunk ${chunkId}`);
-      // Chunks are plain JavaScript (the compiler erases TypeScript).
-      return code;
+      // Chunks are plain JavaScript (the compiler erases TypeScript); their
+      // relative imports (server function references) resolve against the
+      // island's module.
+      const island = collected.islands.find(i => i.id === chunkId);
+      return absoluteImports(code, island && island.file);
     },
     generateBundle(_, bundle) {
+      if (collected && (collected.frames.length || collected.candidates.length))
+        this.emitFile({
+          type: "asset",
+          fileName: ".vite/solid-frames.json",
+          source: JSON.stringify(framesReport(collected, config.root), null, 2) + "\n"
+        });
       if (budget == null) return;
       const sizes = bundledIslandSizes(bundle);
       // Next to Vite's manifest: what each lazy island adds to the page.
@@ -530,7 +808,23 @@ function solidIslands(options = {}) {
       });
     },
     async transform(code, id, opts) {
+      if (id.endsWith(ARGS)) return null;
       const file = id.split("?")[0];
+      if (
+        /\.[cm]?[jt]sx?$/.test(file) &&
+        !exclude.test(file) &&
+        !file.startsWith("\0") &&
+        USE_SERVER.test(code)
+      ) {
+        const names = compiler.summary(file, code).serverFunctions || [];
+        return {
+          code:
+            opts && opts.ssr
+              ? code + serverModuleRegistrations(names, file, config.root)
+              : serverModuleClient(names, file, config.root),
+          map: null
+        };
+      }
       if (!matches(file) || file.startsWith("\0")) return null;
       const ssr = !!(opts && opts.ssr);
       const out = compiler.compileFile(file, code);
@@ -545,6 +839,16 @@ function solidIslands(options = {}) {
   };
 }
 
+/** The entry's frames options from what the page's modules hold. */
+function framesOption(collected) {
+  if (!collected.frames.length && !collected.routers.length) return null;
+  const routes = routeTable(collected);
+  return {
+    nav: routes.length > 0,
+    prefetch: routes.some(r => r.preload && r.frame)
+  };
+}
+
 /** A root module that fell back to hydration is hydrated by the entry. */
 function fallbackRoots(collected, rootFile, rootExport = "App", mount = "#root") {
   return collected.fallbacks.some(f => f.file === rootFile)
@@ -554,6 +858,13 @@ function fallbackRoots(collected, rootFile, rootExport = "App", mount = "#root")
 
 function collectWithDedupe(compiler, rootFile, tier1Core) {
   let collected = compiler.collect(rootFile);
+  // Frames: a page with frames compiles its chunks with keyed state (a
+  // keyed island keeps its state across a refetch of its frame).
+  if (collected.frames.length && !compiler.options.keyedState) {
+    compiler.options.keyedState = true;
+    compiler.cache.clear();
+    collected = compiler.collect(rootFile);
+  }
   // Page dedupe (island-runtime-tiers.md recommendation 3): when a group
   // needs the core anyway, bind the page's tier-1 groups to it too.
   const needsCore = collected.islands.some(i => i.tier >= 2) || collected.fallbacks.length > 0;
@@ -586,20 +897,43 @@ function esbuildIslands({
   compiler,
   filter = /\.[jt]sx$/,
   rootExport = "App",
-  mount = "#root"
+  mount = "#root",
+  framesClient
 } = {}) {
   compiler ||= new IslandsCompiler();
   return {
     name: "solid-islands",
     setup(b) {
       let collected;
-      const get = () => (collected ||= compiler.collect(root));
+      const get = () => (collected ||= collectWithDedupe(compiler, root, false));
       b.onResolve({ filter: /^virtual:solid-islands/ }, args => ({
         path: args.path,
         namespace: "solid-islands"
       }));
+      b.onResolve({ filter: /^virtual:solid-frames\/nav$/ }, args => ({
+        path: args.path,
+        namespace: "solid-islands"
+      }));
+      b.onResolve({ filter: /\?solid-frames-args$/ }, args => ({
+        path: args.path,
+        namespace: "solid-frames-args"
+      }));
+      b.onLoad({ filter: /.*/, namespace: "solid-frames-args" }, args => {
+        const file = args.path.slice(0, -ARGS.length);
+        return {
+          contents: get().framesClient.get(file) ?? "export const $$routeArgs = {};\n",
+          loader: "js",
+          resolveDir: path.dirname(file)
+        };
+      });
       b.onLoad({ filter: /.*/, namespace: "solid-islands" }, args => {
         const c = get();
+        if (args.path === NAV)
+          return {
+            contents: navModule(routeTable(c), { client: framesClient || FRAMES_CLIENT }),
+            loader: "js",
+            resolveDir: path.dirname(root)
+          };
         if (args.path === HOST)
           return {
             contents: hostModule(pageRuntimes(compiler.options.runtimes)),
@@ -618,7 +952,8 @@ function esbuildIslands({
               hooks,
               streams: c.streams,
               hydrate: fallbackRoots(c, root, rootExport, mount),
-              core: pageRuntimes(compiler.options.runtimes).core
+              core: pageRuntimes(compiler.options.runtimes).core,
+              frames: framesOption(c)
             }),
             loader: "js",
             resolveDir: path.dirname(root),
@@ -640,6 +975,15 @@ function esbuildIslands({
 
 module.exports = {
   islandsEntry,
+  navModule,
+  routeTable,
+  framesReport,
+  serverFunctionId,
+  serverModuleClient,
+  serverModuleRegistrations,
+  absoluteImports,
+  NAV,
+  ARGS,
   hostModule,
   IslandsCompiler,
   solidIslands,

@@ -103,6 +103,33 @@ export function proveFeatures(options: {
   }[];
 }): FeatureFacts;
 
+/** The link-time switches of @solidjs/web/frames' client (frames/src/features.ts). */
+export type FramesSwitch =
+  | "FRAGMENTS"
+  | "ASSETS"
+  | "SLOT_DATA"
+  | "ASYNC_ARGS"
+  | "CONTAINERS"
+  | "LIVE_PROPS"
+  | "SINGLE_FLIGHT"
+  | "FULL_CODEC"
+  | "HYDRATION_CLAIMS";
+
+export const FRAMES_SWITCHES: readonly FramesSwitch[];
+
+/**
+ * The frames client switches an application needs, proven from its server
+ * graph's compiled output (conservative: a name or shape that may produce a
+ * feature keeps it on; an unknown module keeps every switch on).
+ */
+export function proveFramesFeatures(options: {
+  modules: { rel: string; code: string | null }[];
+  complete?: boolean;
+}): Record<FramesSwitch, { on: boolean; because: string[] }>;
+
+/** The frames client's features module with the proven switches. */
+export function framesFeaturesModuleSource(features: Record<FramesSwitch, { on: boolean }>): string;
+
 export interface SolidCapabilitiesOptions {
   /** Entry modules (relative to the root) when the build input does not name them. */
   entries?: string[];
@@ -116,6 +143,15 @@ export interface SolidCapabilitiesOptions {
   compiledSeams?: boolean;
   /** Prove the feature switches from compiled output (build only; default true). */
   compiledFacts?: boolean;
+  /**
+   * Slice the frames client's switches (default true): the server build
+   * writes the proof from its compiled output, the client build (run after
+   * it) substitutes @solidjs/web/frames' features module from it.
+   */
+  frames?: boolean;
+  /** Where the server build writes the frames proof (relative to the root;
+   * default `node_modules/.cache/solid/frames-features.json`). */
+  framesProof?: string;
 }
 
 /** Vite / Rollup plugin: selects the async-free runtime for proven graphs,

@@ -23,6 +23,7 @@
 //! compiles, and the manifest says why.
 mod callforms;
 mod client;
+mod frames;
 mod graph;
 mod inline;
 mod jsx;
@@ -89,6 +90,34 @@ pub struct IslandOptions {
     /// factories, helper generators and components; the bundler plugin
     /// provides those its per-module summaries name).
     pub imports: Vec<ImportedModule>,
+    /// Imports of server functions (`"use server"` modules): a server call
+    /// whose readers are inert becomes a frame.
+    pub server_imports: Vec<ServerImport>,
+    /// The module the server output registers frames with
+    /// (`registerServerReference`, `createServerReference`, `GET`).
+    pub server_functions_module: String,
+    /// The module island chunks load the frames applier from (lazily, on a
+    /// frame's first refetch).
+    pub frames_module: String,
+    /// Chunks take a transplanted state (`activate(anchor, state)`) and
+    /// expose theirs, so a keyed island keeps its state across a frame's
+    /// refetch (the bundler plugin sets it when the page has frames).
+    pub keyed_state: bool,
+    /// The module's build-stable name (its path relative to the app root):
+    /// frame ids hash it, so they do not depend on where the app is checked
+    /// out. `None`: the filename.
+    pub module_id: Option<String>,
+}
+
+/// An import specifier naming a `"use server"` module (or one exporting
+/// functions with the directive).
+#[derive(Clone, Debug, Default)]
+pub struct ServerImport {
+    pub specifier: String,
+    /// The server functions it exports (`None`: every export).
+    pub names: Option<Vec<String>>,
+    /// Exports marked `@taint` (server-only results).
+    pub tainted: Vec<String>,
 }
 
 impl Default for IslandOptions {
@@ -106,6 +135,11 @@ impl Default for IslandOptions {
             probe_hosts: Vec::new(),
             module_name: crate::compiler::DEFAULT_MODULE_NAME.into(),
             imports: Vec::new(),
+            server_imports: Vec::new(),
+            server_functions_module: "@solidjs/web/server-functions".into(),
+            frames_module: "@solidjs/compiler/frames-client".into(),
+            keyed_state: false,
+            module_id: None,
         }
     }
 }
@@ -127,7 +161,14 @@ pub struct IslandsOutput {
     /// JSON: `{ version, fallback, islands: [...], components: [...] }`.
     pub manifest: String,
     pub fallback: Option<String>,
+    /// Route frames' argument functions (`export const $$routeArgs`), for
+    /// the navigation runtime; `None` when the module has none.
+    pub frames_client: Option<String>,
 }
+
+/// A build error (not a fallback): an island would serialize a value
+/// derived from a `@taint`ed server function.
+const TAINT: &str = "\u{0}taint:";
 
 pub fn compile_islands(
     original: &str,
@@ -232,22 +273,33 @@ fn compile_pass(
         })
         .collect();
     let contexts = inline::imported_contexts(&program, &opts.imports);
-    let m = model::build_model_with(source, &program, scoping, probe_hosts, &contexts);
-    let a = graph::analyze(&m, &opts.id_prefix);
+    let mut m = model::build_model_with(source, &program, scoping, probe_hosts, &contexts);
+    model::bind_server_imports(&mut m, &program, &opts.server_imports);
+    let a = graph::analyze_file(
+        &m,
+        &opts.id_prefix,
+        opts.module_id.as_deref().or(opts.filename.as_deref()),
+    );
     match emit(&m, &a, opts) {
-        Ok((server, chunks, manifest)) => Ok(IslandsOutput {
+        Ok((server, chunks, manifest, frames_client)) => Ok(IslandsOutput {
             server,
             client: None,
             chunks,
             manifest,
             fallback: None,
+            frames_client,
         }),
+        Err(reason) if reason.starts_with(TAINT) => Err(CompileError::transform(format!(
+            "[solid-islands] {}: {}",
+            opts.filename.as_deref().unwrap_or("module"),
+            &reason[TAINT.len()..]
+        ))),
         // The fallback compiles the module as written.
         Err(reason) => fallback(original, opts, &m, &a, reason),
     }
 }
 
-type Emitted = (String, Vec<IslandChunk>, String);
+type Emitted = (String, Vec<IslandChunk>, String, Option<String>);
 
 fn emit(
     m: &model::Model<'_>,
@@ -274,6 +326,8 @@ fn emit(
         tier1_core: opts.tier1_core,
         debug: opts.debug,
         verify: opts.verify,
+        frames_module: opts.frames_module.clone(),
+        keyed_state: opts.keyed_state,
     };
     let mut codes = Vec::new();
     let mut notes: Vec<Vec<String>> = Vec::new();
@@ -320,7 +374,11 @@ fn emit(
     if owners.values().any(|n| *n > 1) {
         return Err("module-level mutable state referenced by two islands".into());
     }
-    let (server, streams) = server::emit_server(m, a, &codes)?;
+    // Server-only data: no island may serialize a tainted value.
+    if let Some(e) = frames::taint_violation(m, a, &codes) {
+        return Err(format!("{TAINT}{e}"));
+    }
+    let (server, streams) = server::emit_server(m, a, &codes, opts)?;
     let chunks = codes
         .iter()
         .map(|(gi, c)| IslandChunk {
@@ -328,8 +386,9 @@ fn emit(
             code: c.code.clone(),
         })
         .collect();
+    let frames_client = frames::route_client(m, a)?;
     let manifest = manifest(m, a, &codes, &notes, None, opts, &streams);
-    Ok((server, chunks, manifest))
+    Ok((server, chunks, manifest, frames_client))
 }
 
 fn manifest(
@@ -435,11 +494,22 @@ fn manifest(
         // boundary around its DOM is pending.
         w.key("waits");
         w.boolean(waits(a, g.root, streams));
+        // Keyed state: the island's cells move to its new anchor when a
+        // frame's refetch keeps its key (plain signal cells, no regions).
+        w.key("transplant");
+        w.boolean(code.transplant);
         w.key("serialized");
         w.begin_array();
         for s in &code.serial {
             match s {
-                client::Serial::Prop(p) => w.string(&format!("props.{p}")),
+                client::Serial::Prop(p) => match code.prop_paths.get(p) {
+                    Some(Some(paths)) if !paths.is_empty() => {
+                        for path in paths {
+                            w.string(&format!("props.{p}.{}", path.join(".")));
+                        }
+                    }
+                    _ => w.string(&format!("props.{p}")),
+                },
                 client::Serial::Ctx(n) => w.string(&format!("context {n}")),
                 client::Serial::Cell(ii) => match &m.comps[g.root].setup[*ii] {
                     model::Item::Cell { name, .. } => w.string(&format!("cell {name}")),
@@ -458,6 +528,7 @@ fn manifest(
         w.end_object();
     }
     w.end_array();
+    frames::manifest(&mut w, m, a, codes, fallback.is_none());
     w.key("components");
     w.begin_array();
     for (ci, c) in m.comps.iter().enumerate() {
@@ -545,6 +616,7 @@ fn fallback(
         chunks: vec![],
         manifest,
         fallback: Some(reason),
+        frames_client: None,
     })
 }
 

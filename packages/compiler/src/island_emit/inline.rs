@@ -1048,6 +1048,35 @@ pub fn island_exports(source: &str, filename: Option<&str>) -> String {
         w.end_object();
     }
     w.end_array();
+    // Server functions (`"use server"` module or functions) and the ones
+    // marked `@taint`: an importing module's calls of them can be frames.
+    w.key("useServer");
+    w.boolean(
+        program
+            .directives
+            .iter()
+            .any(|d| d.directive.as_str() == "use server"),
+    );
+    let mut server: Vec<(&String, bool)> = facts
+        .exports
+        .iter()
+        .filter_map(|(name, sym)| m.server_fns.get(sym).map(|f| (name, f.tainted)))
+        .collect();
+    server.sort();
+    w.key("serverFunctions");
+    w.begin_array();
+    for (n, _) in &server {
+        w.string(n);
+    }
+    w.end_array();
+    w.key("tainted");
+    w.begin_array();
+    for (n, t) in &server {
+        if *t {
+            w.string(n);
+        }
+    }
+    w.end_array();
     w.key("imports");
     w.begin_array();
     for stmt in &program.body {

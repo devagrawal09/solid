@@ -331,7 +331,7 @@ export const App = $component(function* () {
     assert!(chunk.contains("const $c1 = [count, inc];"), "{chunk}");
     assert!(chunk.contains("= $c1;"), "{chunk}");
     // The anchor goes through the provider to its first element.
-    assert!(out.server.contains("<div data-i=\"i0\">"), "{}", out.server);
+    assert!(out.server.contains("<div data-i=\"i0\"${_$k(_$p, $c)}>"), "{}", out.server);
 }
 
 #[test]
@@ -1373,4 +1373,575 @@ export const App = $component(function* (props) {
     let m = manifest(&out);
     assert_eq!(islands_of(&m).len(), 1, "{m}");
     assert!(m.contains(r#""tier":0"#), "{m}");
+}
+
+// --- client-environment reads (islands mode) ---------------------------------------
+
+fn env_page(expr: &str) -> String {
+    format!(
+        r#"
+import {{ $component, isServer }} from "solid-js";
+export const Page = $component(function* (props) {{
+  return function* () {{
+    return <main><h1>title</h1><p class="env">{{{expr}}}</p></main>;
+  }};
+}});
+"#
+    )
+}
+
+#[test]
+fn every_environment_read_in_a_view_is_client_live() {
+    for (expr, why) in [
+        ("isServer ? \"server\" : \"client\"", "isServer"),
+        ("typeof window === \"undefined\" ? \"s\" : \"c\"", "window"),
+        ("window.innerWidth", "window"),
+        ("document.title", "document"),
+        ("navigator.language", "navigator"),
+        ("(1234.5).toLocaleString()", ".toLocaleString()"),
+        ("new Intl.NumberFormat().format(3)", "Intl"),
+        ("Date.now()", "Date.now()"),
+        ("new Date().getFullYear()", "new Date()"),
+        ("Math.random()", "Math.random()"),
+    ] {
+        let out = run(&env_page(expr));
+        assert!(out.fallback.is_none(), "{expr}: {:?}", out.fallback);
+        let m = manifest(&out);
+        // One island, activated at load, rooted at the page.
+        assert_eq!(islands_of(&m).len(), 1, "{expr}: {m}");
+        assert!(m.contains(r#""activation":"load""#), "{expr}: {m}");
+        assert!(
+            m.contains(&format!("reads the client environment ({why})")),
+            "{expr}: {m}"
+        );
+        // Activation computes and writes the hole (tier 0: applied at once).
+        let chunk = &out.chunks[0].code;
+        assert!(chunk.contains("$p($h());"), "{expr}: {chunk}");
+    }
+}
+
+#[test]
+fn environment_reads_flow_through_locals_and_props() {
+    let out = run(r#"
+import { $component } from "solid-js";
+const Stamp = $component(function* (props) {
+  return function* () { return <time>{yield* props.at}</time>; };
+});
+export const Page = $component(function* () {
+  const now = new Date().toISOString();
+  return function* () {
+    return <main><Stamp at={now} /><b>{"static"}</b></main>;
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains("reads the client environment (new Date())"), "{m}");
+    assert!(m.contains(r#""activation":"load""#), "{m}");
+    // A deterministic view stays inert.
+    let out = run(r#"
+import { $component } from "solid-js";
+export const Page = $component(function* (props) {
+  const d = new Date(props.at).toISOString();
+  return function* () { return <time>{d}</time>; };
+});
+"#);
+    assert!(out.chunks.is_empty(), "{}", manifest(&out));
+}
+
+#[test]
+fn an_environment_read_in_a_live_island_hole_applies_at_activation() {
+    let out = run(r#"
+import { $component, $event, $signal } from "solid-js";
+export const Page = $component(function* () {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    return <button onClick={inc} title={`${yield* n} at ${Date.now()}`}>{yield* n}</button>;
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert_eq!(islands_of(&m).len(), 1, "{m}");
+    assert!(m.contains(r#""activation":"load""#), "{m}");
+    let chunk = &out.chunks[0].code;
+    assert!(chunk.contains("$p($h());"), "{chunk}");
+    // Handlers stay attached as before.
+    assert!(chunk.contains("addEventListener(\"click\""), "{chunk}");
+}
+
+#[test]
+fn a_show_over_the_environment_falls_back_with_the_reason() {
+    let reason = fallback_of(
+        r#"
+import { $component, Show } from "solid-js";
+export const Page = $component(function* () {
+  return function* () {
+    return <main><Show when={typeof window !== "undefined"}><p>client</p></Show></main>;
+  };
+});
+"#,
+    );
+    assert!(reason.contains("over the client environment (window)"), "{reason}");
+}
+
+// --- serialization pruned to the paths client code reads ---------------------------
+
+#[test]
+fn a_prop_is_serialized_only_along_the_paths_client_code_reads() {
+    let out = run(r#"
+import { $component, $event, $signal, For } from "solid-js";
+const Row = $component(function* (props) {
+  const [n, setN] = yield* $signal(0);
+  const click = $event(function* () { setN(x => x + 1); console.log(props.item.title, props.item.by.name); });
+  return function* () {
+    return <li><span>{props.label}</span><button onClick={click}>{yield* n}</button></li>;
+  };
+});
+export const Page = $component(function* (props) {
+  return function* () {
+    return <ul><For each={props.items}>{item => <Row item={item} label={"x" + item.id} />}</For></ul>;
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(
+        m.contains(r#""serialized":["props.item.by.name","props.item.title"]"#),
+        "{m}"
+    );
+    // Only those paths reach `data-s`; `label` (read by an inert hole) not at all.
+    assert!(
+        out.server
+            .contains(r#""item": _$pp(_$r(props["item"]), [["by", "name"], ["title"]])"#),
+        "{}",
+        out.server
+    );
+    assert!(out.server.contains("function _$pp(v, ps)"), "{}", out.server);
+    let ds = out.server.split("data-s=").nth(1).unwrap().split("}))}").next().unwrap();
+    assert!(!ds.contains("label"), "{ds}");
+}
+
+#[test]
+fn a_prop_used_whole_is_serialized_whole() {
+    let out = run(r#"
+import { $component, $event, $signal } from "solid-js";
+const Row = $component(function* (props) {
+  const [n, setN] = yield* $signal(0);
+  const click = $event(function* () { setN(x => x + 1); send(props.item); console.log(props.item.title); });
+  return function* () { return <button onClick={click}>{yield* n}</button>; };
+});
+export const Page = $component(function* (props) {
+  return function* () { return <main><Row item={props.item} /></main>; };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains(r#""serialized":["props.item"]"#), "{m}");
+    assert!(!out.server.contains("_$pp("), "{}", out.server);
+}
+
+// --- frames: compiler-derived server components -----------------------------------------
+
+fn run_frames(src: &str) -> IslandsOutput {
+    compile_islands(
+        src,
+        &IslandOptions {
+            filename: Some("routes/story.tsx".into()),
+            server_imports: vec![ServerImport {
+                specifier: "../lib/hn".into(),
+                names: None,
+                tainted: vec!["getSecret".into()],
+            }],
+            ..IslandOptions::default()
+        },
+    )
+    .expect("compiles")
+}
+
+const STORY_ROUTE: &str = r#"
+import { $component, $event, $memo, $signal, attempt, For, Show } from "solid-js";
+import type { RouteProps } from "@solidjs/router";
+import { getStory } from "../lib/hn";
+const Toggle = $component(function* (props) {
+  const [open, setOpen] = yield* $signal(true);
+  const toggle = $event(function* () { setOpen(o => !o); });
+  return function* () {
+    return (
+      <>
+        <div class={["toggle", { open: yield* open }]}>
+          <a onClick={toggle}>{(yield* open) ? "[-]" : "[+] comments collapsed"}</a>
+        </div>
+        <ul class="comment-children" style={{ display: (yield* open) ? "block" : "none" }}>
+          {props.children}
+        </ul>
+      </>
+    );
+  };
+});
+const Comment = $component(function* (props) {
+  return function* () {
+    return (
+      <li class="comment">
+        <div class="by">{yield* props.comment.user}</div>
+        <Show when={(yield* props.comment.comments).length}>
+          <Toggle>
+            <For each={yield* props.comment.comments}>{c => <Comment comment={c} />}</For>
+          </Toggle>
+        </Show>
+      </li>
+    );
+  };
+});
+const Story = $component(function* (props: RouteProps<"/stories/:id">) {
+  const story = yield* $memo(function* () {
+    const id = yield* props.params.id;
+    return yield* attempt(() => getStory(id));
+  });
+  return function* () {
+    return (
+      <div class="item-view">
+        <h1>{(yield* story).title}</h1>
+        <ul><For each={(yield* story).comments}>{c => <Comment comment={c} />}</For></ul>
+      </div>
+    );
+  };
+});
+export default Story;
+"#;
+
+#[test]
+fn a_route_components_server_call_is_a_frame() {
+    let out = run_frames(STORY_ROUTE);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains(r#""frames":[{"id":"Story-"#), "{m}");
+    assert!(m.contains(r#""driver":"route""#), "{m}");
+    assert!(m.contains(r#""arguments":["id"]"#), "{m}");
+    assert!(m.contains(r#""argumentsFrom":["props.params"]"#), "{m}");
+    assert!(m.contains(r#""serverFunctions":["getStory"]"#), "{m}");
+    // The toggle is a nested island, keyed by its server row.
+    assert!(m.contains(r#""root":"Toggle","key":"row item id""#), "{m}");
+    // Server: the region carries the frame id, the frame function renders
+    // it from the argument alone, registered and declared GET.
+    assert!(out.server.contains(r#"<div data-f="Story-"#), "{}", out.server);
+    assert!(out.server.contains("const $$frame0 = async (...$a) => {"), "{}", out.server);
+    assert!(out.server.contains("const id = $a[0];"), "{}", out.server);
+    assert!(out.server.contains("(await getStory(...$a))"), "{}", out.server);
+    assert!(out.server.contains("_$fget(_$fcsr(_$frsr("), "{}", out.server);
+    assert!(out.server.contains("from \"@solidjs/web/server-functions\""), "{}", out.server);
+    // Rows key their islands.
+    assert!(out.server.contains("_$forK($c, "), "{}", out.server);
+    assert!(out.server.contains("${_$k(props, $c)}"), "{}", out.server);
+    // The navigation runtime's argument function.
+    let fc = out.frames_client.as_deref().expect("route args");
+    assert!(fc.contains("(props) => {\nconst id = props.params.id;\nreturn [id];"), "{fc}");
+}
+
+const SEARCH: &str = r#"
+import { $component, $event, $memo, $signal, attempt, For } from "solid-js";
+import { search } from "../lib/hn";
+export const Search = $component(function* () {
+  const [q, setQ] = yield* $signal("solid");
+  const results = yield* $memo(function* () {
+    const s = yield* q;
+    return yield* attempt(() => search(s));
+  });
+  const input = $event(function* (e) { setQ(e.target.value); });
+  return function* () {
+    return (
+      <section>
+        <input value={yield* q} onInput={input} />
+        <ul class="results"><For each={yield* results}>{r => <li>{r.title}</li>}</For></ul>
+      </section>
+    );
+  };
+});
+"#;
+
+#[test]
+fn a_server_call_over_island_state_is_a_frame_driven_by_the_island() {
+    let out = run_frames(SEARCH);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains(r#""driver":"island""#), "{m}");
+    assert!(m.contains(r#""region":"<ul class=\"results\">"#), "{m}");
+    assert!(m.contains(r#""argumentsFrom":["Search.q"]"#), "{m}");
+    // The memo is never materialized on the client: the island is tier 0
+    // (no async memo), and nothing is serialized for the results.
+    assert!(m.contains(r#""tier":0"#), "{m}");
+    assert!(!m.contains("memo results"), "{m}");
+    assert!(out.server.contains(r#"<ul data-f="Search-"#), "{}", out.server);
+}
+
+#[test]
+fn prefer_client_keeps_a_server_call_over_island_state_as_client_code() {
+    let src = SEARCH.replace(
+        "  const results = yield* $memo(",
+        "  // @frame prefer: \"client\"\n  const results = yield* $memo(",
+    );
+    let out = run_frames(&src);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains(r#""frames":[]"#), "{m}");
+    assert!(m.contains(r#"prefer: \"client\""#), "{m}");
+    // Today's compile: an adopted tier-2 memo, its value serialized.
+    assert!(m.contains(r#""tier":2"#) && m.contains("memo results"), "{m}");
+}
+
+#[test]
+fn a_call_that_is_not_a_server_function_is_not_a_frame() {
+    let src = SEARCH.replace("import { search } from \"../lib/hn\";", "import { search } from \"./local\";");
+    let out = run_frames(&src);
+    let m = manifest(&out);
+    assert!(m.contains(r#""frames":[]"#), "{m}");
+    assert!(m.contains("is not a server function"), "{m}");
+}
+
+#[test]
+fn a_frame_candidate_inside_client_control_flow_stays_client_code() {
+    let out = run_frames(r#"
+import { $component, $event, $memo, $signal, attempt, For, Show } from "solid-js";
+import { search } from "../lib/hn";
+export const Search = $component(function* () {
+  const [q, setQ] = yield* $signal("solid");
+  const [shown, setShown] = yield* $signal(true);
+  const results = yield* $memo(function* () {
+    const s = yield* q;
+    return yield* attempt(() => search(s));
+  });
+  const input = $event(function* (e) { setQ(e.target.value); });
+  const flip = $event(function* () { setShown(v => !v); });
+  return function* () {
+    return (
+      <section>
+        <input value={yield* q} onInput={input} />
+        <button onClick={flip}>toggle</button>
+        <Show when={yield* shown}>
+          <ul class="results"><For each={yield* results}>{r => <li>{r.title}</li>}</For></ul>
+        </Show>
+      </section>
+    );
+  };
+});
+"#);
+    let m = manifest(&out);
+    assert!(m.contains(r#""frames":[]"#), "{m}");
+    assert!(m.contains("client control flow"), "{m}");
+}
+
+#[test]
+fn a_server_result_a_live_island_also_reads_is_not_a_frame() {
+    let out = run_frames(r#"
+import { $component, $event, $memo, $signal, attempt, For } from "solid-js";
+import { search } from "../lib/hn";
+export const Search = $component(function* () {
+  const [q, setQ] = yield* $signal("solid");
+  const [picked, setPicked] = yield* $signal(0);
+  const results = yield* $memo(function* () {
+    const s = yield* q;
+    return yield* attempt(() => search(s));
+  });
+  const input = $event(function* (e) { setQ(e.target.value); });
+  const pick = $event(function* () { setPicked(p => p + 1); });
+  return function* () {
+    return (
+      <section>
+        <input value={yield* q} onInput={input} />
+        <p onClick={pick}>{(yield* results).length + (yield* picked)} picked</p>
+        <ul class="results"><For each={yield* results}>{r => <li>{r.title}</li>}</For></ul>
+      </section>
+    );
+  };
+});
+"#);
+    let m = manifest(&out);
+    assert!(m.contains(r#""frames":[]"#), "{m}");
+    assert!(m.contains("a live island also reads it"), "{m}");
+}
+
+#[test]
+fn an_island_serializing_a_tainted_value_is_a_build_error() {
+    let err = compile_islands(
+        r#"
+import { $component, $event, $memo, $signal, attempt } from "solid-js";
+import { getSecret } from "../lib/hn";
+export const Account = $component(function* () {
+  const account = yield* $memo(function* () { return yield* attempt(() => getSecret()); });
+  const [shown, setShown] = yield* $signal(account());
+  const show = $event(function* () { setShown(yield* account); });
+  return function* () { return <p onClick={show}>{(yield* shown).email}</p>; };
+});
+"#,
+        &IslandOptions {
+            filename: Some("routes/account.tsx".into()),
+            server_imports: vec![ServerImport {
+                specifier: "../lib/hn".into(),
+                names: None,
+                tainted: vec!["getSecret".into()],
+            }],
+            ..IslandOptions::default()
+        },
+    )
+    .map(|o| o.manifest)
+    .expect_err("a build error");
+    let msg = err.to_string();
+    assert!(msg.contains("marked `@taint`"), "{msg}");
+    assert!(msg.contains("Account.account"), "{msg}");
+    // Rendered in inert markup, the same data is fine (HTML, not data).
+    let out = run_frames(r#"
+import { $component, $memo, attempt } from "solid-js";
+import type { RouteProps } from "@solidjs/router";
+import { getSecret } from "../lib/hn";
+const Account = $component(function* (props: RouteProps<"/me">) {
+  const account = yield* $memo(function* () { return yield* attempt(() => getSecret()); });
+  return function* () { return <p class="me">{(yield* account).email}</p>; };
+});
+export default Account;
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    assert!(manifest(&out).contains(r#""tainted":true"#), "{}", manifest(&out));
+}
+
+#[test]
+fn an_island_frames_driver_refetches_the_region_through_the_lazy_applier() {
+    let out = run_frames(SEARCH);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let chunk = &out.chunks[0].code;
+    // The region is addressed statically; its content is not walked.
+    assert!(
+        chunk.contains("$fa0 = () => {\nconst s = q.v;\nreturn JSON.stringify([s]);\n};\n$hole([q], $fa0, v => { $frame($fe0, v); });"),
+        "{chunk}"
+    );
+    assert!(
+        chunk.contains(r#"const $frame = (e, v) => import("@solidjs/compiler/frames-client").then(m => m.frame(e, v));"#),
+        "{chunk}"
+    );
+    // No list code: the rows are server HTML.
+    assert!(!chunk.contains("$list"), "{chunk}");
+}
+
+#[test]
+fn keyed_state_seeds_cells_and_exposes_them_on_the_anchor() {
+    let out = compile_islands(
+        TOGGLE,
+        &IslandOptions {
+            filename: Some("app.tsx".into()),
+            keyed_state: true,
+            ..IslandOptions::default()
+        },
+    )
+    .unwrap();
+    let chunk = &out.chunks[0].code;
+    assert!(chunk.contains("export function activate($a, $st) {"), "{chunk}");
+    assert!(chunk.contains("const open = $cell($st ? $st[0] : true);"), "{chunk}");
+    assert!(
+        chunk.contains("const $hole = $st ? (c, h, p) => { $hole0(c, h, p); p(h()); } : $hole0;"),
+        "{chunk}"
+    );
+    assert!(chunk.contains(r#"($a.$ss ||= {})["i0"] = () => [open.v];"#), "{chunk}");
+    assert!(manifest(&out).contains(r#""transplant":true"#), "{}", manifest(&out));
+    // Without the option the chunk is unchanged.
+    let plain = run(TOGGLE);
+    assert!(plain.chunks[0].code.contains("export function activate($a) {"));
+    assert!(!plain.chunks[0].code.contains("$st"));
+}
+
+#[test]
+fn a_mutation_then_a_refresh_of_a_frame_is_one_flight() {
+    let out = run_frames(r#"
+import { $component, $event, $memo, attempt, For, refresh } from "solid-js";
+import { getComments, addComment } from "../lib/hn";
+export const Thread = $component(function* (props) {
+  const comments = yield* $memo(function* () {
+    const id = yield* props.id;
+    return yield* attempt(() => getComments(id));
+  });
+  const add = $event(function* () {
+    yield* attempt(() => addComment(props.id, "hi"));
+    refresh(comments);
+  });
+  return function* () {
+    return (
+      <section>
+        <button onClick={add}>add</button>
+        <ul class="comments"><For each={yield* comments}>{c => <li>{c.text}</li>}</For></ul>
+      </section>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains(r#""driver":"island""#), "{m}");
+    // The refresh is the frames applier's, not the core's: no tier 2.
+    assert!(!m.contains(r#""tier":2"#), "{m}");
+    let chunk = &out.chunks[0].code;
+    // The region and its arguments are named for the handler.
+    assert!(chunk.contains("const $fe0 = $n"), "{chunk}");
+    assert!(
+        chunk.contains("$fa0 = () => {\nconst id = $d[\"id\"];\nreturn JSON.stringify([id]);\n}"),
+        "{chunk}"
+    );
+    // The server call carries the frame; the refresh then finds it fresh.
+    assert!(
+        chunk.contains("(await $fcall(addComment, [$d[\"id\"], \"hi\"], [[$fe0, $fa0()]]))"),
+        "{chunk}"
+    );
+    assert!(chunk.contains("$frefresh($fe0, $fa0());"), "{chunk}");
+    assert!(chunk.contains(r#"import { addComment } from "../lib/hn";"#), "{chunk}");
+    // Nothing on the client drives the arguments: no refetch hole.
+    assert!(!chunk.contains("$frame("), "{chunk}");
+}
+
+#[test]
+fn frame_ids_hash_the_module_id_not_the_checkout_path() {
+    let id = |filename: &str, module_id: Option<&str>| {
+        let out = compile_islands(
+            SEARCH,
+            &IslandOptions {
+                filename: Some(filename.into()),
+                module_id: module_id.map(Into::into),
+                server_imports: vec![ServerImport {
+                    specifier: "../lib/hn".into(),
+                    names: None,
+                    tainted: vec![],
+                }],
+                ..IslandOptions::default()
+            },
+        )
+        .expect("compiles");
+        let m = manifest(&out);
+        let at = m.find(r#""id":"Search-"#).expect("a frame");
+        m[at + 6..at + 19].to_string()
+    };
+    let a = id("/home/ci/app/src/search.tsx", Some("src/search.tsx"));
+    assert_eq!(a, id("/Users/me/app/src/search.tsx", Some("src/search.tsx")));
+    assert_ne!(a, id("/Users/me/app/src/search.tsx", Some("src/other.tsx")));
+}
+
+#[test]
+fn static_text_reading_a_prop_is_not_serialized() {
+    // `props.title` is static text on the server markup: the client never
+    // touches it, so it is not translated and nothing is serialized for it.
+    let out = run(r#"
+import { $component, $event, $signal, For } from "solid-js";
+const Toggle = $component(function* (props) {
+  const [open, setOpen] = yield* $signal(false);
+  const flip = $event(function* () { setOpen(o => !o); });
+  return function* () {
+    return <li><button onClick={flip}>{props.title}</button>{(yield* open) ? "open" : "closed"}</li>;
+  };
+});
+export const App = $component(function* () {
+  const items = [{ id: "a", title: "A" }];
+  return function* () {
+    return <ul><For each={items}>{it => <Toggle title={it.title} />}</For></ul>;
+  };
+});
+"#);
+    let m = manifest(&out);
+    assert!(m.contains(r#""serialized":[]"#), "{m}");
+    assert!(!out.server.contains("data-s="), "{}", out.server);
 }

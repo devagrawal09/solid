@@ -24,6 +24,9 @@ pub(crate) enum Tag {
     Provider(SymbolId),
     /// Any other component (imported or unknown).
     Opaque(String),
+    /// The module's router (`createRouter` from `@solidjs/router`): its
+    /// render callback is the layout, `props.children` there the outlet.
+    Router,
 }
 
 pub(crate) fn tag_of(m: &Model<'_>, name: &JSXElementName<'_>) -> Tag {
@@ -37,6 +40,9 @@ pub(crate) fn tag_of(m: &Model<'_>, name: &JSXElementName<'_>) -> Tag {
             if let Some(s) = sym {
                 if let Some(c) = m.comp_of.get(&s) {
                     return Tag::Comp(*c);
+                }
+                if m.router.as_ref().is_some_and(|r| r.sym == s) {
+                    return Tag::Router;
                 }
                 if m.contexts.contains_key(&s) {
                     return Tag::Provider(s);

@@ -180,6 +180,17 @@ export interface Scenario {
   /** Islands mode only: the id each island must get (same keys as `islandTiers`). */
   islandIds?: Record<string, string>;
   /**
+   * Islands mode only: the server half of modules the `islands` source
+   * imports (e.g. a `"use server"` data module named in
+   * `islandsOptions.serverImports`), by specifier. With it the page runs with
+   * compiler-derived frames wired: generated frames register with the real
+   * server-functions handler, a `fetch` stub routes frame requests to it, and
+   * chunks load the real frames applier.
+   */
+  islandsServer?: Record<string, Record<string, unknown>>;
+  /** Islands mode only: assertions on the compiler's manifest (throws on a mismatch). */
+  islandsManifest?: (manifest: any) => void;
+  /**
    * Islands mode only: a declared, reviewed difference from the oracle —
    * the islands trace from the first step on, spelled out in full (islands
    * keep the server's rows where the oracle's lazily rendered views are

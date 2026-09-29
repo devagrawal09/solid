@@ -7,16 +7,21 @@ import solidPlugin from "@solidjs/vite-plugin";
 
 const compiler = process.env.JSX_COMPILER === "babel" ? "babel" : "native";
 import { resolve } from "path";
+import { framesFeatureSwitches, framesSetupFiles } from "./test/setup/frames-features.mjs";
 
 const rootDir = resolve(import.meta.dirname);
 
 export default defineConfig({
-  plugins: [solidPlugin({ compiler, solid: { generate: "ssr", hydratable: true } })],
+  plugins: [
+    framesFeatureSwitches(),
+    solidPlugin({ compiler, solid: { generate: "ssr", hydratable: true } })
+  ],
   test: {
     environment: "node",
     include: ["test/server/**/*.spec.tsx"],
     globals: true,
     pool: "threads",
+    setupFiles: framesSetupFiles()
   },
   resolve: {
     conditions: ["node"],
@@ -29,7 +34,7 @@ export default defineConfig({
       "@solidjs/web/serialization/decode": resolve(rootDir, "serialization/dist/decode.js"),
       "@solidjs/web/serialization": resolve(rootDir, "serialization/dist/serialization.js"),
       "@solidjs/web": resolve(rootDir, "src/index.server.ts"),
-      "solid-js": resolve(rootDir, "../solid/src/server/index.ts"),
+      "solid-js": resolve(rootDir, "../solid/src/server/index.ts")
     }
   }
 });

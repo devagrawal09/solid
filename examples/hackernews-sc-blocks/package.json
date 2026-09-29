@@ -1,0 +1,24 @@
+{
+  "name": "hackernews-sc-blocks-example",
+  "description": "The hackernews server-components app (same routes, markup, data layer and router) written in generator blocks v2 with no \"use server\" on markup: the compiler derives the server components (frames) from the compiled-islands inert proof (documentation/plans/ssr-hydration-redesign.md, Compiler-derived server components)",
+  "version": "0.0.0",
+  "private": true,
+  "author": "Ryan Carniato",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "vite build && vite build --ssr src/entry-server.ts --outDir dist/server",
+    "start": "node server.js",
+    "gate": "node ../../scripts/ssr-redesign/sc-gate.mjs"
+  },
+  "dependencies": {
+    "@solidjs/compiler": "workspace:*",
+    "@solidjs/router": "2.0.0-next.13",
+    "@solidjs/signals": "workspace:*",
+    "@solidjs/web": "workspace:*",
+    "solid-js": "workspace:*"
+  },
+  "devDependencies": {
+    "vite": "^8.0.0"
+  }
+}
