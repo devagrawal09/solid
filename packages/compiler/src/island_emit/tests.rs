@@ -2542,3 +2542,35 @@ export const App = $component(function* () {
         }
     }
 }
+
+#[test]
+fn structure_over_server_data_inside_fresh_content_is_built_by_the_client() {
+    let out = run(r#"
+import { $component, $event, $signal, For, Show } from "solid-js";
+const Tag = $component(function* (props) {
+  return function* () {
+    return <em><Show when={props.item.hot}><i>hot</i></Show></em>;
+  };
+});
+export const App = $component(function* () {
+  const [l, setL] = yield* $signal([{ id: 1, big: true, hot: true }]);
+  const add = $event(function* () { setL(x => [...x, { id: x.length + 1, big: true, hot: false }]); });
+  return function* () {
+    return (
+      <div>
+        <ul><For each={yield* l}>{item => <li><Show when={item.big}><b>big</b></Show><Tag item={item} /></li>}</For></ul>
+        <button onClick={add} />
+      </div>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let chunk = &out.chunks[0].code;
+    // Both Shows (the row's own, and the one in the component a row
+    // renders) are regions the row's builder creates.
+    assert_eq!(chunk.matches("$show(").count(), 2, "{chunk}");
+    assert!(chunk.contains("() => item$"), "{chunk}");
+    // The server marks them for adoption.
+    assert!(out.server.contains("<li><!--$-->"), "{}", out.server);
+}

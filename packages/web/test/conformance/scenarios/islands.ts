@@ -1763,6 +1763,85 @@ export const App = $component(function* () {
   ]
 };
 
+/**
+ * Structure over server data inside content the client creates: a row's
+ * `Show` / `Switch` over the row's item, and a `Show` in a component the row
+ * renders, are regions the row's builder creates (adopted in the server's
+ * rows); their inputs never change.
+ */
+export const islandsFreshStructure: Scenario = {
+  name: "islands-fresh-structure",
+  covers: [
+    "a Show over a row's item in rows the client creates",
+    "a Switch over a row's item in rows the client creates",
+    "a Show in a component rendered by a fresh row"
+  ],
+  entry: { component: "App" },
+  sources: {
+    reference: `
+import { createSignal, For, Match, Show, Switch } from "solid-js";
+function Tag(props) {
+  return <em><Show when={props.item.hot}><i>hot</i></Show></em>;
+}
+export function App() {
+  const [l, setL] = createSignal([{ id: 1, big: true, hot: true }]);
+  return (
+    <div>
+      <ul>
+        <For each={l()}>
+          {item => (
+            <li>
+              <Show when={item.big}><b>big</b></Show>
+              <Switch fallback={<s>odd</s>}><Match when={item.id % 2 === 0}><u>even</u></Match></Switch>
+              <Tag item={item} />
+            </li>
+          )}
+        </For>
+      </ul>
+      <button class="add" onClick={() => setL(x => [...x, { id: x.length + 1, big: x.length % 2 === 0, hot: x.length % 3 === 0 }])} />
+    </div>
+  );
+}
+`,
+    islands: `
+import { $component, $event, $signal, For, Match, Show, Switch } from "solid-js";
+const Tag = $component(function* (props) {
+  return function* () {
+    return <em><Show when={props.item.hot}><i>hot</i></Show></em>;
+  };
+});
+export const App = $component(function* () {
+  const [l, setL] = yield* $signal([{ id: 1, big: true, hot: true }]);
+  const add = $event(function* () { setL(x => [...x, { id: x.length + 1, big: x.length % 2 === 0, hot: x.length % 3 === 0 }]); });
+  return function* () {
+    return (
+      <div>
+        <ul>
+          <For each={yield* l}>
+            {item => (
+              <li>
+                <Show when={item.big}><b>big</b></Show>
+                <Switch fallback={<s>odd</s>}><Match when={item.id % 2 === 0}><u>even</u></Match></Switch>
+                <Tag item={item} />
+              </li>
+            )}
+          </For>
+        </ul>
+        <button class="add" onClick={add} />
+      </div>
+    );
+  };
+});
+`
+  },
+  steps: [
+    { name: "initial", run: ({ html }) => html() },
+    step("add", ctx => ctx.click(".add")),
+    step("add", ctx => ctx.click(".add")),
+    step("add", ctx => ctx.click(".add"))
+  ]
+};
+
 export const islandsScenarios = [
   islandsList,
   islandsSharedMember,
@@ -1784,5 +1863,6 @@ export const islandsScenarios = [
   islandsSvg,
   islandsDynamic,
   islandsPortal,
-  islandsErroredTier0
+  islandsErroredTier0,
+  islandsFreshStructure
 ];

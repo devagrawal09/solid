@@ -1682,6 +1682,55 @@ pub(crate) fn analyze_file<'a>(
             }
         }
     }
+    // Structure inside content the client may create (a live region's
+    // content, or a component rendered inside one): the client builds it, so
+    // it is a region of its own even over server data (its input then never
+    // changes). It joins the enclosing region's island below.
+    loop {
+        let mut fresh: HashSet<usize> = HashSet::new();
+        for ci in 0..n {
+            for call in &a.facts[ci].calls {
+                if call.regions.iter().any(|r| a.site_live[ci][*r])
+                    && let Tag::Comp(k) = call.tag
+                {
+                    fresh.insert(k);
+                }
+            }
+        }
+        loop {
+            let before = fresh.len();
+            for c in fresh.clone() {
+                for call in &a.facts[c].calls {
+                    if let Tag::Comp(k) = call.tag {
+                        fresh.insert(k);
+                    }
+                }
+            }
+            if fresh.len() == before {
+                break;
+            }
+        }
+        let mut changed = false;
+        for ci in 0..n {
+            for si in 0..a.facts[ci].sites.len() {
+                let s = &a.facts[ci].sites[si];
+                if a.site_live[ci][si] || !matches!(s.kind, SiteKind::Show | SiteKind::For) {
+                    continue;
+                }
+                if fresh.contains(&ci) || s.regions.iter().any(|r| a.site_live[ci][*r]) {
+                    a.site_live[ci][si] = true;
+                    let e = elems.len();
+                    elems.push(Elem::Site(ci, si));
+                    parent.push(e);
+                    site_index.insert((ci, si), e);
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
     for (k, deps) in a.memo_deps.clone() {
         if !a.live.contains(&k) {
             continue;
