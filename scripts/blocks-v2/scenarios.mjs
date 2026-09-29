@@ -269,6 +269,48 @@ export const SCENARIOS = [
     }
   ),
   scenario(
+    "helperReads",
+    "n components each reading what setup helpers return (an accessor, and an object's accessor property) in the view; update: write the shared signal (2n memo recomputes + 2n hole updates)",
+    ["update"],
+    {
+      state: `const [src, setSrc] = createSignal(0);`,
+      update: `setSrc(++r); flush();`,
+      handwritten: `function useDoubled() { return createMemo(() => src() * 2); }
+  function useCounter() {
+    const [c, setC] = createSignal(1);
+    const d = createMemo(() => c() + src());
+    return { d, inc: () => setC(c() + 1) };
+  }
+  function Item() {
+    const d = useDoubled();
+    const k = useCounter();
+    return <p>{d()}{k.d()}</p>;
+  }`,
+      v2: `function* useDoubled() { return yield* $memo(function* () { return (yield* src) * 2; }); }
+  function* useCounter() {
+    const [c, setC] = yield* $signal(1);
+    const d = yield* $memo(function* () { return (yield* c) + (yield* src); });
+    return { d, inc: () => setC(x => x + 1) };
+  }
+  const Item = $component(function* () {
+    const d = yield* useDoubled();
+    const k = yield* useCounter();
+    return function* () { return <p>{yield* d}{yield* k.d}</p>; };
+  });`,
+      uncompiled: `function* useDoubled() { return yield* $memo(function* () { return (yield* src) * 2; }); }
+  function* useCounter() {
+    const [c, setC] = yield* $signal(1);
+    const d = yield* $memo(function* () { return (yield* c) + (yield* src); });
+    return { d, inc: () => setC(x => x + 1) };
+  }
+  const Item = $component(function* () {
+    const d = yield* useDoubled();
+    const k = yield* useCounter();
+    return function* () { return <p>{d}{k.d}</p>; };
+  });`
+    }
+  ),
+  scenario(
     "effect",
     "n components each with an effect reading a shared signal and a prop, writing a sink and registering a cleanup; update: write the signal (n effect runs + n cleanups)",
     ["update"],

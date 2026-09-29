@@ -70,11 +70,19 @@ describe("helper summaries", () => {
     const { resolve, file } = project(FILES);
     const summaries = await summarizeHelperGraph({ entries: [file("src/app.tsx")], resolve });
     expect(summaries[file("src/state.ts")]).toEqual({
-      useCounter: { lowered: "useCounter$lowered", hosts: ["setup"] }
+      useCounter: {
+        lowered: "useCounter$lowered",
+        hosts: ["setup"],
+        returns: { object: { count: "accessor", doubled: "accessor", inc: "function" } }
+      }
     });
     // Its twin calls the imported twin: the summary of ./state was known.
     expect(summaries[file("src/use.ts")]).toEqual({
-      useTwo: { lowered: "useTwo$lowered", hosts: ["setup"] }
+      useTwo: {
+        lowered: "useTwo$lowered",
+        hosts: ["setup"],
+        returns: { tuple: ["other", "other"] }
+      }
     });
     expect(summaries[file("src/app.tsx")]).toBeUndefined();
     const use = transform(fs.readFileSync(file("src/use.ts"), "utf8"), {
@@ -94,6 +102,9 @@ describe("helper summaries", () => {
     }).code;
     expect(app).toContain("const counter = _$useCounter$lowered(1);");
     expect(app).toContain("const [a, b] = _$useTwo$lowered();");
+    // The imported return fact: `counter.doubled` is an accessor.
+    expect(app).toContain("counter.doubled()");
+    expect(app).not.toContain('_$readPath1(counter, "doubled")');
     // A memo may not create: that site keeps the generator.
     expect(app).toContain("_$perform(useCounter(3))");
     // Server output lowers the same sites (hydration ids stay aligned).

@@ -415,6 +415,7 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
             source,
             matches!(options.generate, Generate::Dom),
             (!options.host_fusion).then_some(&v2_bodies),
+            None,
         )
         .map_err(CompileError::transform)?;
     }
