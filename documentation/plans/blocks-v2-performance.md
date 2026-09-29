@@ -691,6 +691,85 @@ difference is in the uncompiled rendering path — pinned, not fixed here.
   found at a path (context providers); only the generic `perform` dispatch,
   `performValue`, `stepSync` and the generator-object probe are dropped.
 
+## 11. Completing the lowering (2026-09-29)
+
+Baseline for this section: `d3ed8cc2` (after section 10 and the islands
+merge), runtime and compiler snapshotted as `preH` / `preH-compiler`
+(`scripts/blocks-v2/build-prod.mjs --snapshot`); "current" is `7ac6f164`.
+
+### What landed
+
+- **Server output gets the v2 lowering** (setup creations, erased setups and
+  events, async bodies through `asyncBody`, context reads, `readAccessor` /
+  `readSelected` view reads). Hydration ids stay aligned (`block_scope.rs`;
+  parity scenario `v2-helpers`).
+- **Helper generators** beyond context reads: a `function*` whose every
+  `yield*` is a context read, an accessor read, a creation, a `$cleanup`, a
+  `raise` statement or another lowered helper becomes a plain function —
+  in place when every reference is a lowerable call site, else as a twin
+  (`name$lowered`) next to the generator. Exported twins are listed in the
+  module's `helperSummary`; `helperSummaries` lowers imported helpers'
+  call sites (`@solidjs/compiler/helpers-build`). **Function-scoped helpers**
+  (declared inside a function: no `program.body` slot for a twin) lower in
+  place only; one that escapes stays a generator, and so do its callers.
+- **Async events with `$flush()`** compile to async functions too.
+- **Driver-identical result promises.** `AsyncRun` rebuilds the driver's
+  promise chain, so a compiled async body that suspends more than once
+  settles its result promise in the same microtask as the driver
+  (`tests/block-async-compiled.test.ts`). Cost: `asyncEvent` +5.3% below.
+- **The operation switch** (`performOp`) is installed by the constructors of
+  the operations it runs: fully compiled bundles drop it.
+- **Static views (`BLOCK_STATIC`, flag 4).** A view that is a single
+  `return` of JSX whose every `yield*` sits where the JSX transform defers it
+  (a child hole, a dynamic intrinsic attribute, a component prop — not
+  `ref`, `on*`, `use:` or a spread on an intrinsic element) is flagged
+  `BLOCK_SYNC | BLOCK_STATIC`. Outside hydration, `insert` renders it once,
+  untracked, instead of in a render effect with no sources: a compiled
+  component then costs what a component returning DOM costs. Hydration keeps
+  the effect (it carries the id scope the server rendered with).
+- **Mixed builds.** The capability linker installs the block driver
+  (`installBlockDriver`) in a module whose output still hands a generator
+  body to `createMemo` / `createEffect` / `onSettled` (a module the compiler
+  did not transform) and warns, instead of a production bundle running the
+  body as a plain callback.
+- **Hydration-aware imports.** In hydrating builds, names `solid-js`
+  overrides (block constructors and `createSignal` / `createMemo` /
+  `createEffect` / `createStore` / …) imported from `@solidjs/signals` are
+  re-sourced to `solid-js` (`hydration_imports.rs`).
+
+### Instruction counts (Ir/op, n=300; `compare.mjs --runtimes preH+preH-compiler,current`)
+
+| cell | handwritten (current) | compiled, before | compiled, now | now vs handwritten |
+| --- | ---: | ---: | ---: | ---: |
+| create mount | 3,541k | 4,752k | **3,799k** (−20.0%) | 1.07× |
+| helpers mount | 5,004k | 8,192k | **5,010k** (−38.8%) | 1.00× |
+| helpers update | 2,860k | 4,087k | **2,899k** (−29.1%) | 1.01× |
+| memo update | 1,804k | 1,886k | 1,821k | 1.01× |
+| holes update | 1,926k | 1,981k | 1,926k | 1.00× |
+| event update | 872k | 900k | 894k | 1.03× |
+| attrs update | 1,357k | 1,385k | 1,357k | 1.00× |
+| effect update | 821k | 810k | 772k | 0.94× |
+| view update | 775k | 889k | 889k | 1.15× |
+| paths update | 4,970k | 4,899k | 4,907k | 0.99× |
+| async update | 45,465k | 47,276k | 46,247k | 1.02× |
+| asyncEvent update | 1,111k | 1,549k | 1,631k (+5.3%) | 1.47× |
+
+`view` re-runs its view on every update by construction (a top-level read),
+so it keeps its render effect. `asyncEvent` pays for the handler contract,
+the run object and (new) the driver-identical promise chain.
+
+### Server output and bytes
+
+- `scripts/ssr-redesign/blocks-ssr-bench.mjs --compare before,after`:
+  hn-blocks and todos-blocks server output keep 0 `perform` calls, 0
+  generator bodies and no `$` import (was 16 / 1 and 12 / 6); the HTML is
+  identical; render time hn-blocks 23.97 → 23.10 ms (−3.6%), todos-blocks
+  1.155 → 1.161 ms (+0.5%).
+- `scripts/slices/measure-apps.mjs` (sliced, min / gz): sync-blocks
+  62,838 / 23,043 → **54,844 / 20,179** (the linker again proves it
+  async-free: `<For each>` over a lowered view is SYNC); todos-blocks
+  89,888 / 32,313 → 89,791 / 32,284; todos and sierpinski unchanged.
+
 ## Evaluated and not done
 
 | idea | measurement | why not |
@@ -711,9 +790,9 @@ difference is in the uncompiled rendering path — pinned, not fixed here.
    driver.~~ Done (section 9). A slimmer `perform` was evaluated: nothing left
    to measure once creations, writes and events are lowered.
 3. ~~Lower setup creations to direct runtime calls.~~ Done (section 9).
-4. Treat the view's own render effect as the cost floor of a v2 component
-   (1.27× plain Solid at creation) and document it; everything else is
-   within ~1.0–1.4× with fusion.
+4. ~~Treat the view's own render effect as the cost floor of a v2
+   component.~~ Static views (section 11) remove it where the view reads
+   nothing itself: creation is 1.07× plain Solid.
 5. Keep `scripts/blocks-v2` in the loop for block runtime changes: the closure
    context regressions above were invisible to the test suite and to casual
    timing, and obvious in instruction counts.
@@ -722,10 +801,10 @@ difference is in the uncompiled rendering path — pinned, not fixed here.
 
 - Uncompiled v2 is still 3–11× plain Solid on creation, effects and path reads
   (typed-props proxy chains, generator delegation per `yield*`).
-- Compiled v2 is within 1.01–1.06× plain Solid except creation (1.48×, mostly
-  the view's own render effect, recommendation 4), async memos (1.08×, was
-  1.12× on the driver; section 10) and handlers that wait (1.37×, was 2.30×:
-  the handler contract and the run object). `blocks-effect`'s compiled mode
+- Compiled v2 is within 0.94–1.07× plain Solid on every cell except views
+  that re-run (1.15×: the view's own render effect) and handlers that wait
+  (1.47×: the handler contract, the run object and the driver-identical
+  promise chain; section 11). `blocks-effect`'s compiled mode
   now equals handwritten Solid.
 - In the conformance matrix, `blocks-async-event`'s uncompiled mode (the
   `@solidjs/h` pipeline) re-renders the pre-write value after an awaited write;
