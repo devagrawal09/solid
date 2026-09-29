@@ -179,6 +179,13 @@ export interface Scenario {
   islandTiers?: Record<string, number>;
   /** Islands mode only: the id each island must get (same keys as `islandTiers`). */
   islandIds?: Record<string, string>;
+  /**
+   * Islands mode only: a declared, reviewed difference from the oracle —
+   * the islands trace from the first step on, spelled out in full (islands
+   * keep the server's rows where the oracle's lazily rendered views are
+   * rendered again, …).
+   */
+  islands?: { reason: string; trace: string[] };
 }
 
 /** What one mode observed for one scenario. */

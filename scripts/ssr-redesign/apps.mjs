@@ -135,7 +135,12 @@ export const APPS = {
       "C-T2-lazy": { server: "apps/hn-blocks/server-islands.ts", client: "apps/islands-client.ts", islands: { root: "apps/hn-blocks/story.tsx", mode: "auto", minTier: 2 }, splitting: true },
       // Streaming: the same islands, the page's Loading streamed as a chunk
       // after the shell (islands-stream.js; the swap runs while parsing).
-      "C-stream": { server: "apps/hn-blocks/server-islands-stream.ts", client: "apps/islands-client.ts", islands: { root: "apps/hn-blocks/story.tsx", mode: "auto" }, splitting: true }
+      "C-stream": { server: "apps/hn-blocks/server-islands-stream.ts", client: "apps/islands-client.ts", islands: { root: "apps/hn-blocks/story.tsx", mode: "auto" }, splitting: true },
+      // Component boundaries do not matter: the same page as ONE component
+      // (story-single.tsx: the thread is a named recursive row block holding
+      // each comment's `open`) compiles to the same partition and chunk.
+      "C-single-eager": { server: "apps/hn-blocks/server-islands-single.ts", client: "apps/islands-client.ts", islands: { root: "apps/hn-blocks/story-single.tsx", mode: "eager" } },
+      "C-single-lazy": { server: "apps/hn-blocks/server-islands-single.ts", client: "apps/islands-client.ts", islands: { root: "apps/hn-blocks/story-single.tsx", mode: "auto" }, splitting: true }
     }
   },
   sync: {

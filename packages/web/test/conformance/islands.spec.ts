@@ -119,6 +119,8 @@ const mountOf = (trace: string[]) => trace.slice(trace.indexOf("## mount") + 1, 
 
 function expectSame(expected: string[], actual: string[], what: string) {
   if (actual.join("\n") === expected.join("\n")) return;
+  if (process.env.CONFORMANCE_DUMP === "json")
+    process.stderr.write(`@@ISLANDS ${JSON.stringify({ what, trace: actual })}\n`);
   const rows = Math.max(expected.length, actual.length);
   const lines = [`${what}: oracle | islands`];
   for (let i = 0; i < rows; i++) {
@@ -393,28 +395,31 @@ describe("compiled islands reproduce the oracle", () => {
         normalizeHtml(initial.slice("html = ".length))
       );
     });
-    test(`${scenario.name}: ${chosen} (compiler's choice)`, async () => {
-      const expected = normalize(await observed(scenario));
+    /**
+     * Every event from the first step on: the oracle's, or the scenario's
+     * declared islands trace (an intentional, reviewed difference, e.g. rows
+     * the islands keep where the oracle re-renders them).
+     */
+    const expectedSteps = async () =>
+      scenario.islands?.trace ?? afterMount(normalize(await observed(scenario)));
+    test(`${scenario.name}: ${chosen} (compiler's choice)${scenario.islands ? " [differs: declared]" : ""}`, async () => {
+      const expected = await expectedSteps();
       const { trace, tiers } = await runIslands(scenario, source, 0);
-      expectSame(
-        afterMount(expected),
-        afterMount(normalize(trace)),
-        `${scenario.name} / ${chosen}`
-      );
+      expectSame(expected, afterMount(normalize(trace)), `${scenario.name} / ${chosen}`);
       if (tiers.length && tiers.every(t => t === 0))
         expect(mountOf(trace), "tier-0 activation reads and computes nothing").toEqual([]);
     });
     if (tiers.some(t => t === 0))
       test(`${scenario.name}: tier 1 (kernel)`, async () => {
-        const expected = normalize(await observed(scenario));
+        const expected = await expectedSteps();
         const { trace } = await runIslands(scenario, source, 1);
-        expectSame(afterMount(expected), afterMount(normalize(trace)), `${scenario.name} / tier 1`);
+        expectSame(expected, afterMount(normalize(trace)), `${scenario.name} / tier 1`);
       });
     if (tiers.length)
       test(`${scenario.name}: tier 2 control (the same chunk on the full core)`, async () => {
-        const expected = normalize(await observed(scenario));
+        const expected = await expectedSteps();
         const { trace } = await runIslands(scenario, source, 2);
-        expectSame(afterMount(expected), afterMount(normalize(trace)), `${scenario.name} / tier 2`);
+        expectSame(expected, afterMount(normalize(trace)), `${scenario.name} / tier 2`);
       });
   }
 });

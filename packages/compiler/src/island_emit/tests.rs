@@ -463,10 +463,13 @@ export const App = $component(function* () {
     );
 }
 
+/// State lifted into the parent and read by a recursive child (the thread
+/// under one `closed` signal): genuinely shared state, so ONE island over
+/// the thread, whose rows the island adopts under the server's structural
+/// regions — each level runs the same row function.
 #[test]
-fn live_sites_under_server_driven_structure_are_refused() {
-    let reason = fallback_of(
-        r#"
+fn lifted_state_read_by_a_recursive_child_is_one_island_over_the_thread() {
+    let out = run(r#"
 import { $component, $event, $signal, For } from "solid-js";
 const Node = $component(function* (props) {
   const click = $event(function* () { props.set(x => x + 1); });
@@ -478,14 +481,43 @@ export const App = $component(function* (props) {
   const [n, setN] = yield* $signal(0);
   return function* () { return <ul><b>{yield* n}</b><Node kids={yield* props.kids} set={setN} /></ul>; };
 });
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert_eq!(out.chunks.len(), 1, "{m}");
+    assert!(m.contains(r#""root":"App","members":["App","Node"]"#), "{m}");
+    let chunk = &out.chunks[0].code;
+    // The rows of each level: one row function, called again for its own rows.
+    assert!(chunk.contains("const $rows = "), "{chunk}");
+    let name = chunk
+        .lines()
+        .find(|l| l.starts_with("const $r") && l.contains(" = (k$"))
+        .and_then(|l| l.split(' ').nth(1))
+        .expect("a row function");
+    let calls = chunk
+        .lines()
+        .filter(|l| l.starts_with("$rows(") && l.ends_with(&format!(", {name});")))
+        .count();
+    assert_eq!(calls, 2, "{chunk}");
+    // The server marks the structural region around the rows.
+    assert!(out.server.contains("<!--$-->${_$forR("), "{}", out.server);
+    // A recursion whose props change per level is refused with its reason.
+    let reason = fallback_of(
+        r#"
+import { $component, $event, $signal, For } from "solid-js";
+const Node = $component(function* (props) {
+  const click = $event(function* () { props.set(x => x + 1); });
+  return function* () {
+    return <li onClick={click}>{props.depth}<For each={yield* props.kids}>{k => <Node kids={k} depth={props.depth + 1} set={props.set} />}</For></li>;
+  };
+});
+export const App = $component(function* (props) {
+  const [n, setN] = yield* $signal(0);
+  return function* () { return <ul><b>{yield* n}</b><Node kids={yield* props.kids} depth={0} set={setN} /></ul>; };
+});
 "#,
     );
-    assert!(
-        reason.contains("renders itself")
-            || reason.contains("server values")
-            || reason.contains("no single component"),
-        "{reason}"
-    );
+    assert!(reason.contains("props that change per level"), "{reason}");
 }
 
 #[test]
@@ -1102,4 +1134,243 @@ export function App() {
     for c in &out.chunks {
         assert!(!c.code.contains("$ctx:Api"), "{}", c.code);
     }
+}
+
+// --- scopes: component boundaries do not matter ------------------------------------
+
+/// `TOGGLE` written as ONE component: the thread is a named, recursive row
+/// block declared in the page's setup, holding each comment's `open`.
+const TOGGLE_SINGLE: &str = r#"
+import { $component, $event, $signal, For, Show } from "solid-js";
+export const Page = $component(function* (props) {
+  function* comment(c) {
+    const [open, setOpen] = yield* $signal(true);
+    const toggle = $event(function* () { setOpen(o => !o); });
+    return function* () {
+      return (
+        <li class="comment">
+          <div class="by">{c.user}</div>
+          <Show when={c.comments.length}>
+            <div class={["toggle", { open: yield* open }]}>
+              <a onClick={toggle}>{(yield* open) ? "[-]" : "[+] comments collapsed"}</a>
+            </div>
+            <ul class="comment-children" style={{ display: (yield* open) ? "block" : "none" }}>
+              <For each={c.comments}>{comment}</For>
+            </ul>
+          </Show>
+        </li>
+      );
+    };
+  }
+  return function* () {
+    return <ul><For each={yield* props.comments}>{comment}</For></ul>;
+  };
+});
+"#;
+
+fn islands_of(m: &str) -> Vec<String> {
+    m.split(r#""root":""#)
+        .skip(1)
+        .map(|r| r.split('"').next().unwrap_or("").to_string())
+        .collect()
+}
+
+#[test]
+fn a_named_recursive_row_block_partitions_like_the_split_components() {
+    let split = run(TOGGLE);
+    let single = run(TOGGLE_SINGLE);
+    assert!(single.fallback.is_none(), "{:?}", single.fallback);
+    let m = manifest(&single);
+    // One tier-0 island per toggle, rooted at the branch that owns `open`;
+    // the page and the row markup are inert, nothing is serialized.
+    assert_eq!(islands_of(&m).len(), 1, "{m}");
+    assert!(m.contains(r#""tier":0"#), "{m}");
+    assert!(m.contains(r#"{"name":"Page","class":"inert","islands":[]}"#), "{m}");
+    assert!(!m.contains(r#""serialized":[{"#), "{m}");
+    assert_eq!(single.chunks.len(), split.chunks.len());
+    // The same client code: component boundaries do not matter.
+    assert_eq!(single.chunks[0].code, split.chunks[0].code);
+}
+
+#[test]
+fn a_bare_row_block_gives_per_row_islands() {
+    let out = run(r#"
+import { $component, $event, $signal, For } from "solid-js";
+export const App = $component(function* (props) {
+  return function* () {
+    return (
+      <ul>
+        <For each={yield* props.items}>
+          {function* (item) {
+            const [n, setN] = yield* $signal(0);
+            const inc = $event(function* () { setN(x => x + 1); });
+            return function* () { return <li onClick={inc}>{item.name} {yield* n}</li>; };
+          }}
+        </For>
+      </ul>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert_eq!(islands_of(&m), vec!["App$For".to_string()], "{m}");
+    assert!(m.contains(r#""tier":0"#), "{m}");
+    assert!(m.contains(r#"{"name":"App","class":"inert","islands":[]}"#), "{m}");
+    // The row's capture is a prop of the row scope, read on the server.
+    let chunk = &out.chunks[0].code;
+    assert!(chunk.contains("$cell(0)"), "{chunk}");
+}
+
+#[test]
+fn state_in_one_branch_roots_the_island_at_the_branch() {
+    let out = run(r#"
+import { $component, $event, $signal, Show } from "solid-js";
+export const App = $component(function* (props) {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    return (
+      <main>
+        <h1>{yield* props.title}</h1>
+        <Show when={yield* props.editable}>
+          <button onClick={inc}>{yield* n}</button>
+        </Show>
+      </main>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert_eq!(islands_of(&m), vec!["App$Show".to_string()], "{m}");
+    assert!(m.contains(r#""tier":0"#), "{m}");
+    // The title stays server-rendered.
+    assert!(!out.chunks[0].code.contains("title"), "{}", out.chunks[0].code);
+}
+
+#[test]
+fn exported_children_of_lifted_state_join_one_island() {
+    let out = run(r#"
+import { $component, $event, $signal } from "solid-js";
+export const AddToCart = $component(function* (props) {
+  const add = $event(function* () { props.setCount(c => c + 1); });
+  return function* () { return <button onClick={add}>Add</button>; };
+});
+export const CartBadge = $component(function* (props) {
+  return function* () { return <span class="badge">{yield* props.count}</span>; };
+});
+export const Page = $component(function* () {
+  const [count, setCount] = yield* $signal(0);
+  return function* () {
+    return (
+      <main>
+        <header><CartBadge count={count} /></header>
+        <p>Static copy</p>
+        <AddToCart setCount={setCount} />
+      </main>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert_eq!(islands_of(&m), vec!["Page".to_string()], "{m}");
+    assert!(m.contains(r#""members":["#), "{m}");
+    assert!(m.contains("AddToCart") && m.contains("CartBadge"), "{m}");
+}
+
+const KEYED: &str = r#"
+import { $component, $event, $store, For } from "solid-js";
+export const App = $component(function* (props) {
+  const [closed, setClosed] = yield* $store({});
+  return function* () {
+    return (
+      <ul>
+        <For each={yield* props.comments}>
+          {function* (c) {
+            const toggle = $event(function* () {
+              setClosed(s => { s[c.id] = !s[c.id]; });
+            });
+            return function* () {
+              return <li onClick={toggle}>{c.text}:{(yield* closed[c.id]) ? "closed" : "open"}</li>;
+            };
+          }}
+        </For>
+      </ul>
+    );
+  };
+});
+"#;
+
+#[test]
+fn a_store_read_and_written_at_the_rows_key_is_a_cell_per_row() {
+    let out = run(KEYED);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert_eq!(islands_of(&m), vec!["App$For".to_string()], "{m}");
+    assert!(m.contains(r#""tier":0"#), "{m}");
+    assert!(m.contains("closed$key"), "{m}");
+    assert!(m.contains(r#"{"name":"App","class":"inert","islands":[]}"#), "{m}");
+}
+
+#[test]
+fn a_store_read_at_another_key_stays_one_shared_island() {
+    // The handler finds its key through the DOM: not the row's own key.
+    let dataset = KEYED
+        .replace(
+            "const toggle = $event(function* () {\n              setClosed(s => { s[c.id] = !s[c.id]; });",
+            "const toggle = $event(function* (e) {\n              const id = Number(e.currentTarget.dataset.id);\n              setClosed(s => { s[id] = !s[id]; });",
+        )
+        .replace("<li onClick", "<li data-id={c.id} onClick");
+    assert_ne!(dataset, KEYED);
+    let out = run(&dataset);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert_eq!(islands_of(&m).len(), 1, "{m}");
+    assert!(!m.contains("closed$key"), "{m}");
+    assert!(!m.contains(r#""root":"App$For""#), "{m}");
+    // A row store split still holds for the keyed rows when a filter signal
+    // every row reads is shared: the filter is its own shared island.
+    let filtered = KEYED
+        .replace(
+            "const [closed, setClosed] = yield* $store({});",
+            "const [closed, setClosed] = yield* $store({});\n  const [filter, setFilter] = yield* $signal(\"\");\n  const search = $event(function* (e) { setFilter(e.currentTarget.value); });",
+        )
+        .replace("$store, For", "$store, $signal, For")
+        .replace("<ul>", "<ul><input onInput={search} />")
+        .replace("<li onClick={toggle}>", "<li class={{ hit: c.text === (yield* filter) }} onClick={toggle}>");
+    let out = run(&filtered);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    let roots = islands_of(&m);
+    // ONE shared island for the filter every row reads (rooted at the
+    // page), and the toggles keep their per-row keyed cells.
+    assert_eq!(roots, vec!["App$For".to_string(), "App".to_string()], "{m}");
+    assert!(m.contains(r#""cells":["App.filter"]"#), "{m}");
+    assert!(m.contains(r#""cells":["App$For.closed$key"]"#), "{m}");
+    // The store nothing else writes is its initial value, not a live store.
+    for c in &out.chunks {
+        assert!(!c.code.contains("createPlainStore"), "{}", c.code);
+    }
+}
+
+#[test]
+fn helper_generators_are_read_at_their_sites() {
+    let out = run(r#"
+import { $component, $event, $signal } from "solid-js";
+export const App = $component(function* (props) {
+  const [first, setFirst] = yield* $signal("a");
+  const [last] = yield* $signal("b");
+  function* label(sep) { return (yield* first) + sep + (yield* last); }
+  const rename = $event(function* () { setFirst(f => f + "!"); });
+  return function* () {
+    return <main><h1>{yield* props.title}</h1><button onClick={rename}>{yield* label(" ")}</button></main>;
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert_eq!(islands_of(&m).len(), 1, "{m}");
+    assert!(m.contains(r#""tier":0"#), "{m}");
 }
