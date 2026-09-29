@@ -41,7 +41,7 @@ import {
 } from "./core.js";
 import { DEV, emitDiagnostic, GRAPH_SIZE_WARN_AT, noteFanOut, reportDiagnostic } from "./dev.js";
 import { NotReadyError } from "./error.js";
-import { OPTIMISTIC, SNAPSHOTS, STORES } from "./features.js";
+import { OPTIMISTIC, SNAPSHOTS, STORES, VERDICTS } from "./features.js";
 import { sweepDormant, trimStaleDeps } from "./graph.js";
 import { deleteFromHeap, enqueueSub, runHeap, type Heap } from "./heap.js";
 import {
@@ -1352,7 +1352,7 @@ function commitPendingNode(n: Signal<any>): void {
       n._value = n._pendingValue as any;
       n._pendingValue = NOT_PENDING;
     }
-    if (n._config & CONFIG_HAS_COMPANIONS) GlobalQueue._snapCompanions!(n);
+    if (VERDICTS && n._config & CONFIG_HAS_COMPANIONS) GlobalQueue._snapCompanions!(n);
     return;
   }
   if (n._pendingValue !== NOT_PENDING) {
@@ -1391,7 +1391,7 @@ function commitPendingNode(n: Signal<any>): void {
   else n._config |= CONFIG_INPUTS_PUBLISHED;
   if (c._x != null && (c._x._pendingFirstChild !== null || c._x._pendingDisposal !== null))
     GlobalQueue._dispose(c as Computed<unknown>, false, true);
-  if (n._config & CONFIG_HAS_COMPANIONS) GlobalQueue._snapCompanions!(n);
+  if (VERDICTS && n._config & CONFIG_HAS_COMPANIONS) GlobalQueue._snapCompanions!(n);
 }
 
 // Store commit hook (INTERNALS-STORE-STATE.md §3): installed by the store
