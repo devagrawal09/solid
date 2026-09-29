@@ -251,6 +251,23 @@ async function runIslands(scenario: Scenario, source: string, minTier: number) {
   const t0i = tracedT0(recorder);
   const app: Record<string, any> = {};
   const disposers: (() => void)[] = [];
+  /**
+   * Keep an activation's root disposer, as the islands entry does: on the
+   * anchor (`$d[id]`, where the frames applier disposes a removed anchor's
+   * islands) and for the teardown, once whichever comes first.
+   */
+  const keep = (el: any, id: string, d: unknown) => {
+    if (typeof d !== "function") return;
+    let done = false;
+    const once = () => {
+      if (!done) {
+        done = true;
+        d();
+      }
+    };
+    (el.$d ||= {})[id] = once;
+    disposers.push(once);
+  };
   let disposed = false;
   const disposeAll = () => {
     if (disposed) return;
@@ -286,8 +303,7 @@ async function runIslands(scenario: Scenario, source: string, minTier: number) {
         const seen = ((el as any).$i ||= {});
         if (seen[island.id] || (island.waits && pending(el))) continue;
         seen[island.id] = 1;
-        const d = chunk.activate(el);
-        if (typeof d === "function") disposers.push(d);
+        keep(el, island.id, chunk.activate(el));
       }
     }
   };
@@ -341,8 +357,7 @@ async function runIslands(scenario: Scenario, source: string, minTier: number) {
         const g = groups.find(g => g.island.id === id);
         if (!g) return;
         (el.$i ||= {})[id] = 1;
-        const d = g.chunk.activate(el, state);
-        if (typeof d === "function") disposers.push(d);
+        keep(el, id, g.chunk.activate(el, state));
       }
     };
     landingCleanup = () => {

@@ -138,7 +138,9 @@ class IslandsStream {
  * Swap chunk `id` (`lN` / `eN`) into `doc`: the nodes between `<!--id-->`
  * and `<!--/id-->` are replaced by the chunk's content (a `<template
  * id="s{id}">` in the page, or `html`), the markers removed, and
- * `solid-islands` dispatched with the region's parent element.
+ * `solid-islands` dispatched with the region's parent element. Islands
+ * activated in the replaced content (a fallback's) are disposed first: each
+ * anchor's root disposers (`$d`, kept by the islands entry).
  */
 function swap(id, html, doc) {
   doc = doc || document;
@@ -148,7 +150,16 @@ function swap(id, html, doc) {
     s,
     n,
     d,
-    f;
+    f,
+    z = function (x) {
+      if (x.$d) {
+        var q = x.$d,
+          k;
+        x.$d = null;
+        for (k in q) q[k]();
+      }
+      for (x = x.firstChild; x; x = x.nextSibling) z(x);
+    };
   while ((n = w.nextNode()))
     if (n.data === id) {
       s = n;
@@ -158,6 +169,7 @@ function swap(id, html, doc) {
     var p = s.parentNode;
     for (n = s.nextSibling; n && !(n.nodeType === 8 && n.data === "/" + id); n = d) {
       d = n.nextSibling;
+      z(n);
       n.remove();
     }
     if (t) f = t.content;

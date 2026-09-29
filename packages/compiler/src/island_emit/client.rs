@@ -188,6 +188,8 @@ struct Ce<'x, 'a> {
     cur: usize,
     uid: usize,
     helpers: BTreeSet<&'static str>,
+    /// Event types the island's handlers are delegated for (`$dg`).
+    events: BTreeSet<String>,
     rt: BTreeSet<&'static str>,
     /// Core-only runtime exports the chunk imports (tier 2: `name as $$name`).
     core: BTreeSet<String>,
@@ -355,6 +357,20 @@ const HELPERS: &[(&str, &str)] = &[
         "const $ld = (e, content, fb) => { let kept, shown; const acc = $$createLoadingBoundary(() => ($U(content), 1), () => 0); $E(acc, v => { if (v === 1) { if (kept) { shown.remove(); for (const n of kept) e.before(n); kept = shown = undefined; } return; } if (!kept) { kept = []; for (let n = $start(e).nextSibling; n !== e; n = n.nextSibling) kept.push(n); for (const n of kept) n.remove(); shown = fb(); e.before(shown); } }); };",
     ),
     (
+        "$dg",
+        // Delegated handlers (`node.$$type = h`, Solid's protocol): one
+        // listener per event type on the document (`document.$$E` lists the
+        // types), walking from the target up as Solid's `eventHandler` does
+        // (`$$typeData`, `handleEvent`, disabled nodes skipped) and stopping
+        // at `stopPropagation`. It is an outer delegation root: where a
+        // Solid root below already walked the event (a hydrated fallback
+        // module, its portals: `_$SOLID_EVENT_OWNER`), it resumes above that
+        // root, so no handler runs twice. The islands loader's capture
+        // listener runs first and stops an event whose islands are not
+        // active yet (activate, then replay: the replay reaches this one).
+        DELEGATE,
+    ),
+    (
         "$ref",
         "const $ref = (r, e) => Array.isArray(r) ? r.flat(Infinity).forEach(f => f && f(e)) : r(e);",
     ),
@@ -381,6 +397,9 @@ pub(crate) const CORE_ONLY: &[&str] = &[
     "createErrorBoundary",
     "createLoadingBoundary",
 ];
+
+/// The `$dg` helper (see `HELPERS`).
+pub(crate) const DELEGATE: &str = "const $dg = t => { const D = (self.$$D ||= e => { let n = e.target, p = e._$SOLID_EVENT_OWNER; const k = \"$$\" + e.type; if (p) { if (p === true || !document.contains(p)) return; n = p === n ? p.parentNode : p; } Object.defineProperty(e, \"currentTarget\", { configurable: true, get: () => n || document }); for (; n; n = n.parentNode) { const h = n[k]; if (h && !n.disabled) { const d = n[k + \"Data\"]; d !== undefined ? h.call(n, d, e) : typeof h === \"function\" ? h.call(n, e) : h.handleEvent(e); if (e.cancelBubble) return; } } }), s = (document.$$E ||= new Set()); for (const x of t) s.has(x) || (s.add(x), document.addEventListener(x, D)); };";
 
 fn helper_deps(h: &str) -> &'static [&'static str] {
     match h {
@@ -451,6 +470,7 @@ pub(crate) fn emit_group<'a>(
         cur: 0,
         uid: 0,
         helpers: BTreeSet::new(),
+        events: BTreeSet::new(),
         rt: BTreeSet::new(),
         core: BTreeSet::new(),
         t2: g.tier >= 2 || core,
@@ -1396,6 +1416,15 @@ impl<'x, 'a> Ce<'x, 'a> {
             None => ("$a", String::new(), String::new()),
         };
         let st_in = if tier == 0 || self.transplant.is_none() { st_in } else { String::new() };
+        // The page-level listeners of the island's delegated handlers.
+        let data = if self.events.is_empty() {
+            data
+        } else {
+            format!(
+                "$dg([{}]);\n{data}",
+                self.events.iter().map(|e| js_str(e)).collect::<Vec<_>>().join(", ")
+            )
+        };
         if tier == 0 {
             let _ = write!(
                 out,
@@ -3386,9 +3415,20 @@ impl<'x, 'a> Ce<'x, 'a> {
                 }
                 let h = self.expr(inst, &none, e)?;
                 let ev = jsx::event_name(&at.name);
-                self.bucket(inst)
-                    .handlers
-                    .push(format!("{var}.addEventListener({}, {h});", js_str(&ev)));
+                // Solid's delegated events are delegated (one page-level
+                // listener per event type, `$dg`): a click reaching nested
+                // islands runs all their handlers in one listener, so the
+                // page flushes once. Other events (non-bubbling ones among
+                // them) keep a listener on the element, as in Solid.
+                let line = if crate::shared::constants::delegated_events(&ev) {
+                    self.helpers.insert("$dg");
+                    let line = format!("{var}.$${ev} = {h};");
+                    self.events.insert(ev);
+                    line
+                } else {
+                    format!("{var}.addEventListener({}, {h});", js_str(&ev))
+                };
+                self.bucket(inst).handlers.push(line);
                 continue;
             }
             if jsx::static_child(e).is_some() || at.name == "ref" {

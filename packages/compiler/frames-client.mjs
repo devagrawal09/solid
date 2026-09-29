@@ -22,6 +22,10 @@
 //   chunk. Unkeyed islands start from the server's state. Then the landing
 //   event (`solid-islands`) lets the loader and the eager activation see the
 //   new anchors, as a streamed boundary does.
+// - Every island activated on a removed anchor is disposed (its root's
+//   disposer, `anchor.$d[id]`, which the islands entry keeps): its cleanups,
+//   effects, timers and window listeners end with its DOM. The keyed state
+//   is read first.
 //
 // No render props, claims, hydration or `insert`: the region is server HTML
 // and every live piece in it is a compiled island.
@@ -89,6 +93,23 @@ function states(roots) {
   return s;
 }
 
+/**
+ * Dispose the islands activated in removed subtrees (element and comment
+ * anchors): each anchor's root disposers (`$d`, kept by the islands entry),
+ * once. Tier 0 keeps none (its handlers are properties of its own nodes).
+ */
+export function dispose(roots) {
+  for (const r of roots) {
+    const w = document.createTreeWalker(r, 129);
+    for (let n = r; n; n = w.nextNode())
+      if (n.$d) {
+        const d = n.$d;
+        n.$d = null;
+        for (const id in d) d[id]();
+      }
+  }
+}
+
 /** New anchors take the state of the keyed islands they replace; then the landing event. */
 function land(roots, st) {
   const act = self.$SI && self.$SI.act;
@@ -118,7 +139,8 @@ export function morph(el, html) {
   const st = states([el]);
   if (el.hasAttribute("data-i")) {
     // The region's element is itself an island's anchor: replaced (its
-    // listeners belong to the old activation).
+    // listeners belong to the old activation, which is disposed).
+    dispose([el]);
     el.replaceWith(next);
     land([next], st);
     return next;
@@ -126,6 +148,7 @@ export function morph(el, html) {
   for (const a of [...el.attributes]) if (!next.hasAttribute(a.name)) el.removeAttribute(a.name);
   for (const a of [...next.attributes])
     if (el.getAttribute(a.name) !== a.value) el.setAttribute(a.name, a.value);
+  dispose([...el.childNodes]);
   el.replaceChildren(...next.childNodes);
   land([el], st);
   return el;
@@ -208,6 +231,7 @@ export function navigate(routes, href, { push = true } = {}) {
         const old = [];
         for (let x = start.nextSibling; x !== end; x = x.nextSibling) old.push(x);
         const st = states(old.filter(x => x.nodeType === 1));
+        dispose(old);
         for (const x of old) x.remove();
         const frag = parse(h),
           added = [...frag.childNodes];

@@ -74,7 +74,10 @@ fn toggle_is_a_tier0_island_and_comment_is_inert() {
     let chunk = &out.chunks[0].code;
     assert!(chunk.contains("@solidjs/signals/t0"), "{chunk}");
     assert!(chunk.contains("$cell(true)"), "{chunk}");
-    assert!(chunk.contains("addEventListener(\"click\""), "{chunk}");
+    // A delegated handler, and the page-level listener for its type.
+    assert!(chunk.contains(".$$click = toggle"), "{chunk}");
+    assert!(chunk.contains("$dg([\"click\"]);"), "{chunk}");
+    assert!(!chunk.contains(".addEventListener(\"click\""), "{chunk}");
     // No reactive runtime.
     assert!(!chunk.contains("createRenderEffect"), "{chunk}");
     // Server: the anchor on the first element, no markers on inert holes.
@@ -115,8 +118,8 @@ export const App = $component(function* () {
     assert!(!ca.contains("setB") && !ca.contains("$cell(2"), "{ca}");
     assert!(cb.contains("incB") && !cb.contains("incA"), "{cb}");
     assert!(!cb.contains("setA") && !cb.contains("$cell(1"), "{cb}");
-    assert_eq!(ca.matches("addEventListener").count(), 1, "{ca}");
-    assert_eq!(cb.matches("addEventListener").count(), 1, "{cb}");
+    assert_eq!(ca.matches(".$$click = ").count(), 1, "{ca}");
+    assert_eq!(cb.matches(".$$click = ").count(), 1, "{cb}");
 }
 
 /// A component in two islands (one cell shared with more components than
@@ -1071,7 +1074,7 @@ export const App = $component(function* () {
     );
     assert!(chunk.contains("$err($m"), "{chunk}");
     assert!(
-        chunk.contains("addEventListener(\"click\", reset$"),
+        chunk.contains(".$$click = reset$"),
         "{chunk}"
     );
     // A tier-0 island under an `<Errored>` runs on the core (error routing).
@@ -1468,7 +1471,7 @@ export const Page = $component(function* () {
     let chunk = &out.chunks[0].code;
     assert!(chunk.contains("$p($h());"), "{chunk}");
     // Handlers stay attached as before.
-    assert!(chunk.contains("addEventListener(\"click\""), "{chunk}");
+    assert!(chunk.contains(".$$click = "), "{chunk}");
 }
 
 #[test]
@@ -1975,7 +1978,7 @@ export const App = $component(function* () {
         "{assign}"
     );
     assert!(
-        assign.contains("addEventListener(\"click\", read)"),
+        assign.contains(".$$click = read;"),
         "{assign}"
     );
     let cb = &out.chunks[1].code;
@@ -1983,7 +1986,7 @@ export const App = $component(function* () {
         cb.contains("$ref(el => { seen = el.className; }, $n2);"),
         "{cb}"
     );
-    assert!(!cb.contains("addEventListener"), "{cb}");
+    assert!(!cb.contains(".$$click"), "{cb}");
     let m = manifest(&out);
     // The assigning ref waits for the island's first event; the callback runs at load.
     assert!(m.contains(r#""activation":"lazy""#), "{m}");
@@ -2046,7 +2049,7 @@ export const App = $component(function* () {
 "#);
     assert!(out.fallback.is_none(), "{:?}", out.fallback);
     let chunk = &out.chunks[0].code;
-    assert!(chunk.contains("addEventListener(\"click\""), "{chunk}");
+    assert!(chunk.contains(".$$click = "), "{chunk}");
     assert!(chunk.contains("setAttribute(\"data-n\""), "{chunk}");
     assert!(chunk.contains("setAttribute(\"title\""), "{chunk}");
     // The forwarded children render in the button; attributes a caller
@@ -2282,6 +2285,57 @@ export const App = $component(function* (props) {
 "#,
     );
     assert!(early.contains("returns early"), "{early}");
+}
+
+#[test]
+fn handlers_of_solids_delegated_events_are_delegated() {
+    let out = run(r#"
+import { $component, $event, $signal, For } from "solid-js";
+export const App = $component(function* () {
+  const [items, setItems] = yield* $signal([1]);
+  const [n, setN] = yield* $signal(0);
+  const add = $event(function* () { setItems(l => [...l, l.length + 1]); });
+  const bump = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    return (
+      <div>
+        <button class="add" onClick={add} onFocus={bump} on:my-event={bump}>{yield* n}</button>
+        <input onInput={bump} />
+        <ul><For each={yield* items}>{i => <li onClick={bump}>{i}</li>}</For></ul>
+      </div>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let chunk = &out.chunks[0].code;
+    // Solid's delegated events: a property on the node, one page-level
+    // listener per type registered at activation (sorted, once).
+    assert!(chunk.contains(".$$click = add;"), "{chunk}");
+    assert!(chunk.contains(".$$input = bump;"), "{chunk}");
+    assert_eq!(chunk.matches("$dg([\"click\", \"input\"]);").count(), 1, "{chunk}");
+    assert_eq!(chunk.matches("const $dg = ").count(), 1, "{chunk}");
+    // Rows the island builds bind theirs the same way.
+    assert_eq!(chunk.matches(".$$click = bump;").count(), 1, "{chunk}");
+    // Other events keep a listener on the element (as in Solid).
+    assert!(chunk.contains(".addEventListener(\"focus\", bump);"), "{chunk}");
+    assert!(chunk.contains(".addEventListener(\"my-event\", bump);"), "{chunk}");
+    assert!(!chunk.contains(".addEventListener(\"click\""), "{chunk}");
+    // The dispatcher resumes above a Solid root that already walked the
+    // event, and stops at `stopPropagation`.
+    assert!(chunk.contains("e._$SOLID_EVENT_OWNER"), "{chunk}");
+    assert!(chunk.contains("if (e.cancelBubble) return;"), "{chunk}");
+    // No delegated handler, no helper.
+    let focus_only = run(r#"
+import { $component, $event, $signal } from "solid-js";
+export const App = $component(function* () {
+  const [n, setN] = yield* $signal(0);
+  const bump = $event(function* () { setN(x => x + 1); });
+  return function* () { return <input onFocus={bump} value={yield* n} />; };
+});
+"#);
+    let chunk = &focus_only.chunks[0].code;
+    assert!(!chunk.contains("$dg"), "{chunk}");
 }
 
 #[test]
