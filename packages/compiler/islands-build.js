@@ -31,7 +31,8 @@ const CHUNK = "virtual:solid-islands/chunk/";
  *             anchor: "element"|"comment", preventDefault, root, size? }]
  * mode: "auto" (hot islands at load, the rest lazy) | "eager" (all at load)
  *       | "lazy" (all on interaction; hot islands still activate at load)
- * prefetch: app default, one of PREFETCH (default "interaction")
+ * prefetch: app default, one of PREFETCH (default "intent": pointerover /
+ *   focusin / touchstart on an island fetches its chunk)
  * overrides: { [rootComponentOrId]: policy }
  * budget: bytes of lazy chunks prefetch may load (sizes from `sizeOf(island)`
  *   — a JS expression; default `island.size`, the chunk's source bytes; the
@@ -43,7 +44,7 @@ const CHUNK = "virtual:solid-islands/chunk/";
 function islandsEntry({
   islands,
   mode = "auto",
-  prefetch = "interaction",
+  prefetch = "intent",
   overrides = {},
   budget,
   network = true,
@@ -408,7 +409,7 @@ function solidIslands(options = {}) {
     include = /\.[jt]sx$/,
     exclude = /node_modules/,
     mode = "auto",
-    prefetch = "interaction",
+    prefetch = "intent",
     overrides,
     budget,
     network,
@@ -452,12 +453,12 @@ function solidIslands(options = {}) {
       collected ||= collectWithDedupe(compiler, rootFile, tier1Core);
       if (id === "\0" + ENTRY + "/auto") return `import { start } from "${ENTRY}";\nstart();\n`;
       if (id === "\0" + ENTRY) {
-        if (collected.fallbacks.length) {
-          const f = collected.fallbacks[0];
+        // Every construct that falls back is named (whole-module tier-2
+        // hydration instead of fine-grained islands).
+        for (const f of collected.fallbacks)
           this.warn(
             `[solid-islands] ${path.relative(config.root, f.file)} falls back to hydration: ${f.reason}`
           );
-        }
         return islandsEntry({
           islands: collected.islands,
           mode,
@@ -533,7 +534,7 @@ function resolveRuntimes(r) {
 function esbuildIslands({
   root,
   mode = "auto",
-  prefetch = "interaction",
+  prefetch = "intent",
   overrides,
   budget,
   network,
@@ -569,7 +570,10 @@ function esbuildIslands({
               hydrate: fallbackRoots(c, root, rootExport, mount)
             }),
             loader: "js",
-            resolveDir: path.dirname(root)
+            resolveDir: path.dirname(root),
+            warnings: c.fallbacks.map(f => ({
+              text: `[solid-islands] ${path.relative(process.cwd(), f.file)} falls back to hydration: ${f.reason}`
+            }))
           };
         const id = args.path.slice(CHUNK.length);
         return { contents: c.chunks.get(id), loader: "ts", resolveDir: path.dirname(root) };

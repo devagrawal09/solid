@@ -727,3 +727,9 @@ Harness notes:
   - one large static-dominated page (hn) and two small live apps (todos, sync);
   - in-memory serving, so the network is not modeled (see resumability.md for bandwidth models);
   - the P2 oracle marks nodes by a source rewrite, not a compiler pass.
+
+## Defaults (decided 2026-09-29)
+
+- **Islands are opt-in** (`solidIslands` / `esbuildIslands` / `compileIslands`); full-page hydration stays the default until islands cover the fallback list above.
+- **Fallbacks warn.** Every module that falls back to whole-module tier-2 hydration is named in a build warning with the reason (Vite `this.warn`, esbuild `warnings`).
+- **Prefetch defaults to `"intent"`**: `pointerover` / `focusin` / `touchstart` on an island fetches its chunk; the loader still replays the first event if the chunk has not arrived. The intent listener adds ~0.2 KB gz to the loader: HN `C-lazy` is 0.7 KB gz at load (was 0.52 with `"interaction"`), gate ok. `prefetch: "interaction"` restores the smallest loader.
