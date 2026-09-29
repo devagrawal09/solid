@@ -234,11 +234,8 @@ export namespace JSX {
     | Record<string, boolean | undefined>
     | ClassValue[];
 
-  const SERIALIZABLE: unique symbol;
-  interface SerializableAttributeValue {
-    toString(): string;
-    [SERIALIZABLE]: never;
-  }
+  /** @solidjs/web's own (libraries brand values with it). */
+  type SerializableAttributeValue = import("@solidjs/web").JSX.SerializableAttributeValue;
 
   type RefCallback<T> = (el: T) => void;
   type Ref<T> = T | RefCallback<T> | undefined | Ref<T>[];

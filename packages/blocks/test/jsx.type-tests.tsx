@@ -370,3 +370,8 @@ export const LazyHost = $component(function* () {
 });
 const lazyHostView: View<true, never> = LazyHost();
 void lazyHostView;
+
+// --- web's serializable attribute values (the router's action(), typed paths) ------------------
+declare const serializable: import("@solidjs/web").JSX.SerializableAttributeValue;
+export const formAction = <form action={serializable} />;
+export const linkHref = <a href={serializable} />;
