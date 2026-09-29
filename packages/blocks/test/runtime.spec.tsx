@@ -12,6 +12,7 @@ import {
   $event,
   $flush,
   $memo,
+  isPendingOf,
   $scope,
   $settled,
   $signal,
@@ -119,6 +120,28 @@ describe("views are fine-grained", () => {
     await settle();
     expect(root.querySelector("h3")!.textContent).toBe("Hello Ada");
     expect(viewRuns).toBe(1);
+  });
+
+  it("a memo with a loadingValue renders it without a boundary, then its answer", async () => {
+    let resolve!: (v: { name: string }) => void;
+    const User = $component(function* () {
+      const user = yield* $memo(
+        function* () {
+          return yield* attempt(() => new Promise<{ name: string }>(r => (resolve = r)));
+        },
+        { loadingValue: { name: "…" } }
+      );
+      const pending = isPendingOf(user);
+      return function* () {
+        return <h3 class={{ pending: perform(pending) }}>Hello {perform(user).name}</h3>;
+      };
+    });
+    mount(User);
+    expect(root.querySelector("h3")!.textContent).toBe("Hello …");
+    resolve({ name: "Ada" });
+    await settle();
+    expect(root.querySelector("h3")!.textContent).toBe("Hello Ada");
+    expect(root.querySelector("h3")!.className).toBe("");
   });
 
   devIt("a view that reads at its top level re-renders as a whole, with a warning", () => {

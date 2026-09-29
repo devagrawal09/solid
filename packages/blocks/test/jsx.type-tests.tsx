@@ -126,6 +126,22 @@ export const Fallible = $component(function* (props: TypedProps<{ id: string }>)
     return <h3>{(yield* user).name}</h3>;
   };
 });
+// A memo with a loadingValue is never pending on read (commit #0 is the value)
+export const Seeded = $component(function* (props: TypedProps<{ id: string }>) {
+  const user = yield* $memo(
+    function* () {
+      const id = yield* props.id;
+      return yield* attempt(() => fetchUser(id));
+    },
+    { loadingValue: { name: "…" } }
+  );
+  const seeded: Source<{ name: string }, false, never> = user;
+  void seeded;
+  return function* () {
+    return <h3>{(yield* user).name}</h3>;
+  };
+});
+export const seededOk = <Seeded id="1" />;
 const pendingView: View<true, never> = Pending({ id: "1" });
 const fallibleView: View<true, NotFound> = Fallible({ id: "1" });
 void [pendingView, fallibleView];

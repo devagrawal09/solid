@@ -478,12 +478,22 @@ type MemoFails<Y, R> =
   | FailsOf<Y>
   | (Extract<R, PromiseLike<any> | AsyncIterable<any>> extends never ? never : unknown);
 
+/**
+ * `$memo(body, { loadingValue })`: commit #0 is the loading value, so a read
+ * never suspends — the memo is not pending (`isPendingOf` still reports a
+ * newer value in flight). Its failures are the body's.
+ */
+export function $memo<Y extends MemoOp = never, R = unknown>(
+  body: () => Generator<Y, R, any>,
+  options: MemoOptions<MemoValue<R>> & { loadingValue: MemoValue<R> }
+): Yieldable<Create<"memo">, Source<MemoValue<R>, false, MemoFails<Y, R>>>;
 /** `const doubled = yield* $memo(function* () { return (yield* n) * 2 })` in a setup. */
 export function $memo<Y extends MemoOp = never, R = unknown>(
   body: () => Generator<Y, R, any>,
   options?: MemoOptions<MemoValue<R>>
-): Yieldable<Create<"memo">, Source<MemoValue<R>, MemoPending<Y, R>, MemoFails<Y, R>>> {
-  return new CreateOp("memo", () => memoOf(body, options)) as any;
+): Yieldable<Create<"memo">, Source<MemoValue<R>, MemoPending<Y, R>, MemoFails<Y, R>>>;
+export function $memo(body: () => Generator<any, any, any>, options?: any): any {
+  return new CreateOp("memo", () => memoOf(body, options));
 }
 
 function memoOf(body: () => Generator<unknown, unknown, unknown>, options?: any): any {
