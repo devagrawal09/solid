@@ -707,7 +707,9 @@ fn helpers_lower_in_place_or_as_twins() {
         .helper_summary;
     assert_eq!(
         summary.as_deref(),
-        Some(r#"{"useShared":{"lowered":"useShared$lowered","hosts":["setup"]}}"#)
+        Some(
+            r#"{"useShared":{"lowered":"useShared$lowered","hosts":["setup"],"returns":{"tuple":["accessor","function"]}}}"#
+        )
     );
 }
 
@@ -822,4 +824,198 @@ export function make(register) {
     let flat = flat(&out);
     assert!(flat.contains("function* useCounter(start) {"), "{out}");
     assert!(flat.contains("_$perform(useCounter(1))"), "{out}");
+}
+
+// --- helper return facts (`helpers/returns.rs`) ------------------------------------------
+
+const RETURNS_APP: &str = r#"import { $component, $signal, $memo } from "solid-js";
+function* useDoubled(start) {
+  const [c] = yield* $signal(start);
+  return yield* $memo(function* () { return (yield* c) * 2; });
+}
+function* useCounter(start) {
+  const [c, setC] = yield* $signal(start);
+  const d = yield* $memo(function* () { return (yield* c) * 2; });
+  return { d, inc: () => setC(x => x + 1) };
+}
+function* usePair() {
+  const [a, setA] = yield* $signal(0);
+  return [a, setA];
+}
+function* useNested() {
+  return yield* useCounter(3);
+}
+export const C = $component(function* () {
+  const d = yield* useDoubled(1);
+  const k = yield* useCounter(1);
+  const { d: e, inc } = yield* useCounter(2);
+  const [a] = yield* usePair();
+  const n = yield* useNested();
+  const t = yield* $memo(function* () { return (yield* d) + (yield* k.d) + (yield* e) + (yield* a) + (yield* n.d); });
+  return function* () { return <p onClick={inc}>{yield* d}{yield* k.d}{yield* t}</p>; };
+});
+"#;
+
+#[test]
+fn helper_results_read_directly() {
+    let out = dom(RETURNS_APP);
+    let flat = self::flat(&out);
+    assert!(flat.contains("const d = useDoubled(1);"), "{out}");
+    // The memo is fused: every read is a direct call.
+    assert!(
+        flat.contains(
+            "const t = _$createMemo(function() { return d() + k.d() + e() + a() + n.d(); });"
+        ),
+        "{out}"
+    );
+    // The view's holes are computations: direct calls too.
+    assert!(flat.contains("k.d()"), "{out}");
+    assert!(!flat.contains("_$perform("), "{out}");
+    assert!(!flat.contains("_$readPath1(k"), "{out}");
+    assert!(!flat.contains("_$readAccessor"), "{out}");
+    // Server output: the same reads, `readAccessor` outside computations.
+    let ssr = compile_with(
+        RETURNS_APP,
+        CompileOptions {
+            generate: Generate::Ssr,
+            ..CompileOptions::default()
+        },
+    );
+    let flat = self::flat(&ssr);
+    assert!(!flat.contains("_$perform("), "{ssr}");
+    assert!(flat.contains("_$readAccessor(k.d)"), "{ssr}");
+}
+
+#[test]
+fn helper_results_stay_unproven_when_unsound() {
+    let out = dom(r#"import { $component, $signal, $memo } from "solid-js";
+function* useCounter(start) {
+  const [c] = yield* $signal(start);
+  const d = yield* $memo(function* () { return (yield* c) * 2; });
+  return { d };
+}
+function* useMaybe(flag) {
+  const [c] = yield* $signal(0);
+  if (flag) return { d: c };
+  return { d: 5 };
+}
+function* useEither(flag) {
+  const [c] = yield* $signal(0);
+  if (flag) return c;
+  return { d: c };
+}
+function* useFallsOff(flag) {
+  const [c] = yield* $signal(0);
+  if (flag) return c;
+}
+function* useKept() {
+  const [c] = yield* $signal(0);
+  const o = { d: c };
+  return o;
+}
+export const C = $component(function* () {
+  const k = yield* useCounter(1);
+  k.d = () => 1;
+  let r = yield* useCounter(2);
+  const esc = yield* useCounter(3);
+  mutate(esc);
+  const m = yield* useMaybe(true);
+  const e = yield* useEither(true);
+  const f = yield* useFallsOff(true);
+  const o = yield* useKept();
+  const t = yield* $memo(function* () {
+    return (yield* k.d) + (yield* r.d) + (yield* esc.d) + (yield* m.d) + (yield* e) + (yield* f) + (yield* o.d);
+  });
+  return function* () { return <p>{yield* t}</p>; };
+});
+"#);
+    let flat = self::flat(&out);
+    for read in [
+        "_$readPath1(k, \"d\")",
+        "_$readPath1(r, \"d\")",
+        "_$readPath1(esc, \"d\")",
+        "_$readPath1(m, \"d\")",
+        "_$readPath1(o, \"d\")",
+        "_$perform(e)",
+        "_$perform(f)",
+    ] {
+        assert!(flat.contains(read), "{read}: {out}");
+    }
+}
+
+#[test]
+fn helper_return_facts_cross_modules() {
+    let shared = r#"import { $signal, $memo } from "solid-js";
+export function* useCounter(start) {
+  const [c, setC] = yield* $signal(start);
+  const d = yield* $memo(function* () { return (yield* c) * 2; });
+  return { d, inc: () => setC(x => x + 1) };
+}
+export function* useDoubled(start) {
+  const [c] = yield* $signal(start);
+  return yield* $memo(function* () { return (yield* c) * 2; });
+}
+"#;
+    let summary = compile(shared, &CompileOptions::default())
+        .unwrap()
+        .helper_summary
+        .unwrap();
+    assert_eq!(
+        summary,
+        r#"{"useCounter":{"lowered":"useCounter$lowered","hosts":["setup"],"returns":{"object":{"d":"accessor","inc":"function"}}},"useDoubled":{"lowered":"useDoubled$lowered","hosts":["setup"],"returns":"accessor"}}"#
+    );
+    let source = r#"import { $component, $memo } from "solid-js";
+import { useCounter, useDoubled } from "./shared";
+export const D = $component(function* () {
+  const k = yield* useCounter(1);
+  const d = yield* useDoubled(1);
+  const t = yield* $memo(function* () { return (yield* k.d) + (yield* d); });
+  return function* () { return <i>{yield* t}</i>; };
+});
+"#;
+    let out = compile_with(
+        source,
+        CompileOptions {
+            helper_summaries: vec![
+                "./shared\0useCounter\0useCounter$lowered\0setup\0object:d=accessor;inc=function"
+                    .to_string(),
+                "./shared\0useDoubled\0useDoubled$lowered\0setup\0accessor".to_string(),
+            ],
+            ..CompileOptions::default()
+        },
+    );
+    assert!(
+        flat(&out).contains("const t = _$createMemo(function() { return k.d() + d(); });"),
+        "{out}"
+    );
+    // Without return facts (a summary without them), the reads keep the readers.
+    let out = compile_with(
+        source,
+        CompileOptions {
+            helper_summaries: vec![
+                "./shared\0useCounter\0useCounter$lowered\0setup".to_string(),
+                "./shared\0useDoubled\0useDoubled$lowered\0setup".to_string(),
+            ],
+            ..CompileOptions::default()
+        },
+    );
+    assert!(flat(&out).contains("_$readPath1(k, \"d\")"), "{out}");
+    assert!(flat(&out).contains("_$perform(d)"), "{out}");
+}
+
+#[test]
+fn helper_return_shapes_round_trip() {
+    use super::helpers::Shape;
+    for text in [
+        "accessor",
+        "store",
+        "object:d=accessor;inc=function;x=other",
+        "tuple:accessor;function",
+        "object:",
+        "tuple:",
+    ] {
+        assert_eq!(Shape::decode(text).unwrap().encode(), text);
+    }
+    assert!(Shape::decode("object:a-b=accessor").is_none());
+    assert!(Shape::decode("").is_none());
 }

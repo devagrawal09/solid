@@ -770,6 +770,73 @@ the run object and (new) the driver-identical promise chain.
   async-free: `<For each>` over a lowered view is SYNC); todos-blocks
   89,888 / 32,313 → 89,791 / 32,284; todos and sierpinski unchanged.
 
+## 12. Helper return facts (2026-09-29)
+
+Section 11 turned helper generators into plain functions, but what they
+returned stayed opaque: `const d = yield* useDoubled()` lowered to
+`const d = useDoubled()` while `yield* d` kept `_$perform(d)`, and
+`const k = yield* useCounter()` kept `yield* k.d` as `_$readPath1(k, "d")`
+(a props-target probe, a token probe, a guard bracket and `readThrough`'s
+function dispatch per read).
+
+The helper lowering now records what each lowered helper returns
+(`packages/compiler/src/blocks_v2_lower/helpers/returns.rs`), analyzed on the
+generator form:
+
+| the helper returns, on every path | fact |
+| --- | --- |
+| `yield* $memo(…)`, a `$signal` / `$memo` / `createSignal` / `createMemo` accessor binding, another helper's accessor | `accessor` |
+| a `$store` / `createStore` store binding | `store` |
+| an object literal `{ d, inc }` | `object`: per property `accessor`, `store`, `function` (an arrow or a setter) or `other` |
+| an array literal `[a, setA]` | `tuple`: per element, as above |
+
+The fusion (`FusionContext::binding_origin`) and the remaining-reads pass
+consume it: `const d = h()`, `const [a] = h()` and `const { d } = h()` bind
+proven accessors (`_$perform(d)` → `d()` in a computation, `_$readAccessor(d)`
+elsewhere), and `_$readPath1(k, "d")` of `const k = h()` becomes `k.d()` in a
+fused body or computation and `_$readAccessor(k.d)` elsewhere.
+
+Why it is the same program: the helper's body alone decides the fact. Every
+`return` at its own depth must yield the same shape and the body must end in
+a `return` (no path falls off with `undefined`); property kinds that differ
+between returns are `other`. An object or array fact requires a literal built
+by the `return` itself, with plain data properties only (no getter, setter,
+method, spread, computed key or `__proto__`), so nothing else holds it and
+reading `k.d` runs no code. The caller's binding must be `const`; for
+property reads every reference to `k` must be a lowered path read's root or a
+member access that is never written (`k.d = …`, `k.d++`, `delete k.d`,
+destructuring and `for` targets) and is called only for an `accessor` or
+`function` property — `k` never escapes, so no unseen code can replace `k.d`.
+`readPath1(k, "d")` on such a `k` (not a store, not typed props, not a path
+token) is `readThrough(k.d)`, which for an accessor is `readAccessor(k.d)`.
+The helper binding itself must be a function declaration nothing reassigns,
+or an import.
+
+Cross-module: an exported helper's summary entry carries the fact
+(`"returns": "accessor"`, `{ "object": { "d": "accessor", "inc":
+"function" } }`, `{ "tuple": [...] }`); `helperSummaries` threads it to
+importers (flattened as a fifth field; a summary without it still lowers the
+call sites, the results just stay unproven).
+
+Instruction counts (n=300; before = the section 11 compiler, `preR-compiler`,
+same runtime; `helperReads` is new: n components whose view reads a helper's
+accessor and an object's accessor property, update writes the shared
+signal):
+
+| cell | handwritten | compiled, before | compiled, now |
+| --- | ---: | ---: | ---: |
+| helpers mount | | 5,056k | **5,026k** (−0.6%) |
+| helpers update | | 2,925k | **2,895k** (−1.0%) |
+| helperReads update | 3,740k | 3,821k (1.02×) | **3,781k** (−1.0%, 1.01×) |
+| memo update, create mount | | | ±0.0% (identical output) |
+
+The compiled `helpers` cell's memo is now
+`_$createMemo(function() { return label() + k.d(); })`.
+
+Not done: `yield* k.d` inside another helper (a member operand is not a
+helper yield the lowering takes), nested objects (`k.a.b`), and facts for
+helpers that stay generators.
+
 ## Evaluated and not done
 
 | idea | measurement | why not |

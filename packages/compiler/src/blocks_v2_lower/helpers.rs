@@ -47,6 +47,10 @@
 //! hosts). A module importing a helper whose summary the build supplies
 //! (`CompileOptions::helper_summaries`) lowers its call sites to the twin
 //! the same way, importing it from the same module.
+//!
+//! What a lowered helper returns (an accessor, a store, a fresh object or
+//! array literal of those) is recorded as well (`returns.rs`, and `returns`
+//! in the summary), so the passes after this one read the results directly.
 use std::collections::{HashMap, HashSet};
 
 use oxc_allocator::{Allocator, CloneIn};
@@ -68,6 +72,11 @@ use crate::blocks_v2::{V2Bodies, V2Kind};
 use crate::generators::{FusionContext, Origin, collect_fusion_symbols};
 use crate::shared::ast::{argument_to_expression, expression_to_argument};
 use crate::shared::ast_builder::AstBuilder;
+
+mod returns;
+pub(crate) use returns::{
+    HelperReturns, Member, Position, Shape, const_declarator, object_stays_local,
+};
 
 /// A helper body's classification: its `yield*` sites (None: not lowerable),
 /// the spans of its `$cleanup` statements, and its host-operation bits.
@@ -123,6 +132,8 @@ pub(crate) struct ExportedHelper {
     pub(crate) name: String,
     pub(crate) lowered: String,
     pub(crate) hosts: u8,
+    /// What the twin returns, when proven (`returns.rs`).
+    pub(crate) returns: Option<Shape>,
 }
 
 /// An imported helper's summary entry, as the build supplied it: the import
@@ -134,9 +145,11 @@ pub(crate) struct ImportedHelper {
     pub(crate) export: String,
     pub(crate) lowered: String,
     pub(crate) hosts: u8,
+    /// What the twin returns (`Shape::encode`'s form in the options).
+    pub(crate) returns: Option<Shape>,
 }
 
-/// Parse the flattened `source\0export\0lowered\0hosts` strings.
+/// Parse the flattened `source\0export\0lowered\0hosts[\0returns]` strings.
 pub(crate) fn parse_imported(facts: &[String]) -> Vec<ImportedHelper> {
     facts
         .iter()
@@ -146,17 +159,20 @@ pub(crate) fn parse_imported(facts: &[String]) -> Vec<ImportedHelper> {
             let export = parts.next()?.to_string();
             let lowered = parts.next()?.to_string();
             let hosts = host_bits(parts.next()?.split(','));
+            let returns = parts.next().and_then(Shape::decode);
             Some(ImportedHelper {
                 source,
                 export,
                 lowered,
                 hosts,
+                returns,
             })
         })
         .collect()
 }
 
-/// The summary JSON: `{ "<export>": { "lowered": "<twin>", "hosts": [...] } }`.
+/// The summary JSON: `{ "<export>": { "lowered": "<twin>", "hosts": [...],
+/// "returns"?: <shape> } }`.
 pub(crate) fn summary_json(helpers: &[ExportedHelper]) -> String {
     let mut out = String::from("{");
     for (i, helper) in helpers.iter().enumerate() {
@@ -168,8 +184,13 @@ pub(crate) fn summary_json(helpers: &[ExportedHelper]) -> String {
             .map(|h| format!("\"{h}\""))
             .collect::<Vec<_>>()
             .join(",");
+        let returns = helper
+            .returns
+            .as_ref()
+            .map(|shape| format!(",\"returns\":{}", shape.json()))
+            .unwrap_or_default();
         out.push_str(&format!(
-            "\"{}\":{{\"lowered\":\"{}\",\"hosts\":[{}]}}",
+            "\"{}\":{{\"lowered\":\"{}\",\"hosts\":[{}]{returns}}}",
             helper.name, helper.lowered, hosts
         ));
     }
@@ -293,6 +314,8 @@ pub(super) struct HelperPlan {
     imports: Vec<(String, String, String)>,
     /// The module's exported twins.
     pub(super) exported: Vec<ExportedHelper>,
+    /// What the lowered helpers (and the imported twins called) return.
+    pub(super) returns: HelperReturns,
 }
 
 #[derive(Clone, Debug)]
@@ -632,6 +655,7 @@ pub(super) fn plan_helpers(
         scoping,
         nodes,
         symbols: collect_fusion_symbols(program),
+        returns: None,
     };
 
     // Candidates: generator declarations — module-level (exported or not;
@@ -857,6 +881,9 @@ pub(super) fn plan_helpers(
         }
     }
 
+    // What the lowered helpers return (`returns.rs`).
+    let shapes = returns::return_shapes(&analysis, &functions, &lowered_any);
+
     // Names: twins get `NAME$lowered` (suffixed when taken).
     let taken: HashSet<&str> = scoping.symbol_names().collect();
     let mut target: Vec<Option<String>> = vec![None; n];
@@ -893,8 +920,25 @@ pub(super) fn plan_helpers(
                     name: export.clone(),
                     lowered: twin.clone(),
                     hosts: admitted[i],
+                    returns: shapes[i].clone(),
                 });
             }
+        }
+    }
+    // Return facts by the lowered function's name and span.
+    for i in 0..n {
+        if let (true, Some(shape)) = (lowered_any[i], shapes[i].as_ref()) {
+            let name = target[i].clone().unwrap_or_else(|| list[i].name.clone());
+            plan.returns
+                .local
+                .insert((name, list[i].function), shape.clone());
+        }
+    }
+    for (fact, source) in analysis.imported.values() {
+        if let Some(shape) = fact.returns.as_ref() {
+            plan.returns
+                .imported
+                .insert((source.clone(), fact.lowered.clone()), shape.clone());
         }
     }
     // Imported twins: the local each module import gets.

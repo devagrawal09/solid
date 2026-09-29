@@ -141,7 +141,7 @@ pub(crate) fn lower_v2_client<'a>(
     if runtime_imports(program).is_empty() {
         return Vec::new();
     }
-    let (exported, helpers_lowered) =
+    let (exported, helpers_lowered, returns) =
         lower_helpers(allocator, program, v2, imported_helpers, filename);
     if v2.kinds.is_empty() {
         // A module with helpers and no v2 body: nothing else to lower.
@@ -155,36 +155,45 @@ pub(crate) fn lower_v2_client<'a>(
         // A memo whose only operation was a helper's `perform` fuses now,
         // exactly as the first fusion would have (identically on every
         // generate; the DOM-only hole fusion stays off).
-        let _ = crate::generators::fuse_host_blocks(allocator, program, "", false, Some(v2));
+        // Reads of what lowered helpers return fuse too (`helpers/returns.rs`).
+        let _ = crate::generators::fuse_host_blocks(
+            allocator,
+            program,
+            "",
+            false,
+            Some(v2),
+            Some(&returns),
+        );
     }
-    erase_blocks(allocator, program, v2);
+    erase_blocks(allocator, program, v2, &returns);
     if !v2.async_bodies.is_empty() {
         restore_async_generators(allocator, program, v2);
     }
-    lower_remaining_reads(allocator, program);
+    lower_remaining_reads(allocator, program, &returns);
     compiled_constructors(allocator, program, v2);
     drop_unused_generated(allocator, program);
     exported
 }
 
 /// Section 5: helper generators (see `helpers.rs`). Returns the exported
-/// twins and whether anything was lowered.
+/// twins, whether anything was lowered, and what the lowered helpers return.
 fn lower_helpers<'a>(
     allocator: &'a Allocator,
     program: &mut Program<'a>,
     v2: &V2Bodies,
     imported: &[helpers::ImportedHelper],
     filename: Option<&str>,
-) -> (Vec<helpers::ExportedHelper>, bool) {
+) -> (Vec<helpers::ExportedHelper>, bool, helpers::HelperReturns) {
     let mut imports = Imports::new(program);
-    let plan = helpers::plan_helpers(program, v2, &mut imports, imported, filename);
+    let mut plan = helpers::plan_helpers(program, v2, &mut imports, imported, filename);
     if plan.is_empty() {
-        return (Vec::new(), false);
+        return (Vec::new(), false, helpers::HelperReturns::default());
     }
     let exported = plan.exported.clone();
+    let returns = std::mem::take(&mut plan.returns);
     plan.apply(allocator, program);
     imports.apply(allocator, program);
-    (exported, true)
+    (exported, true, returns)
 }
 
 // --- imports -----------------------------------------------------------------------
@@ -817,7 +826,12 @@ struct ErasePlan {
     async_blocks: HashMap<Span, String>,
 }
 
-fn erase_blocks<'a>(allocator: &'a Allocator, program: &mut Program<'a>, v2: &V2Bodies) {
+fn erase_blocks<'a>(
+    allocator: &'a Allocator,
+    program: &mut Program<'a>,
+    v2: &V2Bodies,
+    returns: &helpers::HelperReturns,
+) {
     let mut imports = Imports::new(program);
     let plan = {
         let semantic = SemanticBuilder::new()
@@ -829,6 +843,7 @@ fn erase_blocks<'a>(allocator: &'a Allocator, program: &mut Program<'a>, v2: &V2
             scoping: semantic.scoping(),
             nodes: semantic.nodes(),
             symbols: collect_fusion_symbols(program),
+            returns: Some(returns),
         };
         let mut collector = EraseCollector {
             context: &context,
@@ -902,6 +917,7 @@ impl EraseCollector<'_, '_> {
             self.plan.fusion.accessor_calls.extend(check.accessor_calls);
             self.plan.fusion.path_reads.extend(check.path_reads);
             self.plan.fusion.store_reads.extend(check.store_reads);
+            self.plan.fusion.member_reads.extend(check.member_reads);
         }
         check.ok
     }
@@ -915,6 +931,7 @@ impl EraseCollector<'_, '_> {
             self.plan.fusion.accessor_calls.extend(check.accessor_calls);
             self.plan.fusion.path_reads.extend(check.path_reads);
             self.plan.fusion.store_reads.extend(check.store_reads);
+            self.plan.fusion.member_reads.extend(check.member_reads);
         }
         check.ok
     }
@@ -1688,7 +1705,11 @@ fn member<'a>(
 /// lowered; `readSelected`: the store read op performed). After the JSX
 /// transform, the ones inside a computation become plain calls
 /// (`fuse_computation_reads`).
-fn lower_remaining_reads<'a>(allocator: &'a Allocator, program: &mut Program<'a>) {
+fn lower_remaining_reads<'a>(
+    allocator: &'a Allocator,
+    program: &mut Program<'a>,
+    returns: &helpers::HelperReturns,
+) {
     let mut imports = Imports::new(program);
     let plan: HashMap<Span, String> = {
         let semantic = SemanticBuilder::new()
@@ -1700,6 +1721,7 @@ fn lower_remaining_reads<'a>(allocator: &'a Allocator, program: &mut Program<'a>
             scoping: semantic.scoping(),
             nodes: semantic.nodes(),
             symbols: collect_fusion_symbols(program),
+            returns: Some(returns),
         };
         struct Collector<'s, 'x> {
             context: &'s FusionContext<'s>,
@@ -1745,6 +1767,16 @@ fn lower_remaining_reads<'a>(allocator: &'a Allocator, program: &mut Program<'a>
                         _ => {}
                     }
                 }
+                // `_$readPath1(k, "d")` of a helper's accessor property →
+                // `_$readAccessor(k.d)` (`helpers/returns.rs`).
+                if self.context.helper_accessor_read(call)
+                    && let Some(source) = self.names.of(scoping, call).map(|(_, source)| source)
+                {
+                    let source = source.to_string();
+                    let local = self.imports.local(&source, "readAccessor");
+                    self.plan.insert(call.span, local);
+                    return;
+                }
                 walk::walk_call_expression(self, call);
             }
         }
@@ -1771,8 +1803,26 @@ fn lower_remaining_reads<'a>(allocator: &'a Allocator, program: &mut Program<'a>
             {
                 let ast = AstBuilder::new(self.allocator);
                 let span = call.span;
-                let argument = call.arguments.pop().expect("planned: one argument");
                 let callee = ast.expression_identifier(Span::new(0, 0), ast.ident(&local));
+                if call.arguments.len() == 2 {
+                    // `_$readPath1(k, "d")` → `_$readAccessor(k.d)`.
+                    let placeholder = ast.expression_null_literal(Span::new(0, 0));
+                    let Expression::CallExpression(read) =
+                        std::mem::replace(expression, placeholder)
+                    else {
+                        unreachable!("matched above");
+                    };
+                    let member = crate::generators::helper_member(&ast, read.unbox());
+                    *expression = ast.expression_call(
+                        span,
+                        callee,
+                        None,
+                        ast.vec1(expression_to_argument(member)),
+                        false,
+                    );
+                    return;
+                }
+                let argument = call.arguments.pop().expect("planned: one argument");
                 *expression = match argument {
                     // `_$perform(readStore(s, sel))` → `_$readSelected(s, sel)`.
                     Argument::CallExpression(read) if local.starts_with("_$readSelected") => {
@@ -1847,7 +1897,11 @@ pub(crate) fn fuse_computation_reads<'a>(
             let ast = AstBuilder::new(self.allocator);
             if callee.name.starts_with("_$readAccessor")
                 && call.arguments.len() == 1
-                && matches!(call.arguments[0], Argument::Identifier(_))
+                && (matches!(call.arguments[0], Argument::Identifier(_))
+                    // `_$readAccessor(k.d)` of a helper's accessor property
+                    // (the property read runs no code: `helpers/returns.rs`).
+                    || matches!(&call.arguments[0], Argument::StaticMemberExpression(member)
+                        if matches!(member.object, Expression::Identifier(_))))
             {
                 let span = call.span;
                 let accessor = argument_to_expression(call.arguments.pop().expect("one"))
@@ -1940,4 +1994,6 @@ pub(crate) fn fuse_computation_reads<'a>(
         depth: None,
     }
     .visit_program(program);
+    // A reader every read of which became a call is no longer imported.
+    drop_unused_generated(allocator, program);
 }

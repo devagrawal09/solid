@@ -514,10 +514,33 @@ function flattenHelperSummaries(summaries) {
           "@solidjs/compiler `helperSummaries[source][export]` must be `{ lowered: string, hosts: string[] }`"
         );
       }
-      out.push(`${source}\0${name}\0${helper.lowered}\0${helper.hosts.join(",")}`);
+      const returns = encodeHelperReturns(helper.returns);
+      out.push(
+        `${source}\0${name}\0${helper.lowered}\0${helper.hosts.join(",")}` +
+          (returns ? `\0${returns}` : "")
+      );
     }
   }
   return out;
+}
+
+// A helper's return fact (`returns`: "accessor" | "store" | { object: { key:
+// member } } | { tuple: [member] }, members "accessor" | "store" | "function" |
+// "other") in the compiler's flat form: `accessor`, `store`,
+// `object:d=accessor;inc=function`, `tuple:accessor;function`. Anything
+// else is no fact (the call sites still lower, their results stay unproven).
+function encodeHelperReturns(returns) {
+  if (returns === "accessor" || returns === "store") return returns;
+  const member = m => (["accessor", "store", "function"].includes(m) ? m : "other");
+  if (returns && typeof returns === "object") {
+    if (returns.object && typeof returns.object === "object") {
+      const entries = Object.entries(returns.object);
+      if (entries.some(([k]) => !/^[A-Za-z_$][\w$]*$/.test(k))) return "";
+      return "object:" + entries.map(([k, m]) => `${k}=${member(m)}`).join(";");
+    }
+    if (Array.isArray(returns.tuple)) return "tuple:" + returns.tuple.map(member).join(";");
+  }
+  return "";
 }
 
 function validateRenderers(renderers) {

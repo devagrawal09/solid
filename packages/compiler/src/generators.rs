@@ -89,6 +89,9 @@ use oxc_syntax::scope::ScopeFlags;
 
 use crate::block_proofs::{BLOCK_STATIC, BLOCK_SYNC, ProofSymbols, Prover};
 use crate::blocks_v2::{V2Bodies, V2Kind};
+use crate::blocks_v2_lower::helpers::{
+    HelperReturns, Member, Position, Shape, const_declarator, object_stays_local,
+};
 use crate::shared::ast::{argument_to_expression, expression_to_argument};
 use crate::shared::ast_builder::AstBuilder;
 
@@ -1420,6 +1423,7 @@ pub(crate) fn fuse_host_blocks<'a>(
     _source: &'a str,
     dom: bool,
     v2_only: Option<&V2Bodies>,
+    returns: Option<&HelperReturns>,
 ) -> Result<(), String> {
     if !imports_adapter(program) {
         return Ok(());
@@ -1431,7 +1435,7 @@ pub(crate) fn fuse_host_blocks<'a>(
     let mut needs_read_value = false;
     let mut memo_import: Option<Span> = None;
     for _ in 0..MAX_FUSION_PASSES {
-        let plan = build_fusion_plan(program, dom, v2_only);
+        let plan = build_fusion_plan(program, dom, v2_only, returns);
         if plan.is_empty() {
             break;
         }
@@ -1460,6 +1464,10 @@ pub(crate) struct FusionSymbols {
     perform: Vec<SymbolId>,
     /// `readPath` and `readProp`: one tracked walk plus read-through.
     read_path: Vec<SymbolId>,
+    /// The lowered path readers: `readPath1` (`k0`) …
+    pub(crate) read_path1: Vec<SymbolId>,
+    /// … and every lowered reader (`readPath1`–`readPath4`, `readPathN`).
+    pub(crate) lowered_readers: Vec<SymbolId>,
     /// `readStore`: one selector invocation.
     read_store: Vec<SymbolId>,
     /// Factories whose tuple element 0 is an accessor: `createSignal`,
@@ -1518,6 +1526,15 @@ pub(crate) fn collect_fusion_symbols(program: &Program<'_>) -> FusionSymbols {
                 "readStore" => symbols.read_store.push(symbol),
                 _ => {}
             }
+            if matches!(
+                name,
+                "readPath1" | "readPath2" | "readPath3" | "readPath4" | "readPathN"
+            ) {
+                symbols.lowered_readers.push(symbol);
+                if name == "readPath1" {
+                    symbols.read_path1.push(symbol);
+                }
+            }
             match name {
                 "createSignal" | "createOptimistic" => symbols.accessor_tuples.push(symbol),
                 "createMemo" => symbols.accessor_values.push(symbol),
@@ -1557,6 +1574,8 @@ pub(crate) struct FusionContext<'s> {
     pub(crate) scoping: &'s Scoping,
     pub(crate) nodes: &'s AstNodes<'s>,
     pub(crate) symbols: FusionSymbols,
+    /// What lowered helpers return (after the v2 helper lowering).
+    pub(crate) returns: Option<&'s HelperReturns>,
 }
 
 impl FusionContext<'_> {
@@ -1571,6 +1590,16 @@ impl FusionContext<'_> {
     /// direct call to a runtime factory, with the symbol bound either as the
     /// whole value or as element 0 of an array pattern — nothing else.
     pub(crate) fn binding_origin(&self, symbol: SymbolId) -> Origin {
+        // A lowered helper's result: `const d = h()`, `const [a] = h()`,
+        // `const { d } = h()` (`helpers/returns.rs`).
+        if let Some(returns) = self.returns
+            && let Some((declarator, position)) = const_declarator(self.scoping, self.nodes, symbol)
+            && let Some(Expression::CallExpression(call)) = declarator.init.as_ref()
+            && let Some(callee) = resolve_callee(self.scoping, call)
+            && let Some(shape) = returns.shape_of(self.scoping, self.nodes, callee)
+        {
+            return shape.at(&position).origin();
+        }
         let mut node_id = self.scoping.symbol_declaration(symbol);
         // The binder records the declarator for every name it binds; walk up
         // from a binding identifier to be safe against either convention.
@@ -1665,6 +1694,57 @@ impl FusionContext<'_> {
     }
 }
 
+impl FusionContext<'_> {
+    /// `_$readPath1(k, "d")` whose root is a `const k = h()` of a lowered
+    /// helper returning a fresh object whose `d` is an accessor, and `k`
+    /// stays local (`helpers/returns.rs`): `k.d` is that accessor.
+    pub(crate) fn helper_accessor_read(&self, call: &CallExpression<'_>) -> bool {
+        let Some(returns) = self.returns else {
+            return false;
+        };
+        if call.arguments.len() != 2
+            || !resolve_callee(self.scoping, call)
+                .is_some_and(|callee| self.symbols.read_path1.contains(&callee))
+        {
+            return false;
+        }
+        let (Argument::Identifier(root), Argument::StringLiteral(key)) =
+            (&call.arguments[0], &call.arguments[1])
+        else {
+            return false;
+        };
+        if !is_identifier_name(&key.value) {
+            return false;
+        }
+        let Some(symbol) = self.reference_symbol(root) else {
+            return false;
+        };
+        let Some((declarator, Position::Whole)) =
+            const_declarator(self.scoping, self.nodes, symbol)
+        else {
+            return false;
+        };
+        let Some(Expression::CallExpression(init)) = declarator.init.as_ref() else {
+            return false;
+        };
+        let Some(Shape::Object(members)) = resolve_callee(self.scoping, init)
+            .and_then(|callee| returns.shape_of(self.scoping, self.nodes, callee))
+        else {
+            return false;
+        };
+        members
+            .iter()
+            .any(|(k, m)| *k == key.value.as_str() && *m == Member::Accessor)
+            && object_stays_local(
+                self.scoping,
+                self.nodes,
+                symbol,
+                members,
+                &self.symbols.lowered_readers,
+            )
+    }
+}
+
 /// One pass's rewrites, all keyed by the span of the node they replace.
 #[derive(Default)]
 pub(crate) struct FusionPlan {
@@ -1676,6 +1756,8 @@ pub(crate) struct FusionPlan {
     pub(crate) path_reads: Vec<Span>,
     /// `_$perform(_$readStore(store, selector))` → `selector(store)`.
     pub(crate) store_reads: Vec<Span>,
+    /// `_$readPath1(k, "d")` of a helper's accessor property → `k.d()`.
+    pub(crate) member_reads: Vec<Span>,
     /// v2: `_$perform($memo(_$$(fn), …rest))` → `_$createMemo(fn, …rest)`.
     memo_creations: Vec<Span>,
     /// The import declaration that receives `createMemo as _$createMemo`.
@@ -1690,7 +1772,12 @@ impl FusionPlan {
 
 /// `v2_only`: fuse only the generator-blocks-v2 bodies (the default v2
 /// fusion) — blocks the v2 pass synthesized, and view holes inside them.
-fn build_fusion_plan(program: &Program<'_>, dom: bool, v2_only: Option<&V2Bodies>) -> FusionPlan {
+fn build_fusion_plan(
+    program: &Program<'_>,
+    dom: bool,
+    v2_only: Option<&V2Bodies>,
+    returns: Option<&HelperReturns>,
+) -> FusionPlan {
     let semantic = SemanticBuilder::new()
         .with_build_nodes(true)
         .build(program)
@@ -1706,6 +1793,7 @@ fn build_fusion_plan(program: &Program<'_>, dom: bool, v2_only: Option<&V2Bodies
         scoping: semantic.scoping(),
         nodes: semantic.nodes(),
         symbols,
+        returns,
     };
 
     struct Collector<'s> {
@@ -1787,6 +1875,7 @@ fn build_fusion_plan(program: &Program<'_>, dom: bool, v2_only: Option<&V2Bodies
                 self.plan.accessor_calls.extend(check.accessor_calls);
                 self.plan.path_reads.extend(check.path_reads);
                 self.plan.store_reads.extend(check.store_reads);
+                self.plan.member_reads.extend(check.member_reads);
             }
             check.ok
         }
@@ -1928,6 +2017,7 @@ pub(crate) struct BodyCheck<'s, 'b> {
     pub(crate) accessor_calls: Vec<Span>,
     pub(crate) path_reads: Vec<Span>,
     pub(crate) store_reads: Vec<Span>,
+    pub(crate) member_reads: Vec<Span>,
     /// Nested `$` blocks are their own bodies: not examined (a component
     /// setup's views, events and memos keep their own wrappers).
     pub(crate) skip_blocks: bool,
@@ -1949,6 +2039,7 @@ impl<'s, 'b> BodyCheck<'s, 'b> {
             accessor_calls: Vec::new(),
             path_reads: Vec::new(),
             store_reads: Vec::new(),
+            member_reads: Vec::new(),
             path_roots: Vec::new(),
             member_roots: Vec::new(),
             skip_blocks: false,
@@ -2127,6 +2218,12 @@ impl<'b> Visit<'b> for BodyCheck<'_, 'b> {
                 }
                 return;
             }
+            // `_$readPath1(k, "d")` of a helper's accessor property: the
+            // walk is `k.d`, the read-through the accessor call.
+            if self.depth == 0 && self.context.helper_accessor_read(call) {
+                self.member_reads.push(call.span);
+                return;
+            }
             // A direct `acc()` in the body: the violation the strict scope
             // reports in dev (`[DIRECT_READ_IN_BLOCK]`).
             if self.depth == 0 && self.context.binding_origin(symbol) == Origin::Accessor {
@@ -2170,6 +2267,23 @@ impl<'a> VisitMut<'a> for FusionRewriter<'a> {
                     false,
                 );
                 walk_mut::walk_expression(self, expression);
+                return;
+            }
+            if plan.member_reads.contains(&span) {
+                // `_$readPath1(k, "d")` → `k.d()`.
+                let ast = AstBuilder::new(self.allocator);
+                let placeholder = ast.expression_null_literal(Span::new(0, 0));
+                let Expression::CallExpression(call) = std::mem::replace(expression, placeholder)
+                else {
+                    unreachable!("matched above");
+                };
+                *expression = ast.expression_call(
+                    span,
+                    helper_member(&ast, call.unbox()),
+                    None,
+                    ast.vec(),
+                    false,
+                );
                 return;
             }
             let planned = plan.blocks.contains(&span)
@@ -2233,6 +2347,25 @@ impl<'a> VisitMut<'a> for FusionRewriter<'a> {
         }
         walk_mut::walk_expression(self, expression);
     }
+}
+
+/// `_$readPath1(k, "d")` (planned: an identifier root, an identifier-name
+/// key) → `k.d`.
+pub(crate) fn helper_member<'a>(
+    ast: &AstBuilder<'a>,
+    mut call: CallExpression<'a>,
+) -> Expression<'a> {
+    let Some(Argument::StringLiteral(key)) = call.arguments.pop() else {
+        unreachable!("planned: a string key");
+    };
+    let root = argument_to_expression(call.arguments.pop().expect("planned: a root"))
+        .expect("planned: an identifier");
+    Expression::StaticMemberExpression(ast.alloc_static_member_expression(
+        Span::new(0, 0),
+        root,
+        ast.identifier_name(key.span, ast.ident(&key.value)),
+        false,
+    ))
 }
 
 /// `root` followed by one member access per key, as the generator pass spelled

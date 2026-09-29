@@ -103,8 +103,25 @@ export interface TransformOptions {
 /** A module's exported helper generators with a lowered twin. */
 export type HelperSummary = Record<
   string,
-  { lowered: string; hosts: ("setup" | "view" | "memo" | "effect" | "event")[] }
+  {
+    lowered: string;
+    hosts: ("setup" | "view" | "memo" | "effect" | "event")[];
+    /**
+     * What the twin returns on every path, when the compiler proved it: an
+     * accessor, a store, or a fresh object / array literal whose members are
+     * accessors, stores, functions or other values. Importers read such
+     * results directly (`d()`, `k.d()`).
+     */
+    returns?: HelperReturnShape;
+  }
 >;
+
+export type HelperReturnMember = "accessor" | "store" | "function" | "other";
+export type HelperReturnShape =
+  | "accessor"
+  | "store"
+  | { object: Record<string, HelperReturnMember> }
+  | { tuple: HelperReturnMember[] };
 
 export interface StoreLinkFacts {
   borrowed?: Record<string, Record<string, string[]>>;
