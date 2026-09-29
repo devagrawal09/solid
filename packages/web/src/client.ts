@@ -1051,9 +1051,11 @@ export function insert(parent, accessor, marker, initial, options) {
   // A view the compiler proved static (it reads nothing when it runs: every
   // read is in a hole with its own effect) renders once, untracked, like a
   // plain component's DOM. The computation `read` would get has no sources
-  // and could never re-run. Hydration keeps the computation: it carries the
-  // id scope the server rendered with.
-  if (hydrationRt === null && blockFlags(accessor) & BLOCK_STATIC && !accessor.$s)
+  // and could never re-run. Hydrating too: that computation is a transparent
+  // effect (a block value never carries the `$s` hole tag — `scope()` wraps
+  // a fresh accessor), so it took no id slot; the view's ids come from its
+  // `blockScope`, reserved when the block was created, on both sides.
+  if (blockFlags(accessor) & BLOCK_STATIC && !accessor.$s)
     return insert(
       parent,
       untrack(() => renderBlock(accessor)),

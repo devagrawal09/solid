@@ -1,0 +1,5 @@
+{
+  "name": "v2-static-nested",
+  "shell": "<div _hk=00><!--$--><span _hk=0100>in<!--$--><em _hk=010100>leaf</em><!--/--></span><!--/--><p>x</p><!--$--><span _hk=0300>in<!--$--><em _hk=030100>leaf</em><!--/--></span><!--/--></div>",
+  "rest": ""
+}

@@ -726,7 +726,8 @@ merge), runtime and compiler snapshotted as `preH` / `preH-compiler`
   `BLOCK_SYNC | BLOCK_STATIC`. Outside hydration, `insert` renders it once,
   untracked, instead of in a render effect with no sources: a compiled
   component then costs what a component returning DOM costs. Hydration keeps
-  the effect (it carries the id scope the server rendered with).
+  the effect (it carries the id scope the server rendered with) — superseded
+  by section 12: it carried none, and hydration takes the static path too.
 - **Mixed builds.** The capability linker installs the block driver
   (`installBlockDriver`) in a module whose output still hands a generator
   body to `createMemo` / `createEffect` / `onSettled` (a module the compiler
@@ -769,6 +770,73 @@ the run object and (new) the driver-identical promise chain.
   62,838 / 23,043 → **54,844 / 20,179** (the linker again proves it
   async-free: `<For each>` over a lowered view is SYNC); todos-blocks
   89,888 / 32,313 → 89,791 / 32,284; todos and sierpinski unchanged.
+
+## 12. Static views under hydration (2026-09-29)
+
+Section 11 kept the render effect for a static view while hydrating, on the
+belief that the effect carried the id scope the server rendered with. It did
+not: a view block never carries the `$s` hole tag (`scope()` wraps a fresh
+accessor, never the block), so its insert effect was *transparent* and took
+no id slot. The view's ids come from its `blockScope`, reserved when the block
+is created (the component call), in source order on both sides. Rendering the
+view untracked from the current owner allocates from the same counter, so
+`insert` now takes the static path whenever the flag is set (the `$s`
+exclusion stays: a tagged accessor still gets its scoped effect). No new
+owner, scope or server change was needed for the static path itself (design
+option (b) degenerates to "already scoped identically").
+
+### A parity defect the new scenarios found (not specific to static views)
+
+A component called *inside* a view body is deferred (`lazyView`: the block
+guard is up). The client resolves the thunk at once, in the hole's `insert`,
+under a fresh owner that takes the next id; the server resolved it only at
+`ssr()` time, after later holes in the same view had reserved their scopes.
+`<StInner /><p>{yield* props.text}</p><StInner />` in one view: server `02` /
+`03` for the two components, client `01` / `03` — two key misses and two
+unclaimed server nodes, with the static path or without it. The server
+`lazyView` now tags its thunk and `escape` resolves a tagged thunk where it
+meets it (the hole), matching the client. A thunk the view *returns* (a view
+returning `<Loading>`) still resolves where the renderer takes it, on both
+sides (reserving at creation instead broke `v2-view-returns-loading`).
+
+### Scope of the win
+
+The static path applies where a static view reaches `insert` as a block: a
+`$component` used as a hole in a plain component's JSX. A component used inside another view is a `lazyView`
+thunk (flags 0) and keeps its insert effect; a view rendered by a flow
+control's `flatten` (a `For` row) never had an effect of its own. In the
+measured apps that leaves little: todos-blocks' `<Header />` is the only
+static view at an `insert`; hn-blocks' views are all rows or nested calls.
+
+### Parity scenarios
+
+`packages/web/test/harness/block-v2-scenarios.tsx`, `v2-static-*`: nested
+static views (with a scoped hole between two nested components), siblings
+mixed with a re-running view, under `<Loading>` beside an async sibling
+(loaded and streamed), under `<Show>` (toggled to its fallback) and `<For>`
+(an item appended), and a static view holding a plain component, a
+re-running `$component`, a `<Show>` and a `<For>`. 0 key misses, every server
+node claimed and kept across the update (`vitest run --config
+vite.config.server.mjs test/server/hydration-harness.spec.tsx`, then
+`vitest run --config vite.config.hydrate.mjs`: 226 / 226). Before the
+`lazyView` fix, `v2-static-nested` and `v2-static-siblings` failed with and
+without the static path.
+
+### Browser gate (`measure.mjs --apps todos,hn --only A,A-blocks`)
+
+`--check` passes for both apps (gate ok, identity kept, no `keyMiss`
+counter). Hydration work (instrumented build) and hydrate time (`--reps 7
+--cpu 1`, median):
+
+| app | claims | key misses | recomputes | hydrate, before | hydrate, after |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| todos-blocks (A) | 105 → 105 | 0 → 0 | 638 → 637 | 38.5 ms | 34.6 ms |
+| hn A-blocks | 2,712 → 2,712 | 0 → 0 | 13,776 → 13,776 | 145.6 ms | 156.9 ms |
+
+The counts are the signal: todos-blocks loses one render effect run (its
+`Header`), hn-blocks is unchanged (no static view reaches `insert`). The
+times are within run-to-run noise — hn `A`, whose code did not change,
+moved 124.2 → 111.7 ms between the same two runs.
 
 ## Evaluated and not done
 
