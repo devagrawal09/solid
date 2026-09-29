@@ -14,7 +14,8 @@
 //       | "server" (run `node <server>` with PORT set; build it first)
 //   server?: "server.js"            (mode "server")
 //   dist?: "dist" | "csr/dist"      (mode "static"; the directory to serve)
-//   clock?: boolean                  (install Playwright's fake clock at load)
+//   clock?: boolean                  (install Playwright's fake clock, paused, at load)
+//   init?: async page => void        (before the first step: init scripts, …)
 //   root?: CSS selector of the compared subtree (default "body")
 //   normalize?: (html) => html       (extra, app-specific normalization)
 //   snapshot?: async page => string  (replaces reading `root`'s innerHTML)
@@ -114,7 +115,12 @@ async function run(dir, browser, port) {
       });
     });
   }
-  if (spec.clock) await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
+  if (spec.clock) {
+    // Paused: time moves only by the steps' `page.clock.runFor(…)`.
+    await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
+    await page.clock.pauseAt(new Date("2026-01-01T00:00:01Z"));
+  }
+  if (spec.init) await spec.init(page);
   const snapshots = [];
   const ctx = { base };
   try {
