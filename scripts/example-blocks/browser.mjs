@@ -137,7 +137,11 @@ async function run(dir, browser, port) {
   if (spec.mode === "server" || spec.mode === "dev") {
     const s = await startServer(dir, port, spec.mode === "dev");
     base = s.url;
-    stop = s.stop;
+    // `SERVER_LOG=1` prints each server's output when its run ends.
+    stop = () => {
+      if (process.env.SERVER_LOG) console.error(`--- ${dir.split("/").pop()} server log\n${s.log()}`);
+      s.stop();
+    };
   } else {
     base = "http://app.local";
     const dist = join(dir, spec.dist ?? "dist");
