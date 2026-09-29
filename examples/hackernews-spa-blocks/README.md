@@ -25,14 +25,14 @@ including document loads of every route and the 1,406-comment thread.
 
 `$component`: the three route components (`Stories`, `Story`, `User` — passed
 to `@solidjs/router`), `Nav`, the story row, the recursive `Comment`, and
-`Toggle` (`$signal` + `$event`). Plain: `App` (see below) and the router's
+`Toggle` (`$signal` + `$event`), and `App` (see below). Plain: the router's
 root-layout render callback.
 
 ## Porting notes and findings
 
 | Where | Original | v2 | Why |
 | --- | --- | --- | --- |
-| `app.tsx` | `export default function App() { return <Router>{props => …}</Router> }` | **unchanged (plain)** | As a `$component` the app SSR-renders and hydrates, but the first client navigation to a route whose data is not cached (a story page) re-creates the route component endlessly — ≈17 000 setups in 30 s, the page freezes. Every other component can be v2; only the component rendering `<Router>` has to stay plain. |
+| `app.tsx` | `export default function App() { return <Router>{props => …}</Router> }` | `$component` whose **setup** creates `<Router>…</Router>` and whose view returns it | Written the natural way (`return function* () { return <Router>…</Router> }`), the app SSR-renders and hydrates, but the first client navigation to a route whose data is not cached (a story page) re-creates the route component endlessly — ≈17 000 setups in 30 s, the page freezes. A plain `App`, or a `$component` that creates the router in its setup, works. (The same shows up in `hackernews-blocks`, where a `dynamic()` server component created in a route view never appears after client navigation.) |
 | `app.tsx` | `component: Stories` | `component: routeComponent(Stories)` (a cast) | a route component that reads async data has a pending view (`View<true, …>`), and the router's component type wants a settled `JSX.Element`; the router renders routes under App's `<Loading>`, which the types cannot see through it |
 | `routes/*` | `createMemo(() => getStory(props.params.id))` | `$memo(function* () { const id = (yield* props.params.id)!; return getStory(id) as unknown as StoryDefinition })` | The idiomatic v2 form, `return yield* attempt(() => getStory(id))`, breaks under hydration: hydration re-runs memo bodies inside `subFetch`, which swaps the global `Promise` for a `MockPromise` whose executor never runs; the compiled body's `AsyncRun.level()` then never gets its `ok`/`fail`, and the run throws `TypeError: this.ok is not a function` (or `this.fail`) when it is superseded — a page error on every SSR load. Returning the promise as the memo's value (as the original does) avoids the async body, at the price of a cast. |
 | `routes/story.tsx`, `user.tsx` | `props.params.id` (`string`) | `(yield* props.params.id)!` | `TypedProps` maps the router's `Params` index signature (`Record<string, string \| undefined>`), so the path read is typed `string \| undefined` |

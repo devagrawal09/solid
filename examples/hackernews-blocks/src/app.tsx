@@ -1,6 +1,6 @@
-// v2 twin note: `App` (the component rendering `<Router>`) stays plain, as in
-// ../hackernews-spa-blocks: as a `$component`, client navigation to a new
-// route re-creates the route component endlessly. See the README.
+// v2 twin note: `App` is a `$component` that creates `<Router>` in its SETUP
+// (as ../hackernews-spa-blocks does): with the router created in the view,
+// client navigation to a new route never completes. See the README.
 // The client side of the server-components twin. Compare with
 // ../hackernews-spa/src/app.tsx: same router, same routes, same boundary. What
 // is missing here is the app itself — there are no story, comment, or list
@@ -12,7 +12,7 @@
 // `"use server"` call is the entire client surface (see the routes); the
 // transport install lives in the generated entry.
 import { createRouter, defineRoute } from "@solidjs/router";
-import { Loading } from "solid-js";
+import { $component, Loading } from "solid-js";
 import { dynamic } from "@solidjs/web";
 import { navView } from "~/lib/views";
 import Stories, { preload as preloadStories } from "~/routes/stories";
@@ -37,13 +37,15 @@ const Router = createRouter({
   ]
 });
 
-export default function App() {
+const App = $component(function* () {
   // The nav is a server component too. It is static chrome, so there is no
   // reason for its markup to ship as client templates at all — and with no
   // reactive input it is never refetched: it renders inline at t=0, the client
   // adopts it, and navigation leaves it alone.
   const Nav = dynamic(() => navView());
-  return (
+  // The router is created here, in the setup, and the view returns it (see
+  // the note at the top of this file).
+  const rendered = (
     <Router>
       {props => (
         <>
@@ -55,4 +57,9 @@ export default function App() {
       )}
     </Router>
   );
-}
+  return function* () {
+    return rendered;
+  };
+});
+
+export default App;

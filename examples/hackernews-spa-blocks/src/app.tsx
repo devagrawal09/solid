@@ -2,16 +2,15 @@
 // with generator blocks v2: every template lives here, so the comment tree
 // renders in the browser from JSON and all of these components must ship to
 // it in order to hydrate. The route components passed to the router, the
-// nav, the story rows, the comments and the toggle are `$component`s.
+// nav, the story rows, the comments, the toggle and `App` are `$component`s.
 //
-// `App` itself — the component that renders `<Router>` — stays a plain
-// component. As a `$component` (view: `return <Router>{props => …}</Router>`)
-// the app SSR-renders and hydrates, but the first client navigation to a
+// `App` creates `<Router>` in its SETUP and its view returns it. Written the
+// natural way — `return function* () { return <Router>{props => …}</Router> }`
+// — the app SSR-renders and hydrates, but the first client navigation to a
 // route whose data is not cached yet re-creates the route component in an
-// endless loop (≈17 000 setups in 30 s, the page freezes). With a plain `App`
-// and every other component unchanged, navigation works. See the README.
+// endless loop (≈17 000 setups in 30 s, the page freezes). See the README.
 import { createRouter, defineRoute } from "@solidjs/router";
-import { Loading, type BlockComponent } from "solid-js";
+import { $component, Loading, type BlockComponent } from "solid-js";
 import type { JSX } from "@solidjs/web";
 import Nav from "~/components/nav";
 import Stories, { preload as preloadStories } from "~/routes/stories";
@@ -44,8 +43,9 @@ const Router = createRouter({
   ]
 });
 
-export default function App() {
-  return (
+const App = $component(function* () {
+  // Created here, not in the view: see the note at the top of this file.
+  const rendered = (
     <Router>
       {props => (
         <>
@@ -55,4 +55,9 @@ export default function App() {
       )}
     </Router>
   );
-}
+  return function* () {
+    return rendered;
+  };
+});
+
+export default App;

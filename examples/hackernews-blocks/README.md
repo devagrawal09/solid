@@ -23,7 +23,7 @@ builds through document loads and client navigation of every route.
 | Module | v2? | Notes |
 | --- | --- | --- |
 | `src/routes/*` (route components passed to the router) | yes | each is `$component` whose setup reads its params through a `$memo` and creates the `dynamic()` server-component instance; the view returns that instance |
-| `src/app.tsx` `App` (renders `<Router>`) | **no** | as in `hackernews-spa-blocks`: as a `$component`, client navigation re-creates route components endlessly |
+| `src/app.tsx` `App` (renders `<Router>`) | yes | a `$component` whose **setup** creates `dynamic(() => navView())` and `<Router>…</Router>`; the view returns the router. With the router created in the view (`return function* () { return <Router>…</Router> }`) the SSR document arrives but the page never finishes loading in Chromium (the hydrating client hangs); see also `hackernews-spa-blocks`. |
 | `src/components/toggle.tsx` (client component filling the `toggle` slot) | **no** | as a `$component` it works (collapse, client navigation), but in a document-rendered thread its fills are rendered anew on the client instead of adopting the server markup: the DOM differs from the original's (`style="display: block;"` re-serialized from a property write, vs the server's `style="display:block"`) |
 | `src/lib/views.tsx` (`"use server"` views returning components) | **no** | as `$component`s they render and stream, but the SSR markup loses the `data-lha` attribute-hole addresses the frames runtime mints on the original's anchors (`<a data-lha="6" href=…>`), and after client navigation the attribute order differs (`href` before `data-lha`) |
 
