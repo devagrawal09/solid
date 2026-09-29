@@ -566,6 +566,12 @@ class IslandsCompiler {
       ...(serverFunctionsModule ? { serverFunctionsModule } : {}),
       verify,
       filename: file,
+      // Frame ids hash the module's path relative to the app root, so they
+      // are the same on every checkout (CI diffs the frames manifest).
+      moduleId: path
+        .relative(this.options.root ?? process.cwd(), file)
+        .split(path.sep)
+        .join("/"),
       idPrefix: this.prefixFor(file),
       t0Module: runtimes.t0,
       kernelModule: runtimes.kernel,
@@ -724,6 +730,7 @@ function solidIslands(options = {}) {
       // Island ids must match across the SSR and client builds: assign
       // every module's id prefix in the root's import order (a DFS), before
       // either build transforms anything in its own order.
+      compiler.options.root = config.root;
       collected = collectWithDedupe(compiler, path.resolve(config.root, root), tier1Core);
     },
     resolveId(id) {

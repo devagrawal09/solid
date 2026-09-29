@@ -3459,6 +3459,11 @@ impl<'x, 'a> Ce<'x, 'a> {
         target: TextTarget,
     ) -> R<()> {
         let none = HashMap::new();
+        // Static text on adopted markup is never touched: not translated
+        // either, so what it reads (a prop) is not serialized for nothing.
+        if !live && !self.scopes[self.cur].builder {
+            return Ok(());
+        }
         let c = self.expr(inst, &none, e)?;
         // A value that is always a string needs no text coercion.
         let s = if is_stringy(e) {

@@ -177,6 +177,9 @@ pub struct CompileIslandsOptions {
     pub frames_module: Option<String>,
     /// Chunks take and expose keyed state (frames' keyed morph).
     pub keyed_state: Option<bool>,
+    /// The module's build-stable name (relative to the app root); frame ids
+    /// hash it. Default: the filename.
+    pub module_id: Option<String>,
 }
 
 #[napi(object)]
@@ -273,6 +276,7 @@ pub fn compile_islands(code: String, options: Option<CompileIslandsOptions>) -> 
             .unwrap_or(d.server_functions_module),
         frames_module: o.frames_module.unwrap_or(d.frames_module),
         keyed_state: o.keyed_state.unwrap_or(false),
+        module_id: o.module_id,
     };
     let out = crate::compile_islands(&code, &opts).map_err(|error| Error::from_reason(error.to_string()))?;
     Ok(CompileIslandsResult {

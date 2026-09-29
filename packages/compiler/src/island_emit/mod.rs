@@ -103,6 +103,10 @@ pub struct IslandOptions {
     /// expose theirs, so a keyed island keeps its state across a frame's
     /// refetch (the bundler plugin sets it when the page has frames).
     pub keyed_state: bool,
+    /// The module's build-stable name (its path relative to the app root):
+    /// frame ids hash it, so they do not depend on where the app is checked
+    /// out. `None`: the filename.
+    pub module_id: Option<String>,
 }
 
 /// An import specifier naming a `"use server"` module (or one exporting
@@ -135,6 +139,7 @@ impl Default for IslandOptions {
             server_functions_module: "@solidjs/web/server-functions".into(),
             frames_module: "@solidjs/compiler/frames-client".into(),
             keyed_state: false,
+            module_id: None,
         }
     }
 }
@@ -270,7 +275,11 @@ fn compile_pass(
     let contexts = inline::imported_contexts(&program, &opts.imports);
     let mut m = model::build_model_with(source, &program, scoping, probe_hosts, &contexts);
     model::bind_server_imports(&mut m, &program, &opts.server_imports);
-    let a = graph::analyze_file(&m, &opts.id_prefix, opts.filename.as_deref());
+    let a = graph::analyze_file(
+        &m,
+        &opts.id_prefix,
+        opts.module_id.as_deref().or(opts.filename.as_deref()),
+    );
     match emit(&m, &a, opts) {
         Ok((server, chunks, manifest, frames_client)) => Ok(IslandsOutput {
             server,

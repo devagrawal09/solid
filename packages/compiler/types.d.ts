@@ -541,6 +541,8 @@ export interface CompileIslandsOptions {
   framesModule?: string;
   /** Chunks take and expose keyed state (frames' keyed morph). */
   keyedState?: boolean;
+  /** The module's build-stable name (relative to the app root); frame ids hash it. Default: the filename. */
+  moduleId?: string;
 }
 
 export interface IslandExports {

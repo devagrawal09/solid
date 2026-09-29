@@ -7,6 +7,7 @@ Update 2026-09-28: the compiler emits compiled islands (phases 3–4 for the con
 Update 2026-09-28 (later): islands for real apps — streamed boundary chunks, tier-2 islands over stores and async (adopted, not hydrated), islands spanning modules, component call forms, client error boundaries, a bundled prefetch budget and a dev verifier; `examples/todos-blocks` compiles to one island instead of falling back. See [Islands for real apps](#islands-for-real-apps).
 
 This builds on, and does not redo:
+
 - [resumability.md](./resumability.md): hydration vs pruned resumability, and the hydrate-before-write rule;
 - [compiler-heuristics-build.md](./compiler-heuristics-build.md): per-island hydration F, the handler → island map, and compiled resumability C;
 - [heuristic-oracles.md](./heuristic-oracles.md): H10 cold-scope bindings and the hydration overhead breakdown;
@@ -16,12 +17,14 @@ This builds on, and does not redo:
 ## Summary
 
 **Today, hydration re-runs the whole app to learn what the server already knew.** On the 1,406-comment HackerNews story page (the `hackernews-spa` components):
+
 - The page ships **405.6 KB gz of HTML, half of it (204.7 KB) the serialized story** that the same HTML already shows.
 - **Hydration does exactly a client render's reactive work:** 4,880 computations and 2,061 owners, against 4,879 and 2,061 for a render from scratch. On top of that come 2,712 key claims.
 - It costs **1.2× the time and 1.6× the heap** of that render.
 - The only interactive thing on the page is a collapse toggle on each comment with replies.
 
 **The design: compiled islands over the v2 block graph.** A linker joins each component's block facts: what its setup creates, what its view reads, what its `$event` handlers write, and whether it has load-time effects. From them it proves which rendered regions are:
+
 - **inert:** HTML only, with no code, keys, markers or data;
 - **event islands:** only the handlers ship;
 - **view islands:** activated with static addresses and only the live bindings;
@@ -31,21 +34,22 @@ Islands activate on the first event that can reach them (hydrate-before-write), 
 
 **Measured on the HN page** (P1-static against today, Chromium, 4× CPU):
 
-| | Today (A) | P1-static, eager | P1-static, lazy |
-| --- | ---: | ---: | ---: |
-| HTML gz | 405.6 KB | 189.7 KB (−53%) | 189.7 KB |
-| JS gz at load | 32.1 KB | 9.6 KB (−70%) | **0.3 KB** (+9.6 KB on first click) |
-| Script at load | 368 ms | 49 ms (−87%) | 8 ms |
-| Heap after load | 13.7 MB | 2.4 MB | 1.5 MB |
-| Ready (navigation → interactive) | 1,602 ms | 1,045 ms (−35%) | 959 ms (−40%) |
-| First toggle click | 7 ms | 6 ms | 30 ms (chunk load + activation) |
-| Server render | 27–31 ms | 0.5–0.9 ms as a string template | same |
+|                                  | Today (A) |                P1-static, eager |                     P1-static, lazy |
+| -------------------------------- | --------: | ------------------------------: | ----------------------------------: |
+| HTML gz                          |  405.6 KB |                 189.7 KB (−53%) |                            189.7 KB |
+| JS gz at load                    |   32.1 KB |                   9.6 KB (−70%) | **0.3 KB** (+9.6 KB on first click) |
+| Script at load                   |    368 ms |                    49 ms (−87%) |                                8 ms |
+| Heap after load                  |   13.7 MB |                          2.4 MB |                              1.5 MB |
+| Ready (navigation → interactive) |  1,602 ms |                 1,045 ms (−35%) |                       959 ms (−40%) |
+| First toggle click               |      7 ms |                            6 ms |     30 ms (chunk load + activation) |
+| Server render                    |  27–31 ms | 0.5–0.9 ms as a string template |                                same |
 
 The real server-components twin (`examples/hackernews`), which gets the same effect by hand, ships **55.5 KB gz of JS and 260.5 KB gz of HTML** for this page.
 
 **When everything is live, it degrades to today's cost.** In todos-blocks, every component is live and a hashchange listener must run at load. The design then falls back to hydrating the live islands, with nothing to prune. On-interaction activation moves ~33 ms (1×) of load script to a ~60 ms first interaction, as the earlier E-lazy study found.
 
 **Four defects came out of the measurements:**
+
 - **Fixed:** the todos-blocks production build was broken. Every v2 app's view blocks mis-read stores in production.
 - **Fixed:** v2 `yield* Ctx` could not server-render.
 - **Not fixed:** the real `hackernews-spa` build leaves its toggles dead in 6 of 7 loads at 4× CPU.
@@ -72,6 +76,7 @@ streaming: shell, then <template> + $df swaps          every component body, mem
 ```
 
 The client cost splits into four parts:
+
 - the framework runtime, which a client render also needs;
 - hydration-only runtime: key gathering, claiming, hydration-aware primitive wrappers, `subFetch`, snapshots, boundary resume;
 - app code for every component, including components whose output can never change;
@@ -83,50 +88,51 @@ The harness is `scripts/ssr-redesign/measure.mjs`, with the real Rust compiler, 
 
 **HN story page**: the `hackernews-spa` Story, Comment and Toggle components, with the captured 1,406-comment thread.
 
-| | A: hydrate (today) | CSR: client render of the same page |
-| --- | ---: | ---: |
-| HTML gz | 405.6 KB (1,423 KB raw) | 198.0 KB (the inline story JSON) |
-| of which serialized data | 204.7 KB gz | – |
-| of which `_hk` keys | 11.3 KB gz (2,712 keys) | – |
-| hole markers | 5,632 (1.4 KB gz) | – |
-| JS gz | 32.1 KB | 26.5 KB |
-| min KB: signals / solid / web / app | 61.3 / 12.2 / 12.2 / 2.7 | 60.7 / 1.1 / 7.8 / 2.4 |
-| owners / computations / compute runs | 2,061 / 4,880 / 13,775 | 2,061 / 4,879 / 13,774 |
-| template claims | 2,712 | – |
-| `_hk` gather | 5.5–6.1 ms | – |
-| hydrate() / render(), 1× · 4× | 107 · 346 ms | 89 · 323 ms |
-| script at load, 1× · 4× | 111 · 369 ms | 91 · 333 ms |
-| heap | 13.7 MB | 8.3 MB |
-| server render | 27–31 ms | – |
+|                                      |       A: hydrate (today) | CSR: client render of the same page |
+| ------------------------------------ | -----------------------: | ----------------------------------: |
+| HTML gz                              |  405.6 KB (1,423 KB raw) |    198.0 KB (the inline story JSON) |
+| of which serialized data             |              204.7 KB gz |                                   – |
+| of which `_hk` keys                  |  11.3 KB gz (2,712 keys) |                                   – |
+| hole markers                         |        5,632 (1.4 KB gz) |                                   – |
+| JS gz                                |                  32.1 KB |                             26.5 KB |
+| min KB: signals / solid / web / app  | 61.3 / 12.2 / 12.2 / 2.7 |              60.7 / 1.1 / 7.8 / 2.4 |
+| owners / computations / compute runs |   2,061 / 4,880 / 13,775 |              2,061 / 4,879 / 13,774 |
+| template claims                      |                    2,712 |                                   – |
+| `_hk` gather                         |               5.5–6.1 ms |                                   – |
+| hydrate() / render(), 1× · 4×        |             107 · 346 ms |                         89 · 323 ms |
+| script at load, 1× · 4×              |             111 · 369 ms |                         91 · 333 ms |
+| heap                                 |                  13.7 MB |                              8.3 MB |
+| server render                        |                 27–31 ms |                                   – |
 
 What the table shows:
+
 - **Hydration-only code is 5.6 KB gz:** 11.1 KB min in `solid-js` (the hydration-aware wrappers) and 4.4 KB min in `@solidjs/web` (gather, claim, resume).
 - **Almost none of it is avoidable per app today:** the page has one serialized computation, and its "re-run" is the only trace run.
 - **The work is the render.** A page that is 98% static hydrates like a page that is 100% live.
 
 **The real twins** are their own vite production builds and servers (`measure-twins.mjs`), on the same story:
 
-| Twin | HTML gz (data, `_hk`) | JS gz | CPU | hydrated at | script | heap | dead toggles | failed loads |
-| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |
-| hackernews-spa | 406.6 (204.8, 12.0) | 46.0 | 1× | 504 ms | 151 ms | 13.6 MB | 1/7 | 0/7 |
-| hackernews-spa | | | 4× | 1,679 ms | 736 ms | 13.6 MB | **6/7** | 0/7 |
-| hackernews (server components) | 260.5 (9.5, 6.2) | **55.5** | 1× | 533 ms | 33 ms | 7.0 MB | 0/7 | **1/7** |
-| hackernews (server components) | | | 4× | 1,429 ms | 129 ms | 3.7 MB | 0/7 | 0/7 |
+| Twin                           | HTML gz (data, `_hk`) |    JS gz | CPU | hydrated at | script |    heap | dead toggles | failed loads |
+| ------------------------------ | --------------------- | -------: | --- | ----------: | -----: | ------: | -----------: | -----------: |
+| hackernews-spa                 | 406.6 (204.8, 12.0)   |     46.0 | 1×  |      504 ms | 151 ms | 13.6 MB |          1/7 |          0/7 |
+| hackernews-spa                 |                       |          | 4×  |    1,679 ms | 736 ms | 13.6 MB |      **6/7** |          0/7 |
+| hackernews (server components) | 260.5 (9.5, 6.2)      | **55.5** | 1×  |      533 ms |  33 ms |  7.0 MB |          0/7 |      **1/7** |
+| hackernews (server components) |                       |          | 4×  |    1,429 ms | 129 ms |  3.7 MB |          0/7 |          0/7 |
 
 - **Server components remove the data and 78–82% of the script.** They ship more JS than the SPA twin: the router plus the frame runtime.
 - **Their HTML is still 37% larger than an inert page needs:** 260.5 against 189.7 KB gz, spent on frames, slot markers and keys.
 
 **todos-blocks** (100 todos, generator blocks v2) and **sync-blocks** (async-free, v2):
 
-| | todos A | todos CSR | sync A | sync CSR |
-| --- | ---: | ---: | ---: | ---: |
-| HTML gz (data, `_hk`) | 2.6 (1.2, 0.3) | – | 0.5 (0, 0) | – |
-| JS gz | 39.3 | 33.5 | 34.1 | 27.4 |
-| hydration-only JS gz | **5.8** | | **6.7** | |
-| owners / computations / claims | 105 / 325 / 105 | | 2 / 9 / 2 | |
-| trace re-runs (async compute re-run) | 1 | | 0 | |
-| hydrate() 1× · 4× | 32 · 141 ms | | 8 · 44 ms | |
-| first interaction 1× · 4× | 4.5 · 21.9 ms | | 1.2 · 5.0 ms | |
+|                                      |         todos A | todos CSR |       sync A | sync CSR |
+| ------------------------------------ | --------------: | --------: | -----------: | -------: |
+| HTML gz (data, `_hk`)                |  2.6 (1.2, 0.3) |         – |   0.5 (0, 0) |        – |
+| JS gz                                |            39.3 |      33.5 |         34.1 |     27.4 |
+| hydration-only JS gz                 |         **5.8** |           |      **6.7** |          |
+| owners / computations / claims       | 105 / 325 / 105 |           |    2 / 9 / 2 |          |
+| trace re-runs (async compute re-run) |               1 |           |            0 |          |
+| hydrate() 1× · 4×                    |     32 · 141 ms |           |    8 · 44 ms |          |
+| first interaction 1× · 4×            |   4.5 · 21.9 ms |           | 1.2 · 5.0 ms |          |
 
 - For small live apps, the fixed hydration runtime (5.8–6.7 KB gz) is 15–20% of the JS.
 - The signals core (61–77 KB min) dominates everything.
@@ -135,16 +141,17 @@ What the table shows:
 
 Generator blocks v2 make every reactive fact syntactic, per component:
 
-| Fact | Where the compiler reads it | What SSR/hydration uses it for |
-| --- | --- | --- |
-| Creations | `yield* $signal / $store / $memo / $effect` in the setup only | what state an island owns; what must be rebuilt or serialized |
-| Reads | `yield*` in the view (reads only) and in memos | which holes are live; subscribers derived statically, not serialized |
-| Writes | `yield* set(…)` and setter calls, only in `$event` / `$effect` | the live closure: a cell no handler, action or effect writes is server-authoritative |
-| Async | `attempt(() => promise)` in memos and events; `Pending` in the types | every async read sits under a `Loading`; a streamed boundary's inputs are known |
-| Failures | `raise` / `Failures` in the types | which `Errored` boundary a failure lands in; what to serialize for it |
-| Load-time effects | `$effect`, `onSettled`, `onMount` (directly or through a factory) | which islands must activate at load |
+| Fact              | Where the compiler reads it                                          | What SSR/hydration uses it for                                                       |
+| ----------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Creations         | `yield* $signal / $store / $memo / $effect` in the setup only        | what state an island owns; what must be rebuilt or serialized                        |
+| Reads             | `yield*` in the view (reads only) and in memos                       | which holes are live; subscribers derived statically, not serialized                 |
+| Writes            | `yield* set(…)` and setter calls, only in `$event` / `$effect`       | the live closure: a cell no handler, action or effect writes is server-authoritative |
+| Async             | `attempt(() => promise)` in memos and events; `Pending` in the types | every async read sits under a `Loading`; a streamed boundary's inputs are known      |
+| Failures          | `raise` / `Failures` in the types                                    | which `Errored` boundary a failure lands in; what to serialize for it                |
+| Load-time effects | `$effect`, `onSettled`, `onMount` (directly or through a factory)    | which islands must activate at load                                                  |
 
 The setup/view split is what makes the difference:
+
 - A **setup runs once** and only creates.
 - A **view only reads.**
 - **Writes happen only in events and effects.**
@@ -152,6 +159,7 @@ The setup/view split is what makes the difference:
 So "does this rendered region ever change on the client" is a join over three syntactic sets. Compat Solid needed H10's runtime trace for this, and was unsafe on an unseen writer.
 
 `scripts/ssr-redesign/analyze.mjs` is a prototype of that join over the three example apps, using the TypeScript AST and name-based resolution. It builds:
+
 - the cells;
 - the flows (props joined over call sites to a fixed point, context values over providers, `For` / `Show` parameters);
 - each component's live reads, events, writes and load-time effects;
@@ -159,17 +167,18 @@ So "does this rendered region ever change on the client" is a join over three sy
 
 The output is in `ssr-hydration-redesign/analysis.json`.
 
-| App | Component | Class | Why |
-| --- | --- | --- | --- |
-| hn | Page, StoryPage, Comment | **inert** | `story` is an async memo that nothing writes or refetches (server-authoritative); every view read derives from it |
-| hn | Toggle | view island, self-contained | `open` is written by its own `onClick`; the children slot is inert pass-through |
-| todos | Header | **event island** | its view reads nothing live; `onKeyDown` writes `todos` |
-| todos | MainSection, TodoItem, Footer | view islands | read `todos` (optimistic store; written by actions, `refresh`ed) |
-| todos | App | **hot island** | `createHashFilter()` registers a `hashchange` listener in `onSettled` at load |
-| sync | Converter | view island, self-contained | its handler writes only `celsius` |
-| sync | App | view island | store and draft |
+| App   | Component                     | Class                       | Why                                                                                                               |
+| ----- | ----------------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| hn    | Page, StoryPage, Comment      | **inert**                   | `story` is an async memo that nothing writes or refetches (server-authoritative); every view read derives from it |
+| hn    | Toggle                        | view island, self-contained | `open` is written by its own `onClick`; the children slot is inert pass-through                                   |
+| todos | Header                        | **event island**            | its view reads nothing live; `onKeyDown` writes `todos`                                                           |
+| todos | MainSection, TodoItem, Footer | view islands                | read `todos` (optimistic store; written by actions, `refresh`ed)                                                  |
+| todos | App                           | **hot island**              | `createHashFilter()` registers a `hashchange` listener in `onSettled` at load                                     |
+| sync  | Converter                     | view island, self-contained | its handler writes only `celsius`                                                                                 |
+| sync  | App                           | view island                 | store and draft                                                                                                   |
 
 Handler → hydrate-before-write sets:
+
 - **hn:** `Toggle.onClick` reaches only Toggle, so **each instance activates alone.**
 - **todos:** every handler writes `todos`, which every live view reads, so the first interaction must activate all of them.
 - **sync:** Converter and App are independent.
@@ -178,12 +187,12 @@ Handler → hydrate-before-write sets:
 
 ### 3.1 Classes and what each ships
 
-| Class | Proof | Server output | Client at load | Client later |
-| --- | --- | --- | --- | --- |
-| **inert** | no live read, no event, no ref, no load-time effect, in this region or in slots it owns | string template: no owner, no `_hk`, no hole markers, nothing serialized | nothing | nothing (a navigation that replaces it renders fresh, see 3.7) |
-| **event island** | events, no live view read, no load-time effect | HTML + one anchor; the handler's captures | nothing | on first event: the handler chunk runs; no view code, no view re-run |
-| **view island** | live view reads, no load-time effect | HTML + one anchor; its live closure (cells reached by its handlers, and captures) | nothing (or idle, by policy) | before the first write that reaches it (the handler map): rebuild cells, bind **live holes only**, attach handlers |
-| **hot island** | a load-time effect (listener, timer, measurement) | as view island | activate | – |
+| Class            | Proof                                                                                   | Server output                                                                     | Client at load               | Client later                                                                                                       |
+| ---------------- | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| **inert**        | no live read, no event, no ref, no load-time effect, in this region or in slots it owns | string template: no owner, no `_hk`, no hole markers, nothing serialized          | nothing                      | nothing (a navigation that replaces it renders fresh, see 3.7)                                                     |
+| **event island** | events, no live view read, no load-time effect                                          | HTML + one anchor; the handler's captures                                         | nothing                      | on first event: the handler chunk runs; no view code, no view re-run                                               |
+| **view island**  | live view reads, no load-time effect                                                    | HTML + one anchor; its live closure (cells reached by its handlers, and captures) | nothing (or idle, by policy) | before the first write that reaches it (the handler map): rebuild cells, bind **live holes only**, attach handlers |
+| **hot island**   | a load-time effect (listener, timer, measurement)                                       | as view island                                                                    | activate                     | –                                                                                                                  |
 
 - **Liveness is per hole, not per component.** Inside an island, a hole whose expression reads nothing live is neither bound nor serialized. This is H10's inert binding, now sound: in strict v2 code the writers are enumerable, so there is no unseen writer.
 - **Slots are pass-through.** Toggle's `{props.children}` is owned by the caller's class (inert here), so activating a Toggle never touches the reply list.
@@ -196,11 +205,11 @@ Handler → hydrate-before-write sets:
 - **Inert regions have no markers.**
 - **Nested islands** in a slot are found through their own anchors: `closest()` on events, or a query for eager activation.
 
-| On the HN page | Today | Compiled islands |
-| --- | ---: | ---: |
-| address bytes | 2,712 `_hk` = 11.3 KB gz | 652 anchors = 7.2 KB raw, **0.2 KB gz** |
-| hole markers | 5,632 = 45 KB raw, 1.4 KB gz | 0 in inert regions |
-| gather at load | 5.5–6.1 ms | none |
+| On the HN page |                        Today |                        Compiled islands |
+| -------------- | ---------------------------: | --------------------------------------: |
+| address bytes  |     2,712 `_hk` = 11.3 KB gz | 652 anchors = 7.2 KB raw, **0.2 KB gz** |
+| hole markers   | 5,632 = 45 KB raw, 1.4 KB gz |                      0 in inert regions |
+| gather at load |                   5.5–6.1 ms |                                    none |
 
 Address stability comes from one compiler pass producing both halves, and a versioned island manifest shared by the server and client builds. The linker refuses to link mismatched manifests.
 
@@ -208,17 +217,17 @@ Address stability comes from one compiler pass producing both halves, and a vers
 
 Only what a client-side reader or writer of an **island** needs.
 
-| Block / value | Serialized | Why |
-| --- | --- | --- |
-| `$signal(literal)` / `createSignal(literal)` | nothing | rebuilt from its constant (Toggle's `open`: 652 islands, 0 bytes) |
-| `$signal(expr)` from props or server data | its value, when live | the client cannot re-evaluate server inputs |
-| `$store(…)` | the store paths live handlers or live holes read; the whole store only for a dynamic key | the store-summary / path facts (`store_handles.rs`) name the paths |
-| sync `$memo` | nothing | recomputed on activation from its sources |
-| async `$memo` / projection (pending-typed) | its settled value, **adopted without re-running the compute** | its reads before the first `attempt` are typed; subscribe to them statically (P2). A memo nothing writes or refetches is server-authoritative: its readers are inert |
-| failure (`raise`, `Errored`) | the error value, only inside a live boundary | inert fallbacks are HTML |
-| `$effect` | nothing | its first run is the server-rendered state; hot islands re-run it |
-| `$event` | nothing at load; its captures when its island activates | see 3.4 |
-| context value read by an island | by reference into the island's scope | the provider's value, once per request, not per reader |
+| Block / value                                | Serialized                                                                               | Why                                                                                                                                                                  |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `$signal(literal)` / `createSignal(literal)` | nothing                                                                                  | rebuilt from its constant (Toggle's `open`: 652 islands, 0 bytes)                                                                                                    |
+| `$signal(expr)` from props or server data    | its value, when live                                                                     | the client cannot re-evaluate server inputs                                                                                                                          |
+| `$store(…)`                                  | the store paths live handlers or live holes read; the whole store only for a dynamic key | the store-summary / path facts (`store_handles.rs`) name the paths                                                                                                   |
+| sync `$memo`                                 | nothing                                                                                  | recomputed on activation from its sources                                                                                                                            |
+| async `$memo` / projection (pending-typed)   | its settled value, **adopted without re-running the compute**                            | its reads before the first `attempt` are typed; subscribe to them statically (P2). A memo nothing writes or refetches is server-authoritative: its readers are inert |
+| failure (`raise`, `Errored`)                 | the error value, only inside a live boundary                                             | inert fallbacks are HTML                                                                                                                                             |
+| `$effect`                                    | nothing                                                                                  | its first run is the server-rendered state; hot islands re-run it                                                                                                    |
+| `$event`                                     | nothing at load; its captures when its island activates                                  | see 3.4                                                                                                                                                              |
+| context value read by an island              | by reference into the island's scope                                                     | the provider's value, once per request, not per reader                                                                                                               |
 
 ### 3.4 `$event` handlers as lazy chunks
 
@@ -234,6 +243,7 @@ Only what a client-side reader or writer of an **island** needs.
   4. **replays the event.**
 
   Later events queue in order while a chunk loads. That queue is the fix for Track C's dropped-first-event failure.
+
 - **Default actions.** A handler loaded after the event cannot `preventDefault()` it. When a `$event` body calls `e.preventDefault()` (a syntactic fact), the compiler marks the element (`data-pd`) so the loader prevents it synchronously and replays. Links and forms without such a handler keep their native behavior.
 - **Prefetch.** Chunks are prefetched on hover, focus or viewport (policy), so the P1-lazy first click (18 ms at 1×, 30 ms at 4× from memory) does not pay a network round trip.
 
@@ -261,29 +271,30 @@ Only what a client-side reader or writer of an **island** needs.
 ### 3.7 Navigation and client-only renders
 
 An inert region is inert for the page state it was rendered with. When a navigation replaces its inputs (a new story id), there is nothing to hydrate: the region is replaced. Two supported paths:
+
 1. **Route chunks.** The region's components ship as a lazy route chunk, loaded on navigation or on hover prefetch. A client render (CSR) is 1.2× cheaper than hydration, so replacing beats hydrating.
 2. **Server components.** The server returns the region's HTML over frames (the `hackernews` twin's model). The compiler's inert proof is exactly the condition under which a component can be a server component automatically: it needs no `"use server"` annotation for markup.
 
 ### 3.8 Runtime shape
 
-| Piece | Size | Notes |
-| --- | ---: | --- |
-| loader | 0.3 KB gz | delegated listeners, anchor lookup, chunk import, event queue and replay |
-| island runtime | the signals core only: 23.5 KB min / **9.6 KB gz** for Toggle | no `_$HY`, `sharedConfig`, registry, gather, claim, hydration-aware wrappers, `subFetch`, snapshots |
-| island chunks | per island | the setup cells, live bindings (static paths), handlers |
-| hydration runtime (today's) | kept for compat apps and for view islands that need full hydration (stateful lists) | compat code keeps working unchanged |
+| Piece                       |                                                                                Size | Notes                                                                                               |
+| --------------------------- | ----------------------------------------------------------------------------------: | --------------------------------------------------------------------------------------------------- |
+| loader                      |                                                                           0.3 KB gz | delegated listeners, anchor lookup, chunk import, event queue and replay                            |
+| island runtime              |                       the signals core only: 23.5 KB min / **9.6 KB gz** for Toggle | no `_$HY`, `sharedConfig`, registry, gather, claim, hydration-aware wrappers, `subFetch`, snapshots |
+| island chunks               |                                                                          per island | the setup cells, live bindings (static paths), handlers                                             |
+| hydration runtime (today's) | kept for compat apps and for view islands that need full hydration (stateful lists) | compat code keeps working unchanged                                                                 |
 
 ## 4. Alternatives, compared
 
-| Strategy | Code at load | Data | Work at load | First event | Correctness condition | Measured |
-| --- | --- | --- | --- | --- | --- | --- |
-| **A.** Full hydration (today) | everything | every async value | the whole tree (= CSR) + claims | cheap | none | HN: 32.1 KB / 405.6 KB / 369 ms at 4× |
-| **E.** Runtime lazy hydration | loader | as A | none | hydrate **everything** (no map) | hydrate-before-write needs the whole tree | resumability.md: total unchanged, 131–321 ms first click at 4×; todos A-lazy: 181 ms first click at 4× |
-| **F.** Per-island hydration + handler map | islands | island values | islands | hydrate the map's islands | compiler map | resumability.md: equal to A in total, moved to the first click |
-| **P1-rt.** F driven by the block graph, on today's runtime | island components + hydration runtime | none here | 652 islands hydrated | cheap | inert proof + slot pass-through | HN: 29.3 KB / 199.6 KB / 227 ms at 4× |
-| **P1-static.** Compiled islands (this design) | loader (lazy) or island chunks (eager) | live closure only (none here) | none (lazy) or live bindings (eager) | chunk + activation | inert proof, handler map, static addresses | HN: 0.3 (+9.6) KB / 189.7 KB / 8 ms (lazy), 49 ms (eager) at 4× |
-| **C.** Pruned resumability (whole graph) | component-free client | live cells + instance table | none | wake subscribers | live-closure proof (over-approximate subscribers) | resumability.md: load + first click 3× less CPU than D/F; +5–8 KB gz when mostly live |
-| **SC.** Server components (by hand) | router, frames runtime, client components | slot args | client components | cheap | author partitions | HN twin: 55.5 KB / 260.5 KB / 129 ms at 4× |
+| Strategy                                                   | Code at load                              | Data                          | Work at load                         | First event                     | Correctness condition                             | Measured                                                                                               |
+| ---------------------------------------------------------- | ----------------------------------------- | ----------------------------- | ------------------------------------ | ------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| **A.** Full hydration (today)                              | everything                                | every async value             | the whole tree (= CSR) + claims      | cheap                           | none                                              | HN: 32.1 KB / 405.6 KB / 369 ms at 4×                                                                  |
+| **E.** Runtime lazy hydration                              | loader                                    | as A                          | none                                 | hydrate **everything** (no map) | hydrate-before-write needs the whole tree         | resumability.md: total unchanged, 131–321 ms first click at 4×; todos A-lazy: 181 ms first click at 4× |
+| **F.** Per-island hydration + handler map                  | islands                                   | island values                 | islands                              | hydrate the map's islands       | compiler map                                      | resumability.md: equal to A in total, moved to the first click                                         |
+| **P1-rt.** F driven by the block graph, on today's runtime | island components + hydration runtime     | none here                     | 652 islands hydrated                 | cheap                           | inert proof + slot pass-through                   | HN: 29.3 KB / 199.6 KB / 227 ms at 4×                                                                  |
+| **P1-static.** Compiled islands (this design)              | loader (lazy) or island chunks (eager)    | live closure only (none here) | none (lazy) or live bindings (eager) | chunk + activation              | inert proof, handler map, static addresses        | HN: 0.3 (+9.6) KB / 189.7 KB / 8 ms (lazy), 49 ms (eager) at 4×                                        |
+| **C.** Pruned resumability (whole graph)                   | component-free client                     | live cells + instance table   | none                                 | wake subscribers                | live-closure proof (over-approximate subscribers) | resumability.md: load + first click 3× less CPU than D/F; +5–8 KB gz when mostly live                  |
+| **SC.** Server components (by hand)                        | router, frames runtime, client components | slot args                     | client components                    | cheap                           | author partitions                                 | HN twin: 55.5 KB / 260.5 KB / 129 ms at 4×                                                             |
 
 - **P1-static is C at component granularity, where it pays off.** Inert regions need no graph at all. A self-contained island (Toggle) is resumed from constants. Only stateful islands need C's serialized cells and subscriber derivation. The same proof covers both, because the live closure and the island set come from the same writes/reads join.
 - **Whole-graph resumability** still wins CPU when most of the page is live. But it pays bytes for every live binding, and the resumability study put its break-even at 0.4–2.6 Mbps. Keep it as the compilation for stateful view islands (Phase 5), not as the page model.
@@ -292,34 +303,36 @@ An inert region is inert for the page state it was rendered with. When a navigat
 ## 5. Prototype results
 
 Two strategies were prototyped. Both run on the real compiler and runtime, and both pass the equivalence gate. The gate requires:
+
 - the page equals A's after load and after every step of a session, with keys, markers, anchors and island wrappers normalized away;
 - server nodes captured during parsing are the live nodes after load (node identity).
 
 ### 5.1 P1: compiled islands on the HN story page
 
 Variants:
+
 - **P1-rt** partitions with today's runtime. The server renders the page in a `NoHydration` zone and wraps each Toggle in a `<solid-island>` that re-enters `Hydration`. The client runs one `hydrate()` per island, and hands the reply list back as the server's own nodes. This is a stand-in for compiler output.
 - **P1-eager** is compiled activation (`islands-static/toggle.island.ts`, a hand-written stand-in for the compiler's emission) run for every island at load. It has static paths, no keys and no hydration runtime. It rebuilds `open` from its constant and creates three render effects whose first run writes nothing, plus one handler.
 - **P1-lazy** is the same activation per instance, on its first event, through the loader, with replay.
 
 Bytes and work:
 
-| Variant | HTML gz | JS gz at load | lazy JS gz | owners | computations | claims | gate |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| A | 405.6 | 32.1 | – | 2,061 | 4,880 | 2,712 | reference |
-| P1-rt | 199.6 | 29.3 | – | 652 | – | 1,304 | pass, nodes kept |
-| P1-eager | 189.7 | 9.6 | – | 652 | – | – | pass, nodes kept |
-| P1-lazy | 189.7 | **0.3** | 9.6 | – (3 after a 4-click session) | – | – | pass, nodes kept |
+| Variant  | HTML gz | JS gz at load | lazy JS gz |                        owners | computations | claims | gate             |
+| -------- | ------: | ------------: | ---------: | ----------------------------: | -----------: | -----: | ---------------- |
+| A        |   405.6 |          32.1 |          – |                         2,061 |        4,880 |  2,712 | reference        |
+| P1-rt    |   199.6 |          29.3 |          – |                           652 |            – |  1,304 | pass, nodes kept |
+| P1-eager |   189.7 |           9.6 |          – |                           652 |            – |      – | pass, nodes kept |
+| P1-lazy  |   189.7 |       **0.3** |        9.6 | – (3 after a 4-click session) |            – |      – | pass, nodes kept |
 
 Time (ms):
 
-| Variant | ready 1× | ready 4× | activation 1× | activation 4× | script at load 1× | script at load 4× | heap | first click 1× | first click 4× |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| A | 423 | 1,602 | 107 | 346 | 111 | 369 | 13.7 MB | 1.6 | 7.1 |
-| CSR (reference) | 147 | 504 | 89 | 323 | 91 | 333 | 8.3 MB | 1.4 | 7.0 |
-| P1-rt | 316 | 1,260 | 55 | 213 | 58 | 227 | 5.2 MB | 1.5 | 7.2 |
-| P1-eager | 269 | 1,045 | 12 | 41 | 14 | 49 | 2.4 MB | 1.2 | 5.8 |
-| P1-lazy | 277 | 959 | 0 | 0 | 1.6 | 8.1 | 1.5 MB | 18.0 | 30.3 |
+| Variant         | ready 1× | ready 4× | activation 1× | activation 4× | script at load 1× | script at load 4× |    heap | first click 1× | first click 4× |
+| --------------- | -------: | -------: | ------------: | ------------: | ----------------: | ----------------: | ------: | -------------: | -------------: |
+| A               |      423 |    1,602 |           107 |           346 |               111 |               369 | 13.7 MB |            1.6 |            7.1 |
+| CSR (reference) |      147 |      504 |            89 |           323 |                91 |               333 |  8.3 MB |            1.4 |            7.0 |
+| P1-rt           |      316 |    1,260 |            55 |           213 |                58 |               227 |  5.2 MB |            1.5 |            7.2 |
+| P1-eager        |      269 |    1,045 |            12 |            41 |                14 |                49 |  2.4 MB |            1.2 |            5.8 |
+| P1-lazy         |      277 |      959 |             0 |             0 |               1.6 |               8.1 |  1.5 MB |           18.0 |           30.3 |
 
 Run-to-run spread on script at load is at most 13% at 1× and 22% at 4×.
 
@@ -332,10 +345,10 @@ Run-to-run spread on script at load is at most 13% at 1× and 22% at 4×.
 
 An oracle patch (`lib.mjs`, `ORACLES.adopt`) skips the trace re-run for nodes the compiler would mark. The prototype marks the HN story memo and the todos projection, whose read sets before the first await are empty.
 
-| App | trace re-runs | script at load 1× (A → adopt) | 4× (A → adopt) |
-| --- | ---: | ---: | ---: |
-| hn | 1 → 0 | 111 → 112 ms | 369 → 327 ms (inside the 22% spread) |
-| todos | 1 → 0 | 33.6 → 33.2 ms | 148 → 141 ms |
+| App   | trace re-runs | script at load 1× (A → adopt) |                       4× (A → adopt) |
+| ----- | ------------: | ----------------------------: | -----------------------------------: |
+| hn    |         1 → 0 |                  111 → 112 ms | 369 → 327 ms (inside the 22% spread) |
+| todos |         1 → 0 |                33.6 → 33.2 ms |                         148 → 141 ms |
 
 - **It is equivalent** (the gate passes, nodes kept).
 - **It is not a speed-up for these pages:** each page has one serialized computation, and its mocked re-run is cheap.
@@ -345,24 +358,24 @@ An oracle patch (`lib.mjs`, `ORACLES.adopt`) skips the trace re-run for nodes th
 
 A-lazy uses the existing bootstrap's event capture and `runHydrationEvents` replay (no compiler map, whole app):
 
-| | script at load 1× · 4× | first interaction 1× · 4× | script through the first interaction 1× · 4× |
-| --- | --- | --- | --- |
-| A | 33.6 · 148.2 ms | 4.5 · 21.9 ms | 39.6 · 173.1 ms |
-| A-lazy | 0.9 · 3.2 ms | 59.6 · 180.6 ms | 40.4 · 131.0 ms |
+|        | script at load 1× · 4× | first interaction 1× · 4× | script through the first interaction 1× · 4× |
+| ------ | ---------------------- | ------------------------- | -------------------------------------------- |
+| A      | 33.6 · 148.2 ms        | 4.5 · 21.9 ms             | 39.6 · 173.1 ms                              |
+| A-lazy | 0.9 · 3.2 ms           | 59.6 · 180.6 ms           | 40.4 · 131.0 ms                              |
 
 The gate passes, including a replayed first click. With every view live, the design has nothing to prune. Laziness is a scheduling choice here: time-to-first-paint-interactive against first-interaction latency, and the default should be eager for such pages.
 
 ## 6. Migration plan
 
-| Phase | Change | Gate to move on | Risk |
-| --- | --- | --- | --- |
-| 0 | **Fix the defects found here.** Done: the production block guard, and v2 context in SSR. Open: the `hackernews-spa` dead toggles under slow CPU, and the server-components twin's intermittent client exception | `probe-twin-toggle.mjs` 0/20 at 4×; the twins' failed loads 0/20 | low |
-| 1 | **Hydration runtime overhead** (H10's list: `claimInitial` child-list copies, GC) and **`adopt`** as an option the compiler emits for computations with proven read sets | conformance goldens updated deliberately for the async re-run; `measure.mjs` todos/hn | low |
-| 2 | **Liveness linker:** `islands.rs` summaries extended with the v2 block facts (setup creations, view reads, `$event` writes, load-time effects), joined across modules like `capabilities.rs`, emitting a versioned island manifest. First consumer: automatic `NoHydration` zones plus island roots on today's runtime (P1-rt), with a slot pass-through API in `hydrate()`. **Dev builds verify**: they hydrate everything and warn if an inert-classified region's DOM would change | P1-rt parity on the conformance scenarios and the three examples; the dev verifier silent | medium: an under-approximated writer is silent staleness (C-broken) |
-| 3 | **Compiled island activation:** static addresses, constant-state rebuild, live-hole-only bindings, `$event` extraction with captures, the loader with queue/replay and `data-pd`, and hydrate-before-write from the handler map. Opt-in per build (`islands: "compiled"`) | P1-static gate on hn/todos/sync + new scenarios (nested islands, islands inside pending boundaries, forms, focus) | medium |
-| 4 | **String-template SSR for inert regions:** ids and serialization only inside islands; inert boundary chunks stream as HTML only | byte-identical HTML modulo markers (`ssr-bench.mjs` gate) | low |
-| 5 | **Stateful islands:** serialize setup cells and live store paths; adopt async memos with static subscriptions; compile stateful view islands resumably (C generalized to component instances, with lazy family members and per-member wake keys) | resumability study's gate + todos with lists | high: lists and stores |
-| 6 | **Navigation:** inert regions as route chunks or automatic server components (frames), unifying the `hackernews` twin's model with the compiler's proof | the hackernews twins produce the same pages | medium |
+| Phase | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Gate to move on                                                                                                   | Risk                                                                |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| 0     | **Fix the defects found here.** Done: the production block guard, and v2 context in SSR. Open: the `hackernews-spa` dead toggles under slow CPU, and the server-components twin's intermittent client exception                                                                                                                                                                                                                                                                       | `probe-twin-toggle.mjs` 0/20 at 4×; the twins' failed loads 0/20                                                  | low                                                                 |
+| 1     | **Hydration runtime overhead** (H10's list: `claimInitial` child-list copies, GC) and **`adopt`** as an option the compiler emits for computations with proven read sets                                                                                                                                                                                                                                                                                                              | conformance goldens updated deliberately for the async re-run; `measure.mjs` todos/hn                             | low                                                                 |
+| 2     | **Liveness linker:** `islands.rs` summaries extended with the v2 block facts (setup creations, view reads, `$event` writes, load-time effects), joined across modules like `capabilities.rs`, emitting a versioned island manifest. First consumer: automatic `NoHydration` zones plus island roots on today's runtime (P1-rt), with a slot pass-through API in `hydrate()`. **Dev builds verify**: they hydrate everything and warn if an inert-classified region's DOM would change | P1-rt parity on the conformance scenarios and the three examples; the dev verifier silent                         | medium: an under-approximated writer is silent staleness (C-broken) |
+| 3     | **Compiled island activation:** static addresses, constant-state rebuild, live-hole-only bindings, `$event` extraction with captures, the loader with queue/replay and `data-pd`, and hydrate-before-write from the handler map. Opt-in per build (`islands: "compiled"`)                                                                                                                                                                                                             | P1-static gate on hn/todos/sync + new scenarios (nested islands, islands inside pending boundaries, forms, focus) | medium                                                              |
+| 4     | **String-template SSR for inert regions:** ids and serialization only inside islands; inert boundary chunks stream as HTML only                                                                                                                                                                                                                                                                                                                                                       | byte-identical HTML modulo markers (`ssr-bench.mjs` gate)                                                         | low                                                                 |
+| 5     | **Stateful islands:** serialize setup cells and live store paths; adopt async memos with static subscriptions; compile stateful view islands resumably (C generalized to component instances, with lazy family members and per-member wake keys)                                                                                                                                                                                                                                      | resumability study's gate + todos with lists                                                                      | high: lists and stores                                              |
+| 6     | **Navigation:** inert regions as route chunks or automatic server components (frames), unifying the `hackernews` twin's model with the compiler's proof                                                                                                                                                                                                                                                                                                                               | the hackernews twins produce the same pages                                                                       | medium                                                              |
 
 Compat (non-strict) code stays on today's pipeline throughout. An unknown library, escaping setter or unanalyzable context makes its region live (conservative).
 
@@ -387,6 +400,7 @@ Compat (non-strict) code stays on today's pipeline throughout. An unknown librar
 ## Runtime tiers
 
 Follow-up study: [island-runtime-tiers.md](./island-runtime-tiers.md). The compiled islands above still load the full signals core (9.6 KB gz for Toggle). The follow-up has the linker give each connected group of islands the smallest runtime its block graph allows:
+
 - **tier 0**, no reactive runtime (cells as slots, holes as direct updates, the core's batching kept by a 0.3 KB gz helper) for islands whose cells only their own handlers write and whose holes read unconditionally — HN's Toggle;
 - **tier 1**, a 2.1 KB gz kernel with the core's API and scheduling for memos, branches, lists, effects and shared cells;
 - **tier 2**, the full core, for async, optimistic writes, stores and boundaries — todos-blocks.
@@ -410,13 +424,34 @@ HN's Toggle island, as emitted (tier 0; compare `apps/hn/islands-static/toggle.t
 ```js
 import { cell as $cell, hole as $hole, set as $set } from "@solidjs/signals/t0";
 export function activate($a) {
-const $n2 = $a.firstElementChild;
-const $n3 = $a.nextElementSibling;
-const open = $cell(true);
-const toggle = () => { $set(open, o => !o); };
-$n2.addEventListener("click", toggle);
-$hole([open], () => (open.v) ? "[-]" : "[+] comments collapsed", v => { $n2.textContent = v; });
-$hole([open], () => ({ _0: !!(open.v), _1: (open.v) ? "block" : "none" }), (o, q) => { if (o._0 !== q?._0) { const v = o._0; $a.classList.toggle("open", v); } if (o._1 !== q?._1) { const v = o._1; $n3.style.setProperty("display", v); } });
+  const $n2 = $a.firstElementChild;
+  const $n3 = $a.nextElementSibling;
+  const open = $cell(true);
+  const toggle = () => {
+    $set(open, o => !o);
+  };
+  $n2.addEventListener("click", toggle);
+  $hole(
+    [open],
+    () => (open.v ? "[-]" : "[+] comments collapsed"),
+    v => {
+      $n2.textContent = v;
+    }
+  );
+  $hole(
+    [open],
+    () => ({ _0: !!open.v, _1: open.v ? "block" : "none" }),
+    (o, q) => {
+      if (o._0 !== q?._0) {
+        const v = o._0;
+        $a.classList.toggle("open", v);
+      }
+      if (o._1 !== q?._1) {
+        const v = o._1;
+        $n3.style.setProperty("display", v);
+      }
+    }
+  );
 }
 ```
 
@@ -452,35 +487,36 @@ Same harness and methodology as §5 and the tier study (`measure.mjs`: prod dist
 
 **HN story page** (1,406 comments; today: 405.6 KB gz HTML, 22.4 KB gz JS, 118 / 335 ms of script at load at 1× / 4×). Pairs are hand-written / **compiler**:
 
-| Tier, activation | HTML gz | JS gz at load | + JS gz on first click | script at load 1× | 4× | first click 1× | 4× |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| tier 0, eager (`T0-eager` / `C-eager`) | 189.7 / **188.3** | 0.56 / **0.62** | – | 4.2 / **4.2** | 12.5 / **7.4** | 0.7 / **0.7** | 3.2 / **1.7** |
-| tier 0, lazy (`T0-lazy` / `C-lazy`) | 189.7 / **188.3** | 0.28 / **0.52** | 0.50 / **0.54** | 1.6 / **1.8** | 7.7 / **1.8** | 5.9 / **8.9** | 27.7 / **44.1** |
-| tier 1 kernel, eager (`T1-eager` / `C-T1-eager`) | 189.7 / **188.3** | 2.21 / **2.29** | – | 8.6 / **7.8** | 18.1 / **23.9** | 1.4 / **1.4** | 4.1 / **4.9** |
-| tier 1 kernel, lazy | 189.7 / **188.3** | 0.28 / **0.52** | 2.13 / **2.21** | 1.7 / **1.8** | 6.3 / **6.2** | 15.2 / **7.6** | 28.3 / **64.8** |
-| tier 2 core, eager (`P1-eager` / `C-T2-eager`) | 189.7 / **188.3** | 9.70 / **9.78** | – | 18.0 / **20.6** | 45.9 / **36.6** | 1.5 / **1.6** | 5.0 / **6.6** |
-| tier 2 core, lazy (`P1-lazy` / `C-T2-lazy`) | 189.7 / **188.3** | 0.28 / **0.52** | 9.63 / **9.70** | 1.5 / **1.5** | 3.1 / **5.6** | 17.9 / **24.3** | 34.0 / **30.6** |
+| Tier, activation                                 |           HTML gz |   JS gz at load | + JS gz on first click | script at load 1× |              4× |  first click 1× |              4× |
+| ------------------------------------------------ | ----------------: | --------------: | ---------------------: | ----------------: | --------------: | --------------: | --------------: |
+| tier 0, eager (`T0-eager` / `C-eager`)           | 189.7 / **188.3** | 0.56 / **0.62** |                      – |     4.2 / **4.2** |  12.5 / **7.4** |   0.7 / **0.7** |   3.2 / **1.7** |
+| tier 0, lazy (`T0-lazy` / `C-lazy`)              | 189.7 / **188.3** | 0.28 / **0.52** |        0.50 / **0.54** |     1.6 / **1.8** |   7.7 / **1.8** |   5.9 / **8.9** | 27.7 / **44.1** |
+| tier 1 kernel, eager (`T1-eager` / `C-T1-eager`) | 189.7 / **188.3** | 2.21 / **2.29** |                      – |     8.6 / **7.8** | 18.1 / **23.9** |   1.4 / **1.4** |   4.1 / **4.9** |
+| tier 1 kernel, lazy                              | 189.7 / **188.3** | 0.28 / **0.52** |        2.13 / **2.21** |     1.7 / **1.8** |   6.3 / **6.2** |  15.2 / **7.6** | 28.3 / **64.8** |
+| tier 2 core, eager (`P1-eager` / `C-T2-eager`)   | 189.7 / **188.3** | 9.70 / **9.78** |                      – |   18.0 / **20.6** | 45.9 / **36.6** |   1.5 / **1.6** |   5.0 / **6.6** |
+| tier 2 core, lazy (`P1-lazy` / `C-T2-lazy`)      | 189.7 / **188.3** | 0.28 / **0.52** |        9.63 / **9.70** |     1.5 / **1.5** |   3.1 / **5.6** | 17.9 / **24.3** | 34.0 / **30.6** |
 
 **todos-local** (100 todos; today: 1.4 KB gz HTML, 22.9 KB gz JS, 11.6 / 58.7 ms of script at load). The compiler puts App, Header, MainSection, TodoItem and Footer in one island at tier 1, as the analysis did:
 
-| Tier, activation | HTML gz | JS gz at load | + JS gz on first interaction | script at load 1× | 4× | first interaction 1× | 4× |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| tier 1 kernel, eager (`T1-eager` / `C-eager`) | 0.85 / **0.86** | 3.69 / **3.97** | – | 3.3 / **3.8** | 15.1 / **14.3** | 1.3 / **1.3** | 7.3 / **5.7** |
-| tier 1 kernel, lazy (`T1-lazy` / `C-lazy`) | 0.85 / **0.86** | 0.45 / **0.67** | 3.64 / **3.90** | 0.7 / **0.8** | 2.5 / **3.8** | 19.6 / **14.3** | 46.9 / **48.5** |
-| tier 2 core, eager (`T2-eager` / `C-T2-eager`) | 0.85 / **0.86** | 11.13 / **11.45** | – | 4.6 / **5.2** | 23.7 / **20.2** | 1.8 / **1.7** | 8.5 / **9.1** |
-| tier 2 core, lazy (`T2-lazy` / `C-T2-lazy`) | 0.85 / **0.86** | 0.45 / **0.67** | 11.09 / **11.39** | 0.6 / **0.7** | 2.3 / **3.0** | 15.5 / **21.6** | 52.7 / **63.5** |
+| Tier, activation                               |         HTML gz |     JS gz at load | + JS gz on first interaction | script at load 1× |              4× | first interaction 1× |              4× |
+| ---------------------------------------------- | --------------: | ----------------: | ---------------------------: | ----------------: | --------------: | -------------------: | --------------: |
+| tier 1 kernel, eager (`T1-eager` / `C-eager`)  | 0.85 / **0.86** |   3.69 / **3.97** |                            – |     3.3 / **3.8** | 15.1 / **14.3** |        1.3 / **1.3** |   7.3 / **5.7** |
+| tier 1 kernel, lazy (`T1-lazy` / `C-lazy`)     | 0.85 / **0.86** |   0.45 / **0.67** |              3.64 / **3.90** |     0.7 / **0.8** |   2.5 / **3.8** |      19.6 / **14.3** | 46.9 / **48.5** |
+| tier 2 core, eager (`T2-eager` / `C-T2-eager`) | 0.85 / **0.86** | 11.13 / **11.45** |                            – |     4.6 / **5.2** | 23.7 / **20.2** |        1.8 / **1.7** |   8.5 / **9.1** |
+| tier 2 core, lazy (`T2-lazy` / `C-T2-lazy`)    | 0.85 / **0.86** |   0.45 / **0.67** |            11.09 / **11.39** |     0.6 / **0.7** |   2.3 / **3.0** |      15.5 / **21.6** | 52.7 / **63.5** |
 
 **todos-blocks** stays tier 2 and falls back: `C` serves the same page and the same JS (38.5 KB gz; script at load 38.9 / 141.5 ms for A, 36.9 / 132.3 ms for C, within noise). Its first-interaction probe timed out for A and C alike when these numbers were taken (104 key misses; fixed since, see Defects found: A now hydrates with 0 misses and its first interaction takes 5.2 / 16.3 ms at 1× / 4×).
 
 **Server render** of the HN page (`ssr-bench.mjs`, median of 30 renders, two runs; HTML gated equal modulo markers and island ids):
 
-| | today (hydratable) | NoHydration zone (P1-zone) | hand-written string template | **compiler string template** |
-| --- | ---: | ---: | ---: | ---: |
-| ms / render | 35.8 · 27.3 | 8.2 · 9.3 | 0.58 · 0.53 | **1.38 · 0.95** |
-| HTML | 1,422.6 KB raw, 405.3 KB gz | 740.6 KB, 189.6 KB gz | 696.6 KB, 188.2 KB gz | 697.2 KB, 188.2 KB gz |
+|             |          today (hydratable) | NoHydration zone (P1-zone) | hand-written string template | **compiler string template** |
+| ----------- | --------------------------: | -------------------------: | ---------------------------: | ---------------------------: |
+| ms / render |                 35.8 · 27.3 |                  8.2 · 9.3 |                  0.58 · 0.53 |              **1.38 · 0.95** |
+| HTML        | 1,422.6 KB raw, 405.3 KB gz |      740.6 KB, 189.6 KB gz |        696.6 KB, 188.2 KB gz |        697.2 KB, 188.2 KB gz |
 
 What the numbers say:
-- **Bytes are at parity.** The compiler's chunks are within 0.1 KB gz of the hand-written ones at every tier on HN (0.62 vs 0.56 KB at tier 0), and within 0.3 KB on todos-local (3.97 vs 3.69 KB at tier 1: generic region / list / marker helpers instead of the stand-in's special cases). The HTML is 1.3 KB gz *smaller* than the prototypes', because the string templates drop the `<!--$-->` hole markers the prototypes' NoHydration server still emitted (740.6 → 697.2 KB raw).
+
+- **Bytes are at parity.** The compiler's chunks are within 0.1 KB gz of the hand-written ones at every tier on HN (0.62 vs 0.56 KB at tier 0), and within 0.3 KB on todos-local (3.97 vs 3.69 KB at tier 1: generic region / list / marker helpers instead of the stand-in's special cases). The HTML is 1.3 KB gz _smaller_ than the prototypes', because the string templates drop the `<!--$-->` hole markers the prototypes' NoHydration server still emitted (740.6 → 697.2 KB raw).
 - **The lazy loader is 0.52 KB gz against the prototype's 0.28 KB** (both with the harness's timing hooks). The extra bytes buy what the stand-in did not do: one ordered queue across islands (an event on an active island waits behind a loading chunk), replay of every queued event, nested anchors, `data-pd`, checkbox replay and window-event stubs — each included only when the page needs it.
 - **Load-time script is at parity** (HN tier 0 eager 4.2 vs 4.2 ms at 1×; todos-local tier 1 eager 3.8 vs 3.3 ms at 1×, 14.3 vs 15.1 ms at 4×): the emitted activation does the same work — static paths, constant cells, live holes only, no work for inert holes, no roots for plain rows. First-interaction times of the lazy variants swing by tens of ms between runs at 4× in both columns (the chunk fetch and compile dominate them, as the tier study found); read them as ties.
 - **The server render is 1.0–1.4 ms, 20–30× faster than today's hydratable render** and 7–9× faster than rendering the same components in a NoHydration zone; the hand-written template is still 1.8–2.4× faster (it inlines every escape and allocates no props objects).
@@ -501,8 +537,8 @@ What the numbers say:
 
 Updated for [Islands for real apps](#islands-for-real-apps): stores, optimistic stores, projections, live async memos, actions, `refresh`, async `$event`s, component call forms, helper generators, factories and components from other modules, a live `Show` with a render callback and an `<Errored>` around or inside live content no longer fall back.
 
-- **Not modeled yet:** a `Loading` *inside* a live region (content the client creates under it needs a client pending fallback); a live keyed `Show` with a render callback; view statements before the return; JSX produced by a live expression (use `Show` / `For`); a live `Show` / `For` with a fallback; a live `For` with an index, or rows that are not one element; SVG / MathML inside live regions; `ref`, spreads (also in call forms), `Index` / `Switch` / `Match` / `Dynamic` / `Portal`, member-expression tags; island sites under a `Show` / `For` over server data and recursion inside an island, except as [Scopes](#scopes-component-boundaries-do-not-matter) supports them; a member component also rendered outside its island's root; a context an island reads with no provider inside it when a provider's value holds reactive state (otherwise its value at the island's root is serialized: `"$ctx:Name"` in `data-s`, checked JSON-plain on the server); module-level reactive state, or module-level mutable state two islands share; an element address that needs a path past two variable-size regions; serialized values on a comment anchor; an async memo whose value is not the result of its one final `attempt` (not adoptable); a derived cell (projection) that reads reactive state (its adoption would not subscribe); a `yield*` read of a value computed by a function from a module the compiler does not see (its reactive state is invisible).
-- **Semantics to know:** side-effect statements in the setup of an *inert* component run on the server only (hydration would re-run them on the client); a setter stored in a module binding is reachable through the island chunk's exports, not through the module's own (empty) client export; a boundary's fallback is server HTML (its handlers are not island sites); an `<Errored>` routes the client errors of the **tier-2** islands in its content to its fallback (a client boundary), while tier-0 / tier-1 islands under it keep their runtime and a throw in their holes escapes (the kernel and the t0 helper have no error routing).
+- **Not modeled yet:** a `Loading` _inside_ a live region (content the client creates under it needs a client pending fallback); a live keyed `Show` with a render callback; view statements before the return; JSX produced by a live expression (use `Show` / `For`); a live `Show` / `For` with a fallback; a live `For` with an index, or rows that are not one element; SVG / MathML inside live regions; `ref`, spreads (also in call forms), `Index` / `Switch` / `Match` / `Dynamic` / `Portal`, member-expression tags; island sites under a `Show` / `For` over server data and recursion inside an island, except as [Scopes](#scopes-component-boundaries-do-not-matter) supports them; a member component also rendered outside its island's root; a context an island reads with no provider inside it when a provider's value holds reactive state (otherwise its value at the island's root is serialized: `"$ctx:Name"` in `data-s`, checked JSON-plain on the server); module-level reactive state, or module-level mutable state two islands share; an element address that needs a path past two variable-size regions; serialized values on a comment anchor; an async memo whose value is not the result of its one final `attempt` (not adoptable); a derived cell (projection) that reads reactive state (its adoption would not subscribe); a `yield*` read of a value computed by a function from a module the compiler does not see (its reactive state is invisible).
+- **Semantics to know:** side-effect statements in the setup of an _inert_ component run on the server only (hydration would re-run them on the client); a setter stored in a module binding is reachable through the island chunk's exports, not through the module's own (empty) client export; a boundary's fallback is server HTML (its handlers are not island sites); an `<Errored>` routes the client errors of the **tier-2** islands in its content to its fallback (a client boundary), while tier-0 / tier-1 islands under it keep their runtime and a throw in their holes escapes (the kernel and the t0 helper have no error routing).
 
 ### Not done
 
@@ -517,34 +553,34 @@ Status: 2026-09-28 (Track G). The islands "not done" list above is closed for th
 - **Server.** A `<Loading>` whose content awaits server data renders through `_$ld($c, content, fallback)`. Without a stream in the render context it awaits in place (the whole page, as before). With one (`renderIslandsStream(render)` / `renderIslandsToString(render)`, `@solidjs/compiler/islands-stream`), the shell carries the fallback between `<!--lN-->` … `<!--/lN-->`, the content renders concurrently, and it is written when it settles as an out-of-order chunk: `<template id="slN">…</template><script>$sl("lN")</script>`. The swap script (0.5 KB raw, once, before the first chunk) replaces the region, removes the markers and dispatches `solid-islands` on `document`. A nested boundary's chunk follows its parent's. A failure inside a streamed boundary renders the nearest `<Errored>` fallback on the server and swaps it over that boundary's region (`<!--eN-->`), dropping the region's other pending chunks; with no `<Errored>` it goes to `onError`.
 - **Inert content streams as HTML only** — no serialized data, no client boundary object, no `$df` bookkeeping. Islands inside a chunk carry their anchors and `data-s` with it.
 - **Per-boundary activation.** The entry activates eager islands at load and again on every `solid-islands` event (each anchor once); lazy ones are found by the loader once their anchor exists. An island whose static paths cross a boundary (its root renders a streamed `<Loading>`: `waits` in the manifest) activates only once no boundary around its anchor is pending — a lazy one loads its chunk at once and activates (and replays its queued events) when the boundary lands.
-- **Limits.** A component's own async memo is awaited in its setup, so only boundaries *above* the awaiting component stream (HN's `Page` → `StoryPage` does; todos' projection is created in `App`, above its `<Loading>`, so the shell waits for it).
+- **Limits.** A component's own async memo is awaited in its setup, so only boundaries _above_ the awaiting component stream (HN's `Page` → `StoryPage` does; todos' projection is created in `App`, above its `<Loading>`, so the shell waits for it).
 
 ### Stateful islands over stores and async (tier 2 compiled, not hydrated)
 
 Groups the tier rules put at tier 2 now compile against the full core instead of falling back (§3.3's per-block-kind rules):
 
-| Block | Client | Serialized |
-| --- | --- | --- |
-| `$store` / `createStore(value)` / `createPlainStore` | the core's plain store; `yield* s.a.b` reads through the proxy, `readStore(s, sel)` is `sel(s)`, setters are called directly | nothing when its initializer is client-evaluable; otherwise the store, **pruned to the top-level keys its component's code reads or writes** (`S.key…`, `readStore` selectors and draft setters that only use `d.key…`; any other use serializes it whole) — `store_paths.rs` |
-| `createOptimisticStore(fn, seed)` / `createProjection` / `createStore(fn, seed)` / `createOptimistic` / `createSignal(fn)` | the core's constructor over an **adopting** function: the first run returns the anchor's value instead of running `fn` (the fetch is not repeated), later runs (`refresh`) run it | its settled value (the server awaits it) |
-| live async `$memo` (`… return yield* attempt(f)`) | adopted (P2): the first run evaluates the body up to the `attempt` (so it subscribes to what it reads there) and returns the anchor's value; later runs are the async body | its settled value |
-| `$event` with `yield* attempt(f)` | an async handler awaiting `f()` (a rejection throws at the `yield*`, as in the driver) | – |
-| `action(function* …)`, `refresh(x)` | the core's; `yield` inside an action generator is the transaction dialect, not a block operation; `refresh(x)` counts as a write of `x` for liveness | – |
-| a `For` over a store | rows bind their item's fields (a row reads through the proxy), the list tracks the array's items | – |
+| Block                                                                                                                      | Client                                                                                                                                                                            | Serialized                                                                                                                                                                                                                                                                    |
+| -------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `$store` / `createStore(value)` / `createPlainStore`                                                                       | the core's plain store; `yield* s.a.b` reads through the proxy, `readStore(s, sel)` is `sel(s)`, setters are called directly                                                      | nothing when its initializer is client-evaluable; otherwise the store, **pruned to the top-level keys its component's code reads or writes** (`S.key…`, `readStore` selectors and draft setters that only use `d.key…`; any other use serializes it whole) — `store_paths.rs` |
+| `createOptimisticStore(fn, seed)` / `createProjection` / `createStore(fn, seed)` / `createOptimistic` / `createSignal(fn)` | the core's constructor over an **adopting** function: the first run returns the anchor's value instead of running `fn` (the fetch is not repeated), later runs (`refresh`) run it | its settled value (the server awaits it)                                                                                                                                                                                                                                      |
+| live async `$memo` (`… return yield* attempt(f)`)                                                                          | adopted (P2): the first run evaluates the body up to the `attempt` (so it subscribes to what it reads there) and returns the anchor's value; later runs are the async body        | its settled value                                                                                                                                                                                                                                                             |
+| `$event` with `yield* attempt(f)`                                                                                          | an async handler awaiting `f()` (a rejection throws at the `yield*`, as in the driver)                                                                                            | –                                                                                                                                                                                                                                                                             |
+| `action(function* …)`, `refresh(x)`                                                                                        | the core's; `yield` inside an action generator is the transaction dialect, not a block operation; `refresh(x)` counts as a write of `x` for liveness                              | –                                                                                                                                                                                                                                                                             |
+| a `For` over a store                                                                                                       | rows bind their item's fields (a row reads through the proxy), the list tracks the array's items                                                                                  | –                                                                                                                                                                                                                                                                             |
 
 Refusals keep this sound: an async memo whose value is not its one final `attempt`'s result, a projection function that reads reactive state (its adopting run would not subscribe), a derived cell outside the island's root component.
 
 ### Islands spanning modules
 
 - **Summaries (pass one).** `islandExports(code)` summarizes a module: its exports by kind (`component`, `factory` — a function creating reactive state, `helper` — a generator read with `yield*`, `function`, `value`) and its relative imports with the names they import. `IslandsCompiler` caches it by content.
-- **Inlining (pass two).** For each module, the plugin passes the sources of the relative imports whose used names are factories, helpers or components (`imports` option). `compileIslands` copies each such export's closure (the top-level declarations it reads, transitively) into the module, renamed apart; runtime imports merge into the module's, other imports become absolute paths; exported *values* it reads (a context, shared state) stay imported so they keep their identity, and the model reads a context imported from a provided module as a context. Then, in every component setup, `const x = f(args)` / `f(args)` / `const x = yield* g(args)` of a module-level factory or helper with one exit is replaced by its body (locals renamed, parameters bound, the `return` bound to the pattern); in a plain component a provider value that calls one (`<Ctx value={createTodos()}>`) is hoisted first. Imported components that receive live state (or that the island's DOM crosses) are inlined on a second pass when the first falls back for that reason. Flows, liveness, tiers, the server templates and the chunks all see the inlined code; the imported modules themselves are unchanged.
+- **Inlining (pass two).** For each module, the plugin passes the sources of the relative imports whose used names are factories, helpers or components (`imports` option). `compileIslands` copies each such export's closure (the top-level declarations it reads, transitively) into the module, renamed apart; runtime imports merge into the module's, other imports become absolute paths; exported _values_ it reads (a context, shared state) stay imported so they keep their identity, and the model reads a context imported from a provided module as a context. Then, in every component setup, `const x = f(args)` / `f(args)` / `const x = yield* g(args)` of a module-level factory or helper with one exit is replaced by its body (locals renamed, parameters bound, the `return` bound to the pattern); in a plain component a provider value that calls one (`<Ctx value={createTodos()}>`) is hoisted first. Imported components that receive live state (or that the island's DOM crosses) are inlined on a second pass when the first falls back for that reason. Flows, liveness, tiers, the server templates and the chunks all see the inlined code; the imported modules themselves are unchanged.
 - **Soundness.** Without a module's source, a `yield*` read of a value that a function from it computed is refused (strict v2 code reads only reactive values with `yield*`, so the value is reactive state the compiler cannot see) — `islands-modules` and the Rust test `an_imported_factory_is_inlined_and_its_state_is_the_islands` pin both sides. The cache key of a module's compile includes its imports' contents.
 
 ### Component call forms, boundaries and their fallbacks
 
 - `X({ … })`, `Loading({ … })`, `Errored({ … })`, `Show({ … })`, `For({ … })` in a view are read as the elements they stand for (a source pre-pass, inside out; a spread, a getter, a method or a computed key is refused). The `blocks-async-resolve` / `-reject` scenarios, skipped before, pass in the islands mode (streamed: the task resolves or rejects while the server streams).
 - A boundary's fallback is server HTML: its holes and handlers are not island sites.
-- **Client error boundaries.** An `<Errored>` around a tier-2 island's live content keeps a client boundary: the server marks its region with a marker pair, the content's activation runs inside `createErrorBoundary`, and a failure detaches the content (kept, still bound) and shows the fallback, built on the client from the fallback JSX with `err` / `reset`; a reset that recovers puts the same content back (`islands-errored`). The same holds for an `<Errored>` *inside* a live region — in rows the client creates, too: its region is part of the row's template and each row's content activates inside its own boundary (`islands-errored-rows`); a live hole in a fallback reads the fallback's live state. A `<Loading>` around adopted content is pass-through (its content is resolved at activation, and a settled boundary does not show its fallback again).
+- **Client error boundaries.** An `<Errored>` around a tier-2 island's live content keeps a client boundary: the server marks its region with a marker pair, the content's activation runs inside `createErrorBoundary`, and a failure detaches the content (kept, still bound) and shows the fallback, built on the client from the fallback JSX with `err` / `reset`; a reset that recovers puts the same content back (`islands-errored`). The same holds for an `<Errored>` _inside_ a live region — in rows the client creates, too: its region is part of the row's template and each row's content activates inside its own boundary (`islands-errored-rows`); a live hole in a fallback reads the fallback's live state. A `<Loading>` around adopted content is pass-through (its content is resolved at activation, and a settled boundary does not show its fallback again).
 
 ### todos-blocks compiles to islands
 
@@ -564,37 +600,37 @@ The Vite plugin's entry carries a placeholder per lazy island; `generateBundle` 
 
 #### hn
 
-| | HTML gz | JS gz at load | + JS gz on first interaction | script at load 1× | 4× | first interaction 1× | 4× | server render (CPU ms) | gate |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| today: hydrate (A) | 405.60 | 22.32 | – | 94.1 | 325.0 | 1.5 | 6.8 | 70.7 | reference |
-| before: compiled islands, tier 0, eager | 188.34 | 0.62 | – | 4.2 | 7.4 | 0.7 | 1.7 | 1.4 | pass |
-| before: compiled islands, tier 0, lazy | 188.34 | 0.52 | 0.54 | 1.8 | 1.8 | 8.9 | 44.1 | 3.9 | pass |
-| after: tier 0, eager | 188.34 | 0.69 | – | 3.8 | 17.6 | 0.8 | 3.2 | 4.6 | pass |
-| after: tier 0, lazy | 188.34 | 0.52 | 0.54 | 1.4 | 7.5 | 10.0 | 79.3 | 8.1 | pass |
-| after: tier 0, lazy, streamed boundary | 188.80 | 0.52 | 0.54 | 2.8 | 16.3 | 6.3 | 40.2 | 5.3 | pass |
+|                                         | HTML gz | JS gz at load | + JS gz on first interaction | script at load 1× |    4× | first interaction 1× |   4× | server render (CPU ms) | gate      |
+| --------------------------------------- | ------: | ------------: | ---------------------------: | ----------------: | ----: | -------------------: | ---: | ---------------------: | --------- |
+| today: hydrate (A)                      |  405.60 |         22.32 |                            – |              94.1 | 325.0 |                  1.5 |  6.8 |                   70.7 | reference |
+| before: compiled islands, tier 0, eager |  188.34 |          0.62 |                            – |               4.2 |   7.4 |                  0.7 |  1.7 |                    1.4 | pass      |
+| before: compiled islands, tier 0, lazy  |  188.34 |          0.52 |                         0.54 |               1.8 |   1.8 |                  8.9 | 44.1 |                    3.9 | pass      |
+| after: tier 0, eager                    |  188.34 |          0.69 |                            – |               3.8 |  17.6 |                  0.8 |  3.2 |                    4.6 | pass      |
+| after: tier 0, lazy                     |  188.34 |          0.52 |                         0.54 |               1.4 |   7.5 |                 10.0 | 79.3 |                    8.1 | pass      |
+| after: tier 0, lazy, streamed boundary  |  188.80 |          0.52 |                         0.54 |               2.8 |  16.3 |                  6.3 | 40.2 |                    5.3 | pass      |
 
 (after: 2 run(s); before: 2 run(s); 7 loads per run and CPU rate.)
 
 #### todos-local
 
-| | HTML gz | JS gz at load | + JS gz on first interaction | script at load 1× | 4× | first interaction 1× | 4× | server render (CPU ms) | gate |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| today: hydrate (A) | 1.39 | 22.81 | – | 10.9 | 49.1 | 2.0 | 11.6 | 1.0 | reference |
-| before: tier 1, eager | 0.86 | 3.97 | – | 3.8 | 14.3 | 1.3 | 5.7 | 0.3 | pass |
-| before: tier 1, lazy | 0.86 | 0.67 | 3.90 | 0.8 | 3.8 | 14.3 | 48.5 | 0.2 | pass |
-| after: tier 1, eager | 0.86 | 4.02 | – | 3.8 | 14.5 | 1.3 | 6.6 | 0.2 | pass |
-| after: tier 1, lazy | 0.86 | 0.67 | 3.96 | 0.7 | 3.2 | 12.9 | 42.6 | 0.2 | pass |
+|                       | HTML gz | JS gz at load | + JS gz on first interaction | script at load 1× |   4× | first interaction 1× |   4× | server render (CPU ms) | gate      |
+| --------------------- | ------: | ------------: | ---------------------------: | ----------------: | ---: | -------------------: | ---: | ---------------------: | --------- |
+| today: hydrate (A)    |    1.39 |         22.81 |                            – |              10.9 | 49.1 |                  2.0 | 11.6 |                    1.0 | reference |
+| before: tier 1, eager |    0.86 |          3.97 |                            – |               3.8 | 14.3 |                  1.3 |  5.7 |                    0.3 | pass      |
+| before: tier 1, lazy  |    0.86 |          0.67 |                         3.90 |               0.8 |  3.8 |                 14.3 | 48.5 |                    0.2 | pass      |
+| after: tier 1, eager  |    0.86 |          4.02 |                            – |               3.8 | 14.5 |                  1.3 |  6.6 |                    0.2 | pass      |
+| after: tier 1, lazy   |    0.86 |          0.67 |                         3.96 |               0.7 |  3.2 |                 12.9 | 42.6 |                    0.2 | pass      |
 
 (after: 2 run(s); before: 2 run(s); 7 loads per run and CPU rate.)
 
 #### todos
 
-| | HTML gz | JS gz at load | + JS gz on first interaction | script at load 1× | 4× | first interaction 1× | 4× | server render (CPU ms) | gate |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| today: hydrate (A) | 2.57 | 38.92 | – | 34.6 | 134.8 | 4.7 | 19.4 | 7.1 | reference |
-| before: whole-module fallback (hydrate) | 2.62 | 38.50 | – | 36.9 | 132.3 | timeout | timeout | 7.4 | pass |
-| after: one tier-2 island, eager | 1.56 | 25.29 | – | 16.2 | 62.0 | 3.2 | 16.4 | 0.9 | false |
-| after: one tier-2 island, lazy | 1.56 | 0.66 | 25.22 | 0.6 | 3.3 | 33.8 | 97.1 | 1.2 | false |
+|                                         | HTML gz | JS gz at load | + JS gz on first interaction | script at load 1× |    4× | first interaction 1× |      4× | server render (CPU ms) | gate      |
+| --------------------------------------- | ------: | ------------: | ---------------------------: | ----------------: | ----: | -------------------: | ------: | ---------------------: | --------- |
+| today: hydrate (A)                      |    2.57 |         38.92 |                            – |              34.6 | 134.8 |                  4.7 |    19.4 |                    7.1 | reference |
+| before: whole-module fallback (hydrate) |    2.62 |         38.50 |                            – |              36.9 | 132.3 |              timeout | timeout |                    7.4 | pass      |
+| after: one tier-2 island, eager         |    1.56 |         25.29 |                            – |              16.2 |  62.0 |                  3.2 |    16.4 |                    0.9 | false     |
+| after: one tier-2 island, lazy          |    1.56 |          0.66 |                        25.22 |               0.6 |   3.3 |                 33.8 |    97.1 |                    1.2 | false     |
 
 (after: 2 run(s); before: 2 run(s); 7 loads per run and CPU rate.)
 
@@ -611,7 +647,9 @@ Reading the tables:
 - **Conformance islands mode**: 75 tests, **0 skipped** (was 25 + 3 skipped). New: `blocks-async-resolve` / `-reject` (call forms, streamed resolve / reject into `Errored`), `blocks-async-event` (merged from blocks v2: an async `$event` reading a context provided outside the island — serialized), `blocks-effect`'s markup test (compared after the load-time effect's activation), and islands-only scenarios `islands-stream` (a streamed boundary with an island inside and an island spanning it), `islands-store` (a store island from server data, pruned serialization, rows over a store), `islands-async` (an adopted live async memo, an async `$event`), `islands-optimistic` (todos' state shape in one module: adopted optimistic store, action, refresh, a live `Show` render callback), `islands-modules` (a factory and a component from other modules, a helper generator reading an imported context), `islands-errored` (a client error boundary: throw, fallback, reset), `islands-errored-rows` (an error boundary inside rows the client creates); and the dev verifier on every scenario.
 - **Rust unit tests** (`src/island_emit/tests.rs`, 33): the above plus call forms, a context provided outside the island, streaming and `waits`, stores and key pruning, adoption (and its refusals), async handlers, cross-module summaries and inlining, imported contexts, factory / helper / provider inlining, client error boundaries. **JS tests**: `__tests__/islands-build.test.js` (16: streaming entry, bundled budget sizes, cross-module pass and cache, verifier entry), `__tests__/islands-stream.test.js` (5: in-place vs streamed, nested order, error routing, HTML form, swap).
 
-### Navigation and route-level clustering (design; not implemented)
+### Navigation and route-level clustering (design; navigation implemented)
+
+**Status (branch `serverComponents`).** Navigation is implemented as below, with frames as the unit: see [Compiler-derived server components](#compiler-derived-server-components). The route table comes from the app's own `createRouter({ routes: [defineRoute(…)] })`, not from a plugin option. The client swaps the outlet (another route) or morphs it (the same route, new arguments), and islands in it activate through the landing path. The gate is `sc-gate.mjs`. **Not implemented:** per-route loader tables and chunk clustering (the loader stays per page), and a per-route byte budget.
 
 - **Routes as roots.** The plugin takes a route table (`routes: { "/": "src/routes/index.tsx", "/item/:id": "src/routes/item.tsx" }`) and collects islands per route root as it does per page now. Per route it emits a small loader table (the route's lazy islands, their events, policies and bundled sizes) and clusters chunks: groups the handler map activates together (a hydrate-before-write set) share one chunk; `load` / `visible` groups of one route merge into one route chunk up to the budget; runtimes dedupe per route (`tier1Core: "auto"` per route).
 - **Navigation is streaming into a region.** A same-origin link to a known route is intercepted; the server renders the route's outlet region with `renderIslandsStream` (the page shell is already there) and the client swaps the outlet exactly as a boundary chunk lands (`$sl` → `solid-islands`): inert content is replaced wholesale — the inert proof is what makes it a server component without annotations (§3.7 path 2) — islands in it activate through the same landing path, and the route's loader table merges into the page loader's (prefetched with the route on `intent`). Islands outside the outlet keep their DOM and state; islands inside are disposed (`activate` returns a disposer at tiers 1/2; tier 0 holds only element listeners).
@@ -622,7 +660,7 @@ Reading the tables:
 
 - `Loading` inside live regions (a client pending boundary around content the client creates), and client pending fallbacks for new async reads under a `Loading` around adopted content.
 - Streaming a boundary whose data is created above it (a projection in `App` read under `App`'s `<Loading>`): the server awaits setup data before the shell.
-- Navigation and route-level clustering (design above).
+- Route-level clustering (design above; navigation itself is implemented, see [Compiler-derived server components](#compiler-derived-server-components)).
 - The t0 helper and the kernel route no errors: tier-0/1 islands under an `<Errored>` keep their runtime and do not show its fallback on a client error.
 - Store serialization is pruned to top-level keys (not paths or rows).
 
@@ -635,25 +673,25 @@ Status: 2026-09-29 (branch `scopeBlocks`). The same logic written as one compone
 Before the partitioner runs, the islands source is normalized to **scopes** (the unit that creates cells and encloses sites), in `prepare()` after imports, call forms and factory calls are inlined:
 
 1. **Row blocks become scope components.** A render callback that is a block (a bare `function*`, `$(function* …)`, or a named row block declared in the setup and passed by name, possibly recursively — see generator-blocks-v2.md, "Render callbacks as blocks") becomes a synthesized `$component` named `Host$name` (named) or `Host$For` / `Host$Show` (inline), whose captures are props and whose parameter is its item prop. Its setup runs once per row, its view is the row.
-2. **Keyed stores split per row** (`split_keyed_stores`, `store_paths::row_keyed_uses`): a `$store` map whose *every* read and write is `map[row.id]` with `row` the same row scope's item becomes a cell per row (`closed$key`), initialized from the map at that key. Any other access — a key read from the DOM (`dataset.id`), another row's key, the whole map — keeps the store whole and shared. When the split leaves the map written by nothing, the client holds it as its initial value (no live store, any tier).
+2. **Keyed stores split per row** (`split_keyed_stores`, `store_paths::row_keyed_uses`): a `$store` map whose _every_ read and write is `map[row.id]` with `row` the same row scope's item becomes a cell per row (`closed$key`), initialized from the map at that key. Any other access — a key read from the DOM (`dataset.id`), another row's key, the whole map — keeps the store whole and shared. When the split leaves the map written by nothing, the client holds it as its initial value (no live store, any tier).
 3. **Helper generators inline** (`inline_helpers`): a helper declared in a setup whose body is one `return` of an expression, called only as `yield* helper(plain args)`, is replaced at each site by its expression (parameters substituted). Others stay and are reported by the model.
 4. **Branch sinking** (`sink_into_branches`, analysis-guided on the first pass's probe): an island whose state and sites all sit in one `Show` branch over server data is rooted at the branch, which becomes a `Host$Show` scope with a children slot. This is what makes one component's toggle state a per-branch island as a `Toggle` child component would be.
 
 The partitioner then roots an island at the nearest scope that creates its cells and encloses its sites (dominance over the render graph), as it did for components. Two dominance rules changed: **an export is not a render site** here (another module's render sites are that module's own compile; `exported` stays in the model for the summary), and **a scope may render itself** (a recursive row is dominated by whoever renders its first instance).
 
-**Recursion inside an island.** Lifted state read by a recursive child (the thread under one `closed` signal) is one island over the thread. The server marks the recursion's rows as a *structural region* (a `Show` / `For` over server data holding island content: markers, as a live region has); the client adopts them with `Slot::Struct` and one row function per recursive scope that calls itself for its own rows (`$rows`). The recursion is refused — with that reason in the manifest — when it goes through another component, sits inside a live region, is not in a `<For>`, or passes props that change per level.
+**Recursion inside an island.** Lifted state read by a recursive child (the thread under one `closed` signal) is one island over the thread. The server marks the recursion's rows as a _structural region_ (a `Show` / `For` over server data holding island content: markers, as a live region has); the client adopts them with `Slot::Struct` and one row function per recursive scope that calls itself for its own rows (`$rows`). The recursion is refused — with that reason in the manifest — when it goes through another component, sits inside a live region, is not in a `<For>`, or passes props that change per level.
 
 Other changes: a prop that a member only forwards to another island's component is not bound (used-props fixpoint); a server-authoritative async memo read by an island root is serialized (`__SERVER_MEMO_i__`); `$list` / `$show` run rows created after activation under the island's owner so they are disposed with it (a leak fix; chunks with lists grow by ~94 bytes).
 
 ### Results
 
-| Source | Partition | chunk bytes | server module bytes |
-| --- | --- | ---: | ---: |
-| `apps/hn-blocks/story.tsx` (Toggle + Comment components) | one tier-0 island per toggle (`Toggle`), nothing serialized | 689 | 6,201 |
-| `apps/hn-blocks/story-single.tsx` (one component, named recursive row block) | one tier-0 island per toggle (`StoryPage$comment$Show`), nothing serialized | **689 (identical)** | 6,084 |
-| `apps/hn-blocks/story-keyed.tsx` (a keyed `closed` store in the page) | per-row tier-0 islands, cell `closed$key` serialized per row | 861 | 6,280 |
-| keyed, handler reads its key from `dataset.id` | one shared tier-2 island at `StoryPage` (the store) | 2,972 | 6,124 |
-| keyed + a filter signal every row reads | one shared tier-1 island at `StoryPage` (filter) + per-row keyed tier-0 islands | 1,651 + 861 | 6,577 |
+| Source                                                                       | Partition                                                                       |         chunk bytes | server module bytes |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ------------------: | ------------------: |
+| `apps/hn-blocks/story.tsx` (Toggle + Comment components)                     | one tier-0 island per toggle (`Toggle`), nothing serialized                     |                 689 |               6,201 |
+| `apps/hn-blocks/story-single.tsx` (one component, named recursive row block) | one tier-0 island per toggle (`StoryPage$comment$Show`), nothing serialized     | **689 (identical)** |               6,084 |
+| `apps/hn-blocks/story-keyed.tsx` (a keyed `closed` store in the page)        | per-row tier-0 islands, cell `closed$key` serialized per row                    |                 861 |               6,280 |
+| keyed, handler reads its key from `dataset.id`                               | one shared tier-2 island at `StoryPage` (the store)                             |               2,972 |               6,124 |
+| keyed + a filter signal every row reads                                      | one shared tier-1 island at `StoryPage` (filter) + per-row keyed tier-0 islands |         1,651 + 861 |               6,577 |
 
 `measure.mjs --apps hn --check`: `C-single-eager` and `C-single-lazy` (new variants over `story-single.tsx`) pass the gate against today's page with identity kept: 188.3 KB gz HTML, 0.7 KB gz JS (+0.5 KB lazy), the same as `C-eager` / `C-lazy`.
 
@@ -665,17 +703,153 @@ Supported, in addition to "Supported constructs": row blocks (bare, `$(…)`, na
 
 Still falling back or shared, with the reason: a recursion through another component, in a live region, outside a `<For>`, or with per-level props (manifest reason); a keyed store accessed at any key other than the row's own (shared, sound); a helper generator with statements, non-plain arguments or non-call uses (kept; the model reports it if it matters); view statements before the return (handled separately).
 
+## Compiler-derived server components
+
+Status: 2026-09-29 (branch `serverComponents`, from `c608e521`). The compiler derives server components (**frames**) from the islands inert proof. `"use server"` goes on data functions only, never on markup. Code:
+
+- `packages/compiler/src/island_emit/frames.rs` (new): detection, guards, manifest;
+- `graph.rs` (environment reads, frame sites), `model.rs` (server functions, pragmas, route tables);
+- `server.rs` (generated frame functions, keys, router);
+- `client.rs` (drivers, keyed state, single flight);
+- `frames-client.mjs` / `frames-server.mjs` (the applier and the flight hook), `islands-build.js` (the Vite plugin);
+- the test app `examples/hackernews-sc-blocks`.
+
+### The cut
+
+A **frame** is a memo whose value is exactly one server call, with readers that are all inert. The memo body is a prelude of plain statements and a single `return yield* attempt(() => serverFn(args))`, and `serverFn` is imported from a `"use server"` module (or named in `serverImports`). The frame's region is the view's element that encloses every reader:
+
+- the view root for a **route frame**: a component typed `RouteProps` / `RouteSectionProps` whose arguments come from `props.params` / `props.location`;
+- the smallest intrinsic element enclosing the readers for an **island frame**: arguments computed from island cells.
+
+A frame is registered per scope, like any `"use server"` reference. The server module gets one generated function, `$$frameN(...args)`, which runs the memo's prelude and the call and renders the region's string template. It is registered as `GET(createServerReference(registerServerReference(id, …)))`, so it is served at `/_server/<id>?args=[…]` as a plain-HTTP read, and its HTML answers with `x-content-raw`. The first load renders the region inline, and nothing about the frame ships to the client. The region carries `data-f="<id>"`.
+
+**Refetch.** For a route frame, navigation computes the arguments from the matched route (the route table the compiler reads from `createRouter`). For an island frame, the island's chunk has a driver hole over the argument cells (`$hole([cells], $faN, v => $frame($feN, v))`). The memo is never materialized on the client: no async memo, no rows code, no serialized result.
+
+**The applier** (`@solidjs/compiler/frames-client`, 1.56 KB gz with navigation) loads on the first refetch or navigation, never at page load. It is dedicated: no render props, no claims, no hydration, no `insert`. It fetches the frame's HTML, caches it per URL (so history and prefetch cost nothing), and morphs the region in place:
+
+- attributes are synced and children replaced;
+- a region that is itself an island's anchor is replaced;
+- then `solid-islands` fires, so the islands in the new content activate through the landing path streamed boundaries already use.
+
+**Keyed state.** An island inside a frame is keyed by its `$key` prop, or by the row's item id when it is rendered in a `<For>` over objects with an `id` (`_$forK` carries the key down the render context). The anchor gets `data-k`. With `keyedState` (on whenever the build has frames), a chunk exposes its cells on the anchor (`$a.$ss[id]`) and accepts a seed (`activate($a, $st)`). Before the morph, the applier collects the keyed states in the region. After it, each new anchor with the same `id` and key is activated with its old cells (`$SI.act`), and holes skip the server values already on the page.
+
+**Mutations: single flight.** An island `$event` that awaits a server call and then `refresh(frameMemo)` sends the call with the frames it refreshes: `x-solid-frames: [[id, argsJSON]]` plus the server functions' `X-Single-Flight`. On the server, `framesFlight(getServerFunction)` is installed as `collectFlightData`. It renders those frames after the mutation, and only for ids in the generated-frames set, never for another function the header names. They come back in the response's `{ value, data }` envelope, and the applier morphs them. One request, and the event's `refresh` is then a no-op.
+
+### Guards
+
+- **Taint.** A server function marked `// @taint` (or listed in `serverImports[].tainted`) whose value reaches client-visible output is a **build error** naming the value. Client-visible output means an island's serialized values or a frame's arguments. A frame region may render a tainted value, because it stays server HTML.
+- **Pruned serialization.** An island serializes only the prop paths its client code reads (`props.item.title`, not `props.item`). Static text is not translated, so it serializes nothing; this fixed a waste where a row island serialized a prop it only printed. The manifest's `serialized` lists the paths.
+- **Environment reads are client-live in islands mode, everywhere.** The following reads make a view hole live, re-applied at activation:
+  - `isServer`, `typeof window`;
+  - `window` / `document` / `navigator` / `Intl`;
+  - `new Date()` (no arguments), `Date.now()`, `Math.random()`;
+  - `.toLocale*()`.
+
+  This holds directly or through locals and props. A `<Show>` / `<For>` over an environment read falls back, with the reason in the manifest.
+
+- **Authorization.** Every frame is a public GET endpoint taking its arguments, so access checks belong in the data functions (an argument is attacker-chosen). The manifest says so per frame (`"public": true`, `"guard": null`) and lists each route's `guard` (null: `@solidjs/router` has none). A reviewer or CI job can diff the `frames` list.
+- **Opt out per call site.** `// @frame prefer: "client"` on the memo keeps the call as client code, and the manifest lists it under `frameCandidates` with that reason.
+- **Never cut inside client control flow over island state, or where a live island reads the server call.** These stay client code, as does a call that is not a server function, a return that reads a non-argument prelude local, and region readers outside one element. Each is listed in `frameCandidates` with its reason.
+
+### Manifest (test app)
+
+`.vite/solid-frames.json` of `examples/hackernews-sc-blocks` (stable across builds and checkouts: ids are `<Component>-<hash of the module path relative to the app root, the component and the memo>`):
+
+| id               | root    | memo    | region                    | driver | arguments ← from                  | server functions | islands                                                            |
+| ---------------- | ------- | ------- | ------------------------- | ------ | --------------------------------- | ---------------- | ------------------------------------------------------------------ |
+| `Stories-6r9b72` | Stories | `feed`  | `<div class="news-view">` | route  | `type`, `page` ← `props.location` | `getStories`     | –                                                                  |
+| `Story-ujn5qn`   | Story   | `story` | `<div class="item-view">` | route  | `id` ← `props.params`             | `getStory`       | `i3_0` Toggle, keyed by `row item id`, transplant, serialized `[]` |
+| `User-udm88r`    | User    | `user`  | `<div class="user-view">` | route  | `id` ← `props.params`             | `getUser`        | –                                                                  |
+
+All three frames are `public: true`, `guard: null`, and not tainted. `frameCandidates` is `[]`. The four routes (`/`, `/:type/:page?`, `/stories/:id`, `/users/:id`) are listed with `preload: true` and `guard: null`.
+
+### Measurements
+
+`node scripts/ssr-redesign/sc-gate.mjs --reps 7 --out documentation/plans/ssr-hydration-redesign/sc-1.json` (data: [`sc-1.json`](./ssr-hydration-redesign/sc-1.json)). Both apps are production Vite builds served by their own `server.js`, with the HN API answered by recorded fixtures (`hn-fixtures.mjs`), in Chromium at 1× CPU:
+
+- HTML gz is the document;
+- JS gz at load is every `.js` response up to the page's `load` and settled content;
+- first navigation clicks the list's first story (from `/`) or the author link (from the story), and counts the `.js` and `/_server` responses it caused;
+- server is the median wall time of the document request (7 reps), fixture data included.
+
+The hn-blocks islands variants come from `measure.mjs --apps hn --only A,C-eager,C-lazy --reps 7 --cpu 1` ([`sc-hn-islands-1.json`](./ssr-hydration-redesign/sc-hn-islands-1.json)). They measure the story page alone, rendered in process with no navigation, and their server time is the in-process render (`ssr`).
+
+| App                                                                   | Page  |      HTML gz |      JS gz at load |              JS gz on first navigation | responses on first navigation | requests on first navigation | server render |
+| --------------------------------------------------------------------- | ----- | -----------: | -----------------: | -------------------------------------: | ----------------------------: | ---------------------------: | ------------: |
+| `hackernews` (hand-written `"use server"` components, frames runtime) | `/`   |       5.9 KB |            53.4 KB |                                      0 |                   253.7 KB gz |                            1 |        6.0 ms |
+|                                                                       | story |     260.5 KB |            53.4 KB |                                      0 |                     0.3 KB gz |                            1 |       77.8 ms |
+| **`hackernews-sc-blocks`** (derived frames)                           | `/`   |   **1.4 KB** |         **1.7 KB** | 1.5 KB (the lazy applier + navigation) |                   193.6 KB gz |                            2 |    **1.4 ms** |
+|                                                                       | story | **193.9 KB** |         **1.7 KB** |                                 1.5 KB |                     0.2 KB gz |                            2 |   **19.5 ms** |
+| hn-blocks islands, today's hydration (A)                              | story |     405.6 KB |            22.4 KB |                      – (no navigation) |                             – |                            – |       34.0 ms |
+| hn-blocks islands `C-eager`                                           | story |     188.3 KB |             0.8 KB |                                      – |                             – |                            – |        2.4 ms |
+| hn-blocks islands `C-lazy`                                            | story |     188.3 KB | 0.7 KB (+0.6 lazy) |                                      – |                             – |                            – |        1.9 ms |
+
+Requests per navigation over the gate's eight steps (list → story, story → user, user → new, new → page 2, back → new, back → user, user → top, top → story):
+
+- `hackernews`: 1, 1, 1, 1, 0, 0, 0, 0.
+- `hackernews-sc-blocks`: 2, 1, 1, 1, 0, 0, 1, 0.
+
+sc-blocks makes one extra request twice:
+
+- the lazy navigation module on the first navigation;
+- `user → top`: the first page's frame was rendered inline with the document, so it is not in the applier's cache (the hand-written app answers this step without a request).
+
+Reading the numbers:
+
+- **Page load.** Derived frames ship the page as server HTML plus a 1.7 KB gz loader: the Toggle island is 0.69 KB gz and loads on interaction. That is 31× less JS at load than the hand-written server components app. The hand-written app's 53.4 KB gz is the hydrated client, including the frames runtime (30.9 KB gz with its runtime parts; see core-runtime-slicing.md §8).
+- **HTML.** The story page is 25% smaller. There are no hydration keys, no slot records, and no serialized data for the Toggle.
+- **Navigation.** It costs the applier once (1.5 KB gz), then HTML per frame. The list → story navigation brings 24% less than the hand-written app's frame stream (193.6 vs 253.7 KB gz).
+- **Server render** is 4× faster: string templates, no reactive graph.
+- **Against hn-blocks islands**, the same story page with no router: sc-blocks adds 5.6 KB gz of HTML (the header, the route layout and the whole page's comment tree under a route) and 1 KB gz of loader, and gains client navigation.
+
+### Behaviour evidence
+
+- **Browser gate** (`sc-gate.mjs`, Chromium; `--check` for the gate alone). Full loads of `/`, a story and a user page, then eight client navigations: link clicks, history back, the next feed page, and the header's `top` link. After every step the two apps' canonical DOM is equal. Frames markers, island and frame attributes, hydration keys and `<solid-frame>` wrappers are removed from the comparison, styles are compared through CSSOM, and `aria-current` is compared on the header only. The keyed toggle check collapses a comment, refetches its story's frame, and checks it is still collapsed: it passes.
+- **Keyed vs unkeyed** (`packages/compiler/__tests__/frames-client.test.js`, "a keyed island keeps its state on its new anchor; an unkeyed one starts over"). The same morph run twice: the keyed Toggle keeps `open`, and the unkeyed one starts from its server value.
+- **Conformance, islands mode** (`packages/web/test/conformance/scenarios/islands-frames.ts`, registered in `islands.spec.ts`; 193 tests pass, none skipped):
+  - `islands-frames-env`: an environment hole applied at activation;
+  - `islands-frames-prune`: `serialized` is exactly `props.item.title`;
+  - `islands-frames-refetch`: an island frame over island state, with the real server-functions handler behind a `fetch` stub and the real applier. It checks four things, each at the compiler's tier, at tier 1 and on the core, equal to the oracle's keyed `For`: the region refetches on `next`, B keeps its open state, C activates on landing, and C keeps its state on the next page. With `keyedState: false` the same scenario fails on exactly those states. The harness gained `islandsServer` (the server half of a data module), `islandsManifest` (manifest assertions), and `data-f` / `data-k` in its markup normalization.
+- **Negative tests** (`src/island_emit/tests.rs`):
+  - `an_island_serializing_a_tainted_value_is_a_build_error`;
+  - `every_environment_read_in_a_view_is_client_live` (the ten environment reads above, each named in the reason) and `environment_reads_flow_through_locals_and_props`;
+  - `prefer_client_keeps_a_server_call_over_island_state_as_client_code`;
+  - `a_frame_candidate_inside_client_control_flow_stays_client_code`;
+  - `a_server_result_a_live_island_also_reads_is_not_a_frame`;
+  - `a_call_that_is_not_a_server_function_is_not_a_frame`;
+  - `a_show_over_the_environment_falls_back_with_the_reason`.
+- **Other Rust tests:** route and island frames, the driver, keyed state, single flight, pruning, and static text not serialized. The crate's 221 Rust tests pass.
+- **JS tests:**
+  - `__tests__/frames-client.test.js` (8: keyed morph, anchor-region replacement, island frame fetch and stale-response drop, outlet swap vs morph, caching and full-load fallback, route matching, the entry's activator / interceptor / link state, the navigation module's route table);
+  - `__tests__/frames-flight.test.js` (1: a mutation and the refresh of the frame it invalidates are one request, end to end over compiler output and the real handler).
+
+### What falls back, and what keeps a full runtime
+
+- **`refresh` of a route frame** refetches nothing, because route frames re-render on navigation only. Island frames and single flight cover mutations.
+- **Non-JSON values.** A frame's response is HTML, but its arguments and the islands' serialized values are JSON. A value outside JSON (a `Date`, a `Map`) would need the server-functions codec, which the derived path does not load.
+- **Environment-dependent structure:** a `<Show>` / `<For>` over an environment read falls back to whole-module hydration (the reason is in the manifest).
+- **The hand-written frames runtime** (`@solidjs/web/frames`) keeps its full client wherever its switches are proven on (core-runtime-slicing.md §8).
+  - The derived path does not use that client at all.
+  - The hand-written `hackernews` still needs `FRAGMENTS` (its `Loading`) and the slot trio: its story view hands the `toggle` slot to a client component. A slot is a hydrated client component inside server markup, which is exactly what the derived path replaces with a keyed island.
+
+### Not done, and blockers from constructs `islandFallbacks` adds
+
+- **View statements.** A `const x = yield* memo` before the view's `return`, the natural way to write a route view, is not supported on this branch; the `islandFallbacks` branch adds it and was not merged here. The test app writes `(yield* story).title` at each use instead. With view statements, a frame's readers could be written once, and the frame region would follow the same rules.
+- **An island component imported from another module inside a frame region makes the rendering component async** (`_$forAK`). The story page renders its comment tree through `Promise.all` per level. The output is correct, but it is slower than a synchronous template.
+- **Refresh of route frames, and streaming a frame's own `<Loading>`.** A frame is one finished HTML string. A `<Loading>` inside a region renders on the server, not as a streamed fragment.
+- **Per-route loader tables and chunk clustering** (the Navigation design above).
+
 ## Defects found
 
-| Defect | Status | Evidence |
-| --- | --- | --- |
-| **Production `$` blocks mis-read stores in nested computations.** `recompute` (and the status-free recompute) lowered the block strict guard only under `__DEV__`, while the driver raises it and store proxies answer it with path tokens in every tier. A `Show` / `For` / render effect created inside a v2 view therefore failed with `[UNREAD_PATH]` in production: the todos-blocks production build showed its error fallback, and its SSR page re-rendered the list instead of hydrating it | **Fixed** (`@solidjs/signals`, changeset `block-guard-prod-nested-computations`) | `tests/block-guard-nested-computation.test.ts` fails under `SIGNALS_TIER=prod` before the fix |
-| **v2 `yield* Ctx` could not server-render.** The context op read through the client core's `getContext`, which has no owner on the server (NoOwnerError; todos-blocks SSR rendered its `<Errored>` fallback) | **Fixed** (`@solidjs/signals`, `solid-js`; the server provider installs a reader under `Symbol.for("solid.contextRead")`) | `packages/web/test/server/block-api.spec.tsx` |
-| **`hackernews-spa` production build: toggles never become interactive** under CPU throttling, although `_$HY.done` is set and the server nodes are in place | **Fixed** (`@solidjs/web`, changeset `hydrate-document-after-shell-parse`). Root cause: a hydration race with the HTML parser. The vite plugin injects the client entry as `<script type="module" async>` so hydration can start while a stream is open; an async module runs as soon as it loads, which on the 1.4 MB story page under throttling is mid-parse. `hydrate(…, document)` then gathered `_hk` elements whose opening tag was parsed but whose children were not, and the compiled walk threw (`Cannot read properties of null (reading 'firstChild' / 'nextSibling')`, `setting '$$click'`) at a different point each load; every toggle past it kept no handler (108–452 of 652 bound). Fix: `hydrate()` on a document still `loading` waits for DOMContentLoaded, or for a shell-parsed marker (`_$HY.sh`) that `renderToStream` writes right after a shell that still has pending fragments, so a streamed shell hydrates before its slow boundaries resolve; captured events replay as before | Regression tests `packages/web/test/hydration/document-root-parse-race.spec.tsx` (3 of 4 fail before the fix) and `test/server/shell-parsed-marker.spec.tsx`. `probe-twin-toggle.mjs hackernews-spa 4 7`: 6/7 dead before (7/7 in a second run), **0/7** after; 0/7 at 1×; all 652 toggles bound, no console errors |
-| **`hackernews` (server components): a load renders "Uncaught Client Exception"** instead of the thread | **Fixed, same root cause (by attribution)**. The text is the generated `DefaultErrorBoundary`'s client fallback, i.e. an error thrown while hydrating; the only client error these twins produce is the parse-race TypeError above, which that boundary catches (its `console.error` is where the TypeErrors surfaced). Not reproduced in 14 loads (1× and 4×) on either runtime, so the fix is confirmed by the absence of any hydration-time error, not by a before/after count | After the fix: 0/14 loads (1× and 4×) with the fallback text, a page error, or a dead toggle, for both `hackernews` and `hackernews-spa` |
-| **The v2 HN page does not hydrate through today's pipeline.** The blocks version of the story page (`apps/hn-blocks/story.tsx`: an async `$memo` with `attempt` under `Loading`) server-rendered only a rejected fragment (`client-only content (bare ssrSource: "client")`), and the client fetched the story again | **Fixed** (`@solidjs/web`, `solid-js`, `@solidjs/signals`; changeset `v2-blocks-hydration-parity`). Three root causes, in the order they surfaced: (1) Toggle's `{props.children}` (forwarded without `yield*`) reaches the renderers as a v2 path-read op, a proxy that answers every property with another read. The server resolver took it for a template object (`node.h`, `node.t`, `node.p` all "present") and pushed reads into the boundary's pending list, where the truthy `p.$clientHole` probe classified them as a final client hole. Renderers now render a read op as the value it reads (`isReadOp`, in `flatten` and in the server's `escape` / resolvers), and the probe checks `=== true`. (2) `Page`'s view returns `<Loading>`, so `Loading` is deferred (`lazyView`) on both sides. The client resolves the thunk under a fresh owner (one id level); the shared implementation's owner is a client-core owner, which carries no id on the server, so every key under the boundary sat one level higher on the server (`1000` vs `10000` for the story memo): the client missed the serialized memo and refetched. The server now registers its own `lazyView` (a server owner around the shared thunk) as a block primitive and uses it in `Loading` / `Errored`. (3) With that, a component called inside a server memo (`Show`'s children: `<Toggle>` in `Comment`) was deferred on the server only: the client's `recompute` lowers the block guard for every computation, the server's memos did not, so `inBlock()` answered true there on the server. Server memo computes now lower the guard too. Also found on the way (client, streaming and CSR): `insert` rendered a hole's `$` block value (the root `() => <Page />`) in its inner unwrapping effect, which re-runs whenever the boundary the view returns settles — a fresh `Loading`, memo and fetch on every settle, forever (CSR: `render(() => <Page />)` never settled; streamed hydration re-rendered the fallback). The outer computation now renders it | `measure.mjs --apps hn --only A-blocks` (variant restored: `apps/hn-blocks/{server,client}.tsx`): before, 0 story markup, a refetch of `/story.json` and 2 key misses (`100010`, `1010`) at the first fix; after, **0 key misses, no request, the story memo adopted** (`adopted: 1`), 2,062 owners / 4,880 computations like A, the gate against A passes after load and after the session, all 652 toggles bound; first interaction 1.3 / 8.5 ms at 1× / 4× (A: 1.4 / 6.4). Regression tests: `packages/web/test/harness/block-v2-scenarios.tsx` in the parity harness (`v2-view-returns-loading` loaded + streamed, `v2-block-root-loading` loaded + streamed, `v2-forwarded-children`: 5 of 6 fail before the runtime fixes), `test/block-api.spec.tsx` (a root view returning `<Loading>` fetches once — looped before; `{props.children}` forwarding) |
-| **todos-blocks today (A) on this branch: 104 hydration key misses, and the first-interaction probe times out** (8 s; the row never shows `pending`) | **Fixed** (`@solidjs/compiler`, changeset `v2-blocks-hydration-parity`). Root cause: a `$component`'s view is lowered to `$(function () { … }, BLOCK_SYNC)`, and the hydration id-scope pass (`block_scope.rs`) only wrapped one-argument `$(fn)` calls, so views were not id-scoped. The client renders `<Header />`'s view from its insert effect at once; the server's `escape` defers it to `ssr()` time, after the sibling `<Loading>` had taken the next slot (server `header _hk=10012`, `Loading` `10011`; client asked for `10011`), and every key below shifted. Without claimed nodes, the delegated handlers were bound to detached clones, so clicks did nothing. The pass now also wraps `$(fn, flags)` views — also when the v2 client lowering imports the adapter as `syncBlock` — and still leaves a flagged setup or event (the direct argument of `$component` / `$event`, which the client lowering may erase to `$componentCompiled(fn)` / `$eventCompiled(fn)`) unscoped on both sides | `measure.mjs --apps todos --only A`: **`keyMiss` 104 → 0**; the session now does work (after-session signals 107 → 237); first interaction **5.2 / 16.3 ms** at 1× / 4× (timed out before); `C` and `A-lazy` pass the gate. Rust test `block_scope::tests::wraps_component_views_lowered_with_flags`; parity-harness scenario `v2-view-then-boundary` |
-| **A component in two islands got both islands' code in each chunk.** `client.rs` lowered every member component's whole setup and view per group: with `Page` owning `count` (written by `AddToCart`, read by `CartBadge`) and `dark` (toggled and read by `CartBadge`, read by `Page`'s root class), the manifest correctly gave `i0` = {count} (Page, AddToCart, CartBadge; `submit`) and `i1` = {dark} (Page, CartBadge; `click`), but `i0`'s chunk also created `dark`, attached the badge's click handler and bound both `dark` class holes, and `i1`'s chunk created `count` and bound the count text. Two copies of each cell existed on the page; once the islands activated at different times (a submit activates `i0`, the first click `i1`) the copies went out of phase and the class holes showed the inverse of the state, silently (whichever island's effect ran last won). Root cause: the emitter decided "bound here?" with the analysis-wide live-site flag and `needed_items` pulled in every setup item that any call prop or any non-root member's site referenced | **Fixed** (`@solidjs/compiler`, changeset `islands-split-shared-component`). The emitter keeps, per group, only the sites in `Group::sites` (handlers, text and attribute holes, `Show` / `For`, effects) and the setup items those need; a cell or memo of another island is never created locally (a hole of another island is counted as its marker pair and left alone). A site that would need another island's cell inside content this island creates (a fresh region row, a client-built fallback), or island sites inside another island's region, is refused with a reason: the union-find should have merged those | Rust tests `island_emit::tests::a_component_in_two_islands_gets_only_each_islands_sites` and the strengthened `two_unrelated_cells_in_one_component_are_two_islands` (each chunk names only its own cell and handler); conformance scenarios `islands-shared-member` / `islands-shared-member-reversed` (`packages/web/test/conformance/scenarios/islands.ts`, `manualActivation`: the steps activate the islands one at a time in both orders with clicks in between, the DOM equals the oracle's after every step). Before the fix, with `i0` active alone, a click on the badge toggled the page dark (`i0` had a handler it did not own) |
+| Defect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Status                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Production `$` blocks mis-read stores in nested computations.** `recompute` (and the status-free recompute) lowered the block strict guard only under `__DEV__`, while the driver raises it and store proxies answer it with path tokens in every tier. A `Show` / `For` / render effect created inside a v2 view therefore failed with `[UNREAD_PATH]` in production: the todos-blocks production build showed its error fallback, and its SSR page re-rendered the list instead of hydrating it                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | **Fixed** (`@solidjs/signals`, changeset `block-guard-prod-nested-computations`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `tests/block-guard-nested-computation.test.ts` fails under `SIGNALS_TIER=prod` before the fix                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| **v2 `yield* Ctx` could not server-render.** The context op read through the client core's `getContext`, which has no owner on the server (NoOwnerError; todos-blocks SSR rendered its `<Errored>` fallback)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | **Fixed** (`@solidjs/signals`, `solid-js`; the server provider installs a reader under `Symbol.for("solid.contextRead")`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | `packages/web/test/server/block-api.spec.tsx`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| **`hackernews-spa` production build: toggles never become interactive** under CPU throttling, although `_$HY.done` is set and the server nodes are in place                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | **Fixed** (`@solidjs/web`, changeset `hydrate-document-after-shell-parse`). Root cause: a hydration race with the HTML parser. The vite plugin injects the client entry as `<script type="module" async>` so hydration can start while a stream is open; an async module runs as soon as it loads, which on the 1.4 MB story page under throttling is mid-parse. `hydrate(…, document)` then gathered `_hk` elements whose opening tag was parsed but whose children were not, and the compiled walk threw (`Cannot read properties of null (reading 'firstChild' / 'nextSibling')`, `setting '$$click'`) at a different point each load; every toggle past it kept no handler (108–452 of 652 bound). Fix: `hydrate()` on a document still `loading` waits for DOMContentLoaded, or for a shell-parsed marker (`_$HY.sh`) that `renderToStream` writes right after a shell that still has pending fragments, so a streamed shell hydrates before its slow boundaries resolve; captured events replay as before                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Regression tests `packages/web/test/hydration/document-root-parse-race.spec.tsx` (3 of 4 fail before the fix) and `test/server/shell-parsed-marker.spec.tsx`. `probe-twin-toggle.mjs hackernews-spa 4 7`: 6/7 dead before (7/7 in a second run), **0/7** after; 0/7 at 1×; all 652 toggles bound, no console errors                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| **`hackernews` (server components): a load renders "Uncaught Client Exception"** instead of the thread                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | **Fixed, same root cause (by attribution)**. The text is the generated `DefaultErrorBoundary`'s client fallback, i.e. an error thrown while hydrating; the only client error these twins produce is the parse-race TypeError above, which that boundary catches (its `console.error` is where the TypeErrors surfaced). Not reproduced in 14 loads (1× and 4×) on either runtime, so the fix is confirmed by the absence of any hydration-time error, not by a before/after count                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | After the fix: 0/14 loads (1× and 4×) with the fallback text, a page error, or a dead toggle, for both `hackernews` and `hackernews-spa`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| **The v2 HN page does not hydrate through today's pipeline.** The blocks version of the story page (`apps/hn-blocks/story.tsx`: an async `$memo` with `attempt` under `Loading`) server-rendered only a rejected fragment (`client-only content (bare ssrSource: "client")`), and the client fetched the story again                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | **Fixed** (`@solidjs/web`, `solid-js`, `@solidjs/signals`; changeset `v2-blocks-hydration-parity`). Three root causes, in the order they surfaced: (1) Toggle's `{props.children}` (forwarded without `yield*`) reaches the renderers as a v2 path-read op, a proxy that answers every property with another read. The server resolver took it for a template object (`node.h`, `node.t`, `node.p` all "present") and pushed reads into the boundary's pending list, where the truthy `p.$clientHole` probe classified them as a final client hole. Renderers now render a read op as the value it reads (`isReadOp`, in `flatten` and in the server's `escape` / resolvers), and the probe checks `=== true`. (2) `Page`'s view returns `<Loading>`, so `Loading` is deferred (`lazyView`) on both sides. The client resolves the thunk under a fresh owner (one id level); the shared implementation's owner is a client-core owner, which carries no id on the server, so every key under the boundary sat one level higher on the server (`1000` vs `10000` for the story memo): the client missed the serialized memo and refetched. The server now registers its own `lazyView` (a server owner around the shared thunk) as a block primitive and uses it in `Loading` / `Errored`. (3) With that, a component called inside a server memo (`Show`'s children: `<Toggle>` in `Comment`) was deferred on the server only: the client's `recompute` lowers the block guard for every computation, the server's memos did not, so `inBlock()` answered true there on the server. Server memo computes now lower the guard too. Also found on the way (client, streaming and CSR): `insert` rendered a hole's `$` block value (the root `() => <Page />`) in its inner unwrapping effect, which re-runs whenever the boundary the view returns settles — a fresh `Loading`, memo and fetch on every settle, forever (CSR: `render(() => <Page />)` never settled; streamed hydration re-rendered the fallback). The outer computation now renders it | `measure.mjs --apps hn --only A-blocks` (variant restored: `apps/hn-blocks/{server,client}.tsx`): before, 0 story markup, a refetch of `/story.json` and 2 key misses (`100010`, `1010`) at the first fix; after, **0 key misses, no request, the story memo adopted** (`adopted: 1`), 2,062 owners / 4,880 computations like A, the gate against A passes after load and after the session, all 652 toggles bound; first interaction 1.3 / 8.5 ms at 1× / 4× (A: 1.4 / 6.4). Regression tests: `packages/web/test/harness/block-v2-scenarios.tsx` in the parity harness (`v2-view-returns-loading` loaded + streamed, `v2-block-root-loading` loaded + streamed, `v2-forwarded-children`: 5 of 6 fail before the runtime fixes), `test/block-api.spec.tsx` (a root view returning `<Loading>` fetches once — looped before; `{props.children}` forwarding) |
+| **todos-blocks today (A) on this branch: 104 hydration key misses, and the first-interaction probe times out** (8 s; the row never shows `pending`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | **Fixed** (`@solidjs/compiler`, changeset `v2-blocks-hydration-parity`). Root cause: a `$component`'s view is lowered to `$(function () { … }, BLOCK_SYNC)`, and the hydration id-scope pass (`block_scope.rs`) only wrapped one-argument `$(fn)` calls, so views were not id-scoped. The client renders `<Header />`'s view from its insert effect at once; the server's `escape` defers it to `ssr()` time, after the sibling `<Loading>` had taken the next slot (server `header _hk=10012`, `Loading` `10011`; client asked for `10011`), and every key below shifted. Without claimed nodes, the delegated handlers were bound to detached clones, so clicks did nothing. The pass now also wraps `$(fn, flags)` views — also when the v2 client lowering imports the adapter as `syncBlock` — and still leaves a flagged setup or event (the direct argument of `$component` / `$event`, which the client lowering may erase to `$componentCompiled(fn)` / `$eventCompiled(fn)`) unscoped on both sides                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | `measure.mjs --apps todos --only A`: **`keyMiss` 104 → 0**; the session now does work (after-session signals 107 → 237); first interaction **5.2 / 16.3 ms** at 1× / 4× (timed out before); `C` and `A-lazy` pass the gate. Rust test `block_scope::tests::wraps_component_views_lowered_with_flags`; parity-harness scenario `v2-view-then-boundary`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| **A component in two islands got both islands' code in each chunk.** `client.rs` lowered every member component's whole setup and view per group: with `Page` owning `count` (written by `AddToCart`, read by `CartBadge`) and `dark` (toggled and read by `CartBadge`, read by `Page`'s root class), the manifest correctly gave `i0` = {count} (Page, AddToCart, CartBadge; `submit`) and `i1` = {dark} (Page, CartBadge; `click`), but `i0`'s chunk also created `dark`, attached the badge's click handler and bound both `dark` class holes, and `i1`'s chunk created `count` and bound the count text. Two copies of each cell existed on the page; once the islands activated at different times (a submit activates `i0`, the first click `i1`) the copies went out of phase and the class holes showed the inverse of the state, silently (whichever island's effect ran last won). Root cause: the emitter decided "bound here?" with the analysis-wide live-site flag and `needed_items` pulled in every setup item that any call prop or any non-root member's site referenced | **Fixed** (`@solidjs/compiler`, changeset `islands-split-shared-component`). The emitter keeps, per group, only the sites in `Group::sites` (handlers, text and attribute holes, `Show` / `For`, effects) and the setup items those need; a cell or memo of another island is never created locally (a hole of another island is counted as its marker pair and left alone). A site that would need another island's cell inside content this island creates (a fresh region row, a client-built fallback), or island sites inside another island's region, is refused with a reason: the union-find should have merged those                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Rust tests `island_emit::tests::a_component_in_two_islands_gets_only_each_islands_sites` and the strengthened `two_unrelated_cells_in_one_component_are_two_islands` (each chunk names only its own cell and handler); conformance scenarios `islands-shared-member` / `islands-shared-member-reversed` (`packages/web/test/conformance/scenarios/islands.ts`, `manualActivation`: the steps activate the islands one at a time in both orders with clicks in between, the DOM equals the oracle's after every step). Before the fix, with `i0` active alone, a click on the badge toggled the page dark (`i0` had a handler it did not own)                                                                                                                                                                                                                |
 
 ## Decisions (after review)
 
@@ -719,6 +893,7 @@ Still falling back or shared, with the reason: a recursion through another compo
 1. **Store serialization granularity:** live paths vs whole store vs per-row. It interacts with Track B handle stores and projections.
 2. **How does the dev verifier report without making dev builds diverge from production** in timing-sensitive code (streaming, boundaries)?
 3. **Unifying with server components:** should an inert region become a server component automatically on navigation (frames), or should route chunks be the default and SC opt-in?
+   **Answered (branch `serverComponents`): frames are automatic, and client code is the per-call-site opt-out.** When the inert proof shows that a region's content depends only on one server call, it becomes a frame. That covers the route's params and search, or island state feeding the call. Navigation and argument changes then refetch HTML, never component code. The data crosses the network once per argument change either way, and HTML is at most the data plus its markup, while the route chunk that would render it client-side is paid once per route. `@frame prefer: "client"` on the memo keeps the call as client code. Use it when the rows are cheaper to render on the client (small data, many argument changes, e.g. typeahead). Route chunks become the default only where the proof fails: a region read by live islands, client control flow over island state, or `"use server"` missing on the data function. The manifest lists each of these as a `frameCandidates` reason. See [Compiler-derived server components](#compiler-derived-server-components).
 
 ## Reproduce
 
@@ -750,9 +925,16 @@ node scripts/ssr-redesign/measure.mjs --apps todos-local --only A,C-eager,C-lazy
 node scripts/ssr-redesign/measure.mjs --apps todos --only A,C,C-eager --out documentation/plans/ssr-hydration-redesign/trackg-todos-1.json   # and -2
 node scripts/ssr-redesign/trackg-report.mjs                    # the tables in "Islands for real apps"
 (cd packages/compiler && pnpm exec vitest run __tests__/islands-stream.test.js)
+# Compiler-derived server components (section "Compiler-derived server components")
+(cd examples/hackernews && pnpm build); (cd examples/hackernews-sc-blocks && pnpm build)
+node scripts/ssr-redesign/sc-gate.mjs --reps 7 --out documentation/plans/ssr-hydration-redesign/sc-1.json   # gate + measurements (--check: gate only)
+node scripts/ssr-redesign/measure.mjs --apps hn --only A,C-eager,C-lazy --reps 7 --cpu 1 --out documentation/plans/ssr-hydration-redesign/sc-hn-islands-1.json
+(cd packages/compiler && cargo test --lib island_emit && pnpm exec vitest run __tests__/frames-client.test.js __tests__/frames-flight.test.js)
+(cd packages/web && pnpm exec vitest run test/conformance/islands.spec.ts -t islands-frames)
 ```
 
 Harness notes:
+
 - **Counters and oracles** are exact-once textual patches of the prod dists, applied at bundle time (`lib.mjs`); a changed anchor fails loudly.
 - **The work counters are:**
   - `computed()` constructions;

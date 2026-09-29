@@ -1,0 +1,159 @@
+{
+  "apps": {
+    "hackernews": {
+      "navs": [
+        {
+          "name": "list → story",
+          "requests": 1,
+          "urls": [
+            "/_server/data/storyView-6d10926b?args=%5B%2230186326%22%5D"
+          ]
+        },
+        {
+          "name": "story → user",
+          "requests": 1,
+          "urls": [
+            "/_server/data/userView-6d10926b?args=%5B%22lxm%22%5D"
+          ]
+        },
+        {
+          "name": "user → new",
+          "requests": 1,
+          "urls": [
+            "/_server/data/storiesView-6d10926b?args=%5B%22new%22%2C1%5D"
+          ]
+        },
+        {
+          "name": "new → page 2",
+          "requests": 1,
+          "urls": [
+            "/_server/data/storiesView-6d10926b?args=%5B%22new%22%2C2%5D"
+          ]
+        },
+        {
+          "name": "back → new",
+          "requests": 0,
+          "urls": []
+        },
+        {
+          "name": "back → user",
+          "requests": 0,
+          "urls": []
+        },
+        {
+          "name": "user → top",
+          "requests": 0,
+          "urls": []
+        },
+        {
+          "name": "top → story",
+          "requests": 0,
+          "urls": []
+        }
+      ],
+      "measure": {
+        "/": {
+          "htmlGz": 6009,
+          "htmlBytes": 32690,
+          "jsLoadGz": 54699,
+          "jsNavGz": 0,
+          "navResponsesGz": 259769,
+          "navRequests": 1,
+          "serverMs": 6.038198000000193
+        },
+        "/stories/30186326": {
+          "htmlGz": 266770,
+          "htmlBytes": 1154888,
+          "jsLoadGz": 54699,
+          "jsNavGz": 0,
+          "navResponsesGz": 339,
+          "navRequests": 1,
+          "serverMs": 77.80294200000026
+        }
+      }
+    },
+    "hackernews-sc-blocks": {
+      "navs": [
+        {
+          "name": "list → story",
+          "requests": 2,
+          "urls": [
+            "/assets/nav-DxbPSAP3.js",
+            "/_server/Story-kvbzen?args=%5B%2230186326%22%5D"
+          ]
+        },
+        {
+          "name": "story → user",
+          "requests": 1,
+          "urls": [
+            "/_server/User-erb1d7?args=%5B%22lxm%22%5D"
+          ]
+        },
+        {
+          "name": "user → new",
+          "requests": 1,
+          "urls": [
+            "/_server/Stories-4gk9dq?args=%5B%22new%22%2C1%5D"
+          ]
+        },
+        {
+          "name": "new → page 2",
+          "requests": 1,
+          "urls": [
+            "/_server/Stories-4gk9dq?args=%5B%22new%22%2C2%5D"
+          ]
+        },
+        {
+          "name": "back → new",
+          "requests": 0,
+          "urls": []
+        },
+        {
+          "name": "back → user",
+          "requests": 0,
+          "urls": []
+        },
+        {
+          "name": "user → top",
+          "requests": 1,
+          "urls": [
+            "/_server/Stories-4gk9dq?args=%5B%22top%22%2C1%5D"
+          ]
+        },
+        {
+          "name": "top → story",
+          "requests": 0,
+          "urls": []
+        }
+      ],
+      "measure": {
+        "/": {
+          "htmlGz": 1385,
+          "htmlBytes": 11156,
+          "jsLoadGz": 1739,
+          "jsNavGz": 1558,
+          "navResponsesGz": 198204,
+          "navRequests": 2,
+          "serverMs": 1.3640329999998357
+        },
+        "/stories/30186326": {
+          "htmlGz": 198522,
+          "htmlBytes": 745410,
+          "jsLoadGz": 1739,
+          "jsNavGz": 1558,
+          "navResponsesGz": 225,
+          "navRequests": 2,
+          "serverMs": 19.454063000001042
+        }
+      }
+    }
+  },
+  "keyed": {
+    "before": "toggle",
+    "after": {
+      "cls": "toggle",
+      "text": "[+] comments collapsed"
+    },
+    "again": "toggle open"
+  }
+}

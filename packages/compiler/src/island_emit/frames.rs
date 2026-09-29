@@ -31,7 +31,7 @@ use oxc_span::{GetSpan, Span};
 
 use super::graph::{Analysis, Key, Refs, SiteKind, refs_expr, refs_stmt};
 use super::jsx::{self, Tag};
-use super::model::{FnRef, Item, Model, binding_symbols, call_of, yield_delegate};
+use super::model::{FnRef, Item, Model, binding_symbols, call_of};
 
 pub(crate) struct Frame<'a> {
     /// The generated server function's id (`<Component>-<hash>`), also the
@@ -732,19 +732,6 @@ fn jsx_parent_region(view: &Expression<'_>, input: Span) -> Option<Span> {
     let mut v = V { input, out: None };
     v.visit_expression(view);
     v.out
-}
-
-/// Does `stmt` read (outside nested functions) the client environment? Used
-/// by the taint guard to report.
-#[allow(dead_code)]
-pub(crate) fn stmt_refs<'a>(m: &Model<'a>, s: &'a Statement<'a>) -> Refs {
-    refs_stmt(m, s)
-}
-
-/// `yield* X` → X, for route argument functions (props are plain values).
-#[allow(dead_code)]
-pub(crate) fn unyield<'b, 'a>(e: &'b Expression<'a>) -> &'b Expression<'a> {
-    yield_delegate(e).unwrap_or(e)
 }
 
 

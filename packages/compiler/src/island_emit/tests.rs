@@ -1894,3 +1894,54 @@ export const Thread = $component(function* (props) {
     // Nothing on the client drives the arguments: no refetch hole.
     assert!(!chunk.contains("$frame("), "{chunk}");
 }
+
+#[test]
+fn frame_ids_hash_the_module_id_not_the_checkout_path() {
+    let id = |filename: &str, module_id: Option<&str>| {
+        let out = compile_islands(
+            SEARCH,
+            &IslandOptions {
+                filename: Some(filename.into()),
+                module_id: module_id.map(Into::into),
+                server_imports: vec![ServerImport {
+                    specifier: "../lib/hn".into(),
+                    names: None,
+                    tainted: vec![],
+                }],
+                ..IslandOptions::default()
+            },
+        )
+        .expect("compiles");
+        let m = manifest(&out);
+        let at = m.find(r#""id":"Search-"#).expect("a frame");
+        m[at + 6..at + 19].to_string()
+    };
+    let a = id("/home/ci/app/src/search.tsx", Some("src/search.tsx"));
+    assert_eq!(a, id("/Users/me/app/src/search.tsx", Some("src/search.tsx")));
+    assert_ne!(a, id("/Users/me/app/src/search.tsx", Some("src/other.tsx")));
+}
+
+#[test]
+fn static_text_reading_a_prop_is_not_serialized() {
+    // `props.title` is static text on the server markup: the client never
+    // touches it, so it is not translated and nothing is serialized for it.
+    let out = run(r#"
+import { $component, $event, $signal, For } from "solid-js";
+const Toggle = $component(function* (props) {
+  const [open, setOpen] = yield* $signal(false);
+  const flip = $event(function* () { setOpen(o => !o); });
+  return function* () {
+    return <li><button onClick={flip}>{props.title}</button>{(yield* open) ? "open" : "closed"}</li>;
+  };
+});
+export const App = $component(function* () {
+  const items = [{ id: "a", title: "A" }];
+  return function* () {
+    return <ul><For each={items}>{it => <Toggle title={it.title} />}</For></ul>;
+  };
+});
+"#);
+    let m = manifest(&out);
+    assert!(m.contains(r#""serialized":[]"#), "{m}");
+    assert!(!out.server.contains("data-s="), "{}", out.server);
+}
