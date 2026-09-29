@@ -83,15 +83,24 @@ function compiledFilename(id) {
 }
 
 const packageCache = new Map();
-/** The nearest package.json above `file`, with its capability manifest. */
+/** The nearest package.json above `file`, with its capability manifest.
+ * A manifest without a `name` and without a capability manifest is a
+ * subpath manifest inside a package (`@solidjs/web/frames/package.json`
+ * carries only `main` / `types`, upstream #3627), not the package root: the
+ * walk goes on to the named manifest above it, and falls back to the
+ * nameless one only when there is none. */
 function packageOf(file) {
   let dir = path.dirname(file);
   const seen = [];
+  let nameless = null;
+  const settle = hit => {
+    for (const d of seen) packageCache.set(d, hit);
+    return hit;
+  };
   for (;;) {
     if (packageCache.has(dir)) {
-      const hit = packageCache.get(dir);
-      for (const d of seen) packageCache.set(d, hit);
-      return hit;
+      const cached = packageCache.get(dir);
+      return settle(cached ?? nameless);
     }
     seen.push(dir);
     const manifestPath = path.join(dir, "package.json");
@@ -102,14 +111,11 @@ function packageOf(file) {
         ? JSON.parse(fs.readFileSync(capabilitiesPath, "utf8"))
         : null;
       const hit = { dir, name: pkg.name, manifest };
-      for (const d of seen) packageCache.set(d, hit);
-      return hit;
+      if (pkg.name !== undefined || manifest) return settle(hit);
+      nameless ??= hit;
     }
     const parent = path.dirname(dir);
-    if (parent === dir) {
-      for (const d of seen) packageCache.set(d, null);
-      return null;
-    }
+    if (parent === dir) return settle(nameless);
     dir = parent;
   }
 }
