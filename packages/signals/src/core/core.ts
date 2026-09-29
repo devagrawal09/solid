@@ -2102,7 +2102,9 @@ export function enterStagedRead(
   // flip activeTransition under the reader that pulled it). (`el` is null for
   // a store backing served under a hold — no node, the transaction is the
   // fold's.)
-  if (el?._x?._parentSource || (context as Computed<any> | null)?._x?._parentSource) return;
+  // (Companions exist only with the verdict layer: VERDICTS switch.)
+  if (VERDICTS && (el?._x?._parentSource || (context as Computed<any> | null)?._x?._parentSource))
+    return;
   // A bookkeeping read (`spectate`) is nobody's derivation: it compares or
   // probes, and enters nothing — the boundary priming read of a born-held
   // tree must not enter the creator's pass into the hold (#3540).
@@ -2118,12 +2120,12 @@ export function enterStagedRead(
   // Verdict pulls are observations, not derivations: a latest() /
   // isPending() call from mainline must never enter a transaction (it
   // would capture the rest of the caller's synchronous block).
-  if (mainline && GlobalQueue._verdictPull) return;
+  if (VERDICTS && mainline && GlobalQueue._verdictPull) return;
   if (
     ctx._flags & REACTIVE_RECOMPUTING_DEPS &&
-    !(ctx._config & CONFIG_OPTIMISTIC) &&
+    !(OPTIMISTIC && ctx._config & CONFIG_OPTIMISTIC) &&
     (stagedEntry === null || stagedEntry === t) &&
-    (mainline || (!GlobalQueue._verdictPull && underFreshLoadingBoundary(ctx)))
+    (mainline || (!(VERDICTS && GlobalQueue._verdictPull) && underFreshLoadingBoundary(ctx)))
   ) {
     stagedEntry = t;
     return;
@@ -2221,7 +2223,7 @@ export function unflushedValue(el: Signal<any> | Computed<any>, committed = el._
     globalQueue._running ||
     el._pendingValue === NOT_PENDING ||
     el._config & CONFIG_PROMOTED ||
-    el._x?._parentSource
+    (VERDICTS && el._x?._parentSource)
   )
     return NOT_PENDING;
   // Ambient, or adopted by a transaction before any flush carried the staging
@@ -2241,7 +2243,9 @@ const promotedWrites: Array<Signal<any> | Computed<any>> = [];
  * advances after every flush, so "this tick, outside a flush" is unflushed. */
 export function unflushedOverride(el: Signal<any> | Computed<any>): boolean {
   // Companions are optimistic signals written by the engine (see unflushed).
-  return !globalQueue._running && el._x?._overrideTime === clock && !el._x?._parentSource;
+  return (
+    !globalQueue._running && el._x?._overrideTime === clock && !(VERDICTS && el._x?._parentSource)
+  );
 }
 /** Active optimistic override on an armed node (an armed slot idles at
  * NOT_PENDING; undefined = unarmed plain node). The writer's own channels —

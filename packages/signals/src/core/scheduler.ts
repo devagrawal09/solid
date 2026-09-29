@@ -1827,7 +1827,8 @@ export function reporterBlocksSource(
         current._x?._pendingSources?.has(source)
       )
         return true;
-      current = current._x?._parentSource;
+      // A companion answers for its source (verdict layer only).
+      current = VERDICTS ? current._x?._parentSource : undefined;
     }
   }
   return !!(
