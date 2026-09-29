@@ -316,6 +316,88 @@ describe("setup operations", () => {
   });
 });
 
+describe("the runtime's other dev errors", () => {
+  // Each is also a type error or a lint error where the syntax allows it;
+  // these reach the runtime through casts / plain JS.
+  const hole = (body: () => Generator<unknown, unknown, unknown>) =>
+    $(body as () => Generator<never, unknown, unknown>);
+
+  devIt("operations in the wrong host", () => {
+    const Ctx = createContext("x");
+    // an async attempt suspends: only a $memo or an $event may wait
+    expect(() =>
+      perform(
+        hole(function* () {
+          return yield* attempt(() => Promise.resolve(1));
+        })
+      )
+    ).toThrow(/ASYNC_NOT_ALLOWED/);
+    // a plain yield is not an operation
+    expect(() =>
+      perform(
+        hole(function* () {
+          yield 1;
+        })
+      )
+    ).toThrow(/NOT_AN_OPERATION/);
+    // $cleanup belongs to a setup or an effect
+    expect(() =>
+      perform(
+        hole(function* () {
+          yield* $cleanup(() => {});
+        })
+      )
+    ).toThrow(/CLEANUP_OUTSIDE_OWNER/);
+    // yield* Ctx belongs to a setup
+    expect(() =>
+      perform(
+        hole(function* () {
+          return yield* Ctx;
+        })
+      )
+    ).toThrow(/CONTEXT_OUTSIDE_SETUP/);
+    // $flush belongs to an $event
+    expect(() =>
+      perform(
+        hole(function* () {
+          yield* $flush();
+        })
+      )
+    ).toThrow(/FLUSH_OUTSIDE_EVENT/);
+  });
+
+  devIt("a setup returns its view; a path is not writable", () => {
+    const NoView = $component(function* () {
+      return 1;
+    } as unknown as () => Generator<never, () => Generator<never, null>>);
+    expect(() => createRoot(() => NoView())).toThrow(/COMPONENT_VIEW/);
+    const p = paths({ a: 1 }) as unknown as { a: number };
+    expect(() => {
+      p.a = 2;
+    }).toThrow(/PATH_WRITE/);
+  });
+
+  devIt("a memo's reads after its first async attempt are errors", async () => {
+    const Late = $component(function* () {
+      const [n] = yield* $signal(1);
+      const m = yield* $memo(function* () {
+        yield* attempt(() => Promise.resolve(0));
+        return yield* n;
+      });
+      return function* () {
+        return <i>{perform(m)}</i>;
+      };
+    });
+    mount(() => (
+      <Loading fallback="…">
+        <Errored fallback={e => <b>{String(e())}</b>}>{Late()}</Errored>
+      </Loading>
+    ));
+    await settle();
+    expect(root.textContent).toMatch(/READ_AFTER_ATTEMPT/);
+  });
+});
+
 describe("setups inside a parent's first view run", () => {
   it("a child's $snapshot is not a read at the parent view's top level", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
