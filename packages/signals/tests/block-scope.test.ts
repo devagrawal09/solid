@@ -110,7 +110,9 @@ describe("row blocks", () => {
     expect(setups).toEqual([1, 2, 3, 1]);
   });
 
-  it("a row's cleanups run when the row is disposed, in registration order", () => {
+  // Unwind order (later registrations first), the core's onCleanup rule
+  // since upstream #3572: a row's `$cleanup`s register on the row's owner.
+  it("a row's cleanups run when the row is disposed, in unwind order", () => {
     const [list, setList] = createSignal<Row[]>([
       { id: 1, label: "a" },
       { id: 2, label: "b" }
@@ -127,9 +129,9 @@ describe("row blocks", () => {
     expect(log).toEqual(["setup 1", "setup 2"]);
     setList([list()[1]]);
     flush();
-    expect(log).toEqual(["setup 1", "setup 2", "cleanup 1 first", "cleanup 1 second"]);
+    expect(log).toEqual(["setup 1", "setup 2", "cleanup 1 second", "cleanup 1 first"]);
     dispose();
-    expect(log.slice(4)).toEqual(["cleanup 2 first", "cleanup 2 second"]);
+    expect(log.slice(4)).toEqual(["cleanup 2 second", "cleanup 2 first"]);
   });
 
   it("the setup is untracked; the view tracks its reads", () => {
