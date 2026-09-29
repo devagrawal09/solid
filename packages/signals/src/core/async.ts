@@ -1006,7 +1006,7 @@ export function notifyStatus(
     // propagation before it rode the lane got a parentless companion lane,
     // and the isPending reader that also depends on the node merged it into
     // the held lane — the verdict then waited on the async it reports (#3379).
-    if (__ASYNC__ && lane) assignOrMergeLane(el, lane);
+    if (__ASYNC__ && OPTIMISTIC && lane) assignOrMergeLane(el, lane);
     if (__ASYNC__ && status === STATUS_PENDING && pendingSource) {
       addPendingSource(el, pendingSource);
       // A fresh flight from a settled state starts with its inputs unpublished
@@ -1120,7 +1120,7 @@ export function notifyStatus(
       // nothing (A15 shared-hole corollary): their reader registers with the
       // flight's transaction at queue notification.
       if (!downstreamBlockStatus)
-        sub._transition
+        __ASYNC__ && sub._transition
           ? pendingSource &&
             !(sub as any)._type &&
             (sub._statusFlags & STATUS_PENDING || sub._pendingValue !== NOT_PENDING) &&

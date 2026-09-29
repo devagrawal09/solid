@@ -542,7 +542,10 @@ describe("pay-for-use tree-shaking (#2883)", () => {
     // at flush: the unflushed selection, promoted writes, late linkers), the
     // A30 dependency tails (heldTrims), unwind-order disposal with the
     // detached drain, void passes of a node disposed mid-pass.
-    expect(sync.minifiedBytes).toBeLessThan(14_950);
+    // coreFloor (2026-09-29): 14,508 — more of upstream's async-only seams
+    // fold here (A29 born held, the A28 held-rewrite stash, the held-pass
+    // release, the parked-transaction wake, the verdict companion snaps).
+    expect(sync.minifiedBytes).toBeLessThan(14_550);
   });
 
   it("importing statusFree retains the status-free recompute (hook side effect)", async () => {
