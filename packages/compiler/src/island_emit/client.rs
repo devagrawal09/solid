@@ -266,15 +266,30 @@ const HELPERS: &[(&str, &str)] = &[
     ),
     (
         "$show",
-        // Content created after activation is owned by the island (its
-        // cleanups run when the island is disposed).
-        "const $show = (e, w, b) => { let d; const o = $O(); $E(() => !!w(), (on, p) => { if (p === undefined) { if (on) $R(x => { d = x; const n = e.previousSibling; b(w, n.nodeType === 1 ? n : null) }); return; } if (on === p) return; if (on) $W(o, () => $R(x => { d = x; e.before(b(w, null)); })); else { d(); d = undefined; const s = $start(e); while (s.nextSibling !== e) s.nextSibling.remove(); } }); };",
+        // Adopts the server's content (or creates it in fresh content, whose
+        // region is an empty marker pair). Content created after activation
+        // is owned by the island (its cleanups run when the island is
+        // disposed).
+        "const $show = (e, w, b) => { let d; const o = $O(); $E(() => !!w(), (on, p) => { if (p === undefined) { if (on) $R(x => { d = x; const n = e.previousSibling; n.nodeType === 1 ? b(w, n) : e.before(b(w, null)); }); return; } if (on === p) return; if (on) $W(o, () => $R(x => { d = x; e.before(b(w, null)); })); else { d(); d = undefined; const s = $start(e); while (s.nextSibling !== e) s.nextSibling.remove(); } }); };",
+    ),
+    (
+        "$showf",
+        // A `Show` with a fallback: either branch is adopted at activation
+        // (an element, or the text of a string fallback), and each flip
+        // disposes one branch and builds the other (owned by the island).
+        "const $showf = (e, w, b, f) => { let d; const o = $O(); const mk = (g, a) => $R(x => { d = x; const n = g(w, a); a || e.before(n); }); $E(() => !!w(), (on, p) => { if (p === undefined) { const n = e.previousSibling; mk(on ? b : f, n.nodeType === 8 && n.data === \"$\" ? null : n); return; } if (on === p) return; d(); const s = $start(e); while (s.nextSibling !== e) s.nextSibling.remove(); $W(o, () => mk(on ? b : f, null)); }); };",
     ),
     (
         "$list",
         // Keyed rows; `plain` rows create no reactive work, so they get no root.
         // The input is copied in the compute (a store array tracks its items).
-        "const $list = (e, each, row, plain) => { let rows = new Map(); const o = $O(); const mk = plain ? (it, n) => ({ n: row(it, n) }) : (it, n) => $W(o, () => $R(d => ({ n: row(it, n), d }))); $E(() => { const l = each(); return l ? Array.from(l) : []; }, (items, p) => { if (p === undefined) { let n = $start(e).nextSibling; for (const it of items) { while (n.nodeType !== 1) n = n.nextSibling; const r = mk(it, n); rows.set(it, r); n = r.n.nextSibling; } return; } const next = new Map(); for (const it of items) next.set(it, rows.get(it) || mk(it, null)); for (const [it, r] of rows) if (!next.has(it)) { r.d && r.d(); r.n.remove(); } let c = $start(e).nextSibling; for (const r of next.values()) { if (r.n === c) c = c.nextSibling; else e.parentNode.insertBefore(r.n, c); } rows = next; }); };",
+        "const $list = (e, each, row, plain) => { let rows = new Map(); const o = $O(); const mk = plain ? (it, n) => ({ n: row(it, n) }) : (it, n) => $W(o, () => $R(d => ({ n: row(it, n), d }))); $E(() => { const l = each(); return l ? Array.from(l) : []; }, (items, p) => { if (p === undefined) { let n = $start(e).nextSibling; for (const it of items) { while (n !== e && n.nodeType !== 1) n = n.nextSibling; const r = mk(it, n === e ? null : n); rows.set(it, r); if (n === e) e.before(r.n); else n = r.n.nextSibling; } return; } const next = new Map(); for (const it of items) next.set(it, rows.get(it) || mk(it, null)); for (const [it, r] of rows) if (!next.has(it)) { r.d && r.d(); r.n.remove(); } let c = $start(e).nextSibling; for (const r of next.values()) { if (r.n === c) c = c.nextSibling; else e.parentNode.insertBefore(r.n, c); } rows = next; }); };",
+    ),
+    (
+        "$listf",
+        // `$list` with a fallback: shown (adopted, or built) while the list
+        // is empty, disposed when rows arrive.
+        "const $listf = (e, each, row, plain, fb) => { let rows = new Map(), F; const o = $O(); const mk = plain ? (it, n) => ({ n: row(it, n) }) : (it, n) => $W(o, () => $R(d => ({ n: row(it, n), d }))); const fo = a => { F = $W(o, () => $R(d => ({ n: fb(a), d }))); a || e.before(F.n); }; $E(() => { const l = each(); return l ? Array.from(l) : []; }, (items, p) => { if (p === undefined) { let n = $start(e).nextSibling; if (!items.length) return fo(n === e ? null : n); for (const it of items) { while (n !== e && n.nodeType !== 1) n = n.nextSibling; const r = mk(it, n === e ? null : n); rows.set(it, r); if (n === e) e.before(r.n); else n = r.n.nextSibling; } return; } if (F && items.length) { F.d(); F.n.remove(); F = undefined; } const next = new Map(); for (const it of items) next.set(it, rows.get(it) || mk(it, null)); for (const [it, r] of rows) if (!next.has(it)) { r.d && r.d(); r.n.remove(); } let c = $start(e).nextSibling; for (const r of next.values()) { if (r.n === c) c = c.nextSibling; else e.parentNode.insertBefore(r.n, c); } rows = next; if (!items.length && !F) fo(null); }); };",
     ),
     (
         "$err",
@@ -289,6 +304,10 @@ const HELPERS: &[(&str, &str)] = &[
         // Structural rows (a `<For>` over server data inside an island): the
         // server's row elements, in order, each activated by `row(item, node)`.
         "const $rows = (e, l, row) => { let n = $start(e).nextSibling; if (l) for (const it of l) { while (n.nodeType !== 1) n = n.nextSibling; row(it, n); n = n.nextSibling; } };",
+    ),
+    (
+        "$ref",
+        "const $ref = (r, e) => Array.isArray(r) ? r.flat(Infinity).forEach(f => f && f(e)) : r(e);",
     ),
     (
         "$cls",
@@ -319,6 +338,8 @@ fn helper_deps(h: &str) -> &'static [&'static str] {
         "$tx" => &["$s"],
         "$show" => &["$start"],
         "$list" => &["$start"],
+        "$showf" => &["$start"],
+        "$listf" => &["$start"],
         "$err" => &["$start"],
         "$rows" => &["$start"],
         _ => &[],
@@ -1145,7 +1166,10 @@ impl<'x, 'a> Ce<'x, 'a> {
                 "createRenderEffect as $E".to_string(),
                 "flush as $F".to_string(),
             ];
-            if self.helpers.contains("$list") || self.helpers.contains("$show") {
+            if ["$list", "$show", "$listf", "$showf"]
+                .iter()
+                .any(|h| self.helpers.contains(h))
+            {
                 names.push("getOwner as $O".into());
                 names.push("runWithOwner as $W".into());
             }
@@ -3214,6 +3238,33 @@ impl<'x, 'a> Ce<'x, 'a> {
             self.frame_driver(inst, fi, var)?;
             return Ok(());
         }
+        // `ref` first (the DOM compiler runs it ahead of the element's other
+        // expressions): a setup local is assigned, anything else is called.
+        // Only this island's refs (another island rooted in the same
+        // component binds its own).
+        for at in &attrs {
+            if at.name != "ref" {
+                continue;
+            }
+            let AttrVal::Expr(e) = &at.value else {
+                continue;
+            };
+            if self.site_other(comp, e.span().start, "a ref")? {
+                continue;
+            }
+            self.helpers.insert("$ref");
+            let v = self.expr(inst, &none, e)?;
+            let lval = matches!(
+                e.without_parentheses(),
+                Expression::Identifier(_) | Expression::StaticMemberExpression(_)
+            ) && super::graph::ref_target(self.m, &self.m.comps[comp], e).is_some();
+            let line = if lval {
+                format!("typeof {v} === \"function\" ? $ref({v}, {var}) : ({v} = {var});")
+            } else {
+                format!("$ref({v}, {var});")
+            };
+            self.bucket(inst).handlers.push(line);
+        }
         for at in &attrs {
             let AttrVal::Expr(e) = &at.value else {
                 continue;
@@ -3531,9 +3582,6 @@ impl<'x, 'a> Ce<'x, 'a> {
         self.transplant = None;
         let attrs = jsx::attrs(el)?;
         let is_show = matches!(jsx::tag_of(self.m, &el.opening_element.name), Tag::Builtin(ref b) if b == "Show");
-        if jsx::attr(&attrs, "fallback").is_some() {
-            return Err("a live <Show>/<For> with a fallback".into());
-        }
         let input = if is_show { "when" } else { "each" };
         let Some(AttrVal::Expr(input_expr)) = jsx::attr(&attrs, input).map(|a| &a.value) else {
             return Err("region input".into());
@@ -3604,8 +3652,87 @@ impl<'x, 'a> Ce<'x, 'a> {
             let kind = if is_show { Kind::Acc } else { Kind::Val };
             self.insts[inst].names.insert(*p, (n.clone(), kind));
         }
-        let saved = self.cur;
+        // Builders take (parameter, adopted node): a row's item, a `Show`'s
+        // `when` accessor.
+        let head = match &param_name {
+            Some((_, n)) => format!("({n}, $e)"),
+            None if is_show => "(_, $e)".to_string(),
+            None => "($e)".to_string(),
+        };
         let saved_stmt = std::mem::replace(&mut self.stmt_in_region, false);
+        let builder = self.builder(content, inst, &head)?;
+        // The fallback: built on the client from its JSX (or its text) when
+        // the region empties, adopted at activation when the server showed it.
+        let fb = match jsx::attr(&attrs, "fallback").map(|a| &a.value) {
+            None => None,
+            Some(AttrVal::Expr(e))
+                if matches!(e.without_parentheses(), Expression::NullLiteral(_))
+                    || matches!(e.without_parentheses(), Expression::Identifier(id) if id.name == "undefined") =>
+            {
+                None
+            }
+            Some(v) => {
+                let head = if is_show { "(_, $e)" } else { "($e)" };
+                let not_markup = "a live <Show>/<For> fallback that is not an element or a string";
+                Some(match v {
+                    AttrVal::Str(t) => {
+                        format!("{head} => $e || document.createTextNode({})", js_str(t))
+                    }
+                    AttrVal::Element(e) => self.builder(vec![Child::Element(e)], inst, head)?,
+                    AttrVal::Expr(e) => match jsx::root_of(e) {
+                        Some(Root::Element(x)) => {
+                            self.builder(vec![Child::Element(x)], inst, head)?
+                        }
+                        _ => return Err(not_markup.into()),
+                    },
+                    _ => return Err(not_markup.into()),
+                })
+            }
+        };
+        let stmt_here = self.stmt_in_region;
+        self.stmt_in_region = saved_stmt || stmt_here;
+        let line = if is_show {
+            match fb {
+                Some(f) => {
+                    self.helpers.insert("$showf");
+                    format!("$showf({end}, () => {input_text}, {builder}, {f});")
+                }
+                None => {
+                    self.helpers.insert("$show");
+                    format!("$show({end}, () => {input_text}, {builder});")
+                }
+            }
+        } else {
+            // A row whose code creates no computation, cleanup or nested
+            // region needs no owner of its own.
+            let reactive = [
+                "$E(", "$M(", "$C(", "$Ef(", "$S(", "$show(", "$showf(", "$list(", "$listf(",
+                "$R(",
+            ]
+            .iter()
+            .any(|k| builder.contains(k))
+                || stmt_here;
+            match fb {
+                Some(f) => {
+                    self.helpers.insert("$listf");
+                    let plain = if reactive { "0" } else { "1" };
+                    format!("$listf({end}, () => {input_text}, {builder}, {plain}, {f});")
+                }
+                None => {
+                    self.helpers.insert("$list");
+                    let plain = if reactive { "" } else { ", 1" };
+                    format!("$list({end}, () => {input_text}, {builder}{plain});")
+                }
+            }
+        };
+        self.bucket(inst).seq.push(Seq::Line(line));
+        Ok(())
+    }
+
+    /// An adopt-or-create builder `head => { … return $x; }` over fresh
+    /// content that must be one element (a component whose view is one).
+    fn builder(&mut self, content: Vec<Child<'a>>, inst: usize, head: &str) -> R<String> {
+        let saved = self.cur;
         self.scopes.push(Scope {
             nav: vec![],
             buckets: HashMap::new(),
@@ -3613,11 +3740,16 @@ impl<'x, 'a> Ce<'x, 'a> {
             builder: true,
         });
         self.cur = self.scopes.len() - 1;
+        let r = self.builder_in_scope(content, inst, head);
+        self.cur = saved;
+        r
+    }
+
+    fn builder_in_scope(&mut self, content: Vec<Child<'a>>, inst: usize, head: &str) -> R<String> {
         let mut slots = Vec::new();
         self.flatten(&content, inst, &mut slots)?;
         let elems: Vec<&Slot<'a>> = slots.iter().filter(|s| !matches!(s, Slot::Text)).collect();
         let [Slot::Elem(root_el, root_inst)] = elems.as_slice() else {
-            self.cur = saved;
             return Err("region content must be a single element".into());
         };
         let (root_el, root_inst) = (*root_el, *root_inst);
@@ -3628,43 +3760,9 @@ impl<'x, 'a> Ce<'x, 'a> {
         self.element(root_el, root_inst, "$x")?;
         let body = self.assemble(self.cur, inst);
         let nav = self.scopes[self.cur].nav.join("\n");
-        self.cur = saved;
-        // Builders take (parameter, adopted node): a row's item, a `Show`'s
-        // `when` accessor.
-        let builder = match &param_name {
-            Some((_, n)) => format!(
-                "({n}, $e) => {{ const $f = !$e, $x = $e || $t{ti}();\n{nav}\n{body}\nreturn $x; }}"
-            ),
-            None if is_show => format!(
-                "(_, $e) => {{ const $f = !$e, $x = $e || $t{ti}();\n{nav}\n{body}\nreturn $x; }}"
-            ),
-            None => format!(
-                "($e) => {{ const $f = !$e, $x = $e || $t{ti}();\n{nav}\n{body}\nreturn $x; }}"
-            ),
-        };
-        let stmt_here = self.stmt_in_region;
-        self.stmt_in_region = saved_stmt || stmt_here;
-        let line = if is_show {
-            self.helpers.insert("$show");
-            format!("$show({end}, () => {input_text}, {builder});")
-        } else {
-            self.helpers.insert("$list");
-            // A row whose code creates no computation, cleanup or nested
-            // region needs no owner of its own.
-            let reactive = [
-                "$E(", "$M(", "$C(", "$Ef(", "$S(", "$show(", "$list(", "$R(",
-            ]
-            .iter()
-            .any(|k| builder.contains(k))
-                || stmt_here;
-            if reactive {
-                format!("$list({end}, () => {input_text}, {builder});")
-            } else {
-                format!("$list({end}, () => {input_text}, {builder}, 1);")
-            }
-        };
-        self.bucket(inst).seq.push(Seq::Line(line));
-        Ok(())
+        Ok(format!(
+            "{head} => {{ const $f = !$e, $x = $e || $t{ti}();\n{nav}\n{body}\nreturn $x; }}"
+        ))
     }
 
     /// A structural region: a `<Show>` / `<For>` over server data that holds

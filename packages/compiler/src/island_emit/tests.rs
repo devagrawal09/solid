@@ -1945,3 +1945,183 @@ export const App = $component(function* () {
     assert!(m.contains(r#""serialized":[]"#), "{m}");
     assert!(!out.server.contains("data-s="), "{}", out.server);
 }
+
+#[test]
+fn a_ref_assigning_a_local_joins_its_readers_island_and_a_ref_callback_activates_at_load() {
+    let out = run(r#"
+import { $component, $event, $signal } from "solid-js";
+export let seen = "none";
+export const App = $component(function* () {
+  let input;
+  const [text, setText] = yield* $signal("");
+  const read = $event(function* () { setText(input.value); });
+  return function* () {
+    return (
+      <div>
+        <input ref={input} value="abc" />
+        <button class="read" onClick={read}>read</button>
+        <p class="out">{yield* text}</p>
+        <span ref={el => { seen = el.className; }}>cb</span>
+      </div>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    assert_eq!(out.chunks.len(), 2, "{}", manifest(&out));
+    let assign = &out.chunks[0].code;
+    assert!(
+        assign.contains("typeof input === \"function\" ? $ref(input, $n2) : (input = $n2);"),
+        "{assign}"
+    );
+    assert!(assign.contains("addEventListener(\"click\", read)"), "{assign}");
+    let cb = &out.chunks[1].code;
+    assert!(cb.contains("$ref(el => { seen = el.className; }, $n2);"), "{cb}");
+    assert!(!cb.contains("addEventListener"), "{cb}");
+    let m = manifest(&out);
+    // The assigning ref waits for the island's first event; the callback runs at load.
+    assert!(m.contains(r#""activation":"lazy""#), "{m}");
+    assert!(m.contains(r#""activation":"load""#), "{m}");
+    assert!(m.contains("`ref` callback"), "{m}");
+    // The server never renders refs.
+    assert!(!out.server.contains("ref"), "{}", out.server);
+}
+
+#[test]
+fn a_ref_in_a_live_region_runs_for_every_row_the_region_builds() {
+    let out = run(r#"
+import { $component, $event, $signal, For } from "solid-js";
+export let last;
+export const App = $component(function* () {
+  const [items, setItems] = yield* $signal([1, 2]);
+  const add = $event(function* () { setItems(l => [...l, l.length + 1]); });
+  return function* () {
+    return (
+      <div>
+        <ul><For each={yield* items}>{i => <li ref={el => { last = el; }}>{i}</li>}</For></ul>
+        <button onClick={add}>add</button>
+      </div>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    // One island: the ref's site is created by the list's builder.
+    assert_eq!(out.chunks.len(), 1, "{}", manifest(&out));
+    assert!(
+        out.chunks[0].code.contains("$ref(el => { last = el; }, $x);"),
+        "{}",
+        out.chunks[0].code
+    );
+}
+
+#[test]
+fn spreads_of_props_and_object_literals_become_attributes() {
+    let out = run(r#"
+import { $component, $event, $signal } from "solid-js";
+function Button(props) {
+  return <button {...props} />;
+}
+export const App = $component(function* () {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    return (
+      <div>
+        <Button class="inc" title={"n=" + (yield* n)} onClick={inc}>+</Button>
+        <Button class="plain" disabled>static</Button>
+        <p {...{ "data-n": yield* n, id: "out" }}>{yield* n}</p>
+      </div>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let chunk = &out.chunks[0].code;
+    assert!(chunk.contains("addEventListener(\"click\""), "{chunk}");
+    assert!(chunk.contains("setAttribute(\"data-n\""), "{chunk}");
+    assert!(chunk.contains("setAttribute(\"title\""), "{chunk}");
+    // The forwarded children render in the button; attributes a caller
+    // leaves out render nothing.
+    assert!(
+        out.server.contains("_$a(\"disabled\", props.disabled)"),
+        "{}",
+        out.server
+    );
+    assert!(out.server.contains("_$e(props.children)"), "{}", out.server);
+}
+
+#[test]
+fn spreads_whose_keys_are_unknown_are_refused() {
+    // An exported component's callers are outside the module.
+    let reason = fallback_of(
+        r#"
+import { $component, $event, $signal } from "solid-js";
+export function Button(props) { return <button {...props} />; }
+export const App = $component(function* () {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () { return <div><Button onClick={inc}>{yield* n}</Button></div>; };
+});
+"#,
+    );
+    assert!(reason.contains("spread"), "{reason}");
+    // A key that collides with an explicit attribute: precedence is dynamic.
+    let reason = fallback_of(
+        r#"
+import { $component } from "solid-js";
+function Button(props) { return <button class="x" {...props} />; }
+export const App = $component(function* () {
+  return function* () { return <div><Button class="y" /></div>; };
+});
+"#,
+    );
+    assert!(reason.contains("spread"), "{reason}");
+}
+
+#[test]
+fn live_show_and_for_fallbacks_are_adopted_or_built_on_the_client() {
+    let out = run(r#"
+import { $component, $event, $signal, For, Show } from "solid-js";
+export const App = $component(function* () {
+  const [items, setItems] = yield* $signal([]);
+  const [open, setOpen] = yield* $signal(false);
+  const [n, setN] = yield* $signal(0);
+  const add = $event(function* () { setItems(l => [...l, "x"]); });
+  const toggle = $event(function* () { setOpen(o => !o); });
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    return (
+      <div>
+        <ul>
+          <For each={yield* items} fallback={<li class="empty">no items {yield* n}</li>}>{item => <li>{item}</li>}</For>
+        </ul>
+        <Show when={yield* open} fallback="closed"><p>open</p></Show>
+        <button onClick={add} /><button onClick={toggle} /><button onClick={inc} />
+      </div>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let chunk = &out
+        .chunks
+        .iter()
+        .map(|c| c.code.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    // The list's fallback is a builder with its own live hole.
+    assert!(chunk.contains("$listf("), "{chunk}");
+    assert!(chunk.contains("<li class=\\\"empty\\\">no items <!--$--><!--/--></li>"), "{chunk}");
+    // The string fallback is a text node.
+    assert!(chunk.contains("$showf("), "{chunk}");
+    assert!(
+        chunk.contains("(_, $e) => $e || document.createTextNode(\"closed\")"),
+        "{chunk}"
+    );
+    // Helpers without a fallback are not shipped.
+    assert!(!chunk.contains("const $show ="), "{chunk}");
+    assert!(!chunk.contains("const $list ="), "{chunk}");
+    // The server renders the fallback between the region's markers.
+    assert!(out.server.contains("<!--$-->"), "{}", out.server);
+}

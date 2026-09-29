@@ -462,7 +462,10 @@ describe("compiled islands reproduce the oracle", () => {
       const { markup, activated } = await runIslands(scenario, source, 0);
       // A hot island's load-time effect writes after the server render (as it
       // does after hydration): the page after activation is the oracle's.
-      expect(normalizeHtml(hot ? activated : markup)).toBe(
+      // Compared as the browser parses it (`disabled` and `disabled=""` are one DOM).
+      const parsed = document.createElement("template");
+      parsed.innerHTML = markup;
+      expect(normalizeHtml(hot ? activated : parsed.innerHTML)).toBe(
         normalizeHtml(initial.slice("html = ".length))
       );
     });

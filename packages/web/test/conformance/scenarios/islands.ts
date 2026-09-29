@@ -976,6 +976,204 @@ export const App = $component(function* () {
 export const islandsSharedMember = sharedMember("islands-shared-member", "i0");
 export const islandsSharedMemberReversed = sharedMember("islands-shared-member-reversed", "i1");
 
+/**
+ * `ref` on intrinsic elements: a ref that assigns a setup local joins the
+ * island whose handler reads it (activated lazily, the local assigned at
+ * activation); a ref callback is client code that runs when the element is
+ * created, so its island activates at load.
+ */
+export const islandsRef: Scenario = {
+  name: "islands-ref",
+  covers: [
+    "ref assigning a setup local read by a handler",
+    "ref callback run at activation (load)"
+  ],
+  entry: { component: "App" },
+  sources: {
+    reference: `
+import { createSignal } from "solid-js";
+export let seen = "none";
+export function App() {
+  let input;
+  const [text, setText] = createSignal("");
+  return (
+    <div>
+      <input ref={input} value="abc" />
+      <button class="read" onClick={() => setText(input.value.toUpperCase())}>read</button>
+      <p class="out">{text()}</p>
+      <span class="cb" ref={el => { seen = el.className; }}>cb</span>
+    </div>
+  );
+}
+`,
+    islands: `
+import { $component, $event, $signal } from "solid-js";
+export let seen = "none";
+export const App = $component(function* () {
+  let input;
+  const [text, setText] = yield* $signal("");
+  const read = $event(function* () { setText(input.value.toUpperCase()); });
+  return function* () {
+    return (
+      <div>
+        <input ref={input} value="abc" />
+        <button class="read" onClick={read}>read</button>
+        <p class="out">{yield* text}</p>
+        <span class="cb" ref={el => { seen = el.className; }}>cb</span>
+      </div>
+    );
+  };
+});
+`
+  },
+  steps: [
+    { name: "initial", run: ({ html }) => html() },
+    { name: "the ref callback ran", run: ctx => ctx.observe("seen", ctx.app.seen) },
+    step("read the input through its ref", ctx => ctx.click(".read")),
+    step("edit and read again", ctx => {
+      (document.querySelector("input") as HTMLInputElement).value = "xyz";
+      ctx.click(".read");
+    })
+  ]
+};
+
+/**
+ * Spread attributes: a component forwarding its props to an element
+ * (`<button {...props}>`, every caller in the module) and an object-literal
+ * spread are compiled as the attributes they stand for — a forwarded
+ * handler, a live attribute, a caller that leaves attributes out, children.
+ */
+export const islandsSpread: Scenario = {
+  name: "islands-spread",
+  covers: [
+    "props spread onto an element (handler, live attribute, children forwarded)",
+    "a caller passing fewer attributes",
+    "object-literal spread with a live value"
+  ],
+  entry: { component: "App" },
+  sources: {
+    reference: `
+import { createSignal } from "solid-js";
+function Button(props) {
+  return <button {...props} />;
+}
+export function App() {
+  const [n, setN] = createSignal(0);
+  return (
+    <div>
+      <Button class="inc" title={"n=" + n()} onClick={() => setN(x => x + 1)}>+</Button>
+      <Button class="plain" disabled>static</Button>
+      <p {...{ "data-n": n(), id: "out" }}>{n()}</p>
+    </div>
+  );
+}
+`,
+    islands: `
+import { $component, $event, $signal } from "solid-js";
+function Button(props) {
+  return <button {...props} />;
+}
+export const App = $component(function* () {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    return (
+      <div>
+        <Button class="inc" title={"n=" + (yield* n)} onClick={inc}>+</Button>
+        <Button class="plain" disabled>static</Button>
+        <p {...{ "data-n": yield* n, id: "out" }}>{yield* n}</p>
+      </div>
+    );
+  };
+});
+`
+  },
+  steps: [
+    { name: "initial", run: ({ html }) => html() },
+    step("inc", ctx => ctx.click(".inc")),
+    step("click the plain button (no handler)", ctx => ctx.click(".plain")),
+    step("inc again", ctx => ctx.click(".inc"))
+  ]
+};
+
+/**
+ * Live `Show` / `For` with fallbacks: the fallback is adopted when the server
+ * rendered it (an element with a live hole, a string), built on the client
+ * when the region empties again, and disposed when content arrives.
+ */
+export const islandsFallback: Scenario = {
+  name: "islands-fallback",
+  covers: [
+    "a live For's fallback (adopted, removed, rebuilt) with a live hole",
+    "a live Show's string fallback",
+    "fresh rows and branches after the fallback"
+  ],
+  entry: { component: "App" },
+  sources: {
+    reference: `
+import { createSignal, For, Show } from "solid-js";
+export function App() {
+  const [items, setItems] = createSignal([]);
+  const [open, setOpen] = createSignal(false);
+  const [n, setN] = createSignal(0);
+  return (
+    <div>
+      <ul>
+        <For each={items()} fallback={<li class="empty">no items {n()}</li>}>{item => <li>{item}</li>}</For>
+      </ul>
+      <Show when={open()} fallback="closed">
+        <p class="open">open {n()}</p>
+      </Show>
+      <button class="add" onClick={() => setItems(l => [...l, "x" + l.length])} />
+      <button class="clear" onClick={() => setItems([])} />
+      <button class="toggle" onClick={() => setOpen(o => !o)} />
+      <button class="inc" onClick={() => setN(x => x + 1)} />
+    </div>
+  );
+}
+`,
+    islands: `
+import { $component, $event, $signal, For, Show } from "solid-js";
+export const App = $component(function* () {
+  const [items, setItems] = yield* $signal([]);
+  const [open, setOpen] = yield* $signal(false);
+  const [n, setN] = yield* $signal(0);
+  const add = $event(function* () { setItems(l => [...l, "x" + l.length]); });
+  const clear = $event(function* () { setItems([]); });
+  const toggle = $event(function* () { setOpen(o => !o); });
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    return (
+      <div>
+        <ul>
+          <For each={yield* items} fallback={<li class="empty">no items {yield* n}</li>}>{item => <li>{item}</li>}</For>
+        </ul>
+        <Show when={yield* open} fallback="closed">
+          <p class="open">open {yield* n}</p>
+        </Show>
+        <button class="add" onClick={add} />
+        <button class="clear" onClick={clear} />
+        <button class="toggle" onClick={toggle} />
+        <button class="inc" onClick={inc} />
+      </div>
+    );
+  };
+});
+`
+  },
+  steps: [
+    { name: "initial", run: ({ html }) => html() },
+    step("inc (the adopted fallback's hole)", ctx => ctx.click(".inc")),
+    step("add (the fallback leaves)", ctx => ctx.click(".add")),
+    step("add again", ctx => ctx.click(".add")),
+    step("clear (the fallback is built)", ctx => ctx.click(".clear")),
+    step("inc (the built fallback's hole)", ctx => ctx.click(".inc")),
+    step("open (the string fallback leaves)", ctx => ctx.click(".toggle")),
+    step("inc (open content)", ctx => ctx.click(".inc")),
+    step("close (the string fallback is built)", ctx => ctx.click(".toggle"))
+  ]
+};
+
 export const islandsScenarios = [
   islandsList,
   islandsSharedMember,
@@ -986,5 +1184,8 @@ export const islandsScenarios = [
   islandsOptimistic,
   islandsModules,
   islandsErrored,
-  islandsErroredRows
+  islandsErroredRows,
+  islandsRef,
+  islandsSpread,
+  islandsFallback
 ];

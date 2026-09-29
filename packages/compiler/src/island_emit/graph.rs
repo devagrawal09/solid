@@ -284,6 +284,9 @@ pub(crate) enum SiteKind {
     /// An island frame's driver (index in `Analysis::frames`): its span is
     /// the frame region; it refetches the region when its arguments change.
     Frame(usize),
+    /// `ref={…}` on an intrinsic element: client code that receives the
+    /// element when the island activates (or its fresh content is built).
+    Ref,
 }
 
 // `expr` / `regions` complete the site record for consumers of the analysis.
@@ -552,8 +555,9 @@ impl<'a> ViewWalk<'_, 'a> {
                                 refs,
                             );
                         }
-                        AttrVal::Expr(_) if a.name == "ref" => {
-                            self.f.issues.push("`ref` attribute".into())
+                        AttrVal::Expr(e) if a.name == "ref" => {
+                            let refs = refs_expr(self.m, self.props, e);
+                            self.site(SiteKind::Ref, e.span(), Some(e), refs);
                         }
                         AttrVal::Expr(e) if jsx::static_child(e).is_none() => {
                             let refs = refs_expr(self.m, self.props, e);
@@ -1262,7 +1266,7 @@ pub(crate) fn analyze_file<'a>(
         for s in &a.facts[ci].sites {
             let v = a.av_of(ci, &s.refs);
             match s.kind {
-                SiteKind::Handler(_) => a.written.extend(v.writes),
+                SiteKind::Handler(_) | SiteKind::Ref => a.written.extend(v.writes),
                 // A view expression that references a setter (other than as
                 // a prop of a module component, which flows) hands it out.
                 SiteKind::Text | SiteKind::Attr(_) | SiteKind::Show | SiteKind::For => {
@@ -1370,7 +1374,7 @@ pub(crate) fn analyze_file<'a>(
             let s = &a.facts[ci].sites[si];
             let (reads, _) = a.live_reads(ci, &s.refs);
             let touches: BTreeSet<Key> = match s.kind {
-                SiteKind::Handler(_) | SiteKind::Effect(..) => {
+                SiteKind::Handler(_) | SiteKind::Effect(..) | SiteKind::Ref => {
                     let v = a.av_of(ci, &s.refs);
                     v.reads
                         .union(&v.writes)
@@ -1382,8 +1386,10 @@ pub(crate) fn analyze_file<'a>(
             };
             // A frame a handler refreshes belongs to that handler's island
             // (it addresses the region), even with no live arguments.
-            let always = matches!(s.kind, SiteKind::Handler(_) | SiteKind::Effect(..))
-                || matches!(s.kind, SiteKind::Frame(fi) if !a.frames[fi].refreshers.is_empty());
+            let always = matches!(
+                s.kind,
+                SiteKind::Handler(_) | SiteKind::Effect(..) | SiteKind::Ref
+            ) || matches!(s.kind, SiteKind::Frame(fi) if !a.frames[fi].refreshers.is_empty());
             // A view site reading the client environment is client-live:
             // the server's value is not final.
             let env = if always {
@@ -1449,6 +1455,48 @@ pub(crate) fn analyze_file<'a>(
         mine.sort();
         for w in mine.windows(2) {
             union(&mut parent, w[0], w[1]);
+        }
+    }
+    // A live site inside a live region is created (and bound) by the
+    // region's builder: it belongs to the region's island.
+    for ci in 0..n {
+        for si in 0..a.facts[ci].sites.len() {
+            let Some(&e) = site_index.get(&(ci, si)) else {
+                continue;
+            };
+            for r in a.facts[ci].sites[si].regions.clone() {
+                if let Some(&er) = site_index.get(&(ci, r)) {
+                    union(&mut parent, e, er);
+                }
+            }
+        }
+    }
+    // `ref={x}` assigns a setup local: the island is the one whose code
+    // reads that local (its handlers, effects, other refs).
+    for (ci, c) in m.comps.iter().enumerate() {
+        for si in 0..a.facts[ci].sites.len() {
+            let site = &a.facts[ci].sites[si];
+            if site.kind != SiteKind::Ref {
+                continue;
+            }
+            let Some(target) = site.expr.and_then(|e| ref_target(m, c, e)) else {
+                continue;
+            };
+            let Some(&e) = site_index.get(&(ci, si)) else {
+                continue;
+            };
+            for sj in 0..a.facts[ci].sites.len() {
+                if sj == si {
+                    continue;
+                }
+                let Some(&ej) = site_index.get(&(ci, sj)) else {
+                    continue;
+                };
+                if sym_closure(m, &a.facts[ci], ci, &a.facts[ci].sites[sj].refs).contains(&target)
+                {
+                    union(&mut parent, e, ej);
+                }
+            }
         }
     }
     // A component whose setup has side-effect statements must run them
@@ -1673,6 +1721,7 @@ pub(crate) fn analyze_file<'a>(
         let mut events = BTreeSet::new();
         let mut window_events = BTreeSet::new();
         let mut hot = false;
+        let mut load_why: Vec<String> = Vec::new();
         let mut prevent_default = false;
         let mut env_why: Vec<String> = Vec::new();
         for (c, s) in &sites {
@@ -1742,6 +1791,23 @@ pub(crate) fn analyze_file<'a>(
                     match settled_listener(m, *c, *ii) {
                         Some(evs) if *settled => window_events.extend(evs),
                         _ => hot = true,
+                    }
+                }
+                // A ref callback runs when the element is created: today's
+                // hydration runs it at load, so the island activates at load.
+                // A ref that only assigns a setup local its island's code
+                // reads can wait for the island's first event.
+                SiteKind::Ref => {
+                    if site
+                        .expr
+                        .and_then(|e| ref_target(m, &m.comps[*c], e))
+                        .is_none()
+                    {
+                        hot = true;
+                        load_why.push(format!(
+                            "`{}`: a `ref` callback (runs when the element is created: at load)",
+                            m.comps[*c].name
+                        ));
                     }
                 }
                 SiteKind::Text | SiteKind::Attr(_) => {
@@ -1860,6 +1926,7 @@ pub(crate) fn analyze_file<'a>(
         };
         let mut why = why;
         why.extend(env_why);
+        why.extend(load_why);
         let mut own_tiers: Vec<(usize, u8)> = members.iter().map(|c| (*c, own[c])).collect();
         own_tiers.sort();
         for (c, s) in &sites {
@@ -2164,4 +2231,48 @@ pub(crate) fn base36(mut n: usize) -> String {
     }
     s.reverse();
     String::from_utf8(s).unwrap()
+}
+
+/// The setup local a `ref={x}` assigns (an identifier declared by a setup
+/// `let` / `const` / `var` whose value is not a function), if any.
+pub(crate) fn ref_target(
+    m: &Model<'_>,
+    c: &super::model::Comp<'_>,
+    e: &Expression<'_>,
+) -> Option<SymbolId> {
+    let s = m.symbol_of_expr(e)?;
+    c.setup.iter().find_map(|it| match it {
+        Item::Local {
+            decl: LocalDecl::Var(d),
+            symbols,
+            ..
+        } if symbols.contains(&s)
+            && d.init.as_ref().is_none_or(|i| FnRef::from_expr(i).is_none()) =>
+        {
+            Some(s)
+        }
+        _ => None,
+    })
+}
+
+/// Symbols a site reaches: its own references and, transitively, those of
+/// the setup items declaring them.
+pub(crate) fn sym_closure(
+    m: &Model<'_>,
+    f: &CompFacts<'_>,
+    ci: usize,
+    r: &Refs,
+) -> HashSet<SymbolId> {
+    let c = &m.comps[ci];
+    let mut seen: HashSet<SymbolId> = HashSet::new();
+    let mut stack: Vec<SymbolId> = r.syms.iter().map(|x| x.0).collect();
+    while let Some(s) = stack.pop() {
+        if !seen.insert(s) {
+            continue;
+        }
+        if let Some(ii) = c.setup.iter().position(|it| it.declares().contains(&s)) {
+            stack.extend(f.item_refs[ii].syms.iter().map(|x| x.0));
+        }
+    }
+    seen
 }
