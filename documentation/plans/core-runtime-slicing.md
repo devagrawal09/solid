@@ -378,7 +378,7 @@ Status 2026-09-28 (Track B of the Generator Blocks v2 compiler work). Four chang
 1. **Compiled facts.** The linker proves the switches from what each application module compiles to, not from what it imports.
 2. **Block rendering on use.** `@solidjs/web` and the `solid-js` boundaries no longer retain the block host machinery (coupling 2).
 3. **Store forms.** The compiler splits `createStore` into its plain and derived forms, so plain stores stop carrying projection and reconcile (coupling 3).
-4. **Default on.** Feature slicing and compiled facts are the linker's defaults. Adding the linker to `@solidjs/vite-plugin`'s build path is an upstream change, sketched below.
+4. **Default on.** Feature slicing and compiled facts are the linker's defaults. Adding the linker to `@solidjs/vite-plugin`'s build path is an upstream change. It is written and verified, and waits for a push (§7.4).
 
 ### 7.1 Per-module compiled facts
 
@@ -439,10 +439,28 @@ Effect: apps that build no block drop `runBlockAs`, the host rules, `reportBlock
 
 - **Why it is safe.** The census differential below has 0 regressions in every configuration. `smoke-apps.mjs` builds sync-blocks, todos-blocks, todos and sierpinski with the linker defaults, then runs each app's main flow on the **sliced production bundle** in jsdom. All four pass, including sync-blocks with `ITERABLE` and `COMPILED_SEAMS` off in a block app. This closes the "dev never runs the slice" gap from §5 for these apps.
 - **What landed.** Inside `solidCapabilities`, feature slicing (`features`) and compiled facts (`compiledFacts`) are on by default. Each has an opt-out.
-- **What did not land, and why.** `@solidjs/vite-plugin` is not in this repository. Its source is `solidjs/solid-vite-plugin`, and the workspace consumes `3.0.0-next.35` from npm. So the plugin's build path could not be changed here. The upstream change is small:
-  - In `solidPlugin(options)`, when `command === "build"` and `options.capabilities !== false`, return `solidCapabilities({ report, ...options.capabilities })` from `@solidjs/compiler/capabilities` alongside the existing plugins.
-  - The linker takes its entries from the build input, including generated start-mode entries (§7.1), so no configuration is needed.
-  - `capabilities: false` is the opt-out.
+- **The plugin's build path: implemented upstream, awaiting a push.** `@solidjs/vite-plugin` lives in `solidjs/solid-vite-plugin`, and the workspace consumes `3.0.0-next.35` from npm. The change is written against its `next` branch (`3.0.0-next.46`) as local branch `capabilities-linker`, commit `3e9eb16`. This session has no push access to that repository, so the change is in [`vite-plugin-capabilities.patch`](./vite-plugin-capabilities.patch) (`git am` on `next`), waiting for someone with access to push it and open the PR.
+  - **Option.** `solid({ capabilities?: boolean | CapabilitiesOptions })`, default `true`; `false` opts out. The object form forwards `features`, `compiledFacts`, `compiledSeams`, `typedSummary`, `report` and `entries` to `solidCapabilities`. `server: true` also links server environments.
+  - **Scope.** `vite build` only: dev and vitest keep the full runtime. Client environments only by default. Server bundles never reach a browser, so slicing them buys little, and the runtime is often externalized from them, where the linker's resolution does not apply. `smoke-apps.mjs` exercises client bundles only. The linker already proves each graph on its own, so `server: true` is safe to add later.
+  - **Wiring.** A `solid:capabilities-linker` plugin (`enforce: "pre"`, last in the plugin array) uses `applyToEnvironment` to return a fresh `solidCapabilities()` for each client build environment. That covers plain builds, builder mode and start mode on Vite 7+, and each environment's proof keeps its own state. Environment-scoped plugins get no config-level hooks, so the environment's resolved config is passed to the linker's `configResolved`. The linker takes its entries from the build input, including generated start-mode entries (§7.1).
+  - **Coexistence.** If a config already has a plugin named `solid:capabilities` (sync-blocks' config, `measure-apps.mjs`, `smoke-apps.mjs`), the plugin's own linker stands down, so hand-wired options such as `typedSummary` win. The linker is imported lazily from `@solidjs/compiler/capabilities`, which the plugin already depends on. The published compiler (`2.0.0-rc.10`) has no such export yet; in that case the build is unchanged and logs one info line, or a warning if `capabilities` was set explicitly.
+  - **Tests.** `pnpm test:unit` in the plugin runs `node:test` against a fixture linker, 11 tests, all passing. They cover: default on; `true`; `false` removes the linker; options are forwarded but `server` is not; server builds are skipped by default and linked with `server: true`; builder mode links the client environment once; a hand-wired linker wins; the dev server never links; a compiler without the linker gets an info line by default and a warning when explicit. The plugin's `examples/vite-8` and `examples/start-ssr` still build.
+  - **Verification in this workspace.** The workspace cannot run `3.0.0-next.46` as it stands. That version needs Vite 8 (`transformWithOxc`), and it passes `sourceNames` to the compiler, which the workspace compiler rejects (`unknown option`). So the check applied the same compiled `src/capabilities.ts` as a scratch overlay on the installed `3.0.0-next.35` dist, then restored it. Each example was built with its own config through `vite build`, and client JS was counted as `measure-apps.mjs` counts it (min / gz bytes):
+
+    | Example      | npm plugin, plain build | `measure-apps` sliced | patched plugin, plain build | patched, `capabilities` off |
+    | ------------ | ----------------------: | --------------------: | --------------------------: | --------------------------: |
+    | todos-blocks |         90,295 / 32,437 |       89,902 / 32,331 |         **89,902 / 32,331** |             90,295 / 32,437 |
+    | sync-blocks  |        54,955 / 20,220¹ |       54,955 / 20,220 |        **54,955 / 20,220**¹ |            54,955 / 20,220¹ |
+    | todos        |         81,610 / 29,534 |       81,081 / 29,365 |         **81,081 / 29,365** |             81,610 / 29,534 |
+    | sierpinski   |         35,618 / 14,014 |       32,950 / 12,989 |         **32,950 / 12,989** |             35,618 / 14,014 |
+    | hackernews   |       212,841 / 72,656² |     212,841 / 72,656² |       **212,841 / 72,656**² |           212,841 / 72,656² |
+
+    ¹ sync-blocks wires its own linker (with its typed summary) in `vite.config.mjs`, so every column is sliced; the plugin's linker stands down. The `measure-apps.mjs` no-linker baseline is 64,611 / 23,702. For the other four, the npm plain build equals that baseline.
+    ² No switch can be proven off: `@solidjs/web/frames` has no manifest (§7.5).
+
+    The patched plain build equals the `measure-apps.mjs` sliced column byte for byte in all five. With `capabilities` off it equals the no-linker baseline. The full CLI `vite build` of hackernews (client and server) links the client environment once and not the server. `node scripts/slices/smoke-apps.mjs` passes, including todos-blocks-mixed. `pnpm test` passes in `examples/todos-blocks` (6) and `examples/sync-blocks` (5). The workspace's `node_modules` were restored afterwards, and the dependency is still `3.0.0-next.35`.
+
+  - **When the workspace moves to a plugin release with this change:** `measure-apps.mjs`'s `baseline` variant will need the plugin's linker turned off. The script passes no plugin options today, so its no-linker column would become sliced. Sync-blocks' hand-wired linker can stay, since the plugin's linker stands down for it, or it can move to `capabilities: { typedSummary: ".solid-capabilities.json", report: "capabilities-report.json" }`.
 
 ### 7.5 Bytes
 
