@@ -1,17 +1,19 @@
 #!/usr/bin/env node
 // Browser check of an example against its `-blocks` twin, in Chromium.
 //
-//   node scripts/example-blocks/browser.mjs <example>
+//   node scripts/example-blocks/browser.mjs <example> [--mode static|server|dev]
 //
 // Loads the production build of the original and of the twin, runs the
 // twin's `tests/browser.steps.mjs` script against both, and after load and
 // after every step compares the app's DOM (hydration keys and markers
 // normalized away). Fails on a DOM difference, a console error or warning,
-// a page error, or a hydration mismatch message.
+// a page error, or a hydration mismatch message. `DUMP=<file>` writes the
+// twin's snapshots there.
 //
 // The steps module exports:
 //   mode: "static" (serve `dist/`, SPA fallback to index.html)
 //       | "server" (run `node <server>` with PORT set; build it first)
+//       | "dev"    (run the example's `vite` dev server: the dev tier)
 //   server?: "server.js"            (mode "server")
 //   dist?: "dist" | "csr/dist"      (mode "static"; the directory to serve)
 //   clock?: boolean                  (install Playwright's fake clock, paused, at load)
@@ -40,7 +42,16 @@ try {
 const name = process.argv[2];
 if (!name) throw new Error("usage: browser.mjs <example>");
 const twinDir = join(ROOT, "examples", `${name}-blocks`);
-const spec = await import(pathToFileURL(join(twinDir, "tests/browser.steps.mjs")).href);
+const loaded = await import(pathToFileURL(join(twinDir, "tests/browser.steps.mjs")).href);
+// `--mode <m>` overrides the module's `mode`; a `<m>Steps` export, when
+// present, replaces `steps` for that mode (e.g. the production build of a
+// dev-tier app renders only a banner).
+const modeArg = process.argv.includes("--mode")
+  ? process.argv[process.argv.indexOf("--mode") + 1]
+  : undefined;
+const mode = modeArg ?? loaded.mode;
+const spec = { ...loaded, mode, steps: loaded[`${mode}Steps`] ?? loaded.steps };
+console.log(`mode: ${mode}`);
 
 const TYPES = {
   ".html": "text/html",
@@ -64,10 +75,13 @@ function normalize(html) {
   return out;
 }
 
-async function startServer(dir, port) {
-  const child = spawn(process.execPath, [spec.server ?? "server.js"], {
+async function startServer(dir, port, dev) {
+  const args = dev
+    ? [join(dir, "node_modules/vite/bin/vite.js"), "--port", String(port), "--strictPort"]
+    : [spec.server ?? "server.js"];
+  const child = spawn(process.execPath, args, {
     cwd: dir,
-    env: { ...process.env, PORT: String(port), NODE_ENV: "production" },
+    env: { ...process.env, PORT: String(port), NODE_ENV: dev ? "development" : "production" },
     stdio: ["ignore", "pipe", "pipe"]
   });
   let log = "";
@@ -98,8 +112,8 @@ async function run(dir, browser, port) {
   page.on("pageerror", e => problems.push(`pageerror: ${e.message}`));
   let base,
     stop = () => {};
-  if (spec.mode === "server") {
-    const s = await startServer(dir, port);
+  if (spec.mode === "server" || spec.mode === "dev") {
+    const s = await startServer(dir, port, spec.mode === "dev");
     base = s.url;
     stop = s.stop;
   } else {
@@ -156,6 +170,13 @@ try {
       for (const p of r.problems) console.log(`     ${p.slice(0, 400)}`);
       if (who === "twin") failed = true;
     }
+  }
+  if (process.env.DUMP) {
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(
+      process.env.DUMP,
+      twin.snapshots.map(([label, html]) => `== ${label}\n${html}`).join("\n")
+    );
   }
   for (let i = 0; i < original.snapshots.length; i++) {
     const [label, a] = original.snapshots[i];
