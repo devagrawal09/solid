@@ -17,6 +17,7 @@
 //   clock?: boolean                  (install Playwright's fake clock at load)
 //   root?: CSS selector of the compared subtree (default "body")
 //   normalize?: (html) => html       (extra, app-specific normalization)
+//   snapshot?: async page => string  (replaces reading `root`'s innerHTML)
 //   steps: [name, async (page, ctx) => void][] (the first navigates)
 //   ignoreConsole?: RegExp           (console messages that are not failures)
 import { spawn } from "node:child_process";
@@ -119,10 +120,12 @@ async function run(dir, browser, port) {
   try {
     for (const [label, step] of spec.steps) {
       await step(page, ctx);
-      const html = await page.evaluate(
-        sel => document.querySelector(sel)?.innerHTML ?? "<missing root>",
-        spec.root ?? "body"
-      );
+      const html = spec.snapshot
+        ? await spec.snapshot(page)
+        : await page.evaluate(
+            sel => document.querySelector(sel)?.innerHTML ?? "<missing root>",
+            spec.root ?? "body"
+          );
       snapshots.push([label, normalize(html)]);
     }
   } finally {
