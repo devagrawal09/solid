@@ -389,6 +389,28 @@ importers:
         specifier: workspace:*
         version: link:../solid
 
+  packages/blocks-linker:
+    dependencies:
+      '@solidjs/compiler':
+        specifier: workspace:*
+        version: link:../compiler
+    devDependencies:
+      '@solidjs/blocks':
+        specifier: workspace:*
+        version: link:../blocks
+      '@solidjs/web':
+        specifier: workspace:*
+        version: link:../web
+      solid-js:
+        specifier: workspace:*
+        version: link:../solid
+      typescript:
+        specifier: ^6.0.2
+        version: 6.0.3
+      vite:
+        specifier: ^8.0.0
+        version: 8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0)
+
   packages/compiler:
     devDependencies:
       '@emnapi/core':

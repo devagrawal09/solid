@@ -416,7 +416,7 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
     })
 }
 
-fn parse_program<'a>(
+pub(crate) fn parse_program<'a>(
     allocator: &'a Allocator,
     source: &'a str,
     source_type: SourceType,
@@ -450,7 +450,7 @@ pub(crate) fn has_jsx_import_source(
     })
 }
 
-fn source_type_for_filename(filename: Option<&str>) -> Result<SourceType, CompileError> {
+pub(crate) fn source_type_for_filename(filename: Option<&str>) -> Result<SourceType, CompileError> {
     filename
         .map(SourceType::from_path)
         .transpose()

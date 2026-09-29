@@ -57,6 +57,14 @@ pub struct TsrxTypecheckProjectionResult {
     pub embedded_regions: Vec<TsrxTypecheckEmbeddedRegion>,
 }
 
+/// Analysis only: the blocks type linker's per-module summary (versioned
+/// JSON, `crate::blocks_summary`). Never rewrites code.
+#[napi]
+pub fn summarize_blocks(code: String, filename: Option<String>) -> Result<String> {
+    crate::blocks_summary::summarize_blocks(&code, filename.as_deref())
+        .map_err(|error| Error::from_reason(error.to_string()))
+}
+
 /// Experimental host-independent TSRX projection for typechecking tools.
 #[cfg(feature = "tsrx")]
 #[napi]
