@@ -309,11 +309,16 @@ class Selection {
  * tracked read of whatever the selector touches (a structural read that is
  * not one path).
  */
-export function readStore<T, R>(
-  store: TypedStore<T> | Store<T> | T,
+export function readStore<T, P extends boolean, E, R>(
+  store: Source<T, P, E>,
   select: (state: T) => R
-): Source<R, false, never> {
-  return new Selection(store, select as any) as any;
+): Source<R, P, E>;
+export function readStore<T extends object, R>(
+  store: Store<T>,
+  select: (state: T) => R
+): Source<R, false, never>;
+export function readStore(store: unknown, select: (state: any) => unknown): unknown {
+  return new Selection(store, select);
 }
 
 // --- driving ----------------------------------------------------------------------------

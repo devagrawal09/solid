@@ -184,7 +184,7 @@ function LoadingBlocks(props: { fallback?: Element; on?: unknown; children: Elem
 function LoadingBlocks<P extends boolean, E>(props: {
   fallback?: Element;
   on?: unknown;
-  children: View<P, E>;
+  children: View<P, E> | readonly View<P, E>[];
 }): View<false, E>;
 function LoadingBlocks(props: any): any {
   return SolidLoading(props);
@@ -201,7 +201,7 @@ function ErroredBlocks(props: {
 }): SettledView;
 function ErroredBlocks<P extends boolean, E>(props: {
   fallback: Element | ((error: Accessor<E>, reset: () => void) => Element);
-  children: View<P, E>;
+  children: View<P, E> | readonly View<P, E>[];
 }): View<P, never>;
 function ErroredBlocks(props: any): any {
   const fallback = props.fallback as any;
