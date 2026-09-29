@@ -321,7 +321,7 @@ export interface BlocksSummary {
   }[];
   renders: {
     component: string;
-    form: "tag" | "call";
+    form: "tag" | "call" | "h";
     owner: string | null;
     inLoading: boolean;
     inErrored: boolean;

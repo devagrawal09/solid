@@ -10,12 +10,15 @@ import {
   $event,
   $memo,
   $signal,
+  $snapshot,
   $store,
   attempt,
   For,
   Loading,
+  readStore,
   render,
-  Show
+  Show,
+  type TypedProps
 } from "@solidjs/blocks";
 import { h } from "@solidjs/blocks/h";
 import { html } from "@solidjs/blocks/html";
@@ -167,3 +170,48 @@ for (const flavor of ["h", "html"] as const) {
     });
   });
 }
+
+describe("h argument shapes", () => {
+  it("a path or a selection as the second argument is a child, not the props", () => {
+    const App = $component(function* () {
+      const [store, setStore] = yield* $store({ user: { name: "Ada" }, tags: ["a", "b"] });
+      const rename = $event(function* () {
+        setStore(s => {
+          s.user.name = "Grace";
+        });
+      });
+      return function* () {
+        return h(
+          "p",
+          h("b", store.user.name),
+          h(
+            "i",
+            readStore(store, s => s.tags.join(","))
+          ),
+          h("button", { onClick: rename }, "rename")
+        );
+      };
+    });
+    dispose = render(App as any, root);
+    flush();
+    expect(root.querySelector("b")!.textContent).toBe("Ada");
+    expect(root.querySelector("i")!.textContent).toBe("a,b");
+    root.querySelector("button")!.click();
+    flush();
+    expect(root.querySelector("b")!.textContent).toBe("Grace");
+  });
+
+  it("a prop holding an array or a store is passed as it is", () => {
+    let seen: unknown;
+    const Child = $component(function* (props: TypedProps<{ list: string[] }>) {
+      seen = yield* $snapshot(props.list);
+      return function* () {
+        return h("span", "ok");
+      };
+    });
+    const list = ["x", "y"];
+    dispose = render(() => h(Child, { list }) as any, root);
+    flush();
+    expect(seen).toBe(list);
+  });
+});

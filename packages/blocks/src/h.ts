@@ -12,8 +12,20 @@
  */
 import solidH from "@solidjs/h";
 import type { JSX } from "@solidjs/blocks/jsx-runtime";
-import { toHole, toHoleProps, type Hole, type HViewOf } from "./holes.js";
-import type { Component, EventHandler, HView, Source, View } from "./types.js";
+import { toHole, toHoleProps, type Hole, type HViewOf, type OpsOfHole } from "./holes.js";
+import { READ } from "@solidjs/blocks";
+import type {
+  ChildView,
+  Component,
+  EventHandler,
+  FailsOf,
+  HView,
+  PendingOf,
+  Source,
+  View
+} from "./types.js";
+import type { Errored, Loading } from "./flow.js";
+import type { Accessor } from "solid-js";
 
 type Intrinsic = JSX.IntrinsicElements;
 /** An attribute: event handlers stay handlers; other values may be sources. */
@@ -30,7 +42,14 @@ export type HAttributes<Tag extends keyof Intrinsic> = {
 };
 
 type NotCallable = { readonly call?: never; readonly apply?: never };
-type PropsOfComponent<C> = C extends (props: infer P) => any ? NonNullable<P> : never;
+/** A component's props in `h`: its children come as the rest arguments. */
+type PropsOfComponent<C> = C extends (props: infer P) => any
+  ? Omit<NonNullable<P>, "children"> & { children?: unknown }
+  : never;
+/** What a component's output (a view or `h` output) contributes. */
+type OpsOfOutput<R> = R extends View<infer P, infer E> | HView<infer P, infer E>
+  ? ChildView<P, E>
+  : never;
 
 export interface BlocksH {
   <
@@ -46,19 +65,36 @@ export interface BlocksH {
     tag: Tag,
     ...children: C
   ): HViewOf<C[number]>;
+  /** `Loading` handles the pending of its children; their failures pass on. */
+  <const C extends readonly Hole[]>(
+    component: typeof Loading,
+    props: { fallback?: Hole; on?: unknown },
+    ...children: C
+  ): HView<false, FailsOf<OpsOfHole<C[number]>>>;
+  /** `Errored` handles the failures of its children; their pending passes on. */
+  <const C extends readonly Hole[]>(
+    component: typeof Errored,
+    props: {
+      fallback:
+        | Exclude<Hole, (...args: any[]) => any>
+        | ((error: Accessor<unknown>, reset: () => void) => Hole);
+    },
+    ...children: C
+  ): HView<PendingOf<OpsOfHole<C[number]>>, never>;
   /**
-   * A component: its props, then children. The result carries the
-   * component's pending / failures. Boundaries are simplest as calls
-   * (`Loading({ fallback, children: Child() })`): a generic component
-   * passed as a value loses its type arguments.
+   * A component: its props, then its children. The result carries the
+   * component's pending / failures and its children's (a component renders
+   * the children it is given). Created when the output is materialized, like
+   * a JSX tag.
    */
   <Comp extends (props: any) => unknown, const C extends readonly Hole[]>(
     component: Comp,
     props: PropsOfComponent<Comp>,
     ...children: C
-  ): ReturnType<Comp> extends View<infer P, infer E> | HView<infer P, infer E>
-    ? HView<P, E>
-    : HView<false, never>;
+  ): HView<
+    PendingOf<OpsOfOutput<ReturnType<Comp>> | OpsOfHole<C[number]>>,
+    FailsOf<OpsOfOutput<ReturnType<Comp>> | OpsOfHole<C[number]>>
+  >;
   Fragment: (props: { children: Hole }) => HView<false, never>;
 }
 
@@ -74,7 +110,14 @@ function convert(args: any[]): any[] {
   for (let i = 1; i < args.length; i++) {
     const v = args[i];
     out[i] =
-      i === 1 && v != null && typeof v === "object" && !Array.isArray(v) && !(v instanceof Node)
+      // the second argument is the props object — unless it is a hole (a
+      // path or a selection is an object too)
+      i === 1 &&
+      v != null &&
+      typeof v === "object" &&
+      !Array.isArray(v) &&
+      !(v instanceof Node) &&
+      (v as any)[READ] === undefined
         ? toHoleProps(v)
         : toHole(v);
   }

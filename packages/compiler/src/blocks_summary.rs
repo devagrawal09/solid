@@ -402,6 +402,41 @@ impl Walker<'_> {
         }
     }
 
+    /// The props of a call-form render site: an object literal's properties
+    /// (a spread, a computed key or a non-literal argument: `spread`).
+    fn object_props(&self, arg: Option<&Expression<'_>>) -> (Vec<(String, Fact)>, bool) {
+        match arg {
+            None => (Vec::new(), false),
+            Some(Expression::ObjectExpression(o)) => {
+                let mut props = Vec::new();
+                let mut spread = false;
+                for p in &o.properties {
+                    match p {
+                        ObjectPropertyKind::SpreadProperty(_) => spread = true,
+                        ObjectPropertyKind::ObjectProperty(p) => {
+                            let key = match &p.key {
+                                PropertyKey::StaticIdentifier(k) => k.name.to_string(),
+                                PropertyKey::StringLiteral(s) => s.value.to_string(),
+                                _ => {
+                                    spread = true;
+                                    continue;
+                                }
+                            };
+                            let fact = if p.kind == PropertyKind::Init {
+                                self.value_fact(&p.value)
+                            } else {
+                                Fact::Unknown
+                            };
+                            props.push((key, fact));
+                        }
+                    }
+                }
+                (props, spread)
+            }
+            Some(_) => (Vec::new(), true),
+        }
+    }
+
     fn render_props(&self, attributes: &[JSXAttributeItem<'_>]) -> (Vec<(String, Fact)>, bool) {
         let mut props = Vec::new();
         let mut spread = false;
@@ -458,41 +493,56 @@ impl<'a> Visit<'a> for Walker<'_> {
             }
         }
         let boundary = matches!(name, Some("Loading" | "Errored"));
+        // no-JSX form: `h(X, { … }, …children)`
+        if name == Some("h")
+            && let Some(Expression::Identifier(id)) =
+                it.arguments.first().and_then(|a| a.as_expression())
+            && is_capitalized(id.name.as_str())
+        {
+            let inner_boundary = match id.name.as_str() {
+                "Loading" => Some(true),
+                "Errored" => Some(false),
+                _ => None,
+            };
+            if inner_boundary.is_none() {
+                let arg = it.arguments.get(1).and_then(|a| a.as_expression());
+                let (props, spread) = self.object_props(arg);
+                self.summary.renders.push(Render {
+                    component: id.name.to_string(),
+                    form: "h",
+                    owner: self
+                        .current()
+                        .map(|i| self.summary.components[i].local.clone()),
+                    in_loading: self.loading > 0,
+                    in_errored: self.errored > 0,
+                    props,
+                    spread,
+                    start: it.span.start,
+                    end: it.span.end,
+                });
+            }
+            match inner_boundary {
+                Some(true) => self.loading += 1,
+                Some(false) => self.errored += 1,
+                None => {}
+            }
+            for arg in it.arguments.iter().skip(1) {
+                self.visit_argument(arg);
+            }
+            match inner_boundary {
+                Some(true) => self.loading -= 1,
+                Some(false) => self.errored -= 1,
+                None => {}
+            }
+            return;
+        }
         if let Expression::Identifier(id) = &it.callee
             && is_capitalized(id.name.as_str())
             && !boundary
         {
             // call form: `X({ … })`
-            let (props, spread) = match it.arguments.first().and_then(|a| a.as_expression()) {
-                None => (Vec::new(), false),
-                Some(Expression::ObjectExpression(o)) => {
-                    let mut props = Vec::new();
-                    let mut spread = false;
-                    for p in &o.properties {
-                        match p {
-                            ObjectPropertyKind::SpreadProperty(_) => spread = true,
-                            ObjectPropertyKind::ObjectProperty(p) => {
-                                let key = match &p.key {
-                                    PropertyKey::StaticIdentifier(k) => k.name.to_string(),
-                                    PropertyKey::StringLiteral(s) => s.value.to_string(),
-                                    _ => {
-                                        spread = true;
-                                        continue;
-                                    }
-                                };
-                                let fact = if p.kind == PropertyKind::Init {
-                                    self.value_fact(&p.value)
-                                } else {
-                                    Fact::Unknown
-                                };
-                                props.push((key, fact));
-                            }
-                        }
-                    }
-                    (props, spread)
-                }
-                Some(_) => (Vec::new(), true),
-            };
+            let (props, spread) =
+                self.object_props(it.arguments.first().and_then(|a| a.as_expression()));
             self.summary.renders.push(Render {
                 component: id.name.to_string(),
                 form: "call",
@@ -1031,6 +1081,26 @@ mod tests {
         assert!(s.contains(r#""user":{"k":"prop","name":"user"}"#), "{s}");
         assert!(s.contains(r#""label":{"k":"static"}"#), "{s}");
         assert!(s.contains(r#""escapes":[{"name":"Card""#), "{s}");
+    }
+
+    #[test]
+    fn no_jsx_render_sites() {
+        let s = summary(
+            r#"
+            const Card = $component(function* (props: TypedProps<{ user: User }, "Card">) {
+              return function* () { return h("p", props.user.name); };
+            });
+            const Page = $component(function* () {
+              const user = yield* $memo(function* () { return yield* attempt(() => load()); });
+              return function* () { return h(Loading, { fallback: "…" }, h(Card, { user })); };
+            });
+            "#,
+        );
+        assert!(
+            s.contains(r#""component":"Card","form":"h","owner":"Page","inLoading":true"#),
+            "{s}"
+        );
+        assert!(!s.contains(r#""escapes":[{"name":"Card""#), "{s}");
     }
 
     #[test]

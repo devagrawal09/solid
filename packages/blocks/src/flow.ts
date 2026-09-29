@@ -24,7 +24,25 @@ import {
 } from "solid-js";
 import { BODY, BOUNDARY, READ, isRowBlock, rowArg, runRow, through } from "./runtime.js";
 import type { Element } from "./element.js";
-import type { COMPONENT, Path, RowBlock, SettledView, Source, View } from "./types.js";
+import type {
+  COMPONENT,
+  FailsOf,
+  HView,
+  Path,
+  PendingOf,
+  Read,
+  RowBlock,
+  SettledView,
+  Source,
+  View
+} from "./types.js";
+import type { Hole, OpsOfHole } from "./holes.js";
+
+/** No-JSX output of a flow control: its source's coloring joined with its content's. */
+type FlowOutput<P extends boolean, E, C> = HView<
+  PendingOf<Read<P, E> | OpsOfHole<C>>,
+  FailsOf<Read<P, E> | OpsOfHole<C>>
+>;
 
 /** Flow controls are components (`<${For} …>` in `html`, `h(For, …)`). */
 type Branded = { readonly [COMPONENT]: true };
@@ -96,6 +114,17 @@ function ForBlocks<T extends readonly any[]>(
     children: (item: Path<EachOf<T>>, index: Source<number>) => Element;
   }
 ): SettledView;
+/**
+ * No-JSX (`For({ each: todos, children: todo => h(TodoItem, { todo }) })`):
+ * `each` may be a pending source; the output carries its coloring and the
+ * rows' `h` output's.
+ */
+function ForBlocks<T extends readonly any[], P extends boolean, E, C extends Hole>(props: {
+  each: Source<T | undefined | null | false, P, E> | T | undefined | null | false;
+  fallback?: Hole;
+  keyed?: boolean | ((item: EachOf<T>) => any);
+  children: (item: Path<EachOf<T>>, index: Source<number>) => C;
+}): FlowOutput<P, E, C>;
 function ForBlocks(props: any): any {
   const keyedFalse = props.keyed === false;
   return SolidFor(
@@ -147,6 +176,16 @@ function ShowBlocks<T, Y, VY, R>(
 function ShowBlocks<T>(
   props: ShowProps<T> & { children: Element | ((value: Path<NonNullable<T>>) => Element) }
 ): SettledView;
+/**
+ * No-JSX (`Show({ when: open, children: h(…) })`): `when` may be a pending
+ * source; the output carries its coloring and the content's.
+ */
+function ShowBlocks<T, P extends boolean, E, C extends Hole>(props: {
+  when: Source<T | undefined | null | false, P, E> | T | undefined | null | false;
+  keyed?: boolean;
+  fallback?: Hole;
+  children: C | ((value: Path<NonNullable<T>>) => C);
+}): FlowOutput<P, E, C>;
 function ShowBlocks(props: any): any {
   const keyed = !!props.keyed;
   return SolidShow(

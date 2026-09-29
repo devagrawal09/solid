@@ -57,8 +57,9 @@ export type HtmlValue =
   | ComponentHole
   | { readonly [key: string]: unknown; readonly call?: never; readonly apply?: never };
 
-type OpsOfHole<V> =
-  V extends Source<any, infer P, infer E>
+export type OpsOfHole<V> = V extends { readonly [COMPONENT]: true } | EventHandler<any, any>
+  ? never
+  : V extends Source<any, infer P, infer E>
     ? Read<P, E>
     : V extends HView<infer P, infer E>
       ? ChildView<P, E>
@@ -99,7 +100,16 @@ export function toHole(value: any): any {
   return value;
 }
 
-/** Convert every value of a props object (a copy; getters are kept lazy). */
+/** A prop value: converted like a hole, but arrays are not walked. */
+function toPropHole(value: any): any {
+  return Array.isArray(value) ? value : toHole(value);
+}
+
+/**
+ * Convert the values of a props object (a copy; getters stay lazy). Only
+ * the values themselves: a prop holding an array or an object (a context
+ * value, a store) is passed as it is.
+ */
 export function toHoleProps(props: any): any {
   if (props == null || typeof props !== "object" || Array.isArray(props)) return props;
   if (props instanceof Node) return props;
@@ -108,8 +118,9 @@ export function toHoleProps(props: any): any {
   const descriptors = Object.getOwnPropertyDescriptors(props);
   for (const key in descriptors) {
     const d = descriptors[key];
-    if (d.get) Object.defineProperty(out, key, { get: () => toHole(props[key]), enumerable: true });
-    else out[key] = toHole(d.value);
+    if (d.get)
+      Object.defineProperty(out, key, { get: () => toPropHole(props[key]), enumerable: true });
+    else out[key] = toPropHole(d.value);
   }
   return out;
 }
