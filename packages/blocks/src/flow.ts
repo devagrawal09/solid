@@ -81,6 +81,9 @@ function bodyOf(fn: any): any {
  */
 function adapt(cb: unknown, args: (...raw: any[]) => unknown[], arity: number): unknown {
   if (typeof cb !== "function") return cb;
+  // A view that is a function (a component re-rendering as a whole, an
+  // adopted lazy page) is content, not a render callback.
+  if ((cb as any)[VIEW_MARK] === true) return cb;
   const isBlock = (cb as any)[BODY] !== undefined;
   const row = isBlock || isRowBlock(cb);
   if (!row && (cb as any)[READ] !== undefined) return cb;

@@ -657,6 +657,40 @@ describe("row blocks", () => {
   });
 });
 
+describe("a view that is a function is a branch's content", () => {
+  it("Show / Match render it (a whole-view component, an adopted lazy page) instead of calling it as a render callback", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const [n, setN] = plainSignal(1);
+    // reads at its top level: its output is a memo (a function marked as a view)
+    const Whole = $component(function* () {
+      return function* () {
+        const v = yield* read(n);
+        return <b>{v}</b>;
+      };
+    });
+    const Page = adopt(plainLazy(() => Promise.resolve({ default: Whole })));
+    const [on, setOn] = plainSignal<string | false>("a");
+    mount(() => (
+      <div>
+        <Show when={on()}>{Whole()}</Show>
+        <Switch>
+          <Match when={on()}>{perform(Page())}</Match>
+        </Switch>
+      </div>
+    ));
+    await settle();
+    expect(root.textContent).toBe("11");
+    setN(2);
+    flush();
+    expect(root.textContent).toBe("22");
+    // a new truthy value re-reads the branch: still content, still one view
+    setOn("b");
+    flush();
+    expect(root.textContent).toBe("22");
+    warn.mockRestore();
+  });
+});
+
 describe("adopt", () => {
   it("a lazy block component in call form is built once; its chunk and its state land in place", async () => {
     let setups = 0;
