@@ -316,7 +316,7 @@ pub(crate) struct CompFacts<'a> {
     pub calls: Vec<Call<'a>>,
     pub providers: Vec<(SymbolId, Option<&'a Expression<'a>>)>,
     /// Boundaries (`Loading` / `Errored`) with their enclosing regions.
-    pub boundaries: Vec<(String, Vec<usize>)>,
+    pub boundaries: Vec<(String, Vec<usize>, Span)>,
     pub issues: Vec<String>,
     /// Refs per setup item (init / body).
     pub item_refs: Vec<Refs>,
@@ -327,6 +327,8 @@ pub(crate) struct CompFacts<'a> {
     /// The router layout renders its outlet (`props.children` of its
     /// render callback).
     pub outlet: bool,
+    /// `<Loading on={…}>` keys.
+    pub boundary_on: Vec<Refs>,
 }
 
 struct ViewWalk<'m, 'a> {
@@ -619,7 +621,15 @@ impl<'a> ViewWalk<'_, 'a> {
                     }
                 }
                 "Loading" | "Errored" => {
-                    self.f.boundaries.push((name.clone(), self.regions.clone()));
+                    self.f
+                        .boundaries
+                        .push((name.clone(), self.regions.clone(), el.span));
+                    // `<Loading on={key}>` shows its fallback again when the
+                    // key changes while pending: checked for live reads below.
+                    if let Some(AttrVal::Expr(e)) = jsx::attr(&attrs, "on").map(|a| &a.value) {
+                        let refs = refs_expr(self.m, self.props, e);
+                        self.f.boundary_on.push(refs);
+                    }
                     if let Some(fb) = jsx::attr(&attrs, "fallback") {
                         // A boundary's fallback is server HTML in islands
                         // mode (rendered in the shell, or streamed over the
@@ -787,6 +797,10 @@ pub(crate) struct Analysis<'a> {
     pub frames: Vec<super::frames::Frame<'a>>,
     /// Server calls over client inputs that are not frames, with the reason.
     pub frame_rejects: Vec<super::frames::Reject>,
+    /// `<Loading>` elements (component, span start) the client may create
+    /// (inside a live region, or in a component rendered inside one) over
+    /// content that reads async state: client pending boundaries.
+    pub pending_boundaries: HashSet<(usize, u32)>,
 }
 
 impl<'a> Analysis<'a> {
@@ -1106,6 +1120,7 @@ pub(crate) fn analyze_file<'a>(
         env_sites: HashMap::new(),
         frames: Vec::new(),
         frame_rejects: Vec::new(),
+        pending_boundaries: HashSet::new(),
     };
     loop {
         let mut changed = false;
@@ -1516,6 +1531,44 @@ pub(crate) fn analyze_file<'a>(
         }
     }
 
+    // Client pending boundaries: a `<Loading>` the client can create (its
+    // component's live region, or a component rendered inside a live region
+    // anywhere) whose content reads async state (a live async memo, an
+    // optimistic / projected cell, through memos).
+    let mut fresh_comps: HashSet<usize> = HashSet::new();
+    for ci in 0..n {
+        for call in &a.facts[ci].calls {
+            if call.regions.iter().any(|r| a.site_live[ci][*r])
+                && let Tag::Comp(k) = call.tag
+            {
+                fresh_comps.insert(k);
+            }
+        }
+    }
+    loop {
+        let before = fresh_comps.len();
+        for c in fresh_comps.clone() {
+            for call in &a.facts[c].calls {
+                if let Tag::Comp(k) = call.tag {
+                    fresh_comps.insert(k);
+                }
+            }
+        }
+        if fresh_comps.len() == before {
+            break;
+        }
+    }
+    for ci in 0..n {
+        for (b, regions, span) in &a.facts[ci].boundaries {
+            if b != "Loading" {
+                continue;
+            }
+            let fresh = fresh_comps.contains(&ci) || regions.iter().any(|r| a.site_live[ci][*r]);
+            if fresh && content_reads_async(m, &a, ci, *span) {
+                a.pending_boundaries.insert((ci, span.start));
+            }
+        }
+    }
     // Dominance over the render sites of this module: `dominated[c]` =
     // scopes rendered only under c. An export is another render site, in
     // another module: the instances it renders are that module's (its own
@@ -1860,22 +1913,37 @@ pub(crate) fn analyze_file<'a>(
             }
         }
         for c in &members {
-            for (b, regions) in &a.facts[*c].boundaries {
+            for r in &a.facts[*c].boundary_on {
+                if !a.live_reads(*c, r).0.is_empty() {
+                    unsupported.push(format!(
+                        "`{}`: <Loading on={{…}}> over live state (a key change while pending re-shows the fallback)",
+                        m.comps[*c].name
+                    ));
+                }
+            }
+            for (b, regions, span) in &a.facts[*c].boundaries {
+                if b == "Loading" {
+                    // A `<Loading>` the client may create (fresh content) over
+                    // content that reads async state is a client pending
+                    // boundary (the full core); over content that cannot be
+                    // pending on the client it is pass-through.
+                    if a.pending_boundaries.contains(&(*c, span.start)) {
+                        t2.push(format!(
+                            "`{}`: <Loading> the client creates over async state (a client pending boundary)",
+                            m.comps[*c].name
+                        ));
+                        bump(&mut own, *c, 2);
+                    }
+                    continue;
+                }
                 if regions.iter().any(|r| a.site_live[*c][*r]) {
+                    // An `<Errored>` there is a client error boundary around
+                    // the content the client adopts or creates.
                     t2.push(format!(
                         "`{}`: <{b}> inside a live region",
                         m.comps[*c].name
                     ));
                     bump(&mut own, *c, 2);
-                    // An `<Errored>` there is a client error boundary around
-                    // the content the client adopts or creates; a `<Loading>`
-                    // would need a client pending fallback: not compiled yet.
-                    if b == "Loading" {
-                        unsupported.push(format!(
-                            "`{}`: <Loading> inside a live region (no client pending fallback yet)",
-                            m.comps[*c].name
-                        ));
-                    }
                 }
             }
             for item in &m.comps[*c].setup {
@@ -2275,4 +2343,74 @@ pub(crate) fn sym_closure(
         }
     }
     seen
+}
+
+/// An async key: a live async memo, or an optimistic / projected cell.
+fn is_async_key(m: &Model<'_>, k: Key) -> bool {
+    matches!(
+        &m.comps[k.0].setup[k.1],
+        Item::Memo { is_async: true, .. }
+            | Item::Cell {
+                host: CellHost::Optimistic,
+                ..
+            }
+    )
+}
+
+/// Does the content of the element spanning `span` in component `ci` read
+/// an async key (its sites, and the components it renders, with their
+/// setups; through memos)?
+fn content_reads_async(m: &Model<'_>, a: &Analysis<'_>, ci: usize, span: Span) -> bool {
+    let inside = |sp: Span| span.start <= sp.start && sp.end <= span.end;
+    let mut reads: BTreeSet<Key> = BTreeSet::new();
+    for s in &a.facts[ci].sites {
+        if inside(s.span) && !matches!(s.kind, SiteKind::Handler(_)) {
+            reads.extend(a.av_of(ci, &s.refs).reads);
+        }
+    }
+    let mut stack: Vec<usize> = a.facts[ci]
+        .calls
+        .iter()
+        .filter(|c| inside(c.span))
+        .filter_map(|c| match c.tag {
+            Tag::Comp(k) => Some(k),
+            _ => None,
+        })
+        .collect();
+    let mut seen = HashSet::new();
+    while let Some(c) = stack.pop() {
+        if !seen.insert(c) {
+            continue;
+        }
+        for s in &a.facts[c].sites {
+            if !matches!(s.kind, SiteKind::Handler(_)) {
+                reads.extend(a.av_of(c, &s.refs).reads);
+            }
+        }
+        for (ii, it) in m.comps[c].setup.iter().enumerate() {
+            if !matches!(it, Item::Event { .. }) {
+                reads.extend(a.av_of(c, &a.facts[c].item_refs[ii]).reads);
+            }
+        }
+        for call in &a.facts[c].calls {
+            if let Tag::Comp(k) = call.tag {
+                stack.push(k);
+            }
+        }
+    }
+    // Through memos.
+    let mut seen = BTreeSet::new();
+    let mut stack: Vec<Key> = reads.into_iter().collect();
+    while let Some(k) = stack.pop() {
+        if !seen.insert(k) {
+            continue;
+        }
+        if is_async_key(m, k) {
+            return true;
+        }
+        if let Some(d) = a.memo_deps.get(&k) {
+            stack.extend(d.iter().copied());
+        }
+    }
+    false
 }

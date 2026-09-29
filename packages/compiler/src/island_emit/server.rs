@@ -592,9 +592,24 @@ impl<'x, 'a> Se<'x, 'a> {
                 match b.as_str() {
                     "Loading" => {
                         let kids = jsx::children(&el.children)?;
+                        // A client pending boundary: mark its region.
+                        let pending = self.a.pending_boundaries.contains(&(comp, el.span.start));
+                        if pending && is_async {
+                            return Err(
+                                "a <Loading> the client creates over async state, around server data the server awaits"
+                                    .into(),
+                            );
+                        }
                         if !is_async {
                             // Nothing to wait for: the content renders in place.
-                            return self.kids(comp, &kids, out, anchor, false);
+                            if pending {
+                                out.push_str("<!--$-->");
+                            }
+                            self.kids(comp, &kids, out, anchor, false)?;
+                            if pending {
+                                out.push_str("<!--/-->");
+                            }
+                            return Ok(());
                         }
                         // A boundary over server data: streamed out of order
                         // when the render has a stream (`_$ld`), its fallback

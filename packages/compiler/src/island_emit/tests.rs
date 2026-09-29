@@ -2125,3 +2125,84 @@ export const App = $component(function* () {
     // The server renders the fallback between the region's markers.
     assert!(out.server.contains("<!--$-->"), "{}", out.server);
 }
+
+#[test]
+fn a_loading_the_client_creates_over_async_state_is_a_client_pending_boundary() {
+    let out = run(r#"
+import { $component, $event, $memo, $signal, attempt, For, Loading } from "solid-js";
+const Info = $component(function* (props) {
+  return function* () { return <b>{props.id}:{yield* props.info}</b>; };
+});
+export const App = $component(function* () {
+  const [ids, setIds] = yield* $signal([1]);
+  const [v, setV] = yield* $signal(0);
+  const info = yield* $memo(function* () {
+    const x = yield* v;
+    return yield* attempt(() => fetch("/x?" + x));
+  });
+  const add = $event(function* () { setIds(l => [...l, l.length + 1]); });
+  const bump = $event(function* () { setV(x => x + 1); });
+  return function* () {
+    return (
+      <div>
+        <ul>
+          <For each={yield* ids}>{id => <li><Loading fallback={<em>wait</em>}><Info id={id} info={info} /></Loading></li>}</For>
+        </ul>
+        <button onClick={add} /><button onClick={bump} />
+      </div>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains("a client pending boundary"), "{m}");
+    let chunk = &out.chunks[0].code;
+    assert!(chunk.contains("createLoadingBoundary as $$createLoadingBoundary"), "{chunk}");
+    assert!(chunk.contains("$ld($m"), "{chunk}");
+    // The row template carries the boundary's region.
+    assert!(chunk.contains("<li><!--$--><b>"), "{chunk}");
+    // The server marks it too.
+    assert!(out.server.contains("<li><!--$-->${Info("), "{}", out.server);
+}
+
+#[test]
+fn a_loading_over_content_that_cannot_be_pending_is_pass_through() {
+    let out = run(r#"
+import { $component, $event, $signal, Loading, Show } from "solid-js";
+export const App = $component(function* () {
+  const [open, setOpen] = yield* $signal(false);
+  const [n, setN] = yield* $signal(0);
+  const toggle = $event(function* () { setOpen(o => !o); });
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    return (
+      <div>
+        <Show when={yield* open}><section><Loading fallback={<em>never</em>}><p>{yield* n}</p></Loading></section></Show>
+        <button onClick={toggle} /><button onClick={inc} />
+      </div>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains(r#""tier":1"#), "{m}");
+    for c in &out.chunks {
+        assert!(!c.code.contains("$ld"), "{}", c.code);
+    }
+    // A key that changes while pending re-shows the fallback: not compiled.
+    let reason = fallback_of(
+        r#"
+import { $component, $event, $signal, Loading } from "solid-js";
+export const App = $component(function* () {
+  const [k, setK] = yield* $signal(0);
+  const inc = $event(function* () { setK(x => x + 1); });
+  return function* () {
+    return <div><Loading on={yield* k} fallback="…"><button onClick={inc}>{yield* k}</button></Loading></div>;
+  };
+});
+"#,
+    );
+    assert!(reason.contains("<Loading on"), "{reason}");
+}

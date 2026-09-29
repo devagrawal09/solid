@@ -306,6 +306,14 @@ const HELPERS: &[(&str, &str)] = &[
         "const $rows = (e, l, row) => { let n = $start(e).nextSibling; if (l) for (const it of l) { while (n.nodeType !== 1) n = n.nextSibling; row(it, n); n = n.nextSibling; } };",
     ),
     (
+        "$ld",
+        // A client pending boundary (a `<Loading>` the client creates over
+        // async state): the content's activation runs inside it; while it is
+        // pending the content is detached (kept, still bound) and the
+        // fallback shows.
+        "const $ld = (e, content, fb) => { let kept, shown; const acc = $$createLoadingBoundary(() => ($U(content), 1), () => 0); $E(acc, v => { if (v === 1) { if (kept) { shown.remove(); for (const n of kept) e.before(n); kept = shown = undefined; } return; } if (!kept) { kept = []; for (let n = $start(e).nextSibling; n !== e; n = n.nextSibling) kept.push(n); for (const n of kept) n.remove(); shown = fb(); e.before(shown); } }); };",
+    ),
+    (
         "$ref",
         "const $ref = (r, e) => Array.isArray(r) ? r.flat(Infinity).forEach(f => f && f(e)) : r(e);",
     ),
@@ -342,6 +350,7 @@ fn helper_deps(h: &str) -> &'static [&'static str] {
         "$listf" => &["$start"],
         "$err" => &["$start"],
         "$rows" => &["$start"],
+        "$ld" => &["$start"],
         _ => &[],
     }
 }
@@ -2401,7 +2410,14 @@ impl<'x, 'a> Ce<'x, 'a> {
                     out.push(Slot::Opaque(sh.0, sh.1));
                 }
             }
-            Tag::Builtin(b) if b == "Errored" && self.t2 && self.boundary_live(comp, el) => {
+            Tag::Builtin(b)
+                if (b == "Errored" && self.t2 && self.boundary_live(comp, el))
+                    || (b == "Loading"
+                        && self.a.pending_boundaries.contains(&(comp, el.span.start))) =>
+            {
+                if !self.t2 {
+                    return Err("a client pending boundary below tier 2".into());
+                }
                 // Its content activates inside a client error boundary: a
                 // scope of its own (the members it renders set up there),
                 // adopted or fresh as its enclosing scope is.
@@ -3039,11 +3055,17 @@ impl<'x, 'a> Ce<'x, 'a> {
             rest.push_str(&self.assemble(bscope, i));
         }
         let fb = self.error_fallback(el, inst)?;
-        self.helpers.insert("$err");
-        self.core.insert("createErrorBoundary".into());
+        let loading = matches!(jsx::tag_of(self.m, &el.opening_element.name), Tag::Builtin(ref b) if b == "Loading");
+        let (helper, ctor) = if loading {
+            ("$ld", "createLoadingBoundary")
+        } else {
+            ("$err", "createErrorBoundary")
+        };
+        self.helpers.insert(helper);
+        self.core.insert(ctor.into());
         self.rt.insert("untrack");
         self.bucket(inst).seq.push(Seq::Line(format!(
-            "$err({end}, () => {{\n{nav}\n{body}{rest}}}, {fb});"
+            "{helper}({end}, () => {{\n{nav}\n{body}{rest}}}, {fb});"
         )));
         Ok(())
     }
@@ -3058,10 +3080,16 @@ impl<'x, 'a> Ce<'x, 'a> {
                 Some(AttrVal::Str(s)) => {
                     return Ok(format!("() => document.createTextNode({})", js_str(s)));
                 }
+                Some(AttrVal::Expr(e)) if matches!(jsx::root_of(e), Some(Root::Element(_))) => {
+                    let Some(Root::Element(r)) = jsx::root_of(e) else {
+                        unreachable!()
+                    };
+                    (r, Vec::new())
+                }
                 Some(AttrVal::Expr(e)) => {
                     let Some(f) = FnRef::from_expr(e) else {
                         return Err(
-                            "an <Errored> fallback that is not JSX or a render callback".into()
+                            "a boundary fallback that is not JSX or a render callback".into()
                         );
                     };
                     let Some(Root::Element(r)) = fn_root(f) else {
@@ -3990,9 +4018,13 @@ impl<'x, 'a> Ce<'x, 'a> {
                     }
                     // A client error boundary's region; an inert one is
                     // its content in place.
-                    Tag::Builtin(b) if b == "Errored" => {
+                    Tag::Builtin(b) if b == "Errored" || b == "Loading" => {
                         let ks = jsx::children(&c.children)?;
-                        let live = self.t2 && self.boundary_live(comp, c);
+                        let live = if b == "Loading" {
+                            self.a.pending_boundaries.contains(&(comp, c.span.start))
+                        } else {
+                            self.t2 && self.boundary_live(comp, c)
+                        };
                         if live {
                             out.push_str("<!--$-->");
                         }

@@ -1174,6 +1174,107 @@ export const App = $component(function* () {
   ]
 };
 
+/**
+ * `<Loading>` inside a live region: rows the client creates put a client
+ * pending boundary around content that reads the adopted async memo. A row
+ * created while the memo is refetching shows its fallback until the value
+ * lands; rows whose boundary already settled keep their content. A
+ * `<Loading>` whose content cannot be pending on the client (the `Show`
+ * branch) is pass-through.
+ */
+export const islandsLoadingRows: Scenario = {
+  name: "islands-loading-rows",
+  covers: [
+    "a client pending boundary in rows the client creates",
+    "a row created while its async source is pending shows the fallback",
+    "settled boundaries keep their content during a refetch",
+    "a Loading over content that cannot be pending is pass-through"
+  ],
+  entry: { component: "App" },
+  sources: {
+    reference: `
+import { createMemo, createSignal, For, Loading, Show } from "solid-js";
+import { h } from "conformance";
+export function App() {
+  const [ids, setIds] = createSignal([1]);
+  const [v, setV] = createSignal(0);
+  const [open, setOpen] = createSignal(false);
+  const info = createMemo(() => {
+    const x = v();
+    return x === 0 ? Promise.resolve("v0") : h.task("load", x);
+  });
+  return (
+    <div>
+      <ul>
+        <For each={ids()}>{id => <li><Loading fallback={<em>wait</em>}><b>{id}:{info()}</b></Loading></li>}</For>
+      </ul>
+      <Show when={open()}><section><Loading fallback={<em>never</em>}><p class="plain">plain {ids().length}</p></Loading></section></Show>
+      <button class="add" onClick={() => setIds(l => [...l, l.length + 1])} />
+      <button class="bump" onClick={() => setV(x => x + 1)} />
+      <button class="open" onClick={() => setOpen(o => !o)} />
+    </div>
+  );
+}
+`,
+    islands: `
+import { $component, $event, $memo, $signal, attempt, For, Loading, Show } from "solid-js";
+import { h } from "conformance";
+const Info = $component(function* (props) {
+  return function* () {
+    return <b>{props.id}:{yield* props.info}</b>;
+  };
+});
+export const App = $component(function* () {
+  const [ids, setIds] = yield* $signal([1]);
+  const [v, setV] = yield* $signal(0);
+  const [open, setOpen] = yield* $signal(false);
+  const info = yield* $memo(function* () {
+    const x = yield* v;
+    return yield* attempt(() => (x === 0 ? Promise.resolve("v0") : h.task("load", x)));
+  });
+  const add = $event(function* () { setIds(l => [...l, l.length + 1]); });
+  const bump = $event(function* () { setV(x => x + 1); });
+  const toggle = $event(function* () { setOpen(o => !o); });
+  return function* () {
+    return (
+      <div>
+        <ul>
+          <For each={yield* ids}>{id => <li><Loading fallback={<em>wait</em>}><Info id={id} info={info} /></Loading></li>}</For>
+        </ul>
+        <Show when={yield* open}><section><Loading fallback={<em>never</em>}><p class="plain">plain {(yield* ids).length}</p></Loading></section></Show>
+        <button class="add" onClick={add} />
+        <button class="bump" onClick={bump} />
+        <button class="open" onClick={toggle} />
+      </div>
+    );
+  };
+});
+`
+  },
+  steps: [
+    {
+      name: "initial",
+      run: async ({ settle, html }) => {
+        await settle();
+        html();
+      }
+    },
+    step("add (a row over the settled value)", ctx => ctx.click(".add")),
+    step("open (a pass-through Loading)", ctx => ctx.click(".open")),
+    step("bump (refetch: settled rows keep their content)", ctx => ctx.click(".bump")),
+    step("add while pending", ctx => ctx.click(".add")),
+    {
+      name: "resolve load#1",
+      run: async ({ tasks, settle, html }) => {
+        tasks.resolve("load#1", "v1");
+        await settle();
+        html();
+      }
+    },
+    step("add after (a row over the new value)", ctx => ctx.click(".add"))
+  ]
+};
+
 export const islandsScenarios = [
   islandsList,
   islandsSharedMember,
@@ -1187,5 +1288,6 @@ export const islandsScenarios = [
   islandsErroredRows,
   islandsRef,
   islandsSpread,
-  islandsFallback
+  islandsFallback,
+  islandsLoadingRows
 ];
