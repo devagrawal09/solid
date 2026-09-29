@@ -1,6 +1,6 @@
 # Chat — `@solidjs/blocks` twin (JSX flavor)
 
-[`examples/chat`](../chat) — a simulated LLM chat as Solid Server Components — written with `@solidjs/blocks`. The frames wiring (`start: {}`, `ssr: true`, `serverFunctions.components`), `server.js`, the model (`src/lib/model.ts`), the markdown and highlighting code, the styles and `src/Document.tsx` are the original's. Every component is a block: the client app, the client `Status` rendered in the server's slot, and the server components themselves (`src/lib/ai.tsx`).
+[`examples/chat`](../chat) — a simulated LLM chat as Solid Server Components — written with `@solidjs/blocks`. The frames wiring (`start: {}`, `ssr: true`, `serverFunctions.components`), `server.js`, the model (`src/lib/model.ts`), the markdown and highlighting code and the styles are the original's. Every component is a block: the client app, the client `Status` rendered in the server's slot, the server components themselves (`src/lib/ai.tsx`) and the document shell `start` renders into (`src/Document.tsx`).
 
 ```bash
 pnpm test         # behavior (7) + parity against examples/chat (1): DOM + draft after 18 steps
