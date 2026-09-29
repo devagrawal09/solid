@@ -149,7 +149,7 @@ function checkRead(): void {
 /** Perform the read a readable stands for (tracked in the running computation). */
 function readOf(x: any): unknown {
   if (__DEV__) checkRead();
-  if (viewRunning && getObserver() === null) throw WHOLE_VIEW;
+  if (viewRunning && host === VIEW && getObserver() === null) throw WHOLE_VIEW;
   const r = x[READ];
   return r === PATH_READ ? readPath(x[PATH_TARGET]) : r.call(x);
 }
@@ -743,12 +743,16 @@ function runSetup(
   args: unknown[]
 ): unknown {
   const prev = host;
+  const prevRunning = viewRunning;
   host = SETUP;
+  // a child's setup is not its parent view's top level
+  viewRunning = false;
   let result: unknown;
   try {
     result = drive(body(...args), SYNC_RUN);
   } finally {
     host = prev;
+    viewRunning = prevRunning;
   }
   return result;
 }
@@ -806,15 +810,14 @@ export function renderView(viewFn: () => Generator<unknown, unknown, unknown>): 
 export function $component<
   TP = unknown,
   Y extends SetupOp = never,
-  VY extends ViewOp = never,
-  R = unknown
+  V extends () => Generator<ViewOp, unknown, any> = () => Generator<never, unknown, any>
 >(
-  body: (props: TP) => Generator<Y, () => Generator<VY, R, any>, any>,
-  ..._rule: NoJsxViewRule<VY, R>
+  body: (props: TP) => Generator<Y, V, any>,
+  ..._rule: NoJsxViewRule<ViewYield<V>, ViewReturn<V>>
 ): Component<
   PropsOf<TP>,
-  ViewPending<VY | Extract<Y, Snapshot<any, any>>, R>,
-  ViewFails<VY | Extract<Y, Snapshot<any, any>>, R>
+  ViewPending<ViewYield<V> | Extract<Y, Snapshot<any, any>>, ViewReturn<V>>,
+  ViewFails<ViewYield<V> | Extract<Y, Snapshot<any, any>>, ViewReturn<V>>
 > {
   const component: any = function (props?: object) {
     return untrack(() => {
@@ -830,6 +833,11 @@ export function $component<
   component[COMPONENT_MARK] = true;
   return component;
 }
+
+/** What a view function yields (a setup may return one of several views). */
+export type ViewYield<V> = V extends () => Generator<infer Y, any, any> ? Y : never;
+/** What a view function returns. */
+export type ViewReturn<V> = V extends () => Generator<any, infer R, any> ? R : never;
 
 /**
  * A no-JSX view (one returning `h` / `html` output) reads only in its holes:

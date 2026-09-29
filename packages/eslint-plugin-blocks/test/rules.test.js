@@ -55,7 +55,6 @@ tester.run("no-read-outside-hole", rules["no-read-outside-hole"], {
       "const [n] = yield* $signal(1); return function* () { return <p class={{ a: (yield* n) > 1 }}>{yield* n}</p>; };"
     ),
     component("return function* () { return <section>{yield* Child({})}</section>; };"),
-    component("return function* () { const c = yield* Child({}); return c; };"),
     "const m = $memo(function* () { const v = yield* n; return v; });"
   ],
   invalid: [
@@ -68,6 +67,10 @@ tester.run("no-read-outside-hole", rules["no-read-outside-hole"], {
     {
       code: "const r = <For each={xs}>{function* (x) { return function* () { if (yield* x.done) return <i />; return <b />; }; }}</For>;",
       errors: [{ messageId: "read" }]
+    },
+    {
+      code: component("return function* () { const c = yield* Child({}); return c; };"),
+      errors: [{ messageId: "child" }]
     }
   ]
 });

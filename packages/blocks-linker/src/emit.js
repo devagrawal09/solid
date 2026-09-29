@@ -77,7 +77,6 @@ export function emit(solved, outFile, info) {
     const props = byKey.get(key);
     lines.push(`    ${JSON.stringify(key)}: {`);
     for (const name of [...props.keys()].sort()) {
-      if (name === "children") continue;
       const c = props.get(name);
       const prop = /^[A-Za-z_$][\w$]*$/.test(name) ? name : JSON.stringify(name);
       lines.push(

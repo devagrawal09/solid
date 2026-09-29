@@ -73,7 +73,7 @@
     "types": "npm-run-all -nl types:jsx types:src",
     "types:src": "tsc -p tsconfig.build.json",
     "types:jsx": "ncp ../web/jsx/jsx-properties.d.ts ./jsx/jsx-properties.d.ts && node ../web/scripts/jsx-sync.mjs --compile --input ../web/jsx/jsx-h.d.ts --output ./jsx/jsx.d.ts --element \"BlocksElement\" --import \"import type { Element as BlocksElement } from \\\"@solidjs/blocks\\\";\"",
-    "test": "vitest run --maxWorkers=2 && vitest run --maxWorkers=2 --config vite.config.server.mjs && pnpm run test-types",
+    "test": "vitest run --maxWorkers=2 && vitest run --maxWorkers=2 --config vite.config.prod.mjs && vitest run --maxWorkers=2 --config vite.config.server.mjs && pnpm run test-types",
     "test-types": "tsc -p tsconfig.json"
   },
   "peerDependencies": {

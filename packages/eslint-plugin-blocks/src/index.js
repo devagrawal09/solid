@@ -77,7 +77,8 @@ const noReadOutsideHole = {
         "A JSX view reads only inside JSX: a read in a statement makes the view re-render as a whole."
     },
     messages: {
-      read: "this view re-renders as a whole; move the read into JSX or a $memo."
+      read: "this view re-renders as a whole; move the read into JSX or a $memo.",
+      child: "a child view is rendered by a hole: write `{yield* Child(props)}` inside JSX."
     },
     schema: []
   },
@@ -88,9 +89,12 @@ const noReadOutsideHole = {
         const kind = kindAt(node);
         if (kind !== "view") return;
         if (jsxPosition(node)) return;
-        // `yield* Child(props)` propagates a child view: not a read.
-        if (isCapitalizedCall(node.argument)) return;
-        context.report({ node, messageId: "read" });
+        // Every `yield*` of a view belongs in JSX — a read, and also a child
+        // view (`{yield* Child(props)}`), which only a hole can render.
+        context.report({
+          node,
+          messageId: isCapitalizedCall(node.argument) ? "child" : "read"
+        });
       }
     };
   }

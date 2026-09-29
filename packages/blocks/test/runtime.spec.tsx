@@ -36,6 +36,10 @@ import {
 } from "@solidjs/blocks";
 import { createSignal as plainSignal, createStore as plainStore } from "solid-js";
 
+declare const __DEV__: boolean;
+/** Dev-only checks (warnings, dev errors) are skipped against production builds. */
+const devIt = __DEV__ ? it : it.skip;
+
 const tick = () => new Promise<void>(r => setTimeout(r, 0));
 async function settle(times = 3) {
   for (let i = 0; i < times; i++) {
@@ -112,7 +116,7 @@ describe("views are fine-grained", () => {
     expect(viewRuns).toBe(1);
   });
 
-  it("a view that reads at its top level re-renders as a whole, with a warning", () => {
+  devIt("a view that reads at its top level re-renders as a whole, with a warning", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     let set!: (v: number) => void;
     let runs = 0;
@@ -217,7 +221,7 @@ describe("setup operations", () => {
     expect(root.textContent).toBe("a true 0");
   });
 
-  it("$snapshot takes a value in a setup; setup reads are dev errors", () => {
+  devIt("$snapshot takes a value in a setup; setup reads are dev errors", () => {
     const Child = $component(function* (props: TypedProps<{ start: number }>) {
       const start = yield* $snapshot(props.start);
       const [n] = yield* $signal(start * 2);
@@ -237,7 +241,7 @@ describe("setup operations", () => {
     expect(() => createRoot(() => Bad({ start: 1 }))).toThrow(/READ_IN_SETUP/);
   });
 
-  it("creating outside a setup and writing in a memo are dev errors", () => {
+  devIt("creating outside a setup and writing in a memo are dev errors", () => {
     // @ts-expect-error a view only reads (Create is not a ViewOp)
     const CreatesInView = $component(function* () {
       return function* () {
@@ -263,6 +267,30 @@ describe("setup operations", () => {
     });
     mount(WritesInMemo);
     expect(String(error)).toMatch(/WRITE_IN_REACTIVE/);
+  });
+});
+
+describe("setups inside a parent's first view run", () => {
+  it("a child's $snapshot is not a read at the parent view's top level", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let parentRuns = 0;
+    const Leaf = $component(function* (props: TypedProps<{ n: number }>) {
+      const n = yield* $snapshot(props.n);
+      return function* () {
+        return <i>{n}</i>;
+      };
+    });
+    const Parent = $component(function* () {
+      return function* () {
+        parentRuns++;
+        return <p>{perform(Leaf({ n: 1 }))}</p>;
+      };
+    });
+    mount(Parent);
+    expect(root.textContent).toBe("1");
+    expect(parentRuns).toBe(1);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 });
 
