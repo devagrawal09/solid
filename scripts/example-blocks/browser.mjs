@@ -129,13 +129,15 @@ async function run(dir, browser, port) {
   page.setDefaultTimeout(15000);
   page.setDefaultNavigationTimeout(20000);
   const problems = [];
+  // problems carry the step they happened in
+  let current = "before the first step";
   page.on("console", msg => {
     const text = msg.text();
     if (spec.ignoreConsole && spec.ignoreConsole.test(text)) return;
     if (msg.type() === "error" || msg.type() === "warning" || /hydrat|mismatch/i.test(text))
-      problems.push(`console.${msg.type()}: ${text}`);
+      problems.push(`[${current}] console.${msg.type()}: ${text}`);
   });
-  page.on("pageerror", e => problems.push(`pageerror: ${e.message}`));
+  page.on("pageerror", e => problems.push(`[${current}] pageerror: ${e.message}`));
   let base,
     stop = () => {};
   if (spec.mode === "server" || spec.mode === "dev") {
@@ -169,6 +171,7 @@ async function run(dir, browser, port) {
   const ctx = { base };
   try {
     for (const [label, step] of spec.steps) {
+      current = label;
       try {
         if (process.env.VERBOSE) console.error(`  ${dir.split("/").pop()}: ${label}`);
         await step(page, ctx);
