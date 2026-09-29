@@ -200,6 +200,28 @@ onSettled(() => {
 });
 ```
 
+#### Nested `createRoot` is owned by its parent
+
+In 1.x a `createRoot` created inside another owner was kept out of that owner's `owned` list, so it lived until its own `dispose()` was called. In 2.0 a root created inside an existing owner is a child of that owner and is disposed with it (its own `dispose()` still works for tearing it down earlier). To keep the 1.x “lives until I dispose it” behavior, detach explicitly with `runWithOwner(null, ...)`:
+
+```js
+// 1.x (nested root survives the parent)
+const dispose = createRoot(dispose => {
+  onCleanup(() => controller.destroy());
+  return dispose;
+});
+
+// 2.0 (same lifetime: detach explicitly)
+const dispose = runWithOwner(null, () =>
+  createRoot(dispose => {
+    onCleanup(() => controller.destroy());
+    return dispose;
+  })
+);
+```
+
+See [RFC 02 — Ownership: `createRoot` is owned by the parent by default](02-signals-derived-ownership.md#ownership-createroot-is-owned-by-the-parent-by-default).
+
 ### Dev warnings you’ll likely see (and how to fix them)
 
 These are **dev-only diagnostics** meant to catch bugs earlier. Some are warnings (console); others are errors (throw). See [RFC 08](08-dev-diagnostics.md) for the full reference.
@@ -319,12 +341,12 @@ const user = createMemo(() => fetchUser(id()));
 
 The resource tuple features map to standalone APIs:
 
-| 1.x resource feature | 2.0 replacement                                                             |
-| -------------------- | --------------------------------------------------------------------------- |
+| 1.x resource feature | 2.0 replacement                                                                                                                                                                                                |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `resource.loading`   | `Loading` (initial), `isPending(() => resource())` (in-flight input change); a bare `refresh()` is silent — use `affects(resource); refresh(resource)` or a co-written optimistic flag for refetch affordances |
-| `resource.error`     | `Errored` boundary or effect `error` option                                 |
-| `refetch()`          | `refresh(resource)`                                                         |
-| `mutate()`           | `createOptimisticStore` + `action` (see [RFC 06](06-actions-optimistic.md)) |
+| `resource.error`     | `Errored` boundary or effect `error` option                                                                                                                                                                    |
+| `refetch()`          | `refresh(resource)`                                                                                                                                                                                            |
+| `mutate()`           | `createOptimisticStore` + `action` (see [RFC 06](06-actions-optimistic.md))                                                                                                                                    |
 
 See [RFC 05 — createResource migration](05-async-data.md#createresource--async-computations--loading) for detailed before/after examples of each pattern.
 
@@ -487,7 +509,7 @@ Some control-flow APIs pass accessors into function children so the value is alw
 </Switch>
 ```
 
-### Dynamic components: `createDynamic` → `dynamic` factory
+### Dynamic components: `createDynamic` / `<Dynamic>` → `dynamic` factory
 
 `createDynamic(source, props): JSX.Element` is replaced by a `lazy`-style factory, `dynamic(source): Component<P>`. The factory returns a stable component whose identity is driven by a reactive (and optionally async) source — children, refs, and reactive props flow through the normal JSX path, so the returned value is usable anywhere a component is.
 
@@ -496,11 +518,7 @@ Some control-flow APIs pass accessors into function children so the value is alw
 import { Dynamic } from "solid-js/web";
 <Dynamic component={isEditing() ? Editor : Viewer} value={value()} />;
 
-// 2.0 — <Dynamic> is unchanged at the call site and now delegates to dynamic() internally.
-import { Dynamic } from "@solidjs/web";
-<Dynamic component={isEditing() ? Editor : Viewer} value={value()} />;
-
-// 2.0 — new factory form (preferred when you want a stable component reference)
+// 2.0 — hoist a factory; use it like any component
 import { dynamic } from "@solidjs/web";
 const Active = dynamic(() => (isEditing() ? Editor : Viewer));
 return <Active value={value()} />;
@@ -508,7 +526,7 @@ return <Active value={value()} />;
 
 Async sources compose with `Loading`/Suspense through the normal `NotReadyError` flow — no wrapper primitive or `await` in user code.
 
-`<Dynamic component={...}>` still exists and is user-facing unchanged; it's now a thin wrapper over `dynamic`. Direct callers of the old `createDynamic(source, props)` should either use `<Dynamic>` or compose manually as `createComponent(dynamic(source), props)`.
+`<Dynamic component={...}>` still exists in 2.0 but is **deprecated** (no runtime warning); existing code keeps working, new code should use the factory. It is the same primitive with a worse shape: the tag travels in the props bag, so every instance pays a `merge` at the call site, an `omit` inside, and a fresh factory memo that a JSX wrapper has nowhere to hoist. Replace it with a `dynamic()` factory hoisted to the component body (or the module, for a constant tag); inside a `<For>` callback the callback body is the place. Direct callers of the old `createDynamic(source, props)` compose manually as `createComponent(dynamic(source), props)`.
 
 ### Coordinating loading boundaries: `SuspenseList` → `Reveal`
 
@@ -592,10 +610,12 @@ In Solid 1.x, a ref callback ran inside the reactive owner of the component that
 
 ```jsx
 // 1.x — the ref callback ran owned, so cleanup could live inside it
-<div ref={(el) => {
-  el.addEventListener("pointerdown", onDown);
-  onCleanup(() => el.removeEventListener("pointerdown", onDown));
-}} />
+<div
+  ref={el => {
+    el.addEventListener("pointerdown", onDown);
+    onCleanup(() => el.removeEventListener("pointerdown", onDown));
+  }}
+/>
 ```
 
 In Solid 2.0, ref callbacks are **unowned** — `getOwner()` returns `null` inside them. This makes plain refs consistent with the apply phase of directive factories (below): the callback's only job is to capture or touch the element. Lifecycle work belongs in an owned scope, in one of two packagings.
@@ -610,7 +630,7 @@ onSettled(() => {
   return () => el.removeEventListener("pointerdown", onDown);
 });
 
-<div ref={el} />
+<div ref={el} />;
 ```
 
 For reusable behavior, use a directive factory: its setup half runs owned at component creation — primitives and `onCleanup` live there — and the returned apply callback (the actual ref) is unowned and only captures the element:
@@ -621,17 +641,17 @@ function tooltip(options) {
   const instance = createTooltipInstance();
   createEffect(
     () => options.content,
-    (content) => el && instance.setContent(content)
+    content => el && instance.setContent(content)
   );
   onCleanup(() => instance.destroy());
 
-  return (nextEl) => {
+  return nextEl => {
     el = nextEl;
     instance.attach(nextEl);
   };
 }
 
-<button ref={tooltip({ content: "Save" })} />
+<button ref={tooltip({ content: "Save" })} />;
 ```
 
 Note the timing difference: `onSettled` runs post-settle with the element already in hand, so element work can sit directly inside it; a factory's setup half runs during render before any element exists, so element-dependent work rides the apply callback or an effect.
@@ -727,17 +747,17 @@ These APIs are new additions (not renames of 1.x APIs):
 - **`affects(target, key?)`** — declare that in-flight work will change the targeted data; the marked record (or the single named slot) reads pending until the transaction settles.
 - **`resolve(fn)`** — returns a Promise that resolves when a reactive expression settles.
 - **`until(fn, options?)`** — returns a Promise that resolves the first time a reactive predicate settles truthy (with `timeout`/`signal` rejection). Yielded from an `action()`, it holds the transaction — and its optimistic state — open until arriving truth confirms the mutation (live sockets, subscriptions, live queries, or a refetch the action itself issued). The predicate reads the authoritative view: optimistic overrides are invisible (the action's own tentative writes can never satisfy it), while real data — committed or still staged in the open transaction — reads normally. See [RFC 06](06-actions-optimistic.md).
-- **`Loading` `on` prop** — controls when a Loading boundary re-shows fallback during revalidation.
+- **`Loading` `on` prop** — a dependency list for the boundary: a tracked expression whose value is irrelevant. A change to anything it reads makes `Loading` stop waiting on its current content and show its fallback again (if something under it is still pending) instead of keeping stale content through revalidation — the fallback lands with the same frame as the change, immediately when nothing else holds it, with the rest of the new page during a held navigation.
 - **`deep(store)`** — deep observation of a store (tracks all nested changes).
 - **`reconcile(value, key)`** — diffing function for updating stores from new data.
 - **Function-form `createSignal(fn)` / `createStore(fn)`** — derived (writable) primitives.
 - **Effect `EffectBundle`** — `createEffect` accepts `{ effect, error }` for structured error handling.
 - **`createMemo` `lazy` option** — defers initial computation until first read; also opts the memo into autodisposal when its subscriber count drops to zero. Non-lazy owned memos live for their owner's lifetime.
 - **`unobserved` callback** — fires when a signal/memo loses all subscribers (resource cleanup).
-- **`dynamic(source)` factory** — `lazy`-style factory that returns a stable component whose identity is driven by a reactive (and optionally async) source. Backs the `<Dynamic>` JSX wrapper.
+- **`dynamic(source)` factory** — `lazy`-style factory that returns a stable component whose identity is driven by a reactive (and optionally async) source. Replaces `createDynamic`; the `<Dynamic>` JSX wrapper is kept but deprecated in its favor.
 - **`clientOnly(() => import(...), { lazy? })`** (`@solidjs/web`, hoisted from SolidStart) — wraps a dynamically imported component so it renders only in the browser: the server renders `props.fallback` and never starts the import. Unlike `lazy()`, it avoids Suspense entirely and never server-renders, so it participates in no hydration asset manifest; a mount gate keeps hydration mismatch-free. `{ lazy: true }` defers the import to first render.
 - **`httpStatus(code, text?)` / `httpHeader(name, value, { append? })`** (`@solidjs/web`, hoisted from SolidStart) — declare response status/headers during SSR against the request event's `response` head for the lifetime of the calling reactive scope. Scope-tied declarations, not mutations: call them bare in component/reactive-scope bodies (including behind an `if`), and they un-declare on scope disposal. Writes snapshot the prior value and retract it on disposal (a boundary that errors/recovers un-writes rather than stomping to defaults), and both writes and retractions become no-ops once the integration marks the response head `committed` (head derived/sent). No-ops on the client. The primitives are the whole core API — core ships functions only; SolidStart may provide component wrappers for compatibility.
-- **`ssrSource` option** (`"server"` | `"hybrid"` | `"client"`) — per-primitive hydration policy on memos, function-form signals/stores, projections, and effects: whether the client seeds from the serialized server value (`"server"`, default), seeds then re-runs the compute (`"hybrid"`), or skips the server value and computes only after hydration (`"client"` — the compute never runs on the server). Pairs with **`deferStream: true`**, which holds the SSR stream flush until the primitive's first value resolves (server-only). See [RFC 05](05-async-data.md).
+- **`ssrSource` option** (`"server"` | `"hybrid"` | `"client"`) — per-primitive hydration policy on memos, function-form signals/stores, projections, and effects: whether the client seeds from the serialized server value (`"server"`, default), seeds then continues an async-iterable compute's stream from it (`"hybrid"` — identical to `"server"` for sync/promise computes), or skips the server value and computes only after hydration (`"client"` — the compute never runs on the server). Pairs with **`deferStream: true`**, which holds the SSR stream flush until the primitive's first value resolves (server-only). See [RFC 05](05-async-data.md).
 - **`renderToStream(...).readable`** — a `Response`-body-ready `ReadableStream` (Uint8Array chunks) alongside the existing `pipe`/`pipeTo`; exactly one consumer per render. See [RFC 12](12-ssr-http.md).
 
 ## Detailed removal guide
@@ -1005,7 +1025,7 @@ If you need a standard Observable/AsyncIterable interface for external consumers
 - **`mergeProps` → `merge`**
 - **`splitProps` → `omit`**
 - **`createSelector` → `createProjection` / `createStore(fn)`**
-- **`createDynamic(source, props)` → `dynamic(source)` factory** (`<Dynamic>` JSX wrapper unchanged)
+- **`createDynamic(source, props)` / `<Dynamic component>` → `dynamic(source)` factory** (`<Dynamic>` deprecated but kept in 2.0)
 - **`unwrap` → `snapshot`**
 - **`onMount` → `onSettled`**
 - **`equalFn` → `isEqual`**
@@ -1028,6 +1048,7 @@ If you need a standard Observable/AsyncIterable interface for external consumers
 - **`resetErrorBoundaries`** → no longer needed (error boundaries heal automatically)
 - **`enableScheduling`** → removed
 - **`writeSignal`** → removed (internal API that should not have been exported)
+- **`sharedConfig` / `$DEVCOMP`** → no longer part of `solid-js`'s public types; renderers and tooling reach them through `solid-js/internal` (not public API — no semver guarantee, may change in any release)
 - **`use:` directives** → `ref` directive factories
 - **`attr:` / `bool:` namespaces** → standard attribute behavior
 - **`on:` / `oncapture:`** → `onClick` for Solid events; ref callbacks for native listener options

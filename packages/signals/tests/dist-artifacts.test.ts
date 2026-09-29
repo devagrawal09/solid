@@ -28,7 +28,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 
 type Tier = { DEV: unknown; OBSERVE: unknown };
-type Engine = { attribution: any };
+type Engine = { attribution: any; costs: () => any; feedback: () => any };
 
 function expectObserveLive(mod: Tier) {
   const observe = mod.OBSERVE as any;
@@ -36,13 +36,26 @@ function expectObserveLive(mod: Tier) {
   expect(typeof observe.diagnostics.subscribe).toBe("function");
   expect(typeof observe.diagnostics.capture).toBe("function");
   expect(typeof observe.diagnostics.emit).toBe("function");
-  // The core's side of attribution is the slot and the two declared frames only.
-  expect(typeof observe.attribution.install).toBe("function");
+  // The records channel: process-wide, so the artifact's object IS the
+  // registered one (a second copy of the core would find the same set).
+  expect(typeof observe.records.subscribe).toBe("function");
+  expect(typeof observe.records.observed).toBe("function");
+  expect(typeof observe.records.emit).toBe("function");
+  expect((globalThis as any)[Symbol.for("@solidjs/signals/observe/records")]).toBe(observe.records);
+  // The core's side of attribution is the slot's `installed` and the two
+  // declared frames only: the engine installs itself (no public `install`).
+  expect(observe.attribution.install).toBeUndefined();
   expect(typeof observe.attribution.withInteraction).toBe("function");
   expect(typeof observe.attribution.withOrigin).toBe("function");
   expect(observe.attribution.installed).toBeNull();
   expect(observe.attribution.enable).toBeUndefined();
-  expect(typeof observe.subjectOf).toBe("function");
+  // The live subject rides beside each record and diagnostic; no lookup.
+  expect(observe.subjectOf).toBeUndefined();
+  // The owner walk is an observe-tier helper on the object, not a named
+  // export of the prod surface; the guide URL is dev guidance (`DEV.guideUrl`)
+  // and its string is not on the observe object.
+  expect(typeof observe.ownerPath).toBe("function");
+  expect(observe.diagnostics.guideUrl).toBeUndefined();
 }
 
 /**
@@ -55,10 +68,20 @@ function expectEngineDrivesCore(core: any, engine: Engine) {
   const { attribution } = engine;
   const observe = core.OBSERVE;
   attribution.enable({ log: false, hotRuns: false, hotTime: false, waterfalls: false });
+  const offs: (() => void)[] = [];
   try {
     expect(observe.attribution.installed).not.toBeNull();
+    // The records arrive on the core's channel — the one this engine emits
+    // into, or a second core would be delivering into an empty room.
     const runs: any[] = [];
-    attribution.subscribe((e: any) => runs.push(e));
+    offs.push(observe.records.subscribe("rerun", (e: any) => runs.push(e)));
+    // The timeline records ride core hooks of their own: `flushStart` in the
+    // scheduler, `effectRunStart`/`End` around the callback — both must be
+    // live in the observe core, not only in dev.
+    const flushes: any[] = [];
+    offs.push(observe.records.subscribe("flush", (e: any) => flushes.push(e)));
+    const effects: any[] = [];
+    offs.push(observe.records.subscribe("effect", (e: any) => effects.push(e)));
     const setCount = core.createRoot(() => {
       const [count, set] = core.createSignal(0, { name: "count" });
       core.createEffect(count, () => {}, { name: "reader" });
@@ -77,8 +100,20 @@ function expectEngineDrivesCore(core: any, engine: Engine) {
     expect(rerun.causes[0].origin).toMatchObject({ kind: "navigation", name: "/go" });
     expect(rerun.interaction).toMatchObject({ kind: "interaction", name: "click" });
     // The drain's flushEnd reached the engine: the navigation settled.
-    expect(attribution.navigations()[0]).toMatchObject({ name: "/go", outcome: "committed" });
+    expect(attribution.history("navigation")[0]).toMatchObject({
+      name: "/go",
+      outcome: "committed"
+    });
+    // …and its flushStart: the drain is one record, serving the click.
+    expect(flushes.at(-1)).toMatchObject({ runs: 1, held: false });
+    expect(flushes.at(-1).interaction).toMatchObject({ kind: "interaction", name: "click" });
+    // The effect callback was timed and joined to its compute run.
+    const callback = effects.find((e: any) => e.run === rerun.run);
+    expect(callback).toBeDefined();
+    expect(callback.nodeId).toBe(rerun.nodeId);
+    expect(callback.interaction).toBe(rerun.interaction);
   } finally {
+    for (const off of offs) off();
     attribution.disable();
   }
   expect(observe.attribution.installed).toBeNull();
@@ -88,11 +123,11 @@ function expectEngineDrivesCore(core: any, engine: Engine) {
 function expectEngineInert(engine: Engine) {
   const { attribution } = engine;
   expect(() => attribution.enable()).not.toThrow();
-  expect(attribution.history()).toEqual([]);
-  expect(attribution.costs()).toEqual({ scopes: [], writes: [] });
-  expect(attribution.holds()).toEqual([]);
-  expect(attribution.navigations()).toEqual([]);
-  expect(attribution.feedback()).toEqual({
+  expect(attribution.history("rerun")).toEqual([]);
+  expect(engine.costs()).toEqual({ scopes: [], writes: [] });
+  expect(attribution.history("hold")).toEqual([]);
+  expect(attribution.history("navigation")).toEqual([]);
+  expect(engine.feedback()).toEqual({
     sources: [],
     interactions: [],
     navigations: [],
@@ -111,7 +146,10 @@ function expectDevLive(mod: Tier) {
   expect(typeof dev.hooks).toBe("object");
   expect(typeof dev.getChildren).toBe("function");
   expect(typeof dev.report).toBe("function");
-  expect(typeof dev.setConsoleFooter).toBe("function");
+  expect(typeof dev.guideUrl).toBe("function");
+  // The console footer is solid-js's seam (`setConsoleFooter`, an `@internal`
+  // named export), not a member of the public `DEV` object.
+  expect(dev.setConsoleFooter).toBeUndefined();
   // The console face and devtools surface do not leak onto the observe object.
   expect((mod.OBSERVE as any).setConsoleFooter).toBeUndefined();
   expect((mod.OBSERVE as any).hooks).toBeUndefined();
@@ -160,6 +198,38 @@ describe("@solidjs/signals artifacts", () => {
     expect(read("dev-shared.js")).not.toContain(ENGINE_MARK);
     expect(read("dev.attribution.js")).toContain(ENGINE_MARK);
   });
+});
+
+describe("@solidjs/signals cleanup order per tier", () => {
+  // #3572: cleanup order is unwind — children before the owner's own list,
+  // and within one owner later registrations before earlier ones. The tiers
+  // differ only in wiring and checks; the disposal walk is the same code,
+  // and this pins that against each built artifact (the suite otherwise
+  // sees only source).
+  const cores: Record<keyof typeof TIERS, () => Promise<any>> = {
+    prod: () => import("../dist/prod/index.js"),
+    observe: () => import("../dist/observe/index.js"),
+    dev: () => import("../dist/dev.js")
+  };
+  for (const tier of Object.keys(TIERS) as (keyof typeof TIERS)[]) {
+    test(`${tier}: children first, then the owner's cleanups later-registered first`, async () => {
+      const { createRoot, createEffect, onCleanup, flush } = await cores[tier]();
+      const order: string[] = [];
+      const dispose = createRoot((dispose: () => void) => {
+        onCleanup(() => order.push("A"));
+        onCleanup(() => order.push("B"));
+        createRoot(() => onCleanup(() => order.push("C")));
+        createEffect(
+          () => {},
+          () => () => order.push("D")
+        );
+        return dispose;
+      });
+      flush();
+      dispose();
+      expect(order).toEqual(["D", "C", "B", "A"]);
+    });
+  }
 });
 
 describe("@solidjs/signals node literals per tier", () => {
@@ -387,6 +457,57 @@ describe("@solidjs/signals engine per tier", () => {
     );
   });
 
+  // `AttributionOptions.values` defaults per tier — the literal is folded at
+  // build time, so only the artifacts can show it: dev shows everything, an
+  // observe build carries no user data unless a holder asks. Probed through
+  // the interaction target (the one field every level governs).
+  async function defaultTarget(core: any, engine: Engine, opts?: Record<string, unknown>) {
+    const { attribution } = engine;
+    const observe = core.OBSERVE;
+    const seen: string[] = [];
+    const off = observe.records.subscribe("interaction", (e: any) => seen.push(e.target));
+    const release = attribution.enable({ log: false, hotRuns: false, hotTime: false, ...opts });
+    try {
+      const setCount = core.createRoot(() => {
+        const [count, set] = core.createSignal(0, { name: "count" });
+        core.createEffect(count, () => {}, { name: "reader" });
+        return set;
+      });
+      core.flush();
+      observe.attribution.withInteraction(
+        { type: "click", target: 'div#card "Personal note"' },
+        () => setCount(1)
+      );
+      core.flush();
+    } finally {
+      off();
+      release();
+      attribution.disable();
+    }
+    return seen;
+  }
+
+  test("values: the dev engine defaults to full", async () => {
+    const seen = await defaultTarget(
+      await import("../dist/dev.js"),
+      (await import("../dist/dev.attribution.js")) as Engine
+    );
+    expect(seen).toEqual(['div#card "Personal note"']);
+  });
+
+  test("values: the observe engine defaults to none; an explicit full applies when alone", async () => {
+    const core = await import("../dist/observe/index.js");
+    const engine = (await import("../dist/observe/attribution.js")) as Engine;
+    expect(await defaultTarget(core, engine)).toEqual(["div#card"]);
+    expect(await defaultTarget(core, engine, { values: "full" })).toEqual([
+      'div#card "Personal note"'
+    ]);
+    // The dev branch of the default folded out: the artifact's default is
+    // the literal `"none"`, not a runtime choice.
+    const src = readFileSync(new URL("../dist/observe/attribution.js", import.meta.url), "utf8");
+    expect(src).not.toMatch(/\?\s*"full"\s*:\s*"none"/);
+  });
+
   test("the observe tree keeps the engine out of the core's module graph", () => {
     // Nothing reachable from index.js may import core/attribution.js: the
     // per-module tree is what lets a bundler drop the engine, and one stray
@@ -407,16 +528,24 @@ describe("@solidjs/signals engine per tier", () => {
     // if `_name` were not reserved the label would land on a property
     // ownerPath never reads.
     const capture = OBSERVE.diagnostics.capture();
+    const subjects: unknown[] = [];
+    const off = OBSERVE.diagnostics.subscribe((_: unknown, subject: unknown) =>
+      subjects.push(subject)
+    );
+    let emitted: unknown;
     createRoot(() => {
       const owner = getOwner();
       owner._name = "<App>";
+      emitted = owner;
       OBSERVE.diagnostics.emit(
         { code: "INVARIANT_VIOLATION", kind: "error", severity: "error", message: "probe" },
         owner
       );
     });
+    off();
     const [event] = capture.stop();
     expect(event.ownerPath).toEqual(["<App>"]);
-    expect(OBSERVE.subjectOf(event)).toBeDefined();
+    // The subject rides beside the event to every listener.
+    expect(subjects).toEqual([emitted]);
   });
 });

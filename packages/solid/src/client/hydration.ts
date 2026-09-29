@@ -33,6 +33,7 @@ import {
   markSnapshotScope,
   releaseSnapshotScope,
   clearSnapshots,
+  OBSERVE,
   type Accessor,
   type AnyBlock,
   type BlockAccessor,
@@ -56,13 +57,13 @@ import {
   type StoreSetter,
   type RevealOrder,
   createOwner,
-  createRoot,
+  createRoot as coreRoot,
   getContext,
   setContext,
   type Context
 } from "@solidjs/signals";
 import type { Element as SolidElement } from "../types.js";
-import { IS_DEV } from "./core.js";
+import { IS_DEV, IS_OBSERVE } from "./core.js";
 
 type HydrationSsrFields = {
   /**
@@ -80,10 +81,15 @@ type HydrationSsrFields = {
    *   as initial state. Compute does **not** re-run for the initial
    *   value — the serialized result is authoritative. Choose this when
    *   the compute is deterministic from server-available inputs.
-   * - `"hybrid"`: client uses the serialized server value, then
-   *   re-runs the compute to take over. Choose this for computes that
-   *   mix server data with client-only signals (e.g. window size,
-   *   user-locale).
+   * - `"hybrid"`: client uses the serialized server value first; then,
+   *   for a compute that returns an **async iterable**, the client
+   *   continues the stream from it (the server consumed exactly one
+   *   yield; the client's first yield duplicates it and is discarded,
+   *   later yields update the node). For a sync or promise-shaped
+   *   compute, `"hybrid"` is identical to `"server"`: the serialized
+   *   value is adopted and the compute does not re-run until a
+   *   dependency changes or `refresh()`. Choose this for streaming
+   *   sources the client should keep consuming after hydration.
    * - `"client"`: skip the server value entirely. Compute is deferred
    *   until hydration completes, then runs as if first-mounted.
    *   Choose this for client-only state where serialization is
@@ -114,8 +120,9 @@ declare module "@solidjs/signals" {
  *
  * - `"server"` *(default)*: client uses the serialized server value
  *   as initial state.
- * - `"hybrid"`: serialized value first, then re-run the compute on
- *   the client to take over.
+ * - `"hybrid"`: serialized value first; for an async-iterable derive
+ *   the client then continues the stream from it. For a sync or
+ *   promise-shaped derive, identical to `"server"`.
  * - `"client"`: skip serialization; compute runs only after hydration
  *   completes. Bare = suspends on the server (nearest `<Loading>`
  *   renders its fallback and hands the position to the client);
@@ -168,6 +175,17 @@ type SharedConfig = {
   // `sharedConfig.hydrating` check, which can never be true before that.
   getNextContextId?: () => string;
   /**
+   * Dev builds only (assigned by enableHydration() under the dev gate): the
+   * id `getNextContextId()` would hand out next, read without consuming it
+   * (`undefined` outside an id-carrying tree). The web runtime brackets an
+   * unscoped hole's evaluation with it to detect one that took ids from the
+   * enclosing counter (`UNSCOPED_HOLE_ALLOCATED_IDS`). Callers gate on
+   * `_SOLID_DEV_`; prod and observe builds never carry it.
+   *
+   * @internal
+   */
+  devPeekNextContextId?: () => string | undefined;
+  /**
    * Whether a hydration pass is still claiming server-rendered DOM — true
    * from hydrate()'s synchronous walk until every streamed boundary has
    * resumed or been cancelled. Consumed by dev tooling (the refresh runtime
@@ -191,6 +209,18 @@ type SharedConfig = {
    * @internal
    */
   onHydrationEnd?: (callback: () => void) => void;
+  /**
+   * Whether a render under the current owner is part of the claim in
+   * progress. The root pass claims everything; a streamed boundary's resume
+   * window claims only the subtree under that boundary. A write landing in
+   * the window (the resumed content's `onSettled` reaching a signal above
+   * the boundary, #3504) re-renders an already-hydrated region: that render
+   * is a client render — fresh nodes, live inserts — not a claim against the
+   * registry. Assigned by enableHydration(); absent means "claiming".
+   *
+   * @internal
+   */
+  isClaiming?: () => boolean;
 };
 
 /**
@@ -217,12 +247,33 @@ function hydrationGetNextContextId(): string {
   return getNextChildId(o);
 }
 
+// Dev only — the peek twin of hydrationGetNextContextId (see the slot's doc).
+// Referenced only under the dev gate in enableHydration(), so the prod and
+// observe builds shake it.
+function hydrationDevPeekNextContextId(): string | undefined {
+  const o = getOwner();
+  return o && o.id != null ? peekNextChildId(o) : undefined;
+}
+
 // === Hydration phase API ===
 
 let _hydrationEndCallbacks: (() => void)[] | null = null;
 let _pendingBoundaries = 0;
 let _hydrationDone = false;
 let _snapshotRootOwner: Owner | null = null;
+// The boundary owner whose resume window is open (null during a root pass,
+// which claims everything). Reached as `sharedConfig.isClaiming`.
+let _claimOwner: Owner | null = null;
+
+function isClaiming(): boolean {
+  if (!_claimOwner) return true;
+  let owner: Owner | null = getOwner();
+  while (owner) {
+    if (owner === _claimOwner) return true;
+    owner = owner._parent;
+  }
+  return false;
+}
 
 function markTopLevelSnapshotScope() {
   if (_snapshotRootOwner) return;
@@ -230,6 +281,7 @@ function markTopLevelSnapshotScope() {
   if (!owner) return;
   while (owner._parent) owner = owner._parent;
   markSnapshotScope(owner);
+  openLiveScope(owner);
   _snapshotRootOwner = owner;
 }
 
@@ -286,6 +338,7 @@ let _doneValue = false;
 // (no hydrate() import), the hydrated* functions and their dependencies
 // (MockPromise, subFetch) are eliminated by the bundler.
 
+let _createRoot: Function | undefined;
 let _createMemo: Function | undefined;
 let _createSignal: Function | undefined;
 let _createErrorBoundary: Function | undefined;
@@ -349,8 +402,21 @@ function subFetch<T>(fn: (prev?: T) => any, prev?: T) {
     window.fetch = () => new MockPromise() as any;
     Promise = MockPromise as any;
     const result = fn(prev);
-    if (result && typeof result[Symbol.asyncIterator] === "function") {
-      result[Symbol.asyncIterator]().next();
+    // An async GENERATOR's body has not run yet — its reads before the
+    // first suspension are part of the compute, so pull once under the
+    // mocks to track them. A generator object is its own iterator; any other
+    // async iterable (a live call's reconnecting iterable, a deserialized
+    // stream's adapter read out of an adopted value) is data the compute
+    // already constructed, and pulling it here would be a real consumption
+    // under a fake Promise — an adapter minting its resolver through the
+    // global at pull time is left with a dead entry in its queue.
+    if (
+      result &&
+      typeof result.next === "function" &&
+      typeof result[Symbol.asyncIterator] === "function"
+    ) {
+      const it = result[Symbol.asyncIterator]();
+      if (it === result) it.next();
     }
     // The trace run's flight is never consumed (the serialized value is
     // authoritative) — an async fn returns a REAL promise (engine-internal,
@@ -422,31 +488,80 @@ const latchedOnce = new WeakSet<object>();
 /** Shared “serialized init or run compute” path for memo/signal/optimistic/effect under hydration. */
 function readSerializedOrCompute(compute: (prev: any) => any, prev: any, options?: any) {
   const o = getOwner()!;
+  // A node armed for takeover computes once its gate is open — its own
+  // section's hydration is over even if the page's is not (#D8: a live
+  // node in the shell must not wait for a slow boundary). Checked before
+  // the serialized short-circuit below, which would otherwise re-latch it.
+  const gate = nodeGate.get(o);
+  if (gate && (sharedConfig.done || gate())) return takeOver(o, gate, compute, prev);
   // A computation must adopt its serialized server value for the whole
   // hydration lifecycle (`!done`), not just inside a synchronous resume window.
   // A streamed section can recompute between chunks; running the client body
   // there would commit a fresh Promise and orphan the server-streamed fragment.
   // So short-circuit to the server value whenever one is still waiting; once
   // hydration is `done`, always compute.
-  if (sharedConfig.done || !sharedConfig.has!(o.id!)) return compute(prev);
-  // Divergence arming is a "server"/default-mode contract only: the hybrid
-  // signal-like wrapper runs this path under withHydrationGate, whose
-  // synchronous flip guarantees one internal re-entry that is not user
-  // divergence — and hybrid's sync/promise flavor deliberately latches
-  // (re-running its compute at done would clobber the adopted value).
+  if (sharedConfig.done) return compute(prev);
+  if (!sharedConfig.has!(o.id!)) {
+    const result = compute(prev);
+    // No serialized value, yet the compute answered a LIVE source that
+    // carries the DOCUMENT's answer (LIVE_LOCAL): the node is an
+    // unserialized reader of a live server component the page is showing
+    // (a `dynamic()` factory hoisted to module scope has no id to hydrate
+    // by; it consumes the source itself), and the call was answered locally by the
+    // adopted markup (a frames intercept), not by a wire. That answer is
+    // the value now — there is no serialized value to hydrate, the markup
+    // is the value — and the node takes over at its scope's release
+    // exactly as a serialized live node does: the takeover run re-invokes,
+    // and the new iteration yields this value first, then connects (RFC 11
+    // §9.5, Client face 3). The iterable itself is never started here.
+    if (
+      options?.ssrSource !== "hybrid" &&
+      result != null &&
+      typeof result === "object" &&
+      result[LIVE_SOURCE] &&
+      result[LIVE_LOCAL] !== undefined
+    ) {
+      armLiveTakeover(o);
+      return result[LIVE_LOCAL];
+    }
+    return result;
+  }
+  // Divergence arming is a "server"/default-mode contract only: hybrid's
+  // sync/promise flavor deliberately latches (re-running its compute at done
+  // would clobber the adopted value — the refetch the hybrid wrappers' rule 6
+  // rules out), and the hybrid wrappers re-enter this path for every later
+  // run of such a node, not only on divergence.
   if (latchedOnce.has(o)) {
-    if (options?.ssrSource !== "hybrid") armLiveTakeover();
+    if (options?.ssrSource !== "hybrid") armLiveTakeover(o);
   } else latchedOnce.add(o);
   return readHydratedValue(
     sharedConfig.load!(o.id!),
     () => {
       const traced = subFetch(compute, prev);
       if (options?.ssrSource !== "hybrid" && traced != null && traced[LIVE_SOURCE])
-        armLiveTakeover();
+        armLiveTakeover(o);
       return traced;
     },
     options
   );
+}
+
+/**
+ * The takeover run: the real compute, against live sources. A live answer
+ * is told the value the page was served with (`prev`, the adopted SSR
+ * value) so its first connection can name it as the position it already
+ * holds — a takeover that finds the same value on the server then costs
+ * nothing on the wire (the transport's digest-equal skip). Stamped on the
+ * takeover run only; the node's later recomputes are ordinary.
+ */
+function takeOver(o: Owner, gate: () => boolean, compute: (prev: any) => any, prev: any) {
+  const result = compute(prev);
+  if (gate !== TAKEN) {
+    nodeGate.set(o, TAKEN);
+    if (result != null && typeof result === "object" && result[LIVE_SOURCE])
+      result[LIVE_RESUME_FROM] = prev;
+  }
+  return result;
 }
 
 /**
@@ -476,24 +591,79 @@ const UNASKED: PromiseLike<never> = { then() {} } as any;
  */
 const LIVE_SOURCE = Symbol.for("solid.LiveSource");
 
-// One shared gate for all live-armed nodes in a hydration pass: nodes that
-// trace-detected a live compute read it (tracked); hydration end flips it,
-// recomputing exactly those nodes — whose compute wrapper now sees
-// `sharedConfig.done` and runs the real compute, reconnecting. The stale
+/**
+ * Where a takeover resumes from (registered symbol; read by the transport's
+ * `live()` iteration): the adopted SSR value, stamped on the live answer
+ * the takeover run returns so its first connection names the position the
+ * page already holds.
+ */
+const LIVE_RESUME_FROM = Symbol.for("solid.LiveResumeFrom");
+
+/**
+ * The document's answer for a live call (registered symbol; filed by the
+ * transport's `live()` when an integration already shows the call at t=0 —
+ * a frames boundary the page carries). A hydrating node without a
+ * serialized value adopts it as its value and arms its takeover; see
+ * readSerializedOrCompute.
+ */
+const LIVE_LOCAL = Symbol.for("solid.LiveLocal");
+
+// Takeover gates, one per hydration scope: nodes that trace-detected a live
+// compute (or diverged while latched) read their scope's gate (tracked);
+// the scope's release flips it, recomputing exactly those nodes — whose
+// compute wrapper then runs the real compute, reconnecting. The stale
 // adopted value serves until the reconnect's first yield lands (pending
-// recomputes serve prev), so takeover is seam-free. The gate is discarded
-// on flip so a later hydration pass (islands) arms a fresh one.
-let liveGate: (() => boolean) | undefined;
-function armLiveTakeover() {
-  if (!liveGate) {
-    const [read, write] = coreSignal(false);
-    liveGate = read;
-    onHydrationEnd(() => {
-      liveGate = undefined;
-      write(true);
-    });
+// recomputes serve prev), so takeover is seam-free.
+//
+// The scope is the nearest open snapshot scope above the node — the root
+// pass, or the boundary whose resume window created it — so a live node in
+// the shell takes over when the root pass ends, not when the last boundary
+// lands, and a node under a boundary takes over when THAT boundary
+// hydrates (D8). A node armed with no scope open (re-entered between
+// streamed chunks) falls back to a gate hydration's end flips. An entry is
+// discarded on flip so a later hydration pass (islands) arms a fresh one;
+// `nodeGate` outlives it so a taken-over node keeps computing.
+const openScopes = new Set<Owner>();
+const liveGates = new Map<Owner | null, [() => boolean, (v: boolean) => void]>();
+const nodeGate = new WeakMap<Owner, () => boolean>();
+const TAKEN = () => true;
+function liveScopeOf(o: Owner): Owner | null {
+  if (openScopes.size === 0) return null;
+  let owner: Owner | null = o;
+  while (owner) {
+    if (openScopes.has(owner)) return owner;
+    owner = owner._parent;
   }
-  liveGate();
+  return null;
+}
+function armLiveTakeover(o: Owner) {
+  let gate = nodeGate.get(o);
+  if (!gate) {
+    const scope = liveScopeOf(o);
+    let entry = liveGates.get(scope);
+    if (!entry) {
+      entry = coreSignal(false);
+      liveGates.set(scope, entry);
+      if (scope === null)
+        onHydrationEnd(() => {
+          liveGates.delete(null);
+          entry![1](true);
+        });
+    }
+    gate = entry[0];
+    nodeGate.set(o, gate);
+  }
+  gate();
+}
+function openLiveScope(scope: Owner) {
+  openScopes.add(scope);
+}
+function releaseLiveScope(scope: Owner) {
+  openScopes.delete(scope);
+  const entry = liveGates.get(scope);
+  if (!entry) return;
+  liveGates.delete(scope);
+  entry[1](true);
 }
 
 /** Options carry commit #0 — the loading window must hold through the claim walk. */
@@ -582,8 +752,29 @@ function isAsyncIterable(v: any): boolean {
   return v != null && typeof v[Symbol.asyncIterator] === "function";
 }
 
-function createShadowDraft(realDraft: any) {
-  const shadow = JSON.parse(JSON.stringify(realDraft));
+/**
+ * Whether the current owner has no hydration id counter to consume — no
+ * owner at all (`runWithOwner(null, …)`, a detached creation), or an owner
+ * under an id-less tree (a detached `createRoot` without `id`). Positional
+ * hydration peeks the next child id off the owner, which throws for both
+ * (`childId`: `null._config`, "owner without an id"); and the server
+ * serializes nothing for such a node (its `owner.id` guard), so there is
+ * nothing to look up. Every facade takes the same non-hydrating path
+ * `transparent` takes (#3609) — the predicate lazyHydrationLookup already
+ * applied. Owned nodes under an id-carrying owner are unaffected.
+ */
+function noHydrationId(): boolean {
+  const o = getOwner();
+  return !o || o.id == null;
+}
+
+function createShadowDraft(realDraft: any, shallow?: boolean) {
+  // A shallow store's leaves are raw by contract: copy the root only (#3498).
+  const shadow = shallow
+    ? Array.isArray(realDraft)
+      ? realDraft.slice()
+      : { ...realDraft }
+    : JSON.parse(JSON.stringify(realDraft));
   let useShadow = true;
   return {
     proxy: new Proxy(shadow, {
@@ -620,25 +811,129 @@ function createShadowDraft(realDraft: any) {
   };
 }
 
-function wrapFirstYield(iterable: any, activate: () => void) {
+/**
+ * The hybrid handoff run's client source, as the engine consumes it (#3498,
+ * #3574). The run continues the adopted answer's stream (rule 5), so it must
+ * not open a pending window: step 0 is the adopted answer itself,
+ * landed synchronously (a sync first yield is a landed first answer to
+ * `handleAsync`, and a stream is not pending between yields), and the
+ * source's real first yield — the duplicate — is step 1, discarded as
+ * before. Without the quiet step the store read pending from the handoff
+ * until that yield, and any consumer created in between — a streamed
+ * `<Loading>` resuming to claim its fragment — selected its fallback against
+ * resolved server content (#3574).
+ *
+ * `quiet` is what steps 0 and 1 yield — the adopted answer in the node's own
+ * terms. A store yields `undefined`: a bare `yield` commits the draft as-is,
+ * and the duplicate's writes went to the shadow draft (`activate` switches
+ * the proxy to the real draft once they have). A signal-shaped node
+ * (hydrateSignalLike) yields the adopted value itself — its `prev` — so the
+ * duplicate lands as an equal write, a no-op at the node.
+ */
+function wrapFirstYield(iterable: any, activate?: () => void, quiet?: any) {
   const srcIt = iterable[Symbol.asyncIterator]();
-  let first = true;
+  let step = 0;
   return {
     [Symbol.asyncIterator]() {
       return {
         next() {
+          if (step === 0) {
+            step = 1;
+            return syncThenable({ done: false, value: quiet });
+          }
           const p = srcIt.next();
-          if (first) {
-            first = false;
+          if (step === 1) {
+            step = 2;
+            // The source's first yield, the duplicate.
             return p.then((r: any) => {
-              activate();
-              return r.done ? r : { done: false, value: undefined };
+              activate?.();
+              return r.done ? r : { done: false, value: quiet };
             });
           }
           return p;
         },
         return(value?: any) {
           return forwardIteratorReturn(srcIt, value);
+        }
+      };
+    }
+  };
+}
+
+/**
+ * The promise-shaped handoff run, quiet the same way: the adopted answer as
+ * a sync step 0, the promise's result as step 1 (committed when it lands, as
+ * before — a rejection settles through the engine's error path unchanged),
+ * then done.
+ */
+function quietAnswer(thenable: any) {
+  let step = 0;
+  return {
+    [Symbol.asyncIterator]() {
+      return {
+        next() {
+          if (step === 0) {
+            step = 1;
+            return syncThenable({ done: false, value: undefined });
+          }
+          if (step === 1) {
+            step = 2;
+            return thenable.then((v: any) => ({ done: false, value: v }));
+          }
+          return Promise.resolve({ done: true, value: undefined });
+        }
+      };
+    }
+  };
+}
+
+/**
+ * A hybrid node's still-pending server answer, adopted as a ONE-yield stream
+ * (#3498; store and signal-shaped alike). The hybrid contract is that the
+ * server consumes exactly one yield and the client continues the iteration —
+ * this is that first yield, and the engine's pull for the next one is the
+ * handoff.
+ *
+ * Why a stream and not the thenable itself: the handoff must run only once
+ * the answer has actually LANDED in the node. This relies on the engine's
+ * flight contract — latest-run-wins supersession (PJ-R26 in the signals
+ * RULES-INDEX; flight-identity cancellation, #3122): `handleAsync` pulls a
+ * stream's next step only from the previous step's commit (`asyncWrite`'s
+ * continuation, `iterateOrRelease`), and it drops a landing whose flight is
+ * no longer the node's `_inFlight` or whose node a newer write dirtied
+ * (`asyncWrite`'s guards; a recompute nulls `_inFlight` and fires the flight
+ * teardown first). So the second `next()` pull is the landed-and-committed
+ * signal: `onLanded` fires exactly when the landing applied, and never for a
+ * superseded flight — a dependency change that re-ran the store before the
+ * landing (rule 4) leaves this stream orphaned and silent. A rejection is
+ * the adopted answer (rule 3): the engine settles the error and pulls
+ * nothing more, and `onRejected` only marks authority transferred so the
+ * next non-handoff run (refresh(), a dependency change) runs the client
+ * source. An orphaned stream's rejection reaches `onRejected` too, but the
+ * engine drops the error (same guard) and the store is already live.
+ */
+function adoptedAnswerStream(thenable: any, onLanded: () => void, onRejected: () => void) {
+  let pulled = false;
+  return {
+    [Symbol.asyncIterator]() {
+      return {
+        next() {
+          if (pulled) {
+            onLanded();
+            return Promise.resolve({ done: true, value: undefined });
+          }
+          pulled = true;
+          return {
+            then(res: any, rej: any) {
+              thenable.then(
+                (v: any) => res({ done: false, value: v }),
+                (e: any) => {
+                  onRejected();
+                  rej(e);
+                }
+              );
+            }
+          };
         }
       };
     }
@@ -740,7 +1035,7 @@ function hydrateStoreFromAsyncIterable(
       // dependencies read before the first suspension are tracked. Writes go
       // to a shadow of the draft and are discarded — the server iterator is
       // authoritative and drives the real draft via the iterable below.
-      const { proxy } = createShadowDraft(draft);
+      const { proxy } = createShadowDraft(draft, options?.shallow);
       subFetch(fn, proxy);
       const process = (res: any) => {
         if (res.done) {
@@ -918,7 +1213,7 @@ export function materializeContainerTrace(marker: {
     // below): materialization runs at arg-read inside a reader's render
     // scope, and a version signal owned by that reader would be disposed by
     // its re-render while the memoized store lives on.
-    return createRoot(() => {
+    return coreRoot(() => {
       const [version, setVersion] = coreSignal(0);
       // Subscribe before creating the projection: the buffered replay runs
       // synchronously inside on(), filling the queue the first compute
@@ -977,7 +1272,7 @@ export function materializeContainerTrace(marker: {
   // surfaces as an unhandled error in dev. The root is never disposed —
   // the projection settles itself when the trace ends and is collected
   // with the store.
-  return createRoot(() =>
+  return coreRoot(() =>
     createProjection(
       (draft: any) => ({
         [Symbol.asyncIterator]() {
@@ -1017,10 +1312,12 @@ export function materializeContainerTrace(marker: {
 // --- Hydration-aware implementations ---
 
 // The shared pre-hydration gate lifecycle for the ssrSource branches
-// (signal/store × client/hybrid): create the node with a compute that
+// (signal × client, store × client): create the node with a compute that
 // branches on the gate, then flip it — the flip's recompute is the node's
 // first real run. `ownedWrite` because the write happens inside the node's
-// own creation scope.
+// own creation scope. (The hybrid branches flip their own gate at the
+// adopted answer's landing instead — see hydrateStoreLikeFn, #3498, and
+// hydrateSignalLike's hybrid branch.)
 function withHydrationGate(create: (hydrated: () => boolean) => any) {
   const [hydrated, setHydrated] = coreSignal(false, { ownedWrite: true });
   const result = create(hydrated);
@@ -1034,6 +1331,10 @@ function withHydrationGate(create: (hydrated: () => boolean) => any) {
 // _hydrateSignalLike slot precisely so the wrapper does not statically couple
 // the optimistic engine to this body (which would drag it into CSR bundles).
 function hydrateSignalLike(coreFn: Function, fn: any, options?: any) {
+  // Not hydrating positionally: a transparent node (invisible to the id
+  // scheme — it must not peek, and adopt, the NEXT sibling's slot), or no id
+  // counter to peek from (#3609). Straight to the core primitive.
+  if (options?.transparent || noHydrationId()) return coreFn(fn, options);
   markTopLevelSnapshotScope();
 
   const ssrSource = options?.ssrSource;
@@ -1050,33 +1351,101 @@ function hydrateSignalLike(coreFn: Function, fn: any, options?: any) {
     );
   }
 
-  // Hybrid async-iterable takeover (#2993). The server consumes exactly one
+  // Hybrid async-iterable handoff (#2993). The server consumes exactly one
   // yield from its iterator and serializes it as a plain promise — the
-  // contract is that the CLIENT continues the iteration. Stores get that
-  // through hydrateStoreLikeFn's shadow-draft re-run; without this branch a
-  // signal-shaped node would adopt the first yield and latch there forever
-  // (readSerializedOrCompute only re-runs the compute on invalidation).
-  // Value semantics make the takeover simpler than the store's: re-run the
-  // generator plainly — its first yield reproduces the value the server
-  // rendered (hybrid's determinism contract, same assumption the store path
-  // makes), so nothing needs discarding; equal values dedupe at the node.
-  // The takeover only ARMS when the adoption pass saw an async-iterable
-  // compute: sync and promise-shaped hybrid computes keep their documented
-  // adopt-the-serialized-value semantics (re-running those would clobber the
-  // server value / trigger a client refetch).
+  // contract is that the CLIENT continues the iteration. Without this branch
+  // a signal-shaped node would adopt the first yield and latch there forever
+  // (readSerializedOrCompute only re-runs the compute on invalidation). The
+  // handoff follows the store's rules 1–5 (see the rule block in
+  // hydrateStoreLikeFn): it waits for the adopted answer to LAND (rule 1 —
+  // the gate flips at the landing, never at creation: a creation flip ran
+  // the client generator as a fresh flight ahead of the pending server
+  // answer, superseding it and reading pending from creation until the
+  // client's first yield — #3574's key miss on a streamed <Loading>, with a
+  // wider window than the store's); only the handoff run's first yield is
+  // the duplicate (rule 2); a rejected answer is adopted (rule 3); a
+  // dependency change before the landing supersedes it (rule 4); and the
+  // handoff opens no pending window (rule 5). Value semantics make the run
+  // simpler than the store's — no shadow draft: the adopted answer is the
+  // node's `prev`, so wrapFirstYield yields it as the quiet steps and the
+  // duplicate lands as an equal write.
+  //
+  // The handoff only ARMS when the adoption pass saw an async-iterable
+  // compute (rule 6 in the store's block): sync and promise-shaped hybrid
+  // computes keep their documented adopt-the-serialized-value semantics
+  // (re-running those would clobber the server value / trigger a client
+  // refetch). For those nothing flips: the adoption IS the answer, and every
+  // later run re-enters the adoption path — readSerializedOrCompute, the
+  // "server" body, which re-adopts while hydration is open and runs the
+  // compute live once it is done. (The creation flip this path used to make
+  // for them was not a free re-adopt: the gate write is held by the snapshot
+  // scope and replays at its release, AFTER `done` flips in the plain
+  // hydrate() path — so the recompute ran the compute live, refetching what
+  // the server had serialized.)
   if (ssrSource === "hybrid" && sharedConfig.has!(peekNextChildId(getOwner()!))) {
-    let takeover = false;
+    // undefined until the trace has completed once: a sync NotReady from the
+    // trace (the compute read a pending sibling before returning) leaves the
+    // shape unknown, and the retry decides.
+    let takeover: boolean | undefined;
     const detect = (prev: any) => {
       const r = fn(prev);
       takeover = isAsyncIterable(r);
       return r;
     };
-    return withHydrationGate(hydrated =>
-      coreFn((prev: any) => {
-        if (hydrated() && takeover) return fn(prev);
-        return readSerializedOrCompute(detect, prev, options);
-      }, options)
-    );
+    const [hydrated, setHydrated] = coreSignal(false, { ownedWrite: true });
+    let live = false;
+    const flip = () => {
+      if (!live) setHydrated(true);
+    };
+    let adopted = false;
+    let creating = true;
+    let landedOnCreate = false;
+    const result = coreFn((prev: any) => {
+      if (live) return fn(prev);
+      if (hydrated()) {
+        // The handoff run (rule 5: quiet through its duplicate). The gate
+        // only ever flips for an async-iterable compute.
+        live = true;
+        const r = fn(prev);
+        return isAsyncIterable(r) ? wrapFirstYield(r, undefined, prev) : r;
+      }
+      if (adopted) {
+        // Rule 4: the gate is down and an adoption already returned, so a
+        // dependency changed. The recompute released the adopted flight, so
+        // the server's late landing is dropped and its flip never comes.
+        live = true;
+        return fn(prev);
+      }
+      // Adoption; the trace inside detects the compute's shape. Re-entered
+      // by a NotReady retry of the trace (nothing adopted yet), and — for a
+      // non-iterable compute, which never arms — by every later run.
+      let answer: any;
+      try {
+        answer = readSerializedOrCompute(detect, prev, options);
+      } catch (e) {
+        // The trace completed (an async-iterable compute cannot throw
+        // synchronously), so this is the settled rejection — the adopted
+        // answer (rule 3): authority transfers without a handoff run.
+        if (takeover) live = true;
+        throw e;
+      }
+      // Rule 6: a non-iterable compute's adoption is the answer.
+      if (!takeover) return answer;
+      adopted = true;
+      if (answer != null && typeof answer.then === "function")
+        return adoptedAnswerStream(answer, flip, () => (live = true));
+      // Settled, landing synchronously in this run: flip after construction
+      // (creation) or on a microtask (a retry inside a flush).
+      if (creating) landedOnCreate = true;
+      else queueMicrotask(flip);
+      return answer;
+    }, options);
+    creating = false;
+    // The creation flip: the handoff for a synchronously landed answer. An
+    // untraced node (NotReady) has no shape yet, and a non-iterable compute
+    // has nothing to hand off (rule 6).
+    if (landedOnCreate) flip();
+    return result;
   }
 
   // "server", "hybrid", or undefined — use serialized value from server
@@ -1095,17 +1464,17 @@ function hydrateSignalLike(coreFn: Function, fn: any, options?: any) {
  * their compute and keep the fast path.
  */
 function withoutFastPathIfSerialized(options: any): any {
-  if (options == null || !options.noThrow) return options;
-  const owner = getOwner();
-  return owner && sharedConfig.has!(peekNextChildId(owner))
+  // Transparent, ownerless and id-less nodes hydrate nothing positionally
+  // (hydrateSignalLike takes the core path for them, #3609): nothing to peek.
+  if (options == null || !options.noThrow || options.transparent || noHydrationId()) return options;
+  const owner = getOwner()!;
+  return sharedConfig.has!(peekNextChildId(owner))
     ? { ...options, sync: false, noThrow: false }
     : options;
 }
 
 function hydratedCreateMemo(compute: any, options?: any) {
-  if (!sharedConfig.hydrating || options?.transparent) {
-    return coreMemo(compute, options);
-  }
+  if (!sharedConfig.hydrating) return coreMemo(compute, options);
   return hydrateSignalLike(coreMemo, compute, withoutFastPathIfSerialized(options));
 }
 
@@ -1118,7 +1487,7 @@ function hydratedCreateErrorBoundary<T, U>(
   fn: () => T,
   fallback: (error: () => unknown, reset: () => void) => U
 ): Accessor<T | U> {
-  if (!sharedConfig.hydrating) return coreErrorBoundary(fn, fallback);
+  if (!sharedConfig.hydrating || noHydrationId()) return coreErrorBoundary(fn, fallback);
   markTopLevelSnapshotScope();
   const parent = getOwner()!;
   const expectedId = peekNextChildId(parent);
@@ -1165,27 +1534,150 @@ function hydrateStoreLikeFn(
     );
   }
   if (ssrSource === "hybrid") {
-    return withHydrationGate(hydrated =>
-      coreFn(
-        (draft: any) => {
-          const o = getOwner()!;
-          if (!hydrated()) {
-            if (sharedConfig.has!(o.id!))
-              return readHydratedValue(
-                sharedConfig.load!(o.id!),
-                () => subFetch(fn, draft),
-                options
-              );
-            return fn(draft);
-          }
-          const { proxy, activate } = createShadowDraft(draft);
+    // Hybrid handoff (#3498). Server is truth: the store adopts the
+    // serialized answer, and the client source takes over from it in ONE
+    // handoff run whose first yield is discarded as the duplicate of what
+    // the server serialized. These rules order that handoff:
+    //
+    // 1. It waits for the first server answer to LAND. Synchronous when the
+    //    serialized value is already settled (the flip below, as before);
+    //    when it is still pending — a loadingValue placeholder whose real
+    //    answer arrives later over the stream, or a settled ref the loading
+    //    window defers past the claim walk — the flip rides the landing
+    //    itself (adoptedAnswerStream). That answer is late, not stale:
+    //    flipping earlier let the takeover supersede the flight and lose it.
+    //    Never hydration end, and nothing here holds hydration open.
+    // 2. Only the handoff run is a duplicate. `live` marks authority
+    //    transferred; every later run (dependency change, refresh()) runs fn
+    //    on the real draft and commits its first yield normally.
+    // 3. A rejected server answer is the adopted answer. It transfers
+    //    authority without a handoff run, so the error stays visible until a
+    //    non-handoff run replaces it.
+    // 4. A dependency change before the answer lands supersedes it. Like any
+    //    new pending change, it cancels the incoming server answer: the store
+    //    goes live on that run — genuinely new work, not a handoff, so its
+    //    first yield commits — and the abandoned flight's landing or
+    //    rejection is dropped by the engine (PJ-R26) and flips nothing.
+    // 5. The handoff opens no pending window (#3574). The contract is ONE stream
+    //    — the server consumes exactly one yield, the client continues the
+    //    iteration (adoptedAnswerStream): the adopted answer is step 0, the
+    //    client's first yield its duplicate (rule 2), and a stream is not pending
+    //    between yields (handleAsync's sync-first-yield rule). The engine read
+    //    pending only because the continuation arrived as a fresh recompute whose
+    //    first step looked like a first flight; wrapFirstYield and quietAnswer
+    //    give the run the contract's shape, so the store reads settled until the
+    //    client source produces something new. Maintainer ruling: isPending does
+    //    not read true over the initial load; the handoff is its tail.
+    //
+    // 6. The handoff is for STREAMS. It only ARMS when the adoption pass saw
+    //    an async-iterable source: a sync or promise-shaped source has no
+    //    iteration for the client to continue, so a handoff run would only
+    //    re-run (refetch) what the server serialized and clobber the adopted
+    //    answer. For those shapes "hybrid" is identical to "server" — the
+    //    adopted answer is final until a dependency changes or refresh() —
+    //    exactly as hydrateSignalLike already treated them. Maintainer
+    //    ruling: hybrid is only for streams realistically. The shape is
+    //    the trace's finding, not the option's: the source decides.
+    //
+    // The signal-shaped hybrid handoff (hydrateSignalLike: createMemo,
+    // function-form createSignal, createOptimistic over an async generator)
+    // follows the same rules 1–6 on the same helpers — adoptedAnswerStream
+    // for the landing, wrapFirstYield for the quiet run — with the node's
+    // `prev` as the adopted answer in place of the draft.
+    const id = peekNextChildId(getOwner()!);
+    // Nothing serialized: no answer to wait for and nothing for a first
+    // yield to duplicate — the client is authoritative from its first run.
+    if (!sharedConfig.has!(id)) return coreFn(fn, initialValue, options);
+    const initP = sharedConfig.load!(id);
+    // undefined until the trace has completed once: a sync NotReady from the
+    // trace (the source read a pending sibling before returning) leaves the
+    // shape unknown, and the retry decides (rule 6).
+    let takeover: boolean | undefined;
+    const detect = (draft: any) => {
+      const r = fn(draft);
+      takeover = isAsyncIterable(r);
+      return r;
+    };
+    const [hydrated, setHydrated] = coreSignal(false, { ownedWrite: true });
+    let live = false;
+    // A late flip — a queued microtask, or a landing the engine kept for a
+    // flight this store has since abandoned — must not run a live store again.
+    const flip = () => {
+      if (!live) setHydrated(true);
+    };
+    let adopted = false;
+    let creating = true;
+    let landedOnCreate = false;
+    const result = coreFn(
+      (draft: any) => {
+        if (live) return fn(draft);
+        // Rule 6: a non-iterable source, decided by the trace. No handoff —
+        // from here the store IS a "server" store (wrapStoreFn's body): every
+        // later run (dependency change, refresh()) re-adopts the serialized
+        // answer while hydration is open and runs fn live once it is done.
+        if (takeover === false) return readSerializedOrCompute(() => fn(draft), draft, options);
+        if (hydrated()) {
+          // The handoff run (rule 5: quiet through its duplicate).
+          live = true;
+          const { proxy, activate } = createShadowDraft(draft, options?.shallow);
           const r = fn(proxy);
-          return isAsyncIterable(r) ? wrapFirstYield(r, activate) : r;
-        },
-        initialValue,
-        options
-      )
+          if (isAsyncIterable(r)) return wrapFirstYield(r, activate);
+          if (r != null && typeof r.then === "function") return quietAnswer(r);
+          return r;
+        }
+        if (adopted) {
+          // Rule 4. The gate is down, so this is not the handoff; an adoption
+          // already returned, so it is not a NotReady retry of the trace
+          // either — a dependency changed. The recompute already released
+          // the adopted flight (recompute nulls `_inFlight` and fires the
+          // flight teardown), so the server's late landing is dropped and
+          // its second pull — the flip — never comes.
+          live = true;
+          return fn(draft);
+        }
+        // Adoption; the trace inside detects the source's shape. Re-entered
+        // only by a NotReady retry of the trace (the pending sibling settled;
+        // nothing was adopted yet, so adopt now).
+        subFetch(detect, draft);
+        let answer: any;
+        try {
+          answer = readHydratedValue(initP, () => {}, options);
+        } catch (e) {
+          // The trace above completed, so this is the settled rejection —
+          // the adopted answer (rule 3): authority transfers without a
+          // handoff run. A non-iterable source has no handoff to skip; it
+          // re-adopts (and re-throws) like "server" until a real run. (A
+          // NotReady from the trace is a retry of this same adoption and
+          // never reaches here.)
+          if (takeover) live = true;
+          throw e;
+        }
+        // Rule 6: a non-iterable source's adoption is the answer — nothing
+        // flips, and later runs take the `takeover === false` branch above.
+        if (!takeover) return answer;
+        adopted = true;
+        if (answer != null && typeof answer.then === "function")
+          return adoptedAnswerStream(answer, flip, () => (live = true));
+        // Settled, landing synchronously in this run. The creation run flips
+        // right after construction (below, outside the compute — as the gate
+        // always has); a retry run is inside a flush, where the flip must
+        // not be a self-write, so it follows on a microtask.
+        if (creating) landedOnCreate = true;
+        else queueMicrotask(flip);
+        return answer;
+      },
+      initialValue,
+      options
     );
+    creating = false;
+    // The creation flip: the handoff for a synchronously landed answer. An
+    // untraced source (NotReady) has no shape yet, and a non-iterable source
+    // has nothing to hand off (rule 6). (Nor is a flip a free re-adopt for
+    // it: the gate write is held by the snapshot scope and replays at its
+    // release, AFTER `done` flips in the plain hydrate() path, so the
+    // recompute would run fn live — the very refetch rule 6 rules out.)
+    if (landedOnCreate) flip();
+    return result;
   }
   const aiResult = hydrateStoreFromAsyncIterable(coreFn, fn, initialValue, options);
   if (aiResult !== null) return aiResult;
@@ -1199,14 +1691,40 @@ function hydrateStoreLikeFn(
 // onHydrationEnd it defers through) is unchanged — only how the code is
 // reached moved.
 function hydrateStoreLike(coreFn: Function, fn: any, initialValue: any, options?: any) {
+  // No id counter to peek from: not hydrating positionally (#3609).
+  if (noHydrationId()) return coreFn(fn, initialValue, options);
   markTopLevelSnapshotScope();
   return hydrateStoreLikeFn(coreFn, fn, initialValue, options, options?.ssrSource);
+}
+
+// --- Hydration-aware root ---
+
+// A hydrating root is the snapshot scope from its first child on. The scope
+// used to be marked lazily, by the first hydration-aware primitive created
+// under it — so a control-flow memo made before that (Show's condition, on
+// the core createMemo) sat outside it, and a user-tier write during the
+// hydration pass (onSettled, createEffect) cascaded through it live: the
+// branch it revealed claimed fresh templates against the registry, missed,
+// and rendered detached (#3504). Marking at the root makes the scope
+// creation-order independent: every write during the pass is held and
+// replays at release, once the claim pass is over.
+function hydratedCreateRoot(init: Function, options?: { id?: string; transparent?: boolean }) {
+  return coreRoot(
+    sharedConfig.hydrating
+      ? dispose => {
+          markTopLevelSnapshotScope();
+          return init(dispose);
+        }
+      : (init as any),
+    options
+  );
 }
 
 // --- Hydration-aware effect implementations ---
 
 function hydratedEffect(coreFn: Function, compute: any, effectFn: any, options?: any) {
-  if (!sharedConfig.hydrating || options?.transparent) return coreFn(compute, effectFn, options);
+  if (!sharedConfig.hydrating || options?.transparent || noHydrationId())
+    return coreFn(compute, effectFn, options);
 
   const ssrSource = options?.ssrSource;
 
@@ -1306,6 +1824,7 @@ function lazyHydrationLookup<T>(
 }
 
 export function enableHydration() {
+  _createRoot = hydratedCreateRoot;
   _createMemo = hydratedCreateMemo;
   _createSignal = hydratedCreateSignal;
   _createErrorBoundary = hydratedCreateErrorBoundary;
@@ -1320,6 +1839,7 @@ export function enableHydration() {
   _createLoadingBoundary = hydratedCreateLoadingBoundary;
   _lazyHydrationLookup = lazyHydrationLookup;
   sharedConfig.getNextContextId = hydrationGetNextContextId;
+  if (IS_DEV) sharedConfig.devPeekNextContextId = hydrationDevPeekNextContextId;
   // Installed here rather than in the sharedConfig literal so CSR bundles
   // shake the hydration-phase bookkeeping these close over. Consumers treat
   // absence as "not hydrating": the refresh runtime optional-chains
@@ -1327,6 +1847,7 @@ export function enableHydration() {
   // the exact CSR behavior onHydrationEnd itself had.
   sharedConfig.isHydrationInProgress = isHydrationInProgress;
   sharedConfig.onHydrationEnd = onHydrationEnd;
+  sharedConfig.isClaiming = isClaiming;
 
   // Take ownership of streamed-fragment reveals (see the fragment ledger).
   // The header script creates `_$HY` before any module runs, so the hook is
@@ -1377,6 +1898,9 @@ export function enableHydration() {
       } else if (was && !v) {
         if (_snapshotRootOwner) {
           releaseSnapshotScope(_snapshotRootOwner);
+          // the root pass is over: its live nodes take over now, whatever
+          // boundaries are still pending (D8)
+          releaseLiveScope(_snapshotRootOwner);
           _snapshotRootOwner = null;
         }
         checkHydrationComplete();
@@ -1434,7 +1958,10 @@ export function enableHydration() {
  * **Hydration:** `MemoOptions` accepts an `ssrSource` field
  * (`"server"` | `"hybrid"` | `"client"`) that controls what initial
  * value the client uses and whether `compute` re-runs. See
- * {@link HydrationSsrFields}.
+ * {@link HydrationSsrFields}. `transparent: true` opts a memo out of
+ * hydration (it consumes no id slot and computes live); a memo created
+ * with no owner, or under a root without an `id`, has no id to consume
+ * and takes that path on its own.
  *
  * @param compute receives the previous value, returns the new value
  * @param options `MemoOptions` — `id`, `name`, `equals`, `unobserved`,
@@ -1491,15 +2018,20 @@ export const createMemo: {
  * setCount(1);          // explicit value
  * setCount(c => c + 1); // updater
  *
- * // Writable memo: starts as `fn()`, can be locally overwritten.
+ * // Writable memo: derives from `fn()` and can be written like a signal.
+ * // Within the frame the write wins over a same-tick recompute; the next
+ * // change to `userId` re-derives (the compute receives the written value
+ * // as `prev`). While a transaction holds a re-derived value, a write from
+ * // outside it does not replace that derivation — it becomes its `prev`.
  * const [user, setUser] = createSignal(() => fetchUser(userId()));
- * setUser({ ...user(), name: "Alice" }); // optimistic local edit
+ * setUser({ ...user(), name: "Alice" });
  * ```
  *
  * **Hydration:** in the function form, `SignalOptions & MemoOptions`
  * accepts an `ssrSource` field (`"server"` | `"hybrid"` | `"client"`)
  * that controls what initial value the client uses and whether `fn`
- * re-runs. See {@link HydrationSsrFields}.
+ * re-runs. See {@link HydrationSsrFields}. `transparent: true` and the
+ * ownerless / id-less cases behave as for `createMemo`.
  *
  * @returns `[state: Accessor<T>, setState: Setter<T>]`
  *
@@ -1851,6 +2383,34 @@ export const createOptimisticStore: {
 }) as any;
 
 /**
+ * Creates a reactive root — an owner scope with its own `dispose()`. A root
+ * created inside an existing owner is owned by it and is disposed when the
+ * parent is disposed; call `dispose()` to tear it down earlier. To create a
+ * root that outlives its creator, detach explicitly:
+ * `runWithOwner(null, () => createRoot(...))`. Pass `id` to seed hydration
+ * ids for the tree it owns.
+ *
+ * ```ts
+ * const dispose = createRoot(dispose => {
+ *   // ...
+ *   return dispose;
+ * });
+ *
+ * // Detached from the current owner (lives until `detached()` is called):
+ * const detached = runWithOwner(null, () => createRoot(d => d));
+ * ```
+ *
+ * **Hydration:** a root created during hydration marks itself as the
+ * snapshot scope, so writes landing during the hydration pass are held
+ * until the pass completes (the mark used to depend on which primitive
+ * ran first under it).
+ *
+ * @description https://docs.solidjs.com/reference/reactive-utilities/create-root
+ */
+export const createRoot: typeof coreRoot = ((...args: any[]) =>
+  (_createRoot || coreRoot)(...args)) as typeof coreRoot;
+
+/**
  * Creates a reactive computation that runs during the render phase as
  * DOM elements are created and updated but not necessarily connected.
  *
@@ -1868,7 +2428,9 @@ export const createOptimisticStore: {
  * `transparent: true` makes the effect invisible to hydration entirely —
  * it consumes no hydration id slot and its compute runs live rather than
  * adopting the serialized server value — for client-only effects the
- * server never created.
+ * server never created. An effect created with no owner, or under a
+ * root without an `id`, has no id slot to consume and takes that path on
+ * its own.
  *
  * @example
  * ```ts
@@ -1940,7 +2502,9 @@ export const createRenderEffect: typeof coreRenderEffect = ((...args: any[]) =>
  * `transparent: true` makes the effect invisible to hydration entirely —
  * it consumes no hydration id slot and its compute runs live rather than
  * adopting the serialized server value — for client-only effects the
- * server never created.
+ * server never created. An effect created with no owner, or under a
+ * root without an `id`, has no id slot to consume and takes that path on
+ * its own.
  *
  * @description https://docs.solidjs.com/reference/basic-reactivity/create-effect
  */
@@ -1979,6 +2543,7 @@ function resumeBoundaryHydration(
   // synchronous resume window; without a capture the live globals apply.
   const prevRegistry = sharedConfig.registry;
   const prevGather = sharedConfig.gather;
+  const prevClaim = _claimOwner;
   if (scope) {
     sharedConfig.registry = scope.registry;
     sharedConfig.gather = scope.gather;
@@ -1988,21 +2553,60 @@ function resumeBoundaryHydration(
     _hydratingValue = shouldHydrate;
     if (shouldHydrate) {
       markSnapshotScope(o);
+      openLiveScope(o);
       _snapshotRootOwner = o;
+      // The window claims this boundary's subtree only: the rest of the
+      // tree hydrated in the root pass, and a re-render it takes during the
+      // window (a write from the resumed content's user effects) is a
+      // client render (#3504).
+      _claimOwner = o;
     }
     set();
     flush();
     if (shouldHydrate) _snapshotRootOwner = null;
     _hydratingValue = false;
-    if (shouldHydrate) releaseSnapshotScope(o);
+    _claimOwner = prevClaim;
+    if (shouldHydrate) {
+      releaseSnapshotScope(o);
+      // this boundary's hydration is over: its live nodes take over now,
+      // without waiting for the rest of the page (D8)
+      releaseLiveScope(o);
+    }
     flush();
   } finally {
+    _claimOwner = prevClaim;
     if (scope) {
       sharedConfig.registry = prevRegistry;
       sharedConfig.gather = prevGather;
     }
   }
   checkHydrationComplete();
+}
+
+/**
+ * The client renders a boundary the server could not finish — its fragment
+ * rejected, or the stream was cut before it arrived — as fresh DOM, and the
+ * observe build records it: how long the fallback stood while the server
+ * still tried, and what the fresh render cost. Joins the server's
+ * `"boundary"` record by `id`. Nothing but `resume(false)` when no one
+ * listens (`registeredAt` is -1 then; the clock was never read).
+ */
+function recover(
+  id: string,
+  registeredAt: number,
+  resume: (shouldHydrate?: boolean) => void
+): void {
+  if (registeredAt < 0 || !OBSERVE!.records.observed("recovery")) {
+    resume(false);
+    return;
+  }
+  const start = performance.now();
+  resume(false);
+  OBSERVE!.records.emit(
+    "recovery",
+    { id, at: registeredAt, waitedMs: start - registeredAt, renderMs: performance.now() - start },
+    {}
+  );
 }
 
 function initBoundaryResume(
@@ -2147,10 +2751,7 @@ function fragmentPending(hy: any, id: string): boolean {
   if (_truncated.has(id)) return false;
   const ref = hy.r[id + "_fr"];
   if (!ref || typeof ref !== "object") return false;
-  if (!ref.s) return true;
-  if (hy.v && hy.v[id]) return false;
-  if (!document.getElementById(id)) return false;
-  return !!document.getElementById("pl-" + id);
+  return !ref.s || fragmentParked(id);
 }
 
 /**
@@ -2166,6 +2767,26 @@ function fragmentSuperseded(id: string): boolean {
   if (hy && hy.v && hy.v[id]) return false;
   if (document.getElementById(id)) return false;
   return !!document.getElementById("pl-" + id);
+}
+
+/**
+ * A settled declaration whose swap has not run yet: its content template and
+ * `pl-*` placeholder are both still in the document. `$dfs` holds a swap like
+ * this until its stylesheets load, well after the `_fr` ref settles.
+ */
+function fragmentParked(id: string): boolean {
+  const hy = (globalThis as any)._$HY;
+  if (hy && hy.v && hy.v[id]) return false;
+  return !!document.getElementById(id) && !!document.getElementById("pl-" + id);
+}
+
+function whenRevealed(id: string, cb: () => void) {
+  if (!fragmentParked(id)) return cb();
+  const unsubscribe = subscribeFragments(revealed => {
+    if (revealed !== id) return;
+    unsubscribe();
+    queueMicrotask(cb);
+  });
 }
 
 function anyFragmentPending(): boolean {
@@ -2416,7 +3037,7 @@ function hydratedCreateLoadingBoundary<T, U>(
   fallback: () => U,
   options?: { on?: () => any }
 ): Accessor<T | U> {
-  if (!sharedConfig.hydrating) return coreLoadingBoundary(fn, fallback, options);
+  if (!sharedConfig.hydrating || noHydrationId()) return coreLoadingBoundary(fn, fallback, options);
 
   let settledSerializationResumeQueued = false;
 
@@ -2497,8 +3118,10 @@ function hydratedCreateLoadingBoundary<T, U>(
       // land before any branch below reads the DOM — the settled branches
       // all assume $df already ran.
       replayHeldFragment(id);
+      // A parked fragment has settled but not swapped: it waits like a pending one.
+      const s = fr && typeof fr === "object" ? (fr.s === 1 && fragmentParked(id) ? 0 : fr.s) : 0;
 
-      if (fr && typeof fr === "object" && fr.s === 1 && !assetPromise && !fragmentSuperseded(id)) {
+      if (s === 1 && !assetPromise && !fragmentSuperseded(id)) {
         // Fragment already settled and swapped in ($df ran before hydration):
         // the content is in the DOM, so hydrate straight through. The fallback
         // only hydrates when it is actually showing — rendering it here would
@@ -2510,8 +3133,12 @@ function hydratedCreateLoadingBoundary<T, U>(
 
       settledSerializationResumeQueued = true;
       const [, resume] = initBoundaryResume(o, id);
+      // Observe: the clock for a recovery record, read only when someone
+      // will hear it (a listener on "recovery"). Prod: a dead constant.
+      const registeredAt =
+        IS_OBSERVE && OBSERVE!.records.observed("recovery") ? performance.now() : -1;
 
-      if (fr && typeof fr === "object" && fr.s === 1 && fragmentSuperseded(id)) {
+      if (s === 1 && fragmentSuperseded(id)) {
         // SUPERSEDED (#2801's inverse): the declaration settled but its markup
         // was retired before it shipped — an outer boundary settled first and
         // its fragment carries the final branch instead, so this placeholder
@@ -2534,8 +3161,8 @@ function hydratedCreateLoadingBoundary<T, U>(
         return fallback();
       }
 
-      if (fr && typeof fr === "object" && (fr.s === 1 || fr.s === 2)) {
-        if (fr.s === 2) {
+      if (s === 1 || s === 2) {
+        if (s === 2) {
           // Rejected stream fragments swap to an empty template; any outer error fallback
           // has to be created as fresh client DOM, not claimed from server markup.
           // Nothing else consumes the settled-rejected `_fr` promise once this
@@ -2543,7 +3170,11 @@ function hydratedCreateLoadingBoundary<T, U>(
           // finalize or a client-hole handoff) doesn't surface as an
           // unhandled rejection.
           (fr as Promise<never>).catch?.(() => {});
-          const resumeRejected = () => resume(false);
+          // Observe: the fresh render is a "recovery" record; prod folds the
+          // branch and `recover` with it.
+          const resumeRejected = IS_OBSERVE
+            ? () => recover(id, registeredAt, resume)
+            : () => resume(false);
           if (assetPromise)
             assetPromise.then(
               () => queueMicrotask(resumeRejected),
@@ -2567,7 +3198,18 @@ function hydratedCreateLoadingBoundary<T, U>(
       // for this resume to claim instead of holding it; if the swap already
       // arrived and was held awaiting a claimant, replay it now.
       claimFragment(id);
-      waitAndResume(fr, resume, assetPromise, false, fragmentAbort(id));
+      waitAndResume(
+        fr,
+        shouldHydrate =>
+          shouldHydrate
+            ? whenRevealed(id, () => resume(true))
+            : IS_OBSERVE
+              ? recover(id, registeredAt, resume)
+              : resume(false),
+        assetPromise,
+        false,
+        fragmentAbort(id)
+      );
       return fallback();
     }
 

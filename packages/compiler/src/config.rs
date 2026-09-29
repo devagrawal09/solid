@@ -10,6 +10,19 @@ pub struct RendererOption {
     pub elements: Vec<String>,
 }
 
+/// The object form of `sourceNames`: which kinds of source name to carry
+/// into output. Babel's `SourceNamesConfig`.
+#[napi(object)]
+#[derive(Default, Clone)]
+pub struct SourceNamesOption {
+    /// Component owner labels: the tag as written, as `createComponent`'s
+    /// third argument.
+    pub components: Option<bool>,
+    /// Binding effect labels: the element and attribute (or hole) each
+    /// compiled effect writes.
+    pub bindings: Option<bool>,
+}
+
 #[napi(object)]
 #[derive(Default)]
 pub struct TransformOptions {
@@ -24,11 +37,22 @@ pub struct TransformOptions {
     pub generate: Option<String>,
     pub hydratable: Option<bool>,
     pub dev: Option<bool>,
-    /// Babel's `componentNames`: emit the source tag name as a third
-    /// `createComponent` argument (`createComponent(Home, props, "Home")`) so
-    /// dev/observe runtimes can label owners after minification. DOM output
-    /// only; the production runtime ignores the argument.
-    pub component_names: Option<bool>,
+    /// Babel's `sourceNames`: names as written in source, carried into output
+    /// so the dev and observe runtimes can label the reactive graph after
+    /// minification. `components` emits the source tag name as a third
+    /// `createComponent` argument (`createComponent(Home, props, "Home")`) —
+    /// DOM and SSR output (SSR keeps the `createComponent` call it would
+    /// otherwise inline to `Comp(props)`); not universal or dynamic.
+    /// `bindings` names every compiled binding effect by what it writes
+    /// (`span.textContent`, `div.class:active`, a hole `div.children`, a
+    /// spread `div.spread`) through an options argument on
+    /// `effect`/`insert`/`spread`; DOM output only. The production runtimes
+    /// ignore the names. Defaults to `dev`: unset, every kind is on in dev
+    /// and off otherwise; `true`/`false` sets every kind; the object form
+    /// picks, and each kind it leaves unspecified follows `dev`. Primitive
+    /// names are not a kind here: they come from the standalone
+    /// `transformSourceNames` pass the build tool runs on every module.
+    pub source_names: Option<Either<bool, SourceNamesOption>>,
     pub source_map: Option<bool>,
     pub context_to_custom_elements: Option<bool>,
     pub delegate_events: Option<bool>,
@@ -55,10 +79,18 @@ pub struct TransformOptions {
     pub validate: Option<bool>,
     pub omit_nested_closing_tags: Option<bool>,
     pub omit_last_closing_tag: Option<bool>,
-    /// Babel's `serverComponents`: SSR-only. `ref`/`on*` positions on
-    /// intrinsic elements compile to a guarded `_$ssrClaim` hole (the
-    /// `_bnd` behavior-claim marker) instead of dropping.
+    /// Babel's `serverComponents`: SSR-only. Attribute-slot positions on
+    /// intrinsic elements stay bindable: `ref`/`on*` compile to a guarded
+    /// `_$ssrClaim` hole instead of dropping, and a dynamic `class`/`style`
+    /// compiles to a whole-attribute `_$ssrElementAttribute` hole instead of
+    /// a value inside template quotes.
     pub server_components: Option<bool>,
+    /// SSR-only (default `true`): a component's props literal with getters
+    /// compiles to a module-level constructor with shared getters instead of
+    /// an object literal — same own keys, order and descriptors, prototype
+    /// `Object.prototype`; a getter is defined only for a read through its
+    /// own object (#3511). `false` keeps the literal.
+    pub hoist_props: Option<bool>,
     /// Component exports from `moduleName` that are auto-imported.
     /// Default `["For", "Show", "Switch", "Match", "Loading", "Reveal", "Portal", "Repeat", "Dynamic", "Errored"]`.
     pub built_ins: Option<Vec<String>>,

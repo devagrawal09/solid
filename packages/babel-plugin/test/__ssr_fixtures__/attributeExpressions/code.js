@@ -427,3 +427,37 @@ const template95 = (
     <video src="test.mp4" muted />
   </div>
 );
+
+const template96 = (
+  <div>
+    <textarea value="a &lt;b&gt; &amp; c" />
+    <textarea {...spread} value="a &lt;b&gt; &amp; c" />
+    <textarea {...spread} value="static" />
+    <textarea value="static" {...spread} />
+  </div>
+);
+
+const template97 = (
+  <>
+    <script {...spread}>{"if (a < b) { x && y }"}</script>
+    <style {...spread}>{"a < b { x: 1 }"}</style>
+    <div {...spread}>{"a < b"}</div>
+  </>
+);
+
+// Static attributes after the last spread bake into ssrElement's attribute
+// string with their keys skipped on the spread; statics before a spread, and
+// anything between two spreads, stay a source the spread can override.
+const template110 = <li {...spread} class="row" data-kind="item" />;
+const template111 = <li class="row" data-kind="item" {...spread} />;
+const template112 = (
+  <li {...spread} class="row" data-id={dynamicAttribute()}>
+    {dynamicContent()}
+  </li>
+);
+const template113 = <div {...first} class="x" {...second} id="y" />;
+const template114 = (
+  <input {...spread} disabled={false} type="text" tabindex={0} style=" color: red; top: 0 " />
+);
+const template115 = <textarea {...spread} innerHTML="<b>x</b>" />;
+const template116 = <li {...spread} class="row" data-kind="item" ref={link} />;

@@ -440,13 +440,21 @@ suite; the shim-backed twins in the runtime's own
   streaming through the document's data scripts, so page markup and the
   adopted client's read now agree (previously the markup shipped an
   empty hole over a raw promise read — a hydration mismatch).
-- **Async iterables tap their first yield** — one cursor, two consumers:
+- **Async iterables tap their first yield** — one source, every reader:
   the inline read settles on the first yield (markup is the V1 snapshot;
   later yields are the adopted client's story, per §10 of
-  generator-only-model.md) and the record ships a replay wrapper that
-  re-yields it before delegating, so the client still receives the
-  complete sequence. This is the first-value lock's semantics arrived at
-  from the transport side.
+  generator-only-model.md) and the record ships the complete sequence.
+  Both are SEATS on the runtime's shared multicast of the source
+  (`shareAsyncIterable`, solid-js/server: one pump, a log trimmed to the
+  slowest open seat, the last seat out closes the source) — the same seat
+  the server component's own memo over that source takes, and the same one
+  the border walk (`toBorderForm`) hands the serializer for an iterable
+  nested anywhere in a memo's answer or a slot arg. A generator yields to
+  one reader; under a render the serializer is rarely the only one, so
+  every read the runtime makes goes through a seat. (Superseded: the
+  first build's per-site replay wrapper — one cursor handed between two
+  consumers — which left a third reader splitting the yields.) This is the
+  first-value lock's semantics arrived at from the transport side.
 
 Mode invariance holds at the border: the same authored crossing behaves
 identically whether the mount is call-driven or the initial document.
@@ -779,7 +787,11 @@ guarantees the two compose: a slot's optimistic state survives the settling morp
 (A7), so the overlay never flickers. (Stage 7 refines, not repeals, this line:
 transaction-scoped predictions may temporarily perturb server-rendered DOM,
 re-asserted over every authoritative apply and evaporating at settlement — the
-invariant that only server records make output durable stands. See §9.2.)
+invariant that only server records make output durable stands. See §9.2.
+*Revised 2026-09-27, §9.2.2: predictions are retired and this paragraph is
+again literally the design — the slot that holds optimistic state may be an
+attribute of a server element, so "hide" and "strike-through" are `hidden` and
+`class` fills, not perturbations of server-owned output.*)
 
 ### 5.8 Producer-side symmetry
 
@@ -1024,7 +1036,26 @@ retired as a pole and survives only as potential authoring sugar.
    Content-key nodes persist across morphs, so predicted content may
    be interactive — the old display-only caveat is repealed.
    Substrate shipped 2026-08-15: keyed element matching in the morph
-   (`$key` → `_key`). See §9.2.
+   (`$key` → `_key`). See §9.2. **Amended 2026-09-22 (§9.2.1):
+   settlement is convergence** — a prediction settles when the
+   authoritative markup agrees with it (keyed content matched,
+   attribute value asserted), on any arrival path; pending indicators
+   settle with the transaction. No watermark, no dependency on Stage 8.
+   **Amended 2026-09-27 (§9.2.2): `predict` retired before build;
+   Stage 7 is attribute slots.** A server component spreads a
+   *called* slot onto one of its own elements
+   (`{...props.check({ id, completed })}`); the client fill returns
+   attributes over slot args and `createOptimistic*` state; the
+   engine `spread`s them. Server owns every node, client owns the
+   attribute values it declared — the missing row in Stage 6's
+   taxonomy (ref lifecycle + slot-arg reactivity). No baselines, no
+   re-assertion, no new engine, and no compiler change — spread is
+   the one attribute position SSR already hands to the runtime
+   whole, so `ssrElement` brand-checks the source and both compilers
+   stay untouched. Optimism is pay-for-use and live-safe by
+   construction. Retroactivity is the one thing given up. Adds stay client JSX in a pre-placed content slot (§9.2.1's
+   `$key` convergence still covers off-response). Gate unchanged:
+   the TodoMVC port.
 8. **Stage 8 — Connection-shaped transport.** Promoted from parked: the
    sink-lifetime separation means SSE/socket transports turn the same
    authored component non-terminating (generator-only-model.md §9,
@@ -1037,6 +1068,37 @@ retired as a pole and survives only as potential authoring sugar.
    bounded by an opt-in window; mutations settle against a watermark.
    The related data-API question (top-level async iterators from plain
    `"use server"` calls) is scoped separately and comes first.
+   **Design drafted 2026-09-22 (§9.5); pulled ahead of Stage 7.** The
+   data-API prerequisite has landed (`live()` in
+   `@solidjs/web/server-functions`, with its reconnect loop), and a
+   frame render already stays connected to any unbounded source it
+   reads — what is missing is the warranty. The design revises the
+   seed on one line: liveness is declared, by `live` at the export,
+   not observed — `live` extends to the response's lifetime (RFC 10)
+   so nested-async answers and server components are one case, and
+   frames consume its loop rather than mirror it. The transport is
+   today's per-source stream framed as server-sent events — no
+   declaration, no configuration; a backend that holds connections
+   over HTTP/2 is the precondition. The seed's watermark (causal settlement for Stage 7) is retired:
+   settlement is convergence (§9.2 amendment), and the two stages are
+   independent. Plan: `documentation/plans/stage8-connection-transport.md`.
+
+Ordering note (revised 2026-09-22): Stage 8 now precedes Stage 7,
+and the two are independent. The 08-18 reasoning below still holds
+for Stage 6; what changed is that `live()` shipped, which both
+satisfied Stage 8's prerequisite and created an asymmetry — a
+stream consumed on the client through `live()` reconnects, while a
+server component reading the same feed on the server goes silently
+static when its response dies (and so does any nested stream inside
+a plain answer, which is the same gap one level down). Stage 8
+closes that gap by extending `live` rather than adding beside it,
+and completes the story (t=0 document → post-load liveness →
+liveness that survives the connection). The
+08-18 note's one coupling — "Stage 8 must eventually add causal
+settlement" for predictions — is retired: predictions settle by
+convergence (the §9.2 amendment), which needs nothing from the
+transport, so neither stage waits on the other. Stage 8 first because
+it completes a story; Stage 7 can land before, after, or alongside.
 
 Ordering note (revised 2026-08-18): Stage 6 is the next target and
 now *precedes* optimism — it is dependency-shallow (a compiler round
@@ -1494,6 +1556,12 @@ diverged simpler, and this paragraph is the record.
 
 ### 9.2 Stage 7 design — predictions: one declarative verb (settled 2026-08-18; supersedes the imperative-draft revival, overlays + entries, and the transactional draft)
 
+*Superseded 2026-09-27 by §9.2.2: `predict` was retired before it
+was built; Stage 7 is attribute slots. The text below stands as the
+search record — the fifth shape died on the same kind of named cost
+as the first four (the engine it needed), and §9.2.2 is the
+survivor.*
+
 Fourth and, by its structure, final form of this design. The
 supersession chain compressed into one night's search once the
 machinery was priced honestly, and the search record is the most
@@ -1632,7 +1700,9 @@ row that fulfills it) is deliberately NOT mechanism — it was the
 overlay model's answer, and it required naming schemes this design
 just deleted. Accepted, because it is stated. Stage 8's separate
 connection needs the causal watermark (§9.3) before the single-flight
-guarantee transfers.
+guarantee transfers. *(Amended 2026-09-22, §9.2.1: the watermark is
+retired; off-response confirmation is convergence, which reopens the
+entity-keyed ruling narrowly — see there.)*
 
 **In-flight streaming (unchanged rule).** Authoritative updates do
 not wait for optimism: every incoming chunk first advances the
@@ -1767,9 +1837,1448 @@ derived. Predictions may temporarily perturb its rendered
 projection, but only an authoritative frame record can make that
 output durable.
 
+#### 9.2.1 Amendment — settlement is convergence (2026-09-22)
+
+Found while designing Stage 8 (§9.5). The 08-18 text above settles a
+prediction "at settlement" and the ordering note made settlement on a
+persistent connection Stage 8's problem: "a mutation's transaction
+remains open until the separate connection has applied its
+authoritative frame version" — a WATERMARK the mutation ack would
+name and the address's version would pass. Designing that watermark
+opened a question with no good answer — who mints the version — and
+the answer turned out to be that nobody needs to.
+
+**The question, and why it has no owner.** On single-flight,
+settlement is free: the mutation response carries the regions, and
+delivery order is causality. On a persistent connection the mutation
+is a separate POST and the live stream is an independent render
+reacting to a feed — the client cannot tell WHICH emission reflects
+its write, and versions are client-stamped stream ordinals (`bump`),
+so a server ack cannot name one. This is "read your writes across a
+subscription", and every sync system has answered it:
+
+```text
+system              mechanism                                        version minted by      one pipe?
+──────              ─────────                                        ─────────────────      ─────────
+Meteor DDP          method `updated` sent after its writes reach     connection order       yes
+                    the client's subscriptions; latency comp holds
+                    until then
+Convex              mutation commits at log ts T; the socket           global log position    yes
+                    delivers query results ≥ T before the mutation
+                    promise resolves
+Phoenix LiveView    server-held state; reconnect = remount            connection order       yes
+Firestore           `hasPendingWrites` on snapshots until acked        connection order       yes
+Linear sync         `lastSyncId`, a global sequence from Postgres;     database               no
+                    clients hold and rebase against it
+Electric SQL        shape offset = Postgres LSN; a write API returns   database (txid)        no
+                    the txid; client waits until the shape stream
+                    has delivered that txid
+PowerSync           write acked with a checkpoint;                     database               no
+                    `waitForCheckpoint` before dropping local state
+CouchDB _changes    `since=<update_seq>`                               database               no
+Replicache          per-client `lastMutationID`; pull returns the      client counter +       no
+                    highest processed per client + an opaque cookie    server ack
+Turbo 8 refresh     `X-Turbo-Request-Id` on the write; the refresh     request-id echo        no (causal)
+                    broadcast echoes it; client skips its own
+SSE                 `Last-Event-ID` resume cursor                      producer               n/a
+HLC / Lamport       compare timestamps                                 clocks                 no
+```
+
+Five shapes: same-pipe ordering (unavailable — mutations are
+separate POSTs; single-flight is the degenerate case), database
+sequence (the only one that survives replication lag; costs an API —
+the app must surface the sequence), client mutation counters (the
+render must know which mutations it reflects — a database sequence in
+other clothes), request-id echo (only for renders CAUSED by the
+write), and clocks (true on one node, false under replication lag).
+The finding: **no system mints a version for data it does not own.**
+A candidate that kept versions client-stamped — "causal resume": after
+the ack, force a superseding render of each invalidated address and
+take ITS ordinal as the watermark — was sound on one primary and
+wrong under a lagging replica (the transaction settles against a
+render that does not contain the write; the predicted row vanishes
+and the real one appears a beat later), and needed an opaque
+source-token seam on the ack to be honest. Rejected.
+
+**The resolution: apply `until()`'s principle to markup.** First,
+what does NOT change: the 08-18 default stands. A prediction settles
+with its transaction, and under single-flight the confirming morph
+and the settling are the same event — no condition to express, no
+version to compare. What the watermark was FOR is the other case:
+confirmation arriving off-response (a mutation whose invalidation
+did not cover the address; a fire-and-forget write whose truth comes
+back on the live stream). For that case, `until` already states the
+principle on the data face: "when does the world confirm this
+condition", read from the authoritative view with the caller's own
+optimism carved out — your own tentative write can never satisfy
+your own ack. The same holds for a prediction: it is confirmed when
+the AUTHORITATIVE MARKUP CONVERGES ON IT, and any arrival path
+confirms — a single-flight region, the live stream's own emission, a
+resume snapshot, another tab's mutation. Stage 7's vocabulary makes
+every outcome prediction such a condition:
+
+- A **content prediction with a `$key`** (`append: <li
+  $key={clientId}>…</li>`) is confirmed when an authoritative morph
+  brings an element with that key. The keyed-morph substrate (`$key`
+  → `_key`, shipped 08-15) ADOPTS the predicted node, so there is no
+  duplicate window — the same "correlate by key" guidance RFC 06
+  gives for optimistic store rows.
+- An **attribute prediction** (`checked: true`) is confirmed when an
+  authoritative apply asserts the same value. Whether that render
+  "reflects the write" stops mattering: the world agrees, and
+  dropping the overlay changes nothing. A stale apply that disagrees
+  is already handled — the claim sweep re-asserts the overlay over
+  it (the 08-18 text).
+
+Why this is strictly better than a watermark, not merely simpler:
+under replication lag a stale render cannot confirm anything (no key
+match, no matching value), so the prediction HOLDS until a render
+that actually contains the write — truth, not time. Nothing rides
+the ack. No version has an owner. It composes with `until()` in the
+same action: `yield until(...)` over data and predictions held by
+convergence share one transaction, one hold, one failure story
+(reject → revert). And it matches §9.4's principle — relatedness is
+declared, never inferred by infrastructure from co-occurrence;
+settlement inferred from render-start time was the same category of
+mistake.
+
+**What convergence surfaces that the watermark hid: outcomes vs
+indicators.** Not every patch predicts an outcome. `after: <Spinner
+/>` and `class: "saving"` are PENDING INDICATORS — the server will
+never render them, so they cannot converge; they live for the
+transaction's lifetime and drop at its settlement. Stage 7 needs the
+distinction: keyed content and attribute values the server is
+expected to render settle by convergence; unkeyed content and
+indicator attributes settle with the transaction. The 08-18 design's
+"baseline-restored at settlement" is the indicator half; the outcome
+half is new. Both need a failure floor: `until` has `timeout`, and a
+convergence prediction whose truth never arrives should fail the
+same way (thrown back at the yield; optimistic state reverts).
+
+**What this reopens, narrowly.** The 08-18 text ruled "entity-keyed
+settlement (matching a prediction to the authoritative row that
+fulfills it) is deliberately NOT mechanism — it required naming
+schemes this design just deleted." Convergence IS entity-keyed
+confirmation, so the ruling is reopened — but only for the
+off-response case the ruling accepted as "a transient duplicate
+until settlement", and without the cost that killed it: the key is
+the `$key` the author already writes on predicted content for keyed
+morph retention, not a new naming scheme. Two things are NOT decided
+here and belong to Stage 7's build: how an action holds for an
+off-response confirmation (a yieldable from `predict`, or `until()`
+over a prediction's confirmed state — the former is new surface, the
+latter needs the prediction to be reactive), and whether convergence
+also settles under single-flight (it would be a no-op there — the
+same event — so the answer is probably "one rule", but it is not
+load-bearing).
+
+**Consequences for the roadmap.** Stage 7 no longer depends on Stage
+8 in either direction — it needs nothing from the transport and can
+be proved against single-flight, a live stream, or both. Stage 8's
+watermark work item is deleted (§9.5). The only version that
+survives is the client-stamped ordinal, as stale-guard and resume
+cursor.
+
+#### 9.2.2 Amendment — `predict` retired; optimism is attribute slots (2026-09-27)
+
+Recorded from the design conversation the night Stage 8 Part B
+shipped. Stage 7 was left for last because it was the stage the
+maintainer was least happy with: every other stage of this design
+was reached with zero new API (`dynamic` + server functions +
+slots + props in JSX positions), and Stage 7 alone invented a verb.
+Re-deriving it from the same axioms with Stage 6 and Stage 8 built
+found a shape that needs no verb. **`predict(anchor, patch)` is
+retired before it was built.** The 08-18 text above and the 09-22
+amendment stay as the record of how the shape was found; nothing
+in them ships.
+
+**The candidates, and why two lost.**
+
+1. *`predict` (the 08-18 design).* Client borrows server-owned
+   attributes for a transaction. Buys retroactivity — optimism
+   against any element in hand, no template change — and pays with
+   an engine: per-key baseline capture, transaction-scoped range
+   owners, re-assertion riding the claim sweep, re-targeting,
+   settlement hooks, and every open question listed above. The
+   engine lives in the frames client, eager for every server-
+   component page whether or not it predicts. Its lineage is
+   LiveView's `JS` commands (`JS.add_class |> JS.push`): declarative
+   client-side mutations of server markup preserved across server
+   patches, minus the transaction that would make rollback
+   automatic.
+2. *Slot fills owning the row.* Each mutable row becomes a render-
+   prop fill (`<props.row $key id completed>{label}</props.row>`)
+   rendering its own `<li>` over `createOptimistic*` state. No new
+   surface at all, but it is the RSC pole: the client owns the
+   rendering of data the server already rendered, and as the
+   mutable fraction of a row grows the row degenerates to a client
+   component fed the full record — two renderers for one row. Under
+   live server components this compounds (the server re-renders
+   rows the client also re-renders, every tick). Rejected on the
+   single-copy axiom; it is the "client fork that rots."
+3. *Attribute slots.* Adopted. Below.
+
+**The shape.** A server component spreads a *called* slot onto one
+of its own elements. The client fill receives the occurrence's args
+as reactive props and returns attributes; the engine `spread`s them
+onto the element. The server owns every node; the client owns
+exactly the attribute *values* it declared.
+
+```tsx
+// ── server ("use server" component) ──────────────────────────
+async function getTodos(filter: Filter) {
+  "use server";
+  const todos = await db.todos.list(filter);
+  const remaining = todos.filter(t => !t.completed).length;
+  return props => (
+    <section class="main">
+      <ul class="todo-list">
+        <For each={todos}>{t => (
+          <li $key={t.id} {...props.row({ id: t.id, completed: t.completed })}>
+            <input class="toggle" type="checkbox"
+                   {...props.check({ id: t.id, completed: t.completed })} />
+            <label>{t.title}</label>             {/* server content, never data */}
+            <button class="destroy" {...props.destroy({ id: t.id })} />
+          </li>
+        )}</For>
+        <props.pending />                        {/* content slot: optimistic adds */}
+      </ul>
+      <footer><props.count remaining={remaining} /></footer>
+    </section>
+  );
+}
+
+// ── client ───────────────────────────────────────────────────
+const [pending, setPending] = createOptimisticStore<{
+  byId: Record<string, { completed?: boolean; removed?: boolean }>;
+  adds: { tmp: string; title: string }[];
+}>({ byId: {}, adds: [] });
+
+const done = (p: { id: string; completed: boolean }) =>
+  pending.byId[p.id]?.completed ?? p.completed;
+
+// `yield` is the transaction-safe suspension point (a bare `await` leaves
+// the transaction — core/action.ts). The authoritative apply lands inside
+// this transaction: single-flight, the response's regions apply before
+// the yielded call resolves; multi-flight, `yield refresh(todos)` (or the
+// router's revalidation) holds it until the refetched frame has applied.
+const toggle = action(function* (id: string, completed: boolean) {
+  setPending(s => { s.byId[id] = { completed }; });
+  yield toggleTodo(id, completed);
+});
+const remove = action(function* (id: string) {
+  setPending(s => { s.byId[id] = { removed: true }; });
+  yield deleteTodo(id);
+});
+const add = action(function* (title: string) {
+  setPending(s => { s.adds.push({ tmp: crypto.randomUUID(), title }); });
+  yield createTodo(title);
+});
+const toggleAll = action(function* (ids: string[], completed: boolean) {
+  setPending(s => { for (const id of ids) s.byId[id] = { completed }; });
+  yield toggleAllTodos(ids, completed);
+});
+
+const Todos = dynamic(() => getTodos(filter()));
+
+<Todos
+  row={p => ({ class: { completed: done(p) }, hidden: !!pending.byId[p.id]?.removed })}
+  check={p => ({ checked: done(p), onChange: e => toggle(p.id, e.currentTarget.checked) })}
+  destroy={p => ({ onClick: () => remove(p.id) })}
+  pending={() => (
+    <For each={pending.adds}>{a => <li class="pending">{a.title} <small>Sending…</small></li>}</For>
+  )}
+  count={p => <strong>{p.remaining - Object.values(pending.byId).filter(x => x.completed).length}</strong>}
+/>
+```
+
+The three TodoMVC behaviors:
+
+- *Toggle.* `setPending` flips `done(p)`; `<li class>` and `<input
+  checked>` update through ordinary bindings on server nodes.
+  Success: the authoritative apply morphs the row inside the
+  action's transaction, `p.completed` becomes the new value, the
+  optimistic entry settles to the same thing. Failure: the entry
+  reverts, `done(p)` falls back to `p.completed`, the checkbox
+  corrects itself. No baseline is captured because the client never
+  borrowed the value — it owns it.
+
+**Both mutation shapes are required (clarified 2026-09-27).** The
+fill is identical under router single-flight and under typical
+multi-flight; only the *hold* differs, and the hold is the
+transaction's existing job. The requirement, stated once for three
+arrival paths: *the authoritative apply lands inside the action's
+transaction, however it arrives.*
+
+- *Single-flight (router).* The mutation response carries the
+  invalidated regions; `applyFrameResponse` morphs before the call
+  resolves. Apply and settlement are one event.
+- *Multi-flight (typical).* The mutation POST returns; the refetch
+  of `getTodos(filter)` is a separate request. It must be an async
+  source the SAME transaction tracks — `refresh(Todos)` or the
+  router's revalidation inside the action — so the transaction stays
+  open until the new binding is delivered and applied. This is
+  exactly how `examples/todos` holds today (`yield api.toggleTodo`,
+  then `refresh(todos)`). Without the hold, `done(p)` flashes back
+  to the old `p.completed` between the POST resolving and the
+  refetch landing — which is what the transport did until
+  2026-09-27: a refetch resolved at the response header. It now
+  settles when the response has applied for a call a boundary is
+  showing (see the flicker check below).
+- *Live (off-response).* Nothing to hold on; the transaction settles
+  when the mutation returns and truth arrives on the stream. `until()`
+  on the data face is the author's hold if wanted; otherwise it is
+  §9.2.1's convergence case with a possible stale interval under
+  replication lag, as for any optimistic store.
+- *Remove.* `hidden` on the server-owned `<li>`. Success: the morph
+  drops the `$key` occurrence and the fill's scope disposes.
+  Failure: `hidden` reverts and the row is back untouched. (Same as
+  under `predict`, which forbade removal and used `hidden` too.)
+- *Add.* The pending row is client JSX in a pre-placed content
+  slot — as it was under `predict`'s `append:` key and as it must
+  be: the server has not rendered the row, so nothing exists to
+  decorate. The real row arrives from the server; the pending one
+  evaporates with the transaction (§9.2.1's `$key` adoption covers
+  the off-response case). What is lost versus `predict` is position
+  freedom: the slot is where the author put it, not an arbitrary
+  anchor at call time.
+
+**Why this is the pole, not a compromise.**
+
+- *Ownership is structural.* An attribute has one owner. The server
+  writes it (static, in the template) or the client does (through a
+  fill), never both. `predict` needed a dev-mode discipline warning
+  for exactly this; here the conflict is detectable at SSR time when
+  the fill's output meets the element's static attributes.
+- *Transaction-based, with no new machinery.* `createOptimistic*`
+  lifetimes do settlement and revert. The whole "machinery ledger"
+  of the 08-18 text — baseline capture, transaction-scoped range
+  owners, sweep consumers, settlement hooks — goes to zero because
+  the client owns the value instead of borrowing it. Overlapping
+  actions hold separate lanes as everywhere else in Solid.
+- *Live-safe by construction.* A server patch delivers new args; the
+  derivation reruns with intent still on top. This is the case
+  `predict` had to engineer (re-assertion riding the claim sweep)
+  and the delicate part of that design. Here there is nothing to
+  hook.
+- *Spans addresses.* Intent is client state, so switching
+  `getTodos("all")` → `getTodos("active")` mid-flight shows the same
+  optimism in the new frame. `predict` was address-scoped by design
+  ("predictions do not span addresses").
+- *Pay-for-use.* Pages without optimism carry nothing. Row-local
+  optimism (a vote button) is `createOptimistic` inside the fill:
+  `core/optimistic` + lanes, no store engine. TodoMVC pays for
+  `createOptimisticStore` because it has a counter and bulk actions
+  — intent shared across fills and written many-at-once wants
+  per-key subscriptions. That is the app's cost, not the platform's.
+- *Server-rendered at t = 0.* Document SSR runs the fill inline like
+  any client component (the hydration-once rule), so `checked` is
+  in the HTML before JS with the optimistic store at base state.
+  After t = 0 the server never renders fills (post-load responses
+  carry content and args only); the client dresses the element in
+  the same apply pass, before paint, and the morph diffs around
+  client-owned keys so applied attributes survive patches.
+- *It returns §5.7 to its literal text.* "Optimistic state lives in
+  client slots (which can overlay, badge, strike-through, or hide
+  server content)." Attribute slots are that sentence, made
+  precise: the slot is an attribute.
+
+**Prior art, for the record.** Datastar is the same ownership pole
+reached from the hypermedia side: `data-class:completed="$_pending[id]?.completed ?? true"`
+on server nodes over global client signals, re-evaluated across
+morphs. Three differences, each of which is the thing we add: the
+binding is an expression string in the server template rather than
+a function beside the action that writes to it; there is no
+transaction — the signal stays set until the server explicitly
+patches it to `null` on success AND failure, overlapping requests
+clear each other early, and a dead request leaks intent (which is
+why their docs steer authors away from optimism entirely); and the
+bindings are not server-rendered (they apply after the runtime
+walks the DOM — the docs prescribe `style="display:none"` to hide
+the flash), so correct pre-JS HTML needs the two-owner situation
+this design forbids. LiveView's `JS` commands are `predict`'s
+lineage (client ops on server nodes, preserved across patches, no
+transaction). Blazor Interactive Server has no client intent at
+all — every event round-trips the circuit; its answer to latency is
+the persistent connection, not optimism. Theirs are optimistic
+*bindings*; ours are optimistic *transactions* expressed through
+bindings.
+
+**Against `predict`, dimension by dimension.**
+
+- *Declared* at the call site against any element (retroactive) vs
+  in the server template ahead of time. Retroactivity is the single
+  thing `predict` has over slots, and it is what forces its engine.
+- *Owner of the attribute:* server (client borrows; baseline
+  captured, kept per transaction, restored) vs client (server passes
+  the value as an arg; no baseline exists).
+- *Rollback:* restore baselines vs `createOptimistic` revert.
+- *Server patch mid-flight:* re-assert after every apply vs args
+  update and the binding reruns.
+- *Two elements, one intent:* `el.closest("li")` vs each element
+  named in the template (args passed twice — the wrinkle, below).
+- *Wire:* `$key` + `data-id` (baseline read from the DOM) vs `$key`
+  + `{ id, completed }` — one boolean more per row. The title
+  crosses only if it is editable, which needs it on the client
+  anyway (the edit input's value); `predict` would have read it
+  back out of the label.
+- *Engine:* net-new in the frames client vs a marker, SSR spread of
+  fill output, claim-time `spread`, morph skipping client-owned
+  keys — all existing code paths.
+- *Failure modes:* undeclared property writes surviving rollback;
+  anchor replaced mid-transaction; anchor not yet materialized;
+  repeated predicts needing a merge rule — vs forgot to slot →
+  restructure; two owners → hard error. Both slot failures are
+  static.
+- *Open questions:* every item in the 08-18 list (queue-or-warn
+  pre-materialization, position naming, floating geometry,
+  merge-or-stack, dev enforcement) is a consequence of borrowing.
+  None exists under slots.
+
+Net: `predict` buys retroactivity and one fewer boolean per row and
+pays with the entire engine and every open question. Slots buy the
+engine back and pay with a template declaration.
+
+**Fit with Stage 6 — the missing row.** §9.1's taxonomy is "one
+grammar: a prop, used in a JSX position." Attribute slots are the
+row it lacked:
+
+```text
+use site         server emits                     client resolves via
+────────         ────────────                     ───────────────────
+called           slot record (id + args)          a range it renders into
+ref position     claim marker on the element      claim engine (per-element scope)
+event position   claim marker on the element      delegation (dispatch-time lookup)
+called, spread   slot record + marker on element  claim engine (per-element scope) → spread
+```
+
+Mechanically it is a ref prop with args and a return value: the
+ref's per-element scope and lifecycle (fire on adoption, re-fire on
+morph re-materialization, dispose on removal) plus the content
+fill's arg reactivity (a patch on a surviving element delivers new
+args into the same instance — exactly the behavior refs are
+specified NOT to have, and content fills already do). The marker is
+the same `_bnd="<occ>:<pos>=<row>"` attribute with one more position
+kind beside `ref` and the event names. Nothing about the existing
+tiers moves:
+
+- *Event props* stay the cheap tier, unchanged. `onChange={props.onToggle}`
+  is the degenerate attribute slot — constant handler, no args, no
+  reactivity — which is why it needs no per-element scope and rides
+  delegation. A row with only event props pays nothing; a row whose
+  attributes must react pays a scope. The events/refs tiering line
+  §9.1 drew now has attribute slots on the ref side.
+- *Ref props* keep element-in-hand at materialization for what is
+  not an attribute: observers, measurement, third-party mounts, the
+  ref-fed `Portal` for persistent islands.
+- *Content slots* unchanged; adds go through them.
+
+The rules that keep them apart, all static:
+
+- **One owner per attribute key.** Static attribute or event prop on
+  the element AND the same key in a fill's output is a conflict —
+  a hard error at SSR time, not a warning.
+- **`class` and `style` merge in object form.** The server keeps
+  `class="toggle"`; the fill returns `class: { completed: done(p) }`;
+  `spread`'s classList semantics own only the named classes, so
+  ownership is per class name. A fill returning `class` as a string
+  clobbers the server's — the same footgun client `spread` has.
+- **No attribute slots inside hole interiors.** Refs are excluded
+  there (the owner-creation latch forbids per-element scopes in
+  live holes); attribute slots need the scope and inherit the
+  exclusion. Event props keep working in holes. Optimism inside a
+  hole means restructuring it into JSX — already the "behavior means
+  JSX with a client prop" rule.
+
+**What survives from the earlier text.** The `$key` substrate
+(keyed morph, 08-15) — it is what keeps a fill's scope on the entity
+across reordering morphs. §9.2.1's convergence ruling survives for
+the one place it still applies: keyed pending content in a content
+slot, confirmed off-response by an authoritative morph bringing the
+same `$key` (the narrow entity-keyed reopening stands). Attribute
+values no longer "settle by convergence" — they are derivations;
+the optimistic entry settles with its transaction, and if the server
+has not yet converged the binding shows `p.completed` as any
+optimistic store does under replication lag, with `until()` on the
+data face as the hold. The outcomes-vs-indicators distinction
+dissolves: an indicator (`class: "saving"`) is just an attribute
+derived from `isPending`, and it drops when the transaction does.
+The non-negotiable invariant is unchanged and now trivially true:
+the frame is derived; only an authoritative record makes output
+durable, because the client never writes server-owned output.
+
+**Costs, accepted.** Pre-declaration in the server template
+(attribute and content) — the rule everything else already follows;
+retroactive optimism on an unslotted element is "restructure the
+server component." The three-layer composition `examples/todos`
+gets from one `createOptimisticStore(async () => …)` is written by
+hand in the fill (`intent ?? p.value`) because the persistent layer
+is the frame's args, not client data; the error side-channel becomes
+a second keyed record the fills read. Args passed twice when two
+fills on one row need the same value (`row` and `check` above).
+N per-element scopes for N optimistic rows — fine at TodoMVC scale,
+to be measured at HN-comment scale, and paid only by rows that need
+reactivity.
+
+**Spread only, and no compiler change — settled 2026-09-27.** The
+spelling is the spread of a called slot, `{...props.check(args)}`,
+and it is the ONLY attribute position on offer, for a reason that
+is the constraint itself: SSR shares the compiler, and a gated
+transform is the one thing this design must not need. Spread is the
+one attribute position the SSR compiler defers wholesale to the
+runtime. `<input class="toggle" {...props.check(a)} />` compiles
+today, unchanged, to
+
+```js
+_$ssrElement("input", [{ class: "toggle", type: "checkbox" }, props.check(a)], …)
+```
+
+— the spread expression passed through verbatim as a runtime
+source, and `ssrElement` already brand-checks its sources (`$PROXY
+in s` for stores and views). A slot proxy's call result is one more
+branded source: the runtime emits the marker (`_slot`, per the build
+record below) and slot record and, at t = 0, runs the fill and
+serializes its output as attributes. A single attribute position (`checked={props.checked(a)}`)
+would NOT work this way: attribute values compile into template
+text through per-kind helpers (`ssrAttribute`, boolean handling,
+`ssrClassList`, `ssrStyle`, static folding), many emission sites,
+some compile-time — a brand there is a compiler change. Stage 6
+needed its compiler round for the opposite reason: handler and ref
+expressions are DROPPED at SSR compile time, so the compiler had to
+emit the guarded `_$claim`. Spreads are never dropped. The client
+face is runtime too — no client compilation of a server component
+exists; the claim engine reads the marker and calls client `spread`
+in a per-element scope. Both faces runtime-only; both compilers
+untouched; parity is free.
+
+**Open, for the build.**
+
+- *Args duplication.* Whether an occurrence can scope args for
+  several fills on one element tree, or whether two calls is simply
+  the honest cost.
+- *Fill-returned handlers.* Apply through client `spread` (Solid's
+  own delegated handlers) or route into the `_bnd` binding table so
+  server elements keep one event mechanism. Both ride the same
+  up-walk; the one-owner rule already prevents double-fire.
+- *The flicker check, on both mutation shapes — RUN 2026-09-27
+  (`packages/web/test/frames-optimistic-hold.spec.tsx`).* The
+  authoritative apply must land inside the action's transaction, so
+  `p.completed` flips before the optimistic entry releases; otherwise
+  every success flashes back for a frame. **Single-flight holds**:
+  `applyFlightResponse` awaits the whole body before the mutation
+  resolves, and the fill's trace reads `false/false → false/true →
+  true/true → true/true` (server/derived) — the args land under the
+  live intent, then the intent releases over agreeing truth.
+  **Multi-flight does NOT hold**: the refetch's `handle()` returns
+  the binding at response-HEADER time and applies the body detached,
+  so `yield refresh(todos)` resolves before any content arrives, the
+  transaction commits, the intent releases, and the trace reads
+  `false/false → false/true → false/false` — the flash, with the new
+  args still in flight. Root cause is the same one #2977 named for
+  address switches ("the binding resolves at header time, but the
+  header is not an answer"), for the same address: a refetch of a
+  call a boundary is SHOWING has no answer until the new content
+  applies. **Fixed the same night** in the transport's plain path
+  (`frame-transport.ts`, `handle()`): when `host.get(address)` has a
+  bound frame, the call resolves when `applyFrameResponse` completes
+  rather than at headers — parity with single-flight, which already
+  awaits the body. Cold mounts and switches to unbound addresses
+  keep header-time resolution (the mount needs the binding to place
+  the boundary; the shell gate is their hold). With it the
+  multi-flight trace matches single-flight's exactly, and a
+  revalidation-shaped refetch (an upstream write re-asking the same
+  call) reads `isPending(source)` true until the new content has
+  applied — the same tearing #2977 closed for switches, closed for
+  the same address. (`refresh()` itself stays verdict-quiet by
+  design; its promise is what now settles on apply.) Both mutation
+  shapes hold.
+- *Off-response adds under live* remain §9.2.1's convergence case.
+
+**Public surface (flagged).** No export is removed — `predict` never
+shipped. Added: a fourth use site for server-component props
+(attribute fill: a called slot in spread position; `ServerComponent<P>`
+widens accordingly) and one marker attribute on server elements
+(`_slot`, the `_hk` family — the build record below says why it is
+not a `_bnd` position kind), plus two dev diagnostic codes
+(`ATTRIBUTE_SLOT_FILL`, `ATTRIBUTE_SLOT_CONFLICT`). No compiler
+option, no transform. Everything the client writes is
+`createOptimistic*`, already public.
+
+**Acceptance gate — Server Component TodoMVC (restated for the third
+time; the gate itself does not move).** Port `examples/todos` beside
+itself, preserving its delays, ~33% write failure, per-item retry,
+bulk actions, filters, and overlapping transitions. Pass condition:
+**every optimistic behavior is a derivation over slot args and
+`createOptimistic*` state inside an attribute fill, or client JSX in
+a pre-placed content slot — zero imperative DOM writes, zero
+selector coupling, zero new client vocabulary.** Toggle, remove,
+pending/disabled/error markup are attribute fills; add is a content
+slot; counters and filter state are data-shaped. Do not call the
+shape settled until add/remove/toggle success and failure, checkbox
+correction, concurrent and bulk mutations, retry/error markup,
+state retention across reordering morphs (focus, typed values), and
+clean hydration are all shown in the port, under both mutation
+shapes. The simplicity-parity
+criterion stands, and is now pointed at the one place it can fail:
+if the hand-written layering in the fills is heavier than the
+store's projection in the SPA, that is the finding.
+
+**Machinery ledger.** No net-new engine, no compiler change.
+Touched, all existing and all runtime: `ssrElement` (recognize the
+branded source among a spread's sources; emit the marker + slot
+record; at t = 0 run the fill and serialize its output), the claim
+engine (a scope per marked element receiving reactive args), client
+`spread` (unchanged), the morph (skip client-owned keys on matched
+elements — the same class of exception as foreign ranges). The optimistic engine is
+`@solidjs/signals`' existing `createOptimistic`/`createOptimisticStore`,
+imported by the app that uses them.
+
+**Consequences for the roadmap.** Stage 7 is "attribute slots," not
+"predictions." It is shallower than Stage 6 was — runtime only, no
+compiler round, the claim engine plus `ssrElement`; no transaction
+machinery, no solid-core changes — and independent of Stage 8 in
+both directions.
+The size-harness "hydrating + stores" row stops being Stage 7's
+floor: a frames page carries the optimistic engine only if the app
+imports it.
+
+**Build record (2026-09-27, same night; runtime as shipped).** The
+shape above is in `packages/web` behind three test files
+(`test/server/frame-attribute-slots.spec.tsx`,
+`test/frames-attribute-slots.spec.tsx`,
+`test/hydration/attribute-slot-adoption.spec.tsx`). Where the build
+departed from the text above, the build is right and the text is
+amended here:
+
+- *The marker is `_slot`, not a `_bnd` position kind.*
+  `_slot="<occurrence>[ <occurrence>]*"` — the `_hk` family, one
+  attribute per element, space-separated when several fills spread
+  onto one element. `_bnd` is parsed per DISPATCH (its grammar is
+  `pos=prop`, resolved by prop name against live props with no
+  record); an attribute slot is an OCCURRENCE — it has an args record,
+  identity across responses, and the slot sync's mount/update/unmount
+  lifecycle — so it rides the slot system's discovery, not the claim
+  system's. Folding it into `_bnd` would have taxed every event
+  dispatch on a marked element with a non-event kind to skip.
+- *The branded source is the slot proxy's existing return, widened.*
+  `slotRange()` (stream face) and the document face's `range()` carry
+  `$occurrence`, and the document face's carries `$content` — the
+  fill's t=0 return. `ssrElement` recognizes `$slot` among its
+  sources in all three shapes the compilers produce: a plain object
+  in the array (`[{ class }, result]`), the result of a THUNK in the
+  mixed path (the native compiler wraps a spread CALL as
+  `() => props.row(args)` — the shape every real call takes), and a
+  lone spread (`ssrElement("b", props.x(), …)`, where the document
+  face's value is the marker-pair ARRAY). The slot source is
+  replaced, in place, by the fill's output (document face) or an
+  empty source (stream face), so the walk's precedence rule is
+  untouched: the fill's attributes land at the spread's position.
+- *`class`/`style` merge is by trailer, not by source.* The fill's
+  `class`/`style` are pulled out of its source, the walk skips those
+  two keys, and one merged attribute is appended after the walk:
+  the component's value (read as the walk would have — the last
+  source carrying the key) then each fill's contribution in spread
+  order. No double escaping, no parsing of style strings. A static
+  `class`/`style` written AFTER the spread compiles to trailing
+  markup the merge cannot reach → `ATTRIBUTE_SLOT_CONFLICT` (write
+  static attributes before the spread).
+- *One owner, enforced at t=0 only.* `ATTRIBUTE_SLOT_CONFLICT`
+  (dev, throws) for a fill key any component source also sets, a
+  class name both set, or two fills sharing a key;
+  `ATTRIBUTE_SLOT_FILL` (dev, throws) for a fill that returns content
+  in spread position. The stream face never runs fills, so a
+  conflict on a call-driven mount is not seen by the server; the
+  document render of the same component is where it surfaces.
+- *The client mount is `spread(el, () => fill(args), true)` under a
+  per-occurrence owner, always.* The fill runs inside the spread's
+  compute — the whole derivation reruns when anything it read
+  changes (args, an optimistic store), `assign` diffs per key. Args
+  are the same `liveSlotProps` proxy content occurrences get, so a
+  re-emitted record updates the instance in place. The
+  per-occurrence owner is unconditional here (content fills scope
+  only stream-mounted invocations, for the zombie-heuristic reason
+  recorded in `slotsFor`): an element occurrence places no nodes, so
+  nothing can be misread, and the spread's effect must die with the
+  occurrence. Fill-returned handlers go through client `spread`'s
+  own delegation (the "open" item above closes this way — the
+  one-owner rule keeps `_bnd` and a fill off the same position).
+- *The morph's exception is ownership, reported by the fill.* The
+  fill's output keys are reported each run through `ctx.own` (a
+  frame contract: attribute names as the DOM spells them,
+  `class:<name>` / `style:<property>` in object form, `class` /
+  `style` whole for strings) onto the element (`_$slotOwned`,
+  occurrence → names). `morphAttributes` neither removes nor sets an
+  owned attribute; for `class`/`style` with owned NAMES it applies
+  the server's value and re-imposes the owned names' live state on
+  top (a class the fill toggled on stays on through a server class
+  change; an owned style property survives the attribute rewrite).
+  A replaced element is a zombie mount (its node left the tree) and
+  the fill remounts on the fresh node; an unmounted occurrence
+  releases its ownership so the element is wholly the server's from
+  the next morph on.
+- *No regions in attribute slots.* An element occurrence has no
+  interior: region discovery and range replacement skip it; a
+  server-JSX arg to an attribute fill has nowhere to render and is
+  not supported.
+
+Confirmed empirically: a t=0 document adopts the fill onto the
+server-rendered element with no re-render (the hydrate spec); the
+first client-state change writes through; a keyed morph keeps the
+element and every owned value across a server class change and an
+args re-emission; a dropped row disposes its fills; both event
+delivery and `checked`/`hidden` property-reflected attributes behave.
+The test harness surfaced one thing worth knowing: the frames client
+binds through the packaged `@solidjs/web` instance (`spread`,
+`insert`, `delegateEvents`), so a jsdom spec that renders through
+`../src` has two delegation registries and fill-returned handlers
+never fire — render through the packaged entry (the spec does). Not
+a product issue; one instance in an app.
+
+Still open from the list above: args duplication across several
+fills on one element tree (two calls is the current honest cost);
+off-response adds under live.
+
+**Acceptance gate, first run (2026-09-28; `examples/todos-server`).**
+The SPA's TodoMVC ported as one server component with eleven slots
+— nine attribute (`main`, `toggleAll`, `row`, `check`, `retry`,
+`destroy`, `footer`, `filterLink`, `clearCompleted`) and two content
+(`pending` for adds, `count`) — over the SPA's own API (400 ms,
+~33% failure) behind the server boundary, multi-flight shape
+(`yield refresh(todos)` after each call). Exercised in a browser
+against the dev server, document SSR and hydration included:
+
+- Toggle: optimistic `completed pending` and the count move in the
+  same frame; the settle changes only `class` on the SAME `<li>` (a
+  mutation observer saw three class writes and nothing else — no
+  morph churn, no flash). Failure reverts `checked` and the count,
+  leaves `errored` + a titled retry; retry shows
+  `errored completed pending` and clears on success.
+- Add: client row in the `pending` slot → server row with `_key`
+  (the count already adjusted); a failed add stays as an `errored`
+  client row and retries from there.
+- Remove: `hidden` + `pending` optimistically; the morph drops the
+  row when the refetch lands. A failed bulk clear fans out to
+  per-row `errored` with `Retry removeTodo`.
+- Toggle-all / clear-completed over server-passed id lists; filters
+  via the hash as pure client state (`hidden` composed with intent);
+  a full reload under `#/active` hydrates clean and applies the
+  filter after settle.
+- Overlapping toggles (250 ms apart) settled together at the later
+  refetch — both optimistic, both correct, but the first's settlement
+  was held by the second: the two actions' writes to one
+  `createOptimisticStore` share a transition. Core semantics, same
+  as the SPA would show; noted, not a slots matter.
+
+Two runtime bugs fell out, both fixed on the branch:
+`@solidjs/compiler`'s spread path passed `$key` through unrenamed
+(server markup carried a literal `$key`, so keyed morphs lost row
+identity; the template path and Babel were right), and `dynamic`'s
+kept-resolution delivery — a signal write — ran inside its own
+compute when the source is a memo that already settled the call
+(this shape, and every hydrated document's first refetch), tripping
+the dev owned-scope guard into the error boundary; the address
+signal is `ownedWrite` now. Neither was visible from the specs
+because they never ran the exact shape end-to-end.
+
+The port is the multi-flight shape only. That is a statement about
+the example, not the mechanism: the fills never see which transport
+delivered the refetch (the hold is the transaction's, and the
+`frames-optimistic-hold` spec pins the single-flight hold with a
+content fill), and the single-flight wiring is the router's
+(`createFlightDataCollector`, its action runner — the notes
+example), not something this stage supplies.
+
+Two typing gaps the port surfaced, both public-surface decisions
+taken the same day: `$key` was not declared on intrinsic elements
+(the compilers accepted it) — it is now, in `CustomAttributes`; and
+`Slot<P>` returns `Element`, which TypeScript will not spread — the
+attribute-object return type this called for is superseded by the
+next amendment, which is also where the gate's *finding* is
+recorded: the fill table came out heavier than the SPA's store
+projection, which is the one failure the simplicity-parity
+criterion was pointed at.
+
+#### 9.2.3 Amendment — attribute slots, second form: one per data context, bound per position (2026-09-28)
+
+Recorded from the design conversation the morning after the
+acceptance gate ran. The gate passed its behaviors and failed its
+criterion: `examples/todos-server` needed eleven slot props and a
+ten-entry fill table on the client for a row the SPA writes once.
+Asking why led to the row's real question — *wrap it in a client
+component, or attribute-slot it?* — and both answers worked, which
+meant the design had left the choice to taste. Re-deriving from the
+question instead of the mechanism found one answer, and a shape in
+which the attribute-slot *spread* of 9.2.2 is a special case done
+wrong. **The 09-27 spread shape — one slot per element, its return
+spread onto that element, the client deciding what it owns — is
+retired.** The idea it carried is not: the client still contributes
+*attribute values* to server markup, and that is what this form is
+named for. The 09-27 text and its build record stay as the record
+of how the shape was found; nothing in them ships. Where this
+amendment and 9.2.2 disagree, this amendment is right.
+
+**The reframe: a slot is a client render, and it renders one of two
+things.** A markup slot's client function returns JSX; the server
+places it as a region, and the client owns those nodes. An
+*attribute* slot's client function returns a plain object; the
+server *consumes* it — binds its properties into named positions
+of the server's own template, one call serving every element of
+one data context — and the client owns exactly those values. What
+the object holds is anything that is not markup: an attribute
+value, a class name's condition, a style property, a handler, a
+ref — every derived thing a client would compute for an element
+the server rendered. (The build called this form "data slots" for
+a day, after what the fill returns; it was renamed the same day
+because the name misled — the values are attributes of server
+elements, the object is only how they travel.) The client renders
+JSON, the server renders markup. Both run at t = 0 on the document
+face (the server invokes the client function and serializes what
+came back into place), both are live afterward through the same
+occurrence machinery, and both obey one ownership rule: whoever
+produced the output owns it — the markup owner owns the nodes, the
+attribute owner owns the properties the template read.
+
+That reframe carries the placement principle §9.2 should have led
+with, because it is what the gate was missing:
+
+> **An element lives where the data that creates it lives.** An
+> element that exists because of server data is server markup;
+> client behavior or client-driven values on it are an attribute slot —
+> you never wrap a server-rendered thing to add behavior, you bind.
+> An element that exists because of client state alone (an
+> optimistic add, a modal, a drag ghost, an editor open over a
+> field the server rendered as text) is a client component in a
+> markup slot. The boundary moves with the data's ownership, not
+> with where the author wanted to write code.
+
+Under it the TodoMVC row is not a choice: the row exists because
+the server has a todo, so it is server markup with an attribute slot; the
+pending row exists because the client has an intent the server has
+not seen, so it is a client component; when the server confirms it,
+it *becomes* server markup, and `$key` reconciles the transition.
+Every case that was a judgment call resolves the same way — a
+`selected` class on a server nav link binds; a search input in
+server markup binds; a live-typing filter the client owns entirely
+is a client component; a server table's client-side sort indicators
+bind.
+
+**The shape.** One attribute slot per *data context* — one call, one
+client scope, consumed by any element in the template:
+
+```tsx
+// ── todo-row.tsx — no directive, no side ────────────────────
+export interface RowBehavior {
+  rowClass: Record<string, boolean>;
+  removed: boolean;
+  done: boolean;
+  onToggle: (e: Event) => void;
+  onRemove: () => void;
+  onRetry: () => void;
+  error?: string;
+}
+export function TodoRow(props: { title: string; row: RowBehavior }) {
+  return (
+    <li class={props.row.rowClass} hidden={props.row.removed}>
+      <div class="view">
+        <input class="toggle" type="checkbox" checked={props.row.done} onInput={props.row.onToggle} />
+        <label>{props.title}</label>
+        <button class="retry" title={props.row.error} onClick={props.row.onRetry} />
+        <button class="destroy" onClick={props.row.onRemove} />
+      </div>
+    </li>
+  );
+}
+
+// ── server component ────────────────────────────────────────
+interface TodoListProps {
+  row: AttributeSlot<{ id: string; completed: boolean }, RowBehavior>;
+  pending: Slot;
+}
+export async function todoListView() {
+  "use server";
+  const todos = await db.list();
+  return (props: TodoListProps) => (
+    <ul class="todo-list">
+      {todos.map(t => (
+        <TodoRow title={t.title} row={props.row({ $key: t.id, id: t.id, completed: t.completed })} />
+      ))}
+      <props.pending />
+    </ul>
+  );
+}
+
+// ── client ──────────────────────────────────────────────────
+const rowFor = (p: { id: string; completed: boolean }): RowBehavior => ({
+  rowClass: { todo: true, completed: done(p), pending: !!intent.byId[p.id], errored: !!errors[p.id] },
+  removed: removed(p.id),
+  done: done(p),
+  onToggle: e => toggleTodo(p.id, e.currentTarget.checked),
+  onRemove: () => removeTodo(p.id, p.completed),
+  onRetry: () => retryTodo(p.id),
+  error: errors[p.id]?.message
+});
+
+<Todos
+  row={rowFor}
+  pending={() => <For each={intent.adds}>{a => <TodoRow title={a.title} row={rowFor(a)} />}</For>}
+/>
+```
+
+`TodoRow` is one component, compiled twice like every isomorphic
+Solid component always has been. The server passes it an attribute slot;
+the client passes it the fill's result directly. It cannot tell the
+difference and does not need to: on the server its attribute
+positions bind branded stand-ins that serialize at t = 0 and go
+live on the client; on the client they are ordinary bindings.
+React needs three component categories (server, client, shared)
+because its boundary is the component; here the boundary is data
+ownership, so the component is neutral by construction and the
+decision lives at the call site. Nor is there a "can only exist on
+one side" rule for the shared file to obey: the only directive is
+`"use server"`, and it marks a call boundary reachable from *both*
+sides (the server calls the function, the client calls the stub),
+so the import graph is symmetric. The way to break a shared
+component is the ordinary isomorphic one — reading `document`
+during render — which predates all of this.
+
+**Rules of the shape.**
+
+- *Keys are semantic, positions are structural.* The object's
+  property names are the client's vocabulary (`done`, `onToggle`,
+  `onRemove`); the template decides what each one *is* by where it
+  binds it. Nothing in the object says attribute, handler, or ref
+  — the position does. `ref={row.input}` makes `row.input` a ref,
+  called with that element; the same property bound at two
+  positions is two reads. Position kinds: an attribute (`hidden`,
+  `checked`, `title`, `value`), a class name (`class={{ completed:
+  row.done }}`), the whole `class`/`style`, a style property, an
+  event (`onClick`, `onInput` — the position is the lowercased
+  name, as the client runtime derives it), a ref. Text positions
+  (`<strong>{row.count}</strong>`) are the obvious next kind and
+  are deferred, not rejected (open, below). The vocabulary follows
+  the one convention it already lives under: the object is a
+  *props interface* (a shared component takes it as a prop), so
+  handlers are `on` + intent (`onToggle`, `onCopy` — the position
+  names the DOM event, the key names the meaning, as a component's
+  `onSelect` does), values are nouns, a ref is `ref`. A convention
+  for the reader, not a rule for the runtime: the prefix is never
+  read, because the moment it were, the client would again be
+  deciding what it owns.
+- **A slot property is a JSX attribute value, whole, and nothing
+  else.** `class={row.rowClass}`, `hidden={row.removed}`,
+  `onInput={row.onToggle}` — never `` class={`todo ${row.done}`} ``,
+  never `row.count > 3`, never `if (row.error)`, `row.error && …`
+  or `<Show when={row.done}>`, never passed to a server helper.
+  The reason is not style: *the server does not have the value.*
+  On the stream face a property read is a stand-in with no value;
+  on the document face it holds the t = 0 value and nothing later.
+  Anything computed from it on the server is computed from nothing,
+  and the client — which owns the value — cannot see or update a
+  decision the server made. A decision that depends on a slot value
+  belongs in the fill (return `rowClass`, not `done`, when the class
+  is the decision) or, when it decides whether a node *exists*, in a
+  markup slot (the placement principle). Every coercion the runtime
+  can see — a template literal, `+`, a comparison, a text child — is
+  a dev finding and renders **nothing on either face**, so the
+  misuse shows on the first render, not the first refetch. Truthiness
+  has no hook: a stand-in is an object and always truthy, so
+  `row.error && <button>Retry</button>` puts a retry button on every
+  row. That is the one case only the sentence above catches, and why
+  it is the sentence to teach — to people and to agents.
+- *Spreading an attribute slot's object is an error.* `{...row}` is the
+  09-27 shape: the client decides what it owns and the template
+  cannot show it. Name the positions. Dev throws (the finding is an
+  `error`); a prod build renders the element with nothing from that
+  source — the misuse is caught in development, never in production.
+- *Reserved keys.* The call's return doubles as a placeable range so
+  the same call serves both output types, and the range's own reads
+  pass through the proxy: keys beginning with `$` or a digit (the
+  walker's index reads), `length` and `slice` (the resolver's copy of
+  a placed range), the node keys `t`/`h`/`p`, `then`
+  (thenable probes), and the four `Object.prototype` names an engine
+  coerces through (`constructor`, `toString`, `valueOf`, `toJSON`).
+  Every other string key — `filter`, `map`, `at`, `sort`, `join`
+  included — is a property read of the fill's output, on both faces
+  (the set is explicit, not "whatever the range has": the document
+  face's range is an array and the stream face's is not, and
+  `key in range` had let `Array.prototype` answer on one face only).
+  A fill output that uses a reserved key is a document-face dev
+  finding (`reserved-key`).
+- *A stand-in is not an argument.* `props.child({ parentId:
+  parent.id })` passes another slot's value as data the server does
+  not have — at the top or nested in plain objects and arrays
+  (`{ nested: { x: row.done } }`, `[row.done]`; a `Map`, `Set` or
+  class instance is the app's and is not walked); the arg carries
+  `undefined` at that path on both faces (the record, and the
+  document face's t = 0 fill, which must read what hydration will)
+  and dev says so (`arg`, with the path — once per stand-in, at its
+  first path). A cyclic arg crosses as a cycle. Pass the server's own
+  value, or read it in the client fill from client state.
+- *A handler position is `on<Event>`.* The marker carries the
+  runtime's derivation (`onClick` → `click`), on a template element
+  and a spread element alike: under `serverComponents` both compile
+  their named `ref`/`on*` to one claim map (`{ click: expr, ref:
+  [a, b] }` — duplicate refs merged, a handler tuple kept whole, a
+  duplicate handler last-wins) that is read only inside a server
+  component's render — the template element's as the guarded
+  `ssrClaim` hole, the spread element's as a thunk `ssrElement`
+  takes, keyed by the index of the source each attribute sits before
+  (`<b {...a} onClick={go} {...b}>` → `{ 1: { click: go } }`) — so
+  plain SSR never evaluates a handler expression. A spread's own
+  handler keys bind through the same reading, and a handler position
+  settles in *source order*, because the marker promises what the
+  client binds and the client compiles the same element to
+  `spread(el, [a, { onClick: go }, b])`: the last source that *has*
+  the key wins (`collectProps` shadows an earlier source's key by
+  presence; `merge()` looks a key up with `in`), a named attribute
+  being a source at its position — so a key holding `undefined`
+  owns the position too, and binds nothing (`<b {...rest}
+  onClick={cond ? row.go : undefined}>` binds nothing when `cond` is
+  false, on both sides). Refs merge whatever their order (the client
+  fires every ref); a nullish ref contributes nothing. A server-local
+  function at any of these is a finding (`server-local`) — where it
+  is the one the client would bind. `prop:*` positions are not bindable (the server renders
+  no properties): a stand-in there is a finding (`prop`) on the
+  runtime spread path; the compiled form drops `prop:*` as SSR
+  always has.
+- *The occurrence is the call, not the element.* `$key` on the call
+  is occurrence identity (client state follows the entity across
+  responses); `$key` on the `<li>` is morph identity for the node.
+  Two keys, two jobs. An occurrence lives while any consuming
+  element does; its consumers may change per response (a row gains
+  a bound button) without the fill re-running. **`$key` is
+  optional.** A call is one occurrence however often the render
+  evaluates it: the natural shape puts the call in a shared
+  component's prop — `<TodoRow row={props.row({ id: t.id, … })} />`
+  — and compiled props are getters, so every position the component
+  binds re-evaluates the expression; the first call's proxy answers
+  the rest and the record emits once (without this, one record per
+  position — the double-data disease). A `$key`ed call repeats by
+  name; an un-keyed call repeats by *structural args* once its face
+  is known to be data (identical args are an identical fill output,
+  so one occurrence for both sites changes nothing on screen) —
+  never for a placed range, since two `<props.badge kind="new" />`
+  are two ranges, and never for args identity cannot read by value
+  (a function, a promise, an iterable). What `$key` adds is identity
+  *across* responses: state inside the fill's scope follows the
+  entity through reorders and arg changes; without it that state is
+  positional per prop, which is right for a stateless fill and wrong
+  for one holding an edit draft. Correctness never depends on
+  `$key`; values re-deliver with every response either way.
+
+**Granularity — the compiler's, and per position where the shared
+component forces it.** A client element with
+several dynamic attributes compiles to one effect per element that
+reads every value, compares each against the last, and writes the
+ones that changed. An attribute slot does the same per occurrence: the
+fill runs under one computation, the runtime diffs the bound
+positions against the last output, and writes the ones that moved
+— `class` flipping to `completed` touches `class` and nothing else,
+though `hidden` and `onClick` were recomputed. Plain values are
+the floor; getters on the returned object are the idiom for a fill
+a *shared component* also consumes on the client (build finding,
+09-28). The runtime reads each bound value position inside its
+tracking computation, so a getter tracks its own sources and the
+object is built once — that is finer than the compiler's
+per-element effect, but the reason is not granularity. It is the
+client face of the same component: `<input onInput={props.row.onToggle} />`
+compiles to one eager read of `props.row.onToggle` in the component
+body — a handler position is bound once, not tracked — and `row` is
+a prop getter. A fill that computes its values on construction
+(`done: done(p.id, …)`) does that reactive read *there*, in the
+untracked body, and the strict-read diagnostic names it: the row
+would not update. Getters move every value read to the position
+that binds it — a tracking scope for a value, event time for a
+handler — and the construction reads nothing. So: plain values when
+only the server template reads the output; getters when a client
+`<TodoRow>` reads it too. Handlers are bound once at mount as a
+dispatcher that reads the *current* output's handler, so identity
+churn across runs re-attaches nothing. A ref is called once per
+(element, property) at mount and excluded from the diff. A
+live-delivered arg change re-runs the fill for that occurrence like
+any other dependency.
+
+**Wire.** Per occurrence: the args, once (the 09-27 duplication
+across per-element fills is gone by construction). Per *consuming*
+element: a marker per bound attribute, `_s:<attribute>="<occurrence>:<key>"`,
+with class names / style properties appended (`_s:class="row#0001:done=completed"`),
+events as `_s:on:click`, refs as `_s:ref` — the `_hk` family; the
+occurrence alphabet excludes `:` and the key is percent-encoded onto
+an alphabet that excludes it too, so the split is exact. Handler and
+ref positions cost the name only. On the document face the values
+are the attributes you would emit anyway (`class="todo completed"`,
+`checked`): zero overhead over static markup. On the stream face
+values are omitted — no fill ran, the client is about to write them
+— so refetched markup is slightly smaller than static. The morph
+needs no ownership table: an incoming element's own `_s:*`
+attributes say which positions the client owns, so the morph skips
+them (whole attributes) or re-imposes the owned names (class/style)
+and everything else is the server's. The names are the only cost
+per-position adds over per-element and the part that compresses
+best — every row carries the identical pattern. Tighter encodings
+(indices, out-of-band) are available and deliberately not taken:
+readable on-element markers are worth more than bytes compression
+already removes, and Qwik 2's move to a compact `qwik/vnode` blob is
+also why nothing external can read its output.
+
+**What folds in.** Stage 6's behavior claims (§9.1: `onClick={props.
+onCopy}`, `ref={props.copyBtn}` — the `_bnd` marker, dispatch-time
+resolution by prop name) are the attribute slot with one property and no
+data context. They had looked thin for a reason: `ref` never found a
+use case on its own, and handlers alone are unstable once you look at
+what they attach to — a handler on a checkbox without ownership of
+`checked` is the uncontrolled/controlled mismatch (the native flip,
+then the refetch morphs `checked` back under a failed or in-flight
+mutation), and the row that goes `pending` after its own button was
+clicked forces "wrap the row" for the *feedback* of a binding you
+were allowed to put on the button unwrapped. Handlers-only yields
+"buttons don't need wrapping, checkboxes do." Either a server
+element takes no client binding, or the binding carries values;
+given handlers are in, values are in, and it is one mechanism. `ref`
+returns not because it found a use case but because, under a
+position-typed model, *excluding* it is the rule you would have to
+teach. So: `_bnd` and `CLAIM_PROP` go; §9.1's three-row table
+becomes two rows — *called, placed* (markup) and *called, read at a
+position* (data) — and the notes example's search field becomes
+`const search = props.search(); <input onInput={search.onInput}>`.
+The per-element scope §9.1 reserved for refs is now the
+per-occurrence scope every attribute slot has; a handler position is
+a listener the client attaches on the consuming element itself —
+one dispatcher per (element, event), stable across fill runs, that
+reads the occurrence's current output at event time and fans out to
+every key bound at that position — and the `_bnd` up-walk goes with
+the prop-name lookup it served.
+
+**The compiler round, and why the 09-27 settlement is superseded.**
+09-27 chose spread as the only spelling because it is the one
+attribute position the SSR compiler defers wholesale to the runtime,
+and "no gated transform" was taken as the constraint. That
+constraint produced the shape that failed the gate. Per-position
+binding needs the compiler at exactly the two places where a value
+lands *inside* template quotes: dynamic `class`/`style` compile to
+`class="${ssrClassName(x)}"`, and a helper called inside the quotes
+cannot emit the sibling marker attribute. So, gated on the
+`serverComponents` option both compilers already carry for `_bnd`:
+a dynamic `class`/`style` on an intrinsic element compiles to a
+whole-attribute hole (`ssrElementAttribute("class", x)`, the helper
+the spread path already uses for trailing attributes), and
+`class`/`style` object literals are not folded inline there (the
+fold would evaluate a stand-in's truthiness). Every other position
+already routes through a self-contained helper — `ssrAttribute` for
+attributes, the `ssrClaim` hole for events and refs, `ssrElement`'s
+walk for spread elements — and those learn the brand at runtime. The
+guard is the one `_bnd` introduced; the round is smaller than Stage
+6's; plain SSR compiles exactly as before.
+
+**Prior art.** Kent C. Dodds' prop getters (downshift's
+`getItemProps({ item, index })`): called once per item, the result
+spread across whichever elements make up the item. This is that
+shape with the roles inverted across the wire and the spread made
+explicit per position — which is what keeps it analyzable and gives
+the server the narrow contract. Marko 6's split of one component into
+server markup and the client's reactive residue is what the placement
+principle produces without analysis: the server template is the
+template, the client ships a function per data context that returns
+values, and outside client-created entities no markup crosses. Qwik 2
+kept handlers on the element (`q-e:click`) and moved structure
+out-of-band; the same split, and where we would go if bytes ever
+argued for it. React Server Components is the pole this refines: its
+answer to a server row with client behavior is a client component
+around it, which is where the row template goes, and its three
+component categories are the cost of drawing the boundary at the
+component.
+
+**Public surface (flagged; nothing here has users yet).** Removed:
+`AttributeSlot<P, A>` (09-27, never released), the `_slot` marker,
+`ATTRIBUTE_SLOT_FILL`/`ATTRIBUTE_SLOT_CONFLICT`; Stage 6's `_bnd`
+marker, `CLAIM_PROP`, `BEHAVIOR_CLAIM_DROPPED`, the frame `props`
+option and host `delegate` plumbing that served `_bnd` resolution,
+and the direct `onX={props.onX}` / `ref={props.x}` spelling on
+server intrinsics (a function-valued prop read at a position is now
+a dev error naming the attribute-slot spelling). Added: `AttributeSlot<P, J>`
+(`@solidjs/web/frames`, both faces); the `_s:*` marker family; one
+diagnostic code, `ATTRIBUTE_SLOT_POSITION` (dev: a server-local function
+or a spread where a slot value belongs, a slot value stringified
+outside a bindable position, a reserved key in a fill's output);
+`$key` on intrinsic elements in the JSX typings. Compiler: no new
+option; the `serverComponents` transform widens as above.
+
+**Acceptance gate (restated; the gate does not move, the criterion
+now has teeth).** `examples/todos-server` re-ported on this shape
+with a shared `TodoRow`, ONE `row` attribute slot for the row's whole
+behavior, and pending rows that are not inert — parity with the SPA
+means an added todo is toggleable and deletable while pending, which
+the client component does with the same `rowFor` the server rows
+bind. Pass condition, in addition to 9.2.2's behaviors: the client
+carries no markup except what the placement principle requires (the
+pending row), the server template shows every position the client
+owns, and the fills read as small components rather than a lookup
+table — if `rowFor` is heavier than the SPA's `TodoItem`, that is
+the finding.
+
+**Open.**
+
+- *Text positions.* `{row.remaining}` as a child is the natural
+  fourth kind (TodoMVC's count is one); needs a marker pair in
+  content, deferred to keep this round to attributes.
+- *Client-created entities without client markup.* The pending row
+  is a `<li>` with data holes; the only reason it is a client
+  component is that the client must *produce* the node. The
+  generalization is a server template stamped once per client item
+  (`<props.pending>{p => <li class="pending">{p.title}</li>}</props.pending>`
+  with the client returning data, not markup) — the model closing
+  in both directions. A separate stage: list identity for client
+  items, ordering against server items, supersession by a server
+  row with the same key. §9.2.1's off-response adds live here.
+- *Actions against pending ids.* A toggle on a pending row targets an
+  id the server has not seen; the port sequences it behind the add's
+  settlement (an example concern, surfaced by parity).
+
+**Build record (2026-09-28, same day; runtime as built).** The shape
+above is in `packages/web` behind three test files
+(`test/server/frame-attribute-slots.spec.tsx`, both faces;
+`test/frames-attribute-slots.spec.tsx`, the client binding;
+`test/hydration/attribute-slot-adoption.spec.tsx`, t = 0 adoption), the
+compiler round behind one shared server-components fixture
+(`attributeSlots`, Babel and native), and the 09-27 attribute-slot build
+— never committed — is gone with its three specs, `_bnd`'s spec and
+the `behaviorClaims` fixtures. Web suites 986 / 1262 / 257, Babel
+268, native compiler fixtures green. Where the build departed from
+the text above, the build is right and the text is amended here:
+
+- *The stand-in is the slot proxy's property read.* One proxy over
+  the call's range (both faces): a key the range has, a `$` key, or
+  a node key passes through; any other string key answers with a
+  `SLOT_VALUE`-branded `{ occurrence, key, value, face }`. On the
+  document face the fill's return is classified once — `null`/
+  `undefined` or a plain object is DATA (its properties are the
+  t = 0 values); a string, an array, a function, or an SSR node is
+  MARKUP, and a read off it is a dev finding at the position. The
+  classification edge is the `t` key: an SSR node is `{ t }` plus
+  `h`/`p` and nothing else, so an object carrying `t` *and* other
+  keys is data that used a reserved name (`t` unreadable, the rest
+  binds) and dev names it. Reserved, therefore, and checked on the
+  document face: `$`-prefixed keys, `t`/`h`/`p`/`then`, and
+  Object/Array prototype member names (`length`, `map` — the engine
+  calls array methods on the document face's range through the
+  proxy).
+- *Every attribute helper learns the brand; the compilers touch two
+  positions.* `ssrAttribute` (an attribute, a boolean), the
+  class-name and style-property helpers, `ssrElementAttribute`
+  (whole `class`/`style` — the hole the `serverComponents` round
+  adds), `ssrClaim` (events, refs — the Stage 6 hole kept, its
+  marker replaced), and `ssrElement`'s walk for runtime spreads all
+  recognize a stand-in and emit the marker beside whatever the
+  position would have written. A stand-in that reaches
+  stringification — a template literal, a text child — is an
+  `ATTRIBUTE_SLOT_POSITION` finding; so is spreading the slot's
+  return itself, a server-local function at a claim position, or a
+  markup-faced read. Findings dedupe per render on (occurrence,
+  key, reason, position), because a component's prop getters
+  re-evaluate positions and the same misuse would otherwise report
+  once per read.
+- *A misused stand-in renders nothing, on both faces.* As first
+  built, the document face wrote the t = 0 value where a stand-in
+  was stringified, placed as text or reached an inline `class`/
+  `style`, and the stream face wrote nothing — so a misuse looked
+  right on the first render and broke on the first refetch, the
+  worst place to find it. Struck the same day: every such position
+  renders nothing on either face, and the finding is the only
+  signal. The stand-in also defines `Symbol.toPrimitive`, so a
+  comparison, arithmetic or `==` (`number`/`default` hint) is its
+  own reason, `coerced`, distinct from `stringified` (`string`
+  hint): the message says the server has no value to decide with
+  and the decision belongs in the fill. Truthiness has no hook — a
+  stand-in is an object — which is why the rule above is stated as
+  one sentence, and why `@solidjs/web` ships it as a skill
+  (`skills/server-components/SKILL.md`, in the package's `files`)
+  where an agent writing a server component will read it.
+- *Marker grammar as built.* `_s:<attribute>="<occurrence>:<key>"`;
+  a class name or style property appends `=<name>`; several names
+  bound off one occurrence on one element join with `,`
+  (`_s:class="row#1:done=completed,row#1:editing=editing"`); a whole
+  `class`/`style` read carries no `=`. Events are `_s:on:<event>`
+  with `onInput` lowercased to `input` (the client runtime's own
+  derivation; the client attaches a listener under that name);
+  refs `_s:ref`. Keys and
+  names percent-encode onto `[A-Za-z0-9_.-]`, the occurrence
+  alphabet, so `:`/`=`/`,` split exactly. A zero-arg call is the
+  occurrence named by the prop alone (`codeBlock:onCopy`, no `#n`) —
+  one data context per prop, the notes search field's shape. The
+  document face writes the value where the position would have put
+  it and the marker after. A class-name or style-property position
+  whose names all resolve empty writes no `class=""` — the marker
+  alone says the client owns it; a *whole-value* `class`/`style`
+  read writes what plain SSR writes for the value (`class=""` for
+  an empty object), so the two faces of the same template agree.
+- *Handler positions are one guarded hole per element, as Stage 6
+  left them.* The compilers still collect `ref`/`on*` expressions
+  into `ssrClaim({ click: expr, ref: expr })` behind
+  `sharedConfig.context.claims`; what changed is inside the helper —
+  a stand-in becomes an `_s:on:*`/`_s:ref` marker, a server-local
+  function is `ATTRIBUTE_SLOT_POSITION`, and nothing writes `_bnd`. The
+  arming enum (`CLAIMS_STREAM` / `CLAIMS_DOCUMENT`) is unchanged and
+  still what keeps client fill content, which re-enters the zone
+  owner, from marking or warning. On the document face the enum is
+  armed on a render context *derived* from the page's (prototype
+  inheritance, as a Loading boundary's buffered context) for the
+  component's subtree alone: the page's own elements after the
+  component keep the pre-slot walk, and a late hole minted inside
+  re-emits under its mint-time context, still armed. On the client,
+  the listeners an occurrence attaches are its own: its end (a later
+  response drops it; a positional id now names another row) detaches
+  them, so a kept un-keyed element carries one listener, not one per
+  occurrence that ever bound it, and a dropped occurrence's handler
+  never fires through its disposed fill.
+- *A repeated call is one occurrence per render, on both faces —
+  keyed or not.* Found by the first todos port, which emitted eleven
+  `sc:slot:…row#<id>` records per row (one per position read through
+  `props.row`'s getter); first closed for `$key`ed calls only, with
+  a rule that a getter-re-evaluated call must carry `$key`. That
+  rule was then struck (same day, the AI-usability review: an
+  unenforced rule whose failure is silent duplication is a trap, not
+  a rule) and `$key` made optional, as the rules above now say. Both
+  proxies keep two per-render maps: occurrence id → proxy for keyed
+  calls, registered at the call; `prop + structural args` → proxy
+  for un-keyed calls, registered when the face is known to be data —
+  at the first property read on the stream face (`slotProxy`'s
+  `onData`), at the fill's classification on the document face.
+  Args with a getter, a function, a promise or an iterable are never
+  compared. A placed range never registers: two identical positional
+  markup calls stay two ranges (pinned). No wire change: ids stay
+  `prop#<n>`.
+- *A data occurrence's nodes are its consumers, and it is never a
+  zombie.* The client's slot discovery collects `_s:*` elements into
+  per-occurrence consumer lists `[{ element, positions }]` alongside
+  the range walk. The occurrence's "nodes" are those elements (so the
+  existing bookkeeping sees them), but the zombie rule — output whose
+  node left the tree remounts fresh — does not apply: a replaced
+  consumer is a *consumer change*, and an occurrence no element
+  reads is simply not found and unmounts at the sync's end. Consumer
+  sets compare structurally per sync; a change without an args
+  change rebinds in place through a per-occurrence rebinder (the
+  fill's computation stays; new elements and positions take their
+  current values), independent of the args path that follows.
+  `#syncSlots` runs at the end of every flush and scoped to the
+  materialized fragment at each segment reveal, so positions inside
+  late-revealed content bind when they appear.
+- *Binding: values in the compute phase, writes in the effect.* The
+  client mount is `createMemo(() => fill(args))` under the
+  occurrence's owner, and one render effect per occurrence whose
+  compute reads the output's value positions per consuming element
+  (attribute, class name, style property, whole class/style) into a
+  props object and whose effect phase only `assign`s it against the
+  element's previous props. Reading in the compute is what makes the
+  getter idiom work — each getter's sources are tracked by the
+  binding, not by the fill's memo. Handlers are stable dispatchers
+  created once per (element, position) that read the *current*
+  output's handler at event time; a ref fires once per (element,
+  property). Built the other way first (reads in the effect phase):
+  values did not update under getters, which is how the
+  compute-phase rule and the Granularity amendment were found.
+- *The morph's exception is read off the incoming element.* The
+  morph parses the new element's `_s:*` attributes into owned
+  positions and, for each attribute it would set or remove, either
+  skips it (a whole attribute the client owns) or applies the
+  server's value and re-imposes the owned names' live state (class
+  names, style properties). No ownership table, no `ctx.own`
+  contract: what 09-27 reported per run, the markup states.
+- *`AttributeSlot<P, J>` is conditional on `P`.* `(props?: P & { $key?
+  }) => J` when `{}` extends `P` — the zero-arg call type-checks —
+  and required otherwise. Exported as `DataSlot` for a day; renamed
+  with the diagnostic code (`DATA_SLOT_POSITION` →
+  `ATTRIBUTE_SLOT_POSITION`) when the reframe above was, so that
+  the type, the code, the specs and this section say one thing.
+  The wire is untouched: `_s:*` markers, `SLOT_*` exports,
+  `sc:slot:` record ids are as they were.
+- *No compiler change to the DOM output.* `$key` on an intrinsic
+  strips at a DOM compile (already so); the `serverComponents` SSR
+  transform is the only codegen touched, and plain SSR output is
+  byte-identical to before.
+
+Confirmed empirically, `examples/todos-server` re-ported to the
+shape and driven in a browser against the dev server, document SSR
+and hydration included: one `TodoRow` on both sides; `row` (per
+todo, keyed), `list` and `filters` (zero-arg) attribute slots; `pending`
+and `count` markup (the count is the text position the open list
+defers); one record per occurrence; hydrated `checked`/
+`class`/`hidden` in the HTML before JavaScript and bound with no
+re-render; toggle / retry / toggle-all / clear-completed / filters;
+row nodes stable across settles; the count right through pending
+adds and their toggles; zero console warnings in dev (the strict-read
+diagnostic was the tell that found the compute-phase rule). The
+notes example's search field (`_s:value`, `_s:on:input`,
+`_s:on:submit`, `_s:class="search:active=spinner--active"`,
+`_s:aria-busy`) and the chat example's `codeBlock` copy button
+(`_s:on:click="codeBlock:onCopy"`, a zero-arg occurrence bound inside
+streamed segment content) both moved off `_bnd` and work.
+
+The gate's criterion, this time: `rowFor` is seven properties — four
+getters and three closures — against the SPA's `TodoItem`, which
+holds the same seven things and the markup; the client ships no row
+markup except the pending row, which is `TodoRow` again. The
+server template shows every position the client owns. Passed.
+
+Findings from the port, none of them slot mechanics:
+
+- *Pending rows that are not inert* need two things the SPA never
+  did. `<For>` must be handed the store's own intent objects (stable
+  identity; the default keyed mode) — a spread copy per array change
+  remounted every pending row. And a toggle or remove on a pending
+  id waits for the add's promise (`inflight` map) and then, if the
+  add failed, edits the failed-add error record locally (the todo
+  lives nowhere else); the count skips `intent.byId` entries for
+  ids that are still extra rows and counts the extras themselves.
+- *The shared component's `$key` is on the `<li>` inside `TodoRow`*
+  (`<li $key={props.id}>`), not at the call site — the call carries
+  its own `$key` for the occurrence. Two keys, two jobs, as written;
+  the port shows where each one physically goes.
+- *Chat's greeting at t = 0 replays only its first paragraph.* Not
+  this work: reproduced on the branch's HEAD with the tree stashed.
+  Recorded here so the next reader does not chase it into slots.
+- *One flake, run to ground.* Two early browser runs of the chat
+  example never invoked the `codeBlock` fill (no marker was bound);
+  after a web rebuild and a cleared Vite dep cache, three
+  consecutive runs bound it. The alternative that would have been a
+  bug — a race between the segment reveal's scoped sync and the
+  copy button's arrival — was tested rather than argued: jsdom
+  specs for an occurrence whose only consumer arrives in a segment
+  revealed after the record and the first flush, in a live hole's
+  re-emission, and in a hole that re-emits before its segment
+  reveals, all bind (`test/frames-attribute-slots.spec.tsx`); and
+  the server emits the marker on every sweep of a live hole with an
+  unrelated document render interleaved
+  (`test/server/frame-attribute-slots.spec.tsx`). The runtime is
+  clean in every ordering the model has; what the two runs saw was
+  a Vite dep cache holding the prebundled client from the
+  stash-and-rebuild experiment (`.vite` was cleared only on the
+  final restart). Closed as an environment artifact — and it left
+  a finding: the failure was *silent*. Every misuse in this model
+  reports on the server; the one failure that reaches a user — a
+  marked element whose positions never bind, so a button does
+  nothing when clicked — reported nothing. The frame client now
+  names it (`ATTRIBUTE_SLOT_POSITION`, reason `orphan`, once per
+  occurrence per frame) at the point `#syncSlots` classifies the
+  occurrence: no fill resolves for the prop (`why: "fill"`), or a
+  *called* occurrence has no args record once records can no
+  longer arrive (`why: "record"` — the producer emits the record
+  ahead of the markup that reads it, so a missing one is the
+  protocol out of step, never the fill; a bare occurrence has no
+  record by design). Behavior is unchanged in both cases. Honest
+  limit: the flake's own shape — a *stale client* — is the one
+  skew no client check can see, because the stale client lacks
+  the check; the finding covers the newer-client, dropped-record
+  and id-mismatch shapes, and the missing-prop misconfiguration.
+
+Still open from the list above, unchanged: text positions;
+client-created entities without client markup; actions against
+pending ids as a general concern (the port's sequencing is an
+example's answer).
+
 ### 9.3 Stage 8 seed — connection-shaped transport (2026-08-17)
 
-Recorded from the design conversation; nothing here is built. The
+Recorded from the design conversation; nothing here is built (the
+design that grew from this seed is §9.5, 2026-09-22). The
 stage shrank three times during the pass, each time by discovering
 the capability already existed — what remains is a continuation story
 and a contract with failure, not a transport feature.
@@ -1804,8 +3313,11 @@ correctness switch: a 30-second platform limit produces a 30-second
 resume cycle — chattier, still correct — degrading in the
 pathological limit to long-polling, emergent and never implemented.
 
-**Carrier is content negotiation.** The invocation is a POST whose
-response body is the record stream; "use SSE" is a response
+**Carrier is content negotiation.** *(Superseded 2026-09-22, §9.5
+Wire and RFC 10 "`live(fn)`", Framing: every live response is framed as
+server-sent events — no per-entry choice, no configuration, nothing
+negotiated by the client.)* The invocation is a
+POST whose response body is the record stream; "use SSE" is a response
 *framing*, not a channel. The entry opts in (`carrier: "sse"`),
 Content-Type carries the decision, the client picks its decoder off
 the header. SSE framing, NOT the EventSource API (which cannot POST,
@@ -1961,8 +3473,18 @@ discipline already guarantees sync shells), and the one
 implementation trap is buffering the batch response, which would
 silently convert shared-connection semantics into atomic-completion
 semantics. Held because the heavy cases are already covered (t=0 by
-the document, mutations by single-flight) and Stage 8's persistent
-connection dissolves the question entirely.
+the document, mutations by single-flight). _Corrected 2026-09-23:_
+this seed once also said Stage 8's persistent connection would
+dissolve the question; Stage 8 settled as one event-stream response
+per live source with nothing shared between them (§9.5), so there is
+no pipe for grouping to ride and Stage 8 addresses none of this.
+Coincident bounded reads after load remain uncovered. Discussion
+#3603 (opt-in batching for server functions) proposes the request
+side; the bar stated there is that per-URL `GET` reads and
+many-per-request batching are two read models and core has picked
+the first, so grouping has to justify itself as a second one, and
+a serverless invocation count is a platform cost model — the same
+argument declined for `hold`.
 
 **Multi-component returns — object-first (designed, unbuilt).** A
 server function returning `{ header: SC, feed: SC }` is
@@ -2045,3 +3567,469 @@ item before blessing: probe whether a mount adopts a concurrently
 in-flight call at the same address; host retention proves the
 re-mount case, the race case is likely "second call reissues"
 today — wasteful, not wrong.
+
+### 9.5 Stage 8 design — connection-shaped transport (drafted 2026-09-22; revised 2026-09-23: liveness is `live`, framing is server-sent events)
+
+Builds on the §9.3 seed. This record is what the seed became once
+audited against the tree as it is today and then argued through from
+the data tier up: several of its claims are now verified mechanism
+rather than expectation, one thesis line is revised, the one
+dependency it carried on Stage 7 (the watermark) is retired (see
+"Settlement is not this stage's concern" and §9.2.1), and its carrier
+question is answered as today's per-source stream framed as
+server-sent events, with no declaration and no configuration.
+Names remain provisional. The implementation plan — phases, slices,
+the example that vets each slice — is
+`documentation/plans/stage8-connection-transport.md`; the data-tier
+contract this design consumes is RFC 10 (`live(fn)`, including its
+Framing bullet).
+
+**What changed since the seed.** The scope split held: the data-API
+question was built first as `live()` (`packages/web/server-functions/
+src/client.ts`), a declaration wrapping a server function whose
+answer is a value-shaped async iterable, owning the wire lifecycle —
+each iteration its own connection, post-connect deaths re-invoked
+with backoff, `onstatus` for wire state. `live()` is a CLIENT
+decorator; a server component never sees it (it is already on the
+server; it reads its sources raw). The design pass found the
+asymmetry the ordering note names runs one level deeper than
+"frames lack a reconnect loop": `live` itself stops at the
+top-level iterable. An answer with NESTED streams — an object whose
+properties are generators, or a component whose render streams over
+the connection — is a one-value stream to it: nested deaths are
+invisible, nested SSR handoff never happens. Server components are
+not a special case needing their own loop; they are the nested-async
+case, and the fix is to extend `live` to the response's lifetime
+(RFC 10, "`live(fn)`"). Frames then CONSUME `live` rather than
+mirror it — one declaration, one loop, one status surface across
+both tiers — and everything frames add is about making the resume
+quiet, not about liveness.
+
+**Audit — the mechanism this design rests on:**
+
+```text
+fact                                                    where
+────                                                    ─────
+frame render over any async iterable pumps and holds   server/signals.ts (ctx.commit pump; ctx.hold)
+  in server-component scope with ctx.commit armed —
+  INCLUDING the document face
+first-value lock on serialized memos; the frame pump    server/signals.ts (~1613: "later yields are the
+  is the stated exception ("no hydration claim")          CLIENT's to apply")
+SSR hybrid (first value, close) selected per OBJECT     server/signals.ts LIVE_SOURCE brand
+  by the live brand — except a frame render's pump,
+  where a branded source stays connected; projections
+  follow the same rule as memos (Stage 8 B5: the frame
+  pump drives their trace; live scope takes first value)
+shell blockers: deferStream reads gate the first flush  web/src/server.ts serialize() / blockingPromises
+response end gated on `!registry.size && !holds`        web/src/server.ts flushEnd
+`complete` chunk emitted only when the render settles   frames/src/frame-sink.ts frameStream end()
+client disconnect only sets `closed`; render continues  frames/src/frame-sink.ts serverComponentResponse cancel()
+client applies chunks to body end, resolves either way  frames/src/frame-transport.ts applyFrames
+versions client-stamped per address (`bump`)            frames/src/frame-transport.ts createServerComponentHandler
+stale-guard per address on the client host              DR-5 / policy A
+live() lifetime = top-level iterable; nested invisible  server-functions/src/client.ts live() pull()
+reconnect loop with backoff, online wake, 4xx policy    server-functions/src/client.ts live()
+Serialized/Json/Void negotiated per response            server-functions/src/server.ts encodeResult
+SERVER_WRITE is a once-per-category WARNING             server/signals.ts (~788)
+```
+
+Two of those rows are the stage's first work: the `cancel()` row is a
+live leak TODAY for any server component reading an unbounded source
+(the abandoned tab's render pumps forever), and the `applyFrames` row
+is the client not yet distinguishing a death from a completion.
+
+**Thesis (revised).** The seed said: no new authoring API on either
+side; the component not terminating IS the liveness declaration,
+observed rather than configured. Half survives. There is still no
+new API — but liveness is DECLARED, not observed, by `live`, the
+data tier's existing declaration, at the export. The alternative
+makes an undeclared stream's death mean two things — an error on
+data, a silent re-invoke on frames — and needs a timeout (the
+window) standing in for the declaration on the document face. The
+rest of the thesis is unchanged: a connection is a response that
+doesn't end; resume is re-invocation — a superseding render of the
+address, never a continuation of the old iterator; progressiveness
+is consumer-relative; if losing the transport loses the value, the
+value belonged in durable state.
+
+#### Wire
+
+- **Same chunk protocol.** The one semantic shift: `complete` is the
+  BOUNDED signal. A body that ends without it is a **death** — the
+  resume trigger — never a completion. Bounded renders are untouched.
+  This is the frames instance of the codec's own rule (RFC 10,
+  Lifetime): completion is a record the producer writes, and a body
+  that ends without it fails what it left open.
+- **One SSE response per source (RFC 10, `live(fn)` → Framing).** `live`
+  is for backends that hold connections — the feature's
+  precondition, as it is for LiveView, Datastar, and SvelteKit's
+  `query.live` — and there is nothing to configure. A live frame is
+  its own request, as today, addressed to the live address
+  (`<endpoint>/live/<id>`, the sibling of `/data/<id>`: a third
+  caller kind receiving a third answer shape gets its own path, the
+  #3094 rule), with the response framed as server-sent events
+  (codec payloads as `data:` events, heartbeats, `no-store`,
+  `X-Accel-Buffering: no`) so buffering middleboxes pass it
+  through. Subscribing is a request;
+  unsubscribing closes it, which is how teardown (below) is
+  signalled; a frame under a streamed boundary connects when that
+  boundary hydrates and a frame mounting after navigation connects
+  when it mounts — nothing coordinates with anything else. HTTP/2
+  is part of the precondition (six connections per origin under
+  HTTP/1.1; the dev server speaks HTTP/2 with `server.https`; dev
+  warns past five live connections otherwise). Frames own no
+  transport vocabulary: `serverComponentResponse` writes through
+  the   shared event-stream writer when the call arrived at the live
+  address, `applyFrames` reads through the shared reader off the
+  content type, `isFrameStreamResponse` stays `X-Frame-Stream`-based. On a backend that kills a response at a
+  ceiling the stream dies there and `live` does what it does on any
+  death — backoff, reconnect with its position, `onstatus` showing
+  it — which is `query.live`'s behavior on the same platform and
+  the honest one. `GET(fn)` remains the idiom for server components
+  for its own reasons — a render is a read by construction, and GET
+  buys URL identity and dedupe by address — and is orthogonal to
+  framing. Considered and set aside the same night, recorded in RFC
+  10: one shared channel per page (an SSE response is a fixed set at
+  request time; adding to it needs a mailbox on the holding
+  instance and fights a fine-grained client — a socket is the
+  carrier where add is native, and remains the future if the
+  connection count ever matters), a `transport: "polling" | "sse"`
+  enum, and a `hold` that cycles live responses under a platform
+  ceiling (future, one optional number, if asked for) — all in RFC
+  10's Alternatives considered. There is no transport decision left;
+  what remains is a framing note. Withdrawn unbuilt: `SSE(fn)`,
+  `enableEventStream()`, framing-follows-method.
+- **Resume request.** A reconnect (a `live` re-invocation after a
+  death or a supersession, or the post-hydration takeover) carries
+  `Last-Event-ID: <N>`, N the client's version ordinal for the
+  address, and a bounded **have-list**: the opaque per-hole hashes
+  the client holds for that frame (header, name provisional; when
+  the list would exceed a budget the client omits it and accepts a
+  full snapshot). Never as arguments — a position is not address
+  material (an arg would mint a new `frameAddress` per resume and
+  churn the content store; §9.4's promise-as-argument anti-pattern).
+  The server reads the header's PRESENCE as "this is a resume" and
+  the have-list as the conditional baseline; the ordinal stays
+  opaque to it.
+- **Hole hashes.** Every hole/fragment emission on every face —
+  frame stream and document alike — carries an opaque digest of its
+  content, minted by the server. The client stores digests per hole
+  and never derives them from the DOM (browser serialization differs
+  from the server's string). The document face seeding the ledger is
+  what makes the first reconnect after hydration conditional.
+
+#### Server face
+
+1. **Teardown on disconnect (first slice; a bug fix today).**
+   `serverComponentResponse`'s `cancel()` sets `closed` and drops
+   writes; the render keeps producing. Fix: cancellation (and the
+   request's `signal`) disposes the render root. The pump already
+   handles disposal — `comp.disposed` closes the iterator and
+   releases the hold — so this is wiring the Response lifecycle to
+   the owner, not new machinery. `frameFlightResponse` gets the same
+   wiring. Without this, every persistent render is a server loop
+   with the client's lifetime and no one else's.
+2. **Reconnect is a conditional render (replaces the seed's
+   "settled emission policy").** With a resume header present the
+   render emits a hole only when it has SETTLED and its digest
+   differs from the have-list; a hole still pending is not emitted
+   (the client already shows either its content or its fallback,
+   and either may stand); reveals the client lacks stream as they
+   settle. Three consequences, one rule: a no-op reconnect transfers
+   nothing; a fallback is never emitted over content; the first
+   connection after a document render (holes the document left as
+   fallbacks) streams exactly the reveals that are missing. There is
+   no progressive/settled MODE and no latch split in `flushEnd`;
+   without a resume header the render is today's progressive stream.
+   The compute cost is the whole component re-running per reconnect
+   — LiveView's dead-then-connected cost, accepted. A stateful
+   attach (the render root kept alive past the response for a grace
+   window, the reconnect attaching by token) is the opt-in above
+   this baseline for deployments that can route stickily; nothing
+   here precludes it and nothing here depends on it.
+3. **Document face — first value by scope.** A live-declared
+   component reaches the document render with the brand on its
+   component function (the in-process `live` wrapper puts it there);
+   the frame render turns it into a scope flag, and every async
+   source read in that scope takes the existing hybrid path: first
+   value into markup, iterator closed, no pump, no `ctx.hold`. The
+   shell waits for sources outside `Loading` boundaries exactly as
+   today; sources under boundaries reveal in later flushes as today;
+   the document completes when nothing is pending, as today. One
+   value per source crosses the document — the data tier's
+   first-value lock, applied where the "no hydration claim" exception
+   no longer holds (the client's frame store opens at v0 = the
+   document's markup). The frame's shell carries the live bit;
+   adoption reads it and hands the binding to `live`. No "settled
+   once" event, no window in the path.
+4. **The window becomes a safety cap.** An UNDECLARED unbounded
+   source in server-component scope at t=0 is an authoring error —
+   today it holds the document open forever. The cap ends that
+   render's participation at N ms with a dev diagnostic naming the
+   source, and the client sees a bounded frame that completed
+   early. Whether the cap is a knob (`renderToStream(code, {
+   documentWindow })`) or a fixed dev-only warning is open decision
+   (c); with the live handoff it no longer has a role for declared
+   sources, which is what makes the question small. _Decided
+   2026-09-25 (B3): fixed dev-only warning, `SSR_UNDECLARED_LIVE_SOURCE`
+   after 5s of a document render still pumping; it names the owner and
+   ends nothing — Stage 4's document live holes keep working._
+
+#### Client face
+
+1. **Death vs completion.** `applyFrameResponse` resolves either way
+   today. The host learns the difference from the `:complete`
+   record: a stream that ended without it, on a frame the server
+   never declared complete, is dead. A stream-level `:error` from a
+   definite rejection is a completion of the failing kind (no retry;
+   `live`'s 4xx rule).
+2. **`live` is the loop.** The frames `responseHandler` exposes the
+   response's lifetime — the binding now, the stream's end and how
+   it ended later — and `live`'s loop does what it does on data:
+   death → backoff → re-invoke through the same reference, outside
+   any transition (no `isPending` pulses on a platform that cycles
+   connections). `dynamic` consumes an iterable of bindings. Because the
+   binding is stable per address, the re-yield is the SAME binding
+   and `dynamic`'s equals-gate holds: no remount, no fallback,
+   retained element state follows `_key`, client slots keep their
+   state. Quiet by construction, where on data a reconnect is a
+   fresh object. No shared helper, no mirrored policy: there is one
+   loop and frames call it.
+3. **Hydration handoff.** For a live frame in the document, adoption
+   yields the adopted binding into `live`'s iterable synchronously
+   (there is no serialized value to hydrate — the markup is the
+   value), then the loop reconnects with `Last-Event-ID: 0` and the
+   have-list the document seeded. WHEN it reconnects is the frame's
+   own hydration scope releasing — the root pass's release for a
+   frame in the shell, the boundary's own `releaseSnapshotScope`
+   for a frame under a streamed `Loading` — never page-wide
+   hydration end. The shipped `armLiveTakeover` gate waits for
+   `onHydrationEnd` (all boundaries), which holds every live node
+   on the page for the slowest boundary and contradicts the
+   per-boundary snapshot design; it is re-keyed per scope owner as
+   part of this stage (behavior change to shipped `live`, flagged).
+   The reconnect is conditional, so with nothing changed nothing
+   crosses; what did change since the document rendered arrives as
+   one morph. Honest cost: one server render per live frame per
+   page load, the same price a live data source pays. _Built
+   2026-09-25 (B3): the synchronous yield is the frames intercept's
+   answer riding on the iterable (`LIVE_LOCAL`), adopted by the
+   hydrating node as its value and re-yielded by the takeover run;
+   a boundary still streaming answers with a promise that lands at
+   its reveal, so the connect follows the fragment. No live bit in
+   the shell record — the client derives the address from its own
+   call. `Last-Event-ID` / have-list land with B4._ _Built
+   2026-09-25 (B4), frame face: every content chunk carries a
+   server-minted digest (root = skeleton digest + a `holes` map;
+   fragment/hole/attr their own); the mount keeps a ledger of what
+   it has APPLIED (a fragment counts at its reveal); the loop asks
+   the frames handler per connect and sends the version ordinal as
+   `Last-Event-ID` and the ledger as `X-Frame-Have` (`key=digest`
+   pairs, omitted over 4096 bytes → full snapshot); the sink skips
+   the root on a skeleton match and emits only the settled,
+   differing holes — never a fragment or a fallback reveal over
+   content the list names. NOT yet built: seeding the ledger from
+   the document face. The document's hole engine numbers `lh:N`
+   across the whole page and `pl-N` keys are document-global, while
+   a frame render numbers both from zero, so the adopted interior's
+   names do not align with what the same call's frame render would
+   emit; the connect after adoption is therefore a full snapshot (a
+   morph over adopted content, still no fallback) and every later
+   reconnect is conditional. Closing it needs per-scope ordinals on
+   the document face, `fid`-routed `sc:live` ops, and an alias in
+   the have-list entry (`key=digest@clientKey`)._
+4. **Supersession from another response is a death.** A live
+   address whose store receives a newer version from a DIFFERENT
+   response — a single-flight region for a call the mutation
+   invalidated, a preload, a getter refetch — has been superseded
+   exactly as a death would supersede it: the host cancels the
+   connection, `live` sees the death, reconnects (conditionally). One
+   rule for both events, and a consistency rule, not a causality
+   one: the region's bump makes the open stream's later chunks inert
+   under the stale-guard, so without the reconnect a live address
+   goes silently static the first time any mutation touches it.
+   Known cost: one reconnect per invalidating mutation per live
+   address, concurrent with the connection that would have carried
+   the update anyway. The mitigation belongs with §9.2.1's
+   convergence work (an open connection is the authority for its
+   address, so a live query's invalidation need not bump it) and is
+   not this stage's. Corollary (built 2026-09-25): one live
+   connection per address. Two live readers of one call would each
+   supersede the other's stream on arrival and ping-pong for as long
+   as both are mounted, so a second live reader's body is ended and
+   its loop joins the first connection's lifetime — one death, one
+   reconnect, shared.
+5. **Undeclared death is an error.** A bounded server component
+   whose stream dies mid-render surfaces through `frame.error` /
+   the enclosing `<Errored>`, exactly as an undeclared generator
+   dying mid-stream does on data. Nothing resumes on its own.
+6. **Connection state: `onstatus`, not a frame-handle surface.**
+   The seed's `connected` signal dissolves into `live`'s existing
+   `onstatus` on the reference's iterable — the same three states,
+   the same hook, for data and frames. Open decision (b) closes with
+   no new surface.
+7. **Hidden pages hold their connections.** A live frame in a
+   background tab keeps its connection and its server render, as
+   an `EventSource` keeps its connection — the platform does not
+   pause, and neither does `live`. The cost is one held render per
+   frame on a backend whose precondition is that it holds
+   connections. A pause (grace window, status held through it, a
+   takeover that fires while hidden parked until visible, disposal
+   during a pause cancelling the parked work) was designed and
+   deferred unbuilt (2026-09-23): the most intricate state machine
+   on the data tier, a behavior change to shipped `live`, buying
+   server cost only. Additive if asked for; the digest-equal skip
+   (and B4's hole digests) already make a return reconnect free on
+   the wire. RFC 10's rule; frames inherit it through the loop.
+
+#### Projections pump too — a symmetry the tree currently breaks
+
+`server/signals.ts` (~2154): "Projections have no server-component
+continuation pump: a standing live answer always hands off after V1,
+including no-hydrate/frame consumers." So inside a frame render a
+`createMemo` over an async iterable is live and a `createStore` over
+the same iterable is not. That is not a design choice to make; it is
+a symmetry to restore. A projection and a memo differ in GRANULARITY
+— a patch stream against a whole-value stream — and in nothing else;
+the consumer's shape must not decide whether the source stays
+connected. The pump is the same `ctx.commit`/`ctx.hold` shape with
+the patch stream as its yields; the room-feed "list of messages"
+shape wants exactly this. Under the document face's scope flag, a
+projection takes first value like a memo does. Work item, not open
+question.
+
+#### Router-facing seams
+
+The router is a consumer that MAY apply `live` and `GET` on the
+author's behalf; the core spelling (`live(GET(feed))` at the export)
+is the documented one and the reliable site for the GET grant. What
+frames owe any such layer:
+
+- **Stable binding as the multicast value.** A live query holding
+  one iteration open shares the binding; every reader of the query
+  gets the same component, and reconnects re-yield it.
+- **Revalidate = reconnect.** Revalidating a live query closes the
+  iteration and opens a new one — a fresh connection by
+  construction — rather than a second render beside the open one.
+- **Preload of a live reference is the layer's choice**, not the
+  browser's: a browser-level prefetch of a live GET url opens a
+  standing stream that nothing reads. A layer may warm the address
+  store with a one-shot render or hold an iteration open. Whether
+  `serverFunctionUrl` should refuse a live reference (as it refuses
+  a POST reference) is open decision (d). _Decided 2026-09-25 (B6):
+  it returns the live address — the url the call requests, to fetch
+  by hand, documented as not a preload target. The data address it
+  used to return is one the live call never requests; the one-shot
+  url is the inner `GET(fn)`'s._
+
+#### Settlement is not this stage's concern
+
+The seed's watermark — "a mutation ack carries 'reflected as of
+version N'; the transaction holds until the address's version passes
+N" — existed only so Stage 7's predictions could settle against a
+persistent stream. Retired (2026-09-22, §9.2.1): predictions settle
+by CONVERGENCE — the authoritative markup coming to agree with the
+prediction, the `until()` principle applied to markup — which needs
+no version anyone must own. What survives here is only what Stage 8
+needs on its own: the client-stamped ordinal as stale-guard and
+resume cursor, and the hole digests as the conditional baseline.
+Nothing in this stage depends on Stage 7 and nothing in Stage 7
+depends on this stage.
+
+#### Dev enforcement
+
+- **Chaos reconnect.** Dev-only knob: kill live responses every N
+  seconds — data and frames alike, since there is one loop.
+  Re-derivability becomes something the app proves every few seconds
+  in development instead of a documented discipline.
+- **Undeclared unbounded at t=0.** The safety cap's diagnostic names
+  the source and the scope, and points at `live`.
+- **Connection budget over HTTP/1.1.** Each live source holds a
+  connection; a browser allows six per origin under HTTP/1.1. Dev
+  warns when a page opens more than five live connections over
+  HTTP/1.1, naming them, and points at `server.https` (the dev
+  server then speaks HTTP/2).
+- **`SERVER_WRITE` becomes an error inside persistent renders.** The
+  RFC 11 note said the guard should land before any server scope can
+  outlive a request, because that is when an in-place write stops
+  being an impurity and becomes a cross-request race or a cross-user
+  leak. Stage 8 is that moment. The staged plan (warn now, throw
+  later) is unchanged for bounded renders; a frame render with open
+  holds is where the throw lands first. Public behavior change —
+  flagged. _Decided 2026-09-25: not built in Part B, and there is no
+  scope to decide — the rule is blanket (RFC 11 §5: no server write
+  is legitimate anywhere; all server input is derived). The throw
+  follows the deprecation window, not the arrival of persistence._
+
+#### Work slices
+
+Data tier first, with no server components in sight, then frames —
+each slice landing with the page of `examples/room` that proves it.
+The full sequence, verification per slice, and the example mapping
+live in `documentation/plans/stage8-connection-transport.md`; in
+summary:
+
+- **Phase A (data):** A1 framing — the live address
+  (`<endpoint>/live/<id>`) on both ends, event-stream writer/reader
+  for what it answers, heartbeats, `Last-Event-ID` with value-digest
+  positions and the digest-equal first-emission skip, HTTP/1.1 dev
+  warning; A2 `live` = response lifetime —
+  nested brand walk, death vs completion, whole-answer re-yield, SSR
+  first value per source, per-scope takeover (the `armLiveTakeover`
+  fix, keeping the per-pass re-arm for islands), `onstatus`
+  unchanged (the hidden-page pause deferred unbuilt — item 7); A3
+  chaos knob.
+- **Phase B (frames):** B1 teardown on disconnect; B2 frames consume
+  `live` — response lifetime through the handler, `dynamic` over
+  bindings, hydration adoption into the loop, supersession as death,
+  `onstatus`; B3 document face — brand → scope flag → first value,
+  live bit, cap; B4 conditional reconnect — digests on every
+  emission, have-list on resume, settled-and-different rule; B5
+  projections pump in frame scope; B6 `GET` server components end to
+  end, live frame streams event-stream framed.
+
+**Deliberately absent** (as in the seed): any new client or server
+authoring API, any subscription registry or connection-local
+subscription state (a live call is a direct call; any instance
+answers any reconnect and the server remembers nothing), any cursor
+protocol, WebSocket, stateful attach. Cursors — positional resume for sources
+with real sequence numbers — remain an opt-in optimization over the
+re-derivation baseline, never the baseline, because the baseline
+must hold for sources that have none.
+
+**Public API this stage touches** (flagged, per the engineering
+standard): `live`'s behavior changes three ways on a shipped export
+— it claims nested-async answers, its post-hydration takeover fires
+per scope instead of at page-wide hydration end, and a
+digest-equal reconnect yields nothing (a dying body already
+rejects what it left open — that is the decoder's end-of-body
+sweep today, not a change); `onstatus` becomes reachable for
+server-component references through the same iterable;
+`SERVER_WRITE` becomes an error in persistent renders; a dev-only
+chaos-reconnect knob and a dev-only HTTP/1.1 connection warning;
+the document window — if kept as a knob — as `documentWindow` on
+`renderToStream`. Nothing to configure on the server; no new
+option. New wire, not API: the live address `<endpoint>/live/<id>`
+(live calls move there from the data address; a client and server
+versioned apart miss each other on live calls until both are
+current), the event-stream framing of what it answers,
+`Last-Event-ID` (value digest; ordinal for a frame), the have-list
+header, hole digests. Withdrawn before
+shipping: `SSE(fn)`, `enableEventStream()`, `Accept:
+text/event-stream` as a client declaration, the
+framing-follows-method rule, the per-page channel, the
+`live: { transport, hold }` server configuration, `connected` on
+the frame handle. Deferred unbuilt: the hidden-page pause.
+
+**Open decisions:** (a) CLOSED — `SERVER_WRITE` is blanket (RFC 11
+§5), no persistent-render scope, the throw rides the deprecation
+window; (b) CLOSED —
+connection state is `onstatus`; (c) safety cap: `documentWindow`
+knob or fixed dev-only warning; (d) `serverFunctionUrl` on a live
+reference — refuse, or answer and document the prefetch hazard;
+(e) CLOSED — the address decides: the loop calls
+`<endpoint>/live/<id>` and the server frames what it answers there
+as an event stream (a header would put a third answer shape behind
+a URL caches already hold for the second — #3094 — and reads carry
+no transport header — #3406); a server-side `live` declaration may
+cross-check in dev but cannot decide (topology); (f) is the plan's.

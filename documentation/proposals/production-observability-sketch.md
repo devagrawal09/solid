@@ -43,7 +43,7 @@ causality off structure rather than inferring it:
   `paintedDuringHold`). `SILENT_HOLD` is a responsiveness verdict no RUM tool
   has.
 - **Verdicts with prescribed repairs**: `ASYNC_WATERFALL` (graph-proven
-  sequential flights), `WIDE_WRITE`, `HOT_SCOPE_FANOUT`, `UNSTABLE_MEMO_OUTPUT`,
+  sequential flights), `HUGE_FAN_OUT`, `HOT_SCOPE_FANOUT`, `UNSTABLE_MEMO_OUTPUT`,
   `WIDE_SCOPE_DEPS`, `SILENT_HOLD` — stable codes, `ownerPath`, and message
   text that names the fix.
 
@@ -82,8 +82,10 @@ whether they need dev checks or ride the observe wiring.
    vendor-neutral (OTel-shaped where spans make sense). Observability-vendor
    consumption is a separate track and must not appear in this package."
    `attribution.ts` states the pattern: _one mechanism, N front-ends_ — a
-   vendor SDK is one more implementer of `AttributionHooks` / subscriber to
-   the event feeds, never a fork of the engine.
+   vendor SDK is one more subscriber to the event feeds (`OBSERVE.records`,
+   `OBSERVE.diagnostics`), never a fork of the engine — and not an
+   implementer of the engine's hook table, which is internal to
+   `@solidjs/signals`.
 
 ---
 
@@ -105,7 +107,7 @@ the sites survive the build. The surface is small and well-delineated:
   needed for anything to be legible.
 - **Edge counts**: none stored. Fan-out is counted by the notify walk
   (`insertSubs`), fan-in by the recompute pass (`link()` into one module
-  counter) — the always-on graph-size warnings and `WIDE_WRITE` read those.
+  counter) — the always-on graph-size warnings and the engine's lower-threshold `HUGE_FAN_OUT` read those.
   (An earlier draft kept live `_subCount`/`_depCount` fields per node; they
   forked node shapes and were removed.)
 - **Web runtime (`@solidjs/web`)**: 3 `withInteraction` wrap sites
@@ -174,7 +176,7 @@ A third build flavor alongside `dist/dev` and `dist/prod`: `dist/profiling`
 - `__DEV__: false` (no strict-read checks, no owner-scope errors, no
   invariants, no console reporting) but a new `__OBSERVE__: true` flag that
   keeps exactly: the `attrHooks` call sites, `noteGraphLink`/`unnoteGraphLink`
-  counters (needed by `WIDE_WRITE`), the `_name` field, and `emitDiagnostic`
+  counters (needed by the engine's `HUGE_FAN_OUT` threshold), the `_name` field, and `emitDiagnostic`
   with `DiagnosticEvent` typing. The engine itself (`attribution.ts`) stays
   pay-for-use: not loaded unless a consumer calls `enable()`.
 - `@solidjs/web` mirrors it: the `withInteraction` wrappers at
@@ -286,8 +288,9 @@ build.
 
 ### 4.4 Rerun record (from `RerunEvent`)
 
-Serialized as `Omit<RerunEvent, "node">` — `@solidjs/diagnostics` already
-defines exactly this projection (`RerunRecord`). Attached to the interaction
+Serialized as-is: since observe-tier-plan PR B the event carries `nodeId`
+instead of the live `node` (in-process consumers get the node as the
+listener's second argument, `live`), so `@solidjs/diagnostics` stores `RerunEvent` itself. Attached to the interaction
 span only above thresholds (4.1); otherwise folded into the span's aggregates.
 
 ### 4.5 Cause chain (from `ChangeRecord`)
@@ -308,7 +311,7 @@ the PII surface — see §6.
 - **Per-interaction cost cap**: the adapter drops rerun children above a
   count and keeps aggregates. Findings are never dropped (they are rare and
   already deduped once-per-node by the engine).
-- **Thresholds are the engine's** (`hotRuns`, `hotTime`, `wideWrites`,
+- **Thresholds are the engine's** (`hotRuns`, `hotTime`, `fanOut`,
   `holds: { infoMs, warnMs }`, `waterfalls.minFlightMs`). The adapter may
   raise them for prod; it must not lower them below dev defaults, or prod
   reports things dev never showed the developer.
@@ -365,13 +368,14 @@ interface ObservabilityAdapter {
 
 Inside `install`, the adapter subscribes to the three feeds:
 
-- `dev.attribution.subscribe(rerun => ...)` — aggregate into the current
-  interaction span (keyed by `rerun.interaction`), emit rerun children above
-  thresholds.
-- `dev.diagnostics.subscribe(event => ...)` — `warn` → finding (4.3).
-- Holds: today only via `dev.attribution.holds()` polling; a `holdEnd`
-  subscription (`subscribeHolds`) is a small engine addition and should be
-  made before the first adapter exists rather than after.
+- `OBSERVE.records.subscribe("rerun", (rerun, node) => ...)` — aggregate
+  into the current interaction span (keyed by `rerun.interaction`), emit
+  rerun children above thresholds.
+- `OBSERVE.diagnostics.subscribe((event, subject) => ...)` — `warn` →
+  finding (4.3).
+- Holds: `OBSERVE.records.subscribe("hold", (hold, signal) => ...)` as each
+  settles (the `holdEnd` subscription this sketch originally asked for);
+  `attribution.history("hold")` is the ring buffer for polling.
 
 Interaction boundaries: the web runtime's `withInteraction` already brackets
 dispatch. The adapter does not wrap events itself — doing so would double-count
@@ -397,11 +401,12 @@ Solid (this repo):
 1. Observe build flavor + export condition for `@solidjs/signals`, `solid-js`,
    `@solidjs/web` (§3A). Size scenario and cap for it.
 2. `subscribeHolds` on the engine; confirm every feed is subscribable, not
-   poll-only.
+   poll-only. (Done: every engine record, `hold` included, is a type on
+   `OBSERVE.records`.)
 3. Component-root labeling in the observe build; compiler `name` emission for
    user primitives (already a plan item).
-4. Serializable projections as exported types (`RerunRecord` exists in
-   `@solidjs/diagnostics`; the finding/hold/interaction projections should
+4. Serializable projections as exported types (`RerunEvent` is already
+   serializable and is what `@solidjs/diagnostics` stores; the finding/hold/interaction projections should
    live next to it — the plan already says protocol types publish from
    there).
 5. An enabled-engine overhead benchmark.
@@ -421,7 +426,7 @@ Vendor (e.g. `@sentry/solid`):
 3. Scrubbing defaults per §6 hooked into their existing data-collection
    controls.
 4. Product side: new performance-issue detectors for `SILENT_HOLD`,
-   `ASYNC_WATERFALL`, `HOT_SCOPE_FANOUT`, `WIDE_WRITE` with the engine's
+   `ASYNC_WATERFALL`, `HOT_SCOPE_FANOUT`, `HUGE_FAN_OUT` with the engine's
    repair text as the "how to fix" body; per-interaction cost/hold rows in the
    INP/Web Vitals view. Their autofix/agent surface can consume the
    `reactivity-diagnostics` skill directly — the repairs are already written
@@ -609,9 +614,11 @@ are proposals; thresholds follow the engine's tiering (`info` advisory,
 
 ### 10.2 Server / SSR
 
-- `SSR_BOUNDARY_WATERFALL` — _prod verdict, new._ The client engine's
-  `ASYNC_WATERFALL` logic (causal chain + origin post-dates upstream landing +
-  duration gate) applied to server flights within one request. Server flights
+- `SSR_BOUNDARY_WATERFALL` — _prod verdict; today a dev-only check._ The
+  shipped code reads `passes - 1` off the `<Loading>` boundary record in dev
+  (RFC 08); this proposes the client engine's `ASYNC_WATERFALL` logic (causal
+  chain + origin post-dates upstream landing + duration gate) applied to
+  server flights within one request, in observe builds too. Server flights
   are already per-boundary awaits (`hydration.ts:176–317`); the server facade
   needs `flightStart`/`asyncEnd`-equivalent hooks. This is exactly what
   React's Server Requests track shows visually and does not judge.
@@ -635,7 +642,7 @@ are proposals; thresholds follow the engine's tiering (`info` advisory,
   declared in one scope was retracted before commit (the ledger's own
   semantics). Advisory: it is legal, but a retract-heavy request is usually a
   boundary doing HTTP work it shouldn't.
-- `SERVER_FN_ERROR_SANITIZED` — _wiring, new._ A server function threw a
+- `SERVER_ERROR_SANITIZED` (`data.source: "server-function"`) — _wiring, new._ A server function threw a
   plain error that prod sanitized before encoding. The telemetry side keeps
   the original message + stack (server-only), the wire keeps the sanitized
   form. Closes the "prod errors are opaque" gap without weakening the wire.

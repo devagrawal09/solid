@@ -47,10 +47,11 @@ const build = (input, name, external, isDev, isObserve) => ({
 
 const client = ["@solidjs/signals"];
 const server = ["@solidjs/signals", "stream"];
-// The refresh runtime imports the main entry ("solid-js") rather than
-// relative sources so it shares module state ($DEVCOMP, DEV) with the
-// solid-js instance the app resolves at build time.
-const refresh = ["solid-js", "@solidjs/signals"];
+// The refresh runtime imports the main entry ("solid-js", and its seams
+// through "solid-js/internal") rather than relative sources so it shares
+// module state ($DEVCOMP, DEV) with the solid-js instance the app resolves
+// at build time.
+const refresh = ["solid-js", "solid-js/internal", "@solidjs/signals"];
 
 export default [
   build("src/index.ts", "solid", client, false, false),
@@ -78,5 +79,11 @@ export default [
   // `solid-js/attribution`: a re-export of `@solidjs/signals/attribution`
   // with no wiring of its own, so one build serves every tier — the engine it
   // resolves to is chosen where the signals subpath is resolved.
-  build("src/attribution.ts", "attribution", ["@solidjs/signals/attribution"], false, false)
+  build("src/attribution.ts", "attribution", ["@solidjs/signals/attribution"], false, false),
+  // `solid-js/internal`: the seams the runtimes in this repo consume (see
+  // src/internal.ts). No tier-specific code of its own, so one build: the view
+  // protocol is `@solidjs/signals` (external, the app's one instance) and the
+  // server-scope seams are read back from "solid-js" (external, so the
+  // platform/tier conditions pick the same main build the app runs).
+  build("src/internal.ts", "internal", ["solid-js", "@solidjs/signals"], false, false)
 ];

@@ -12,6 +12,7 @@ import {
   type Transition
 } from "./scheduler.js";
 import { isThenable } from "./async.js";
+import { enterCallback, exitCallback } from "./core.js";
 import { getOwner } from "./owner.js";
 import { CONFIG_CHILDREN_FORBIDDEN } from "./constants.js";
 import { emitDiagnostic } from "./dev.js";
@@ -65,15 +66,22 @@ function restoreTransition<T>(seq: number, transition: Transition, fn: () => T):
  * `yield` is the transaction-safe suspension point: the action waits for a
  * yielded promise and re-enters the transaction before running the code after
  * it. A plain `await` does NOT — the runtime has no hook into an async
- * generator's internal await continuations, so writes to fresh signals
- * between an `await` and the next `yield` escape the transaction and commit
- * immediately. `await` is still the ergonomic choice for typed results; just
- * put a bare `yield` before any writes that follow it:
+ * generator's internal await continuations, so code between an `await` and
+ * the next `yield` runs OUTSIDE the transaction: writes to fresh signals
+ * commit immediately, and anything that creates a reader there — `until()`,
+ * `latest()`, a memo or effect, a mount — is created mainline, where a read of
+ * this action's held state makes it born held (A29): staged with the
+ * transaction and replayed at its commit. For `until()` that commit is the
+ * settle its own promise holds open (#3482). `await` is still the ergonomic
+ * choice for typed results; just put a bare `yield` before any write or
+ * reader creation that follows it — including the expression of the next
+ * `yield`, which is evaluated before the step re-enters:
  *
  * ```ts
  * const saved = await api.createTodo(text); // typed result
- * yield; // re-enter the transaction before writing
+ * yield; // re-enter the transaction before writing or reading
  * setTodos(t => { ... });
+ * yield until(() => todos.some(t => t.id === saved.id));
  * ```
  *
  * (For the same reason, don't call `flush()` inside an action body — it
@@ -139,6 +147,7 @@ export function action<Args extends any[], Y, R>(
       globalQueue.initTransition();
       let ctx = activeTransition!;
       ctx._actions.push(it);
+      ctx._acted = true;
 
       const done = (v?: R, e?: any, failed = false) => {
         ctx = currentTransition(ctx);
@@ -164,14 +173,19 @@ export function action<Args extends any[], Y, R>(
         // The body is on the stack between these brackets: flush() is
         // refused inside (FLUSH_IN_ACTION, scheduler.ts).
         enterActionStep();
+        // Dev: the body's reads are imperative, not post-await reads of the
+        // continuation that invoked the action (UNTRACKED_READ_AFTER_AWAIT).
+        if (__DEV__) enterCallback();
         try {
           r = err ? it.throw!(v) : it.next(v);
         } catch (e) {
           exitActionStep();
+          if (__DEV__) exitCallback();
           if (__OBSERVE__ && attrHooks !== null) attrHooks.actionStepEnd(it);
           return done(undefined, e, true);
         }
         exitActionStep();
+        if (__DEV__) exitCallback();
         if (__OBSERVE__ && attrHooks !== null) attrHooks.actionStepEnd(it);
         // A rejected iterator result (async generators) means the error already
         // escaped the generator body — it is completed, and throwing back in
@@ -258,6 +272,8 @@ export function syncAction<Args extends any[], R>(
     const token = {} as any;
     if (__OBSERVE__ && attrHooks !== null) attrHooks.actionStepStart(token, fn.name || undefined);
     enterActionStep();
+    // Optimistic overrides the ambient batch holds before the body runs.
+    const optimistic0 = __ASYNC__ ? globalQueue._batch._optimisticNodes.length : 0;
     let result: R;
     try {
       result = fn(...args);
@@ -266,6 +282,20 @@ export function syncAction<Args extends any[], R>(
       if (__OBSERVE__ && attrHooks !== null) attrHooks.actionStepEnd(token);
       schedule();
       return Promise.reject(e);
+    }
+    // An optimistic write in the body: an action's overrides end with its
+    // body (upstream #3427 — the correction is its transaction's held work,
+    // judged at the flush that settles it, `_acted`), so the one-slice form
+    // opens that transaction now, adopting the batch the body wrote, as the
+    // action opened it before the body. A body with no optimistic write
+    // keeps the plain batch.
+    if (
+      __ASYNC__ &&
+      activeTransition === null &&
+      globalQueue._batch._optimisticNodes.length > optimistic0
+    ) {
+      globalQueue.initTransition();
+      activeTransition!._acted = true;
     }
     exitActionStep();
     if (__OBSERVE__ && attrHooks !== null) attrHooks.actionStepEnd(token);

@@ -65,14 +65,12 @@ export {
   loading,
   errored,
   $PROXY,
-  $REFRESH,
   $TRACK,
   action,
   syncAction,
   affects,
   createOwner,
   createReaction,
-  createRoot,
   createTrackedEffect,
   createPlainStore,
   deep,
@@ -88,18 +86,15 @@ export {
   isWrappable,
   mapArray,
   merge,
-  mergeSources,
+  isStatic,
   omit,
   onCleanup,
   onSettled,
   latest,
-  // REGION-DELIVERY BRANCH: patch-channel contract gutted (regions replace it)
-  storeIsShallow,
+  // Store handles (compiler-emitted, `storeHandles` pass).
   createStoreHandle,
   storeHandle,
   storeProxy,
-  storeHasFamily,
-  storeHasOptimisticFamily,
   reconcile,
   refresh,
   repeat,
@@ -112,11 +107,16 @@ export {
   enableExternalSource,
   enforceLoadingBoundary,
   snapshot,
-  storePath,
-  untrack
+  untrack,
+  configureClientErrors
 } from "@solidjs/signals";
+/** @internal — the key a root owner carries `render`'s `onError` under, for the web runtime. */
+export { ROOT_ERROR_HOOK } from "@solidjs/signals";
 
 export type {
+  ClientErrorContext,
+  ClientErrorHook,
+  ClientErrorsConfig,
   Accessor,
   AccessorIterable,
   Block,
@@ -201,7 +201,7 @@ export type {
 } from "@solidjs/signals";
 
 // needs wrappers
-export { $DEVCOMP, children, createContext, useContext } from "./client/core.js";
+export { children, createContext, useContext } from "./client/core.js";
 
 export type {
   ChildrenReturn,
@@ -215,11 +215,8 @@ export * from "./client/component.js";
 export * from "./client/flow.js";
 export type { ArrayElement, Element } from "./types.js";
 export {
-  sharedConfig,
   enableHydration,
-  createErrorBoundary,
-  createLoadingBoundary,
-  createRevealOrder,
+  createRoot,
   createMemo,
   createSignal,
   createStore,
@@ -230,9 +227,23 @@ export {
   createRenderEffect,
   createEffect,
   NoHydration,
-  Hydration,
-  NoHydrateContext,
-  materializeContainerTrace
+  Hydration
+} from "./client/hydration.js";
+// Seams for the runtimes in this repo, reached through `solid-js/internal`
+// (src/internal.ts): exported here at runtime so that entry shares this
+// module's state, `@internal` so they are stripped from the declarations.
+/** @internal */
+export { materializeContainerTrace, sharedConfig } from "./client/hydration.js";
+/** @internal */
+export { $DEVCOMP } from "./client/core.js";
+// The boundary primitives behind `Errored`, `Loading` and `Reveal`: exported
+// at runtime (typed for renderers through `solid-js/internal`), `@internal`
+// because application code should use the components.
+/** @internal */
+export {
+  createErrorBoundary,
+  createLoadingBoundary,
+  createRevealOrder
 } from "./client/hydration.js";
 // Stub exports — only meaningful on the server entry; the client entry
 // satisfies the export surface so isomorphic builds don't break.
@@ -243,7 +254,7 @@ export function ssrScope<T>(fn: () => T): () => T {
   return fn;
 }
 /** @internal */
-export function runInServerComponentScope<T>(fn: () => T): T {
+export function runInServerComponentScope<T>(fn: () => T, _options?: { live?: boolean }): T {
   return fn();
 }
 /** @internal */
@@ -254,11 +265,42 @@ export function creationStamp(): number {
 export function inServerComponentScope(): boolean {
   return false;
 }
+/** @internal */
+export function inLiveServerComponentScope(): boolean {
+  return false;
+}
+/** @internal — server-only: the client has no wire to sanitize for. */
+export function ssrSanitizeError(value: unknown): unknown {
+  return value;
+}
+/** @internal — server-only: the server error hook has no client half here. */
+export function reportServerError(): { mapped: boolean; value?: unknown } {
+  return { mapped: false };
+}
+/** Where a server failure was met, as the server error hook hears it (see `@solidjs/web`'s `ServerErrorContext`). */
+export interface ServerErrorSite {
+  kind: "render" | "server-function";
+  handling: "fallback" | "client" | "failed" | "serialize" | "thrown" | "channel";
+  boundary?: string;
+  /** Where the error was thrown — labels root-first up the owner chain it escaped. */
+  ownerPath?: string[];
+  /** Where it was met — the labels up the chain of the boundary named by `boundary`. */
+  boundaryPath?: string[];
+  functionId?: string;
+  direct?: boolean;
+  /** The request event, when the caller has it in hand; else read from the request scope. */
+  event?: unknown;
+}
+export type ServerErrorHook = (error: unknown, context: ServerErrorSite) => unknown | void;
 /** @internal — server-only: on the client no value carries a trace. */
 export function getProjectionTrace(
   value: unknown
 ): { subscribe(): AsyncIterable<any>; array: boolean } | undefined {
   return undefined;
+}
+/** @internal — server-only: on the client there is no render to share a source under. */
+export function shareAsyncIterable<T>(source: AsyncIterable<T>): AsyncIterable<T> {
+  return source;
 }
 
 // Observe / dev tiers — re-exported from @solidjs/signals so an app imports
@@ -266,21 +308,32 @@ export function getProjectionTrace(
 // build resolves signals through the `observe` condition so the two agree.
 import { IS_DEV, IS_OBSERVE } from "./client/core.js";
 import { DEV as _DEV, OBSERVE as _OBSERVE, type Dev, type Observe } from "@solidjs/signals";
+import { installConsoleFooter } from "./console-footer.js";
 export const OBSERVE: Observe | undefined = IS_OBSERVE ? _OBSERVE : undefined;
 export const DEV: Dev | undefined = IS_DEV ? _DEV : undefined;
 // The types a runtime, router or observability adapter names when it talks to
 // the tiers: the refs it hands `withInteraction`/`withOrigin`, the channel's
-// event, and the records the attribution engine delivers. Here so the code
-// that reaches for `OBSERVE.attribution.withOrigin` finds `NavigationRef`
-// beside it; the engine's full surface stays on `solid-js/attribution`.
+// types and the findings'. Here so the code that reaches for
+// `OBSERVE.attribution.withOrigin` finds `NavigationRef` beside it, and a
+// `records.subscribe` listener types from this import alone. The engine's
+// records (`RerunEvent`, `HoldEvent`, …) are `solid-js/attribution`'s, with
+// the engine; `ChangeOrigin` is the one of them a slot method returns
+// (`currentOrigin`), so it is here too.
 export type {
   Dev,
   Observe,
-  AttributionHooks,
+  ServerObserve,
+  Records,
+  RecordTypes,
+  HostRecordTypes,
+  RecordType,
+  RecordEvent,
+  RecordLive,
+  RecordListener,
+  RecordSubscribeOptions,
   AttributionSlot,
   InteractionRef,
   NavigationRef,
-  OriginRef,
   Diagnostics,
   DiagnosticCapture,
   DiagnosticCode,
@@ -290,19 +343,22 @@ export type {
   DiagnosticSeverity,
   DiagnosticSubject
 } from "@solidjs/signals";
+// The server runtime's observe types — the `"boundary"` record it emits on
+// `OBSERVE.records` and the member it declares onto `OBSERVE.server`
+// (`trace`) — and with them the `RecordTypes`/`ServerObserve` augmentations
+// that module declares: the published types resolve to THIS entry under
+// every condition, so this re-export is what puts them in an observer's
+// program (and what `@solidjs/web` builds on, augmenting `HostRecordTypes`
+// and `ServerTrace` through `"solid-js"`). Type-only — the module's runtime
+// never enters the client build.
 export type {
-  Acknowledgement,
-  AttributionRecords,
-  AttributionRecordType,
-  ChangeOrigin,
-  ChangeRecord,
-  HeldWrite,
-  HoldEvent,
-  InteractionEvent,
-  NavigationEvent,
-  NavigationHop,
-  RerunEvent
-} from "@solidjs/signals/attribution";
+  BoundaryEvent,
+  BoundaryLive,
+  BoundaryListener,
+  ServerTrace
+} from "./server/observe.js";
+export type { RecoveryEvent, RecoveryLive, RecoveryListener } from "./recovery.js";
+export type { ChangeOrigin } from "@solidjs/signals/attribution";
 
 // handle multiple instance check
 declare global {
@@ -318,40 +374,9 @@ if (IS_DEV && globalThis) {
 }
 
 // Point-of-pain discovery: the first console report of each diagnostic code
-// gains a footer naming the repair skill shipped with this package, so a
-// reader (human or agent) hitting the warning learns where the prescribed
-// fix lives without any prior knowledge of the skill system.
-//
-// Perf/graph/responsiveness codes additionally name the attribution surface.
-// This breaks a discovery circularity: the sensitive detectors (WIDE_WRITE,
-// HOT_SCOPE_*, ASYNC_WATERFALL, SILENT_HOLD, …) only fire while the
-// `solid-js/attribution` engine is enabled, and a reader who doesn't know the
-// entry exists never enables it — so the always-on graph warnings (and any such
-// code that does fire) are the moments to teach that deeper evidence is one
-// call away. Dev-tier: the footer is console text.
-//
-// Both pointers are given twice: the installed file (what an agent working in
-// the repo can open with no network, at exactly the installed version) and a
-// stable URL (what a human in a browser console can click; Chrome linkifies
-// it) — the anchor jumps to the code's own section.
-const SKILLS_URL = "https://github.com/solidjs/solid/blob/main/packages";
-if (IS_DEV && _DEV) {
-  _DEV.setConsoleFooter(event => {
-    // GitHub heading anchors: lowercased, underscores kept (`### SILENT_HOLD` → `#silent_hold`).
-    const anchor = event.code.toLowerCase();
-    const base =
-      `[${event.code}] repair guide: node_modules/solid-js/skills/reactivity-diagnostics/SKILL.md ` +
-      `— ${SKILLS_URL}/solid/skills/reactivity-diagnostics/SKILL.md#${anchor}`;
-    return event.kind === "perf" || event.kind === "graph" || event.kind === "responsiveness"
-      ? base +
-          `\n[${event.code}] deeper evidence: import { attribution } from "solid-js/attribution"; ` +
-          `attribution.enable() explains every re-run — why-chains, costs(), waterfalls(), ` +
-          `holds(), feedback() — agent loop: ` +
-          `node_modules/@solidjs/diagnostics/skills/agent-loops/SKILL.md — ` +
-          `${SKILLS_URL}/diagnostics/skills/agent-loops/SKILL.md`
-      : base;
-  });
-}
+// gains a footer naming the repair skill shipped with this package — see
+// console-footer.ts (shared with the server entry).
+if (IS_DEV) installConsoleFooter();
 
 /* Not Implemented
 export {

@@ -34,7 +34,32 @@ artifact.attribution; // { reruns, costs, holds, feedback } — who re-ran, why,
 
 `attribution.holds` lists every hold the scenario caused — a write that landed on async work and stayed staged until the data settled — with what was held, what blocked it, how long the user waited (measured from the interaction when the web runtime stamped one), and which affordances acknowledged it (`isPending:posts`, `latest:page`, `optimistic:todos`, `affects:list`) or none. `attribution.feedback` folds those into ranked tables: `sources` (per async source: holds, silent ms, acknowledged-by counts, long holds (tail past the long-hold threshold), the interactions held), `interactions` (per user event: re-run work caused beside time held — the two INP hazards on one row), `flights` (per async source: flights started, landed, and abandoned before landing — the re-ask storm) and `fallbacks` (per loading boundary: time its fallback was shown, and how often that was a sub-150ms flash).
 
-Options: `scenario` labels the artifact, `attribution: false` captures diagnostics only, and an options object is passed through to the engine's `enable()` (`@solidjs/signals/attribution`). `artifactToJSONL(artifact)` emits line-oriented output for offline or agent-side analysis.
+Options: `scenario` labels the artifact, `attribution: false` captures diagnostics only, and an options object is passed through to the engine's `enable()` (`@solidjs/signals/attribution`); the capture holds the shared engine for its duration and releases only its own hold, so a profiler track or an APM adapter enabled beside it is undisturbed. `artifactToJSONL(artifact)` emits line-oriented output for offline or agent-side analysis.
+
+**Clocks.** Every `at` in the artifact — a re-run's start, a hold's, a record's — is on the capturing process's `performance.now()` clock; `artifact.timeOrigin` (epoch milliseconds, the process's `performance.timeOrigin`) anchors it, so `timeOrigin + at` is the absolute time of anything in the artifact and two captures from one process line up. Durations (`selfMs`, `holdMs`, `durationMs`) are already relative. Re-runs are stored as the engine emits them: `nodeId` names the scope (stable across its runs in the process, distinct between scopes), so runs of unnamed effects still fold to one scope offline; the live node never leaves the process (in-process, `OBSERVE.records.subscribe("rerun", (event, node) => …)` hands it over beside the record).
+
+### Records: server renders and browser requests
+
+Beside findings and attribution the artifact carries **records** — `artifact.records`, the runtimes' `OBSERVE.records` channel folded into one table per record type, on either platform. Over a server render the evidence is **waits and calls**: run `renderToStream` (or `renderToString`) as the scenario:
+
+```ts
+import { captureArtifact, expectNoDiagnostics } from "@solidjs/diagnostics";
+import { renderToStream } from "@solidjs/web";
+
+const { artifact } = await captureArtifact(() => renderToStream(() => <App />), {
+  scenario: "profile page",
+  attribution: false
+});
+
+artifact.diagnostics; // server findings too: SSR_RENDER_ERROR_CONTAINED, SERVER_WRITE, HEAD_TAG_INVALID …
+artifact.records.boundary; // every <Loading> that waited: durationMs, heldMs, passes, outcome, ownerPath
+artifact.records.invocation; // every server-function execution: id, durationMs, outcome, boundary
+artifact.records.frame; // every frame stream produced (side: "server"): id, shellMs, durationMs, outcome, the chunk census
+```
+
+`boundary` is one row per `<Loading>` boundary that **waited** (a boundary that rendered on its first pass has nothing to attribute): how long it held its content up (`durationMs`), how long finished content then sat behind `<Reveal>` siblings (`heldMs`), how many render passes it took (`passes` — `2` is one round of async, more is a sequential chain) and how it ended (`outcome`: settled, the `renderToString` fallback, a client-only handoff, an error). `invocation` is one row per server-function execution; a direct call made during a boundary's pass carries that boundary's `id` in `boundary`, so a boundary's wait reads as the calls it consisted of. `frame` is one row per frame stream a server component rendered to (`renderServerComponent`, or a server-function response through `frameTransformResult`): time to the shell (`shellMs`) and to `complete` (`durationMs`), how it ended, and a census of what the stream carried (`fragments`, `slots`, `regions`, `errors`); a server-function response that is a frame stream has an invocation row and a frame row with the same `id`. The runtime derives two dev checks from the same facts — `SSR_BOUNDARY_WATERFALL` for a sequential chain of waits and `SSR_CLIENT_CONTENT_MASKED` for client-only content that surfaced only after a wait — so `expectNoDiagnostics` catches them without reading the tables.
+
+In the browser (the in-process capture in a jsdom test, or the bridge under Playwright) the same tables hold the page's **requests**: `artifact.records.call` is one row per server-function call the client made — `id`, `method`, `durationMs` (the whole wait the caller saw), `outcome`, `status` — and `artifact.records.frame` rows with `side: "client"` are the frame streams it applied (`address` is the local boundary the stream was remapped onto; `outcome` adds `truncated` for a body that ended early). A `call` and the server's `invocation` of the same `id` differ by the wire; a `frame` seen from both sides joins by `id` and `version`. `artifact.records.recovery` is the client's side of a server hand-off: one row per `<Loading>` boundary that rendered its children as fresh client DOM because the server could not produce the fragment (`outcome: "client"` on the server's `boundary` row of the same `id`) — `waitedMs` is the fallback the person looked at while the server was still trying, `renderMs` the fresh render. The tables are always present; one is empty when nothing of its kind happened. Their row types are the runtimes' own — `BoundaryEvent`/`RecoveryEvent` from `solid-js`, `InvocationEvent`/`FrameEvent`/`CallEvent` from `@solidjs/web` — which is why those two packages are (type-only) peers of this one. JSONL egress adds one line per record, `type` naming its table.
 
 ## Assertions and budgets
 

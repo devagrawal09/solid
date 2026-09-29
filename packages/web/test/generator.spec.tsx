@@ -314,7 +314,7 @@ describe("event host", () => {
             });
             return <button onClick={save}>{status()}</button>;
           },
-          error => <p class="error">{(error() as Error).constructor.name}</p>
+          (error: () => unknown) => <p class="error">{(error() as Error).constructor.name}</p>
         ) as unknown as JSX.Element,
       container
     );

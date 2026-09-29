@@ -11,9 +11,11 @@
  *   caches can store them. POST dispatch stays gated.
  * - Every response defaults to `Cache-Control: no-store` unless the function
  *   set its own cache policy — caching is opt-in on the wire.
- * - The endpoint has no CORS surface at all: no `Access-Control-*` header is
- *   ever emitted, so a browser preflight fails and the gate is never the
- *   only thing standing between a cross-origin page and a dispatch.
+ * - The endpoint has no CORS surface by default: no `Access-Control-*`
+ *   header is emitted unless `csrf.origin` lists the caller's origin
+ *   (#3538, pinned in `server-functions-cors-origin`), so a browser
+ *   preflight fails and the gate is never the only thing standing between
+ *   an unlisted cross-origin page and a dispatch.
  * - Conditional requests and `Range` are not part of the contract: a
  *   declared read answers in full, never with a 304 or a 206 it cannot back.
  *
@@ -40,8 +42,7 @@ function postRequest(id: string, headers: Record<string, string> = {}) {
     method: "POST",
     headers: {
       "Sec-Fetch-Site": "same-origin",
-      ...headers,
-      "X-Server-Function-Instance": "server-function:test"
+      ...headers
     }
   });
 }
@@ -208,9 +209,10 @@ describe("server-function method allowlist (#3069)", () => {
   });
 
   it("advertises Allow on OPTIONS and on a verb it has never heard of", async () => {
-    // OPTIONS gets no special handling — there is no CORS surface for it to
-    // describe (below) and no `Allow`-only branch — so it lands on the same
-    // 405 as any other verb, carrying the same advertisement. A method the
+    // A plain OPTIONS gets no special handling — only a listed origin's
+    // preflight is answered (#3538), there is no CORS surface to describe
+    // by default (below) and no `Allow`-only branch — so it lands on the
+    // same 405 as any other verb, carrying the same advertisement. A method the
     // runtime has never seen behaves identically: the allowlist is closed,
     // and `Allow` is the complete answer to "then what may I send?".
     registerServerFunction("hygiene-allow-post", async () => "ok");
@@ -271,16 +273,17 @@ describe("server-function method allowlist (#3069)", () => {
 });
 
 /**
- * The endpoint has no CORS surface (#3069). Nothing here emits an
- * `Access-Control-*` header, on any status, so a cross-origin `fetch` from
- * a page never gets past the browser: the preflight has no
+ * The endpoint has no CORS surface by default (#3069). Nothing here emits
+ * an `Access-Control-*` header, on any status, so a cross-origin `fetch`
+ * from a page never gets past the browser: the preflight has no
  * `Access-Control-Allow-Origin` to read, and a simple request's response is
  * unreadable. That is the layer BELOW the origin gate — the gate stops the
  * dispatch, the missing CORS headers stop the browser from ever asking —
- * and the reason a deployment must opt in at its own edge, deliberately,
- * rather than find that the RPC endpoint quietly answers everybody.
+ * and the reason a deployment must opt in deliberately, by listing the
+ * origin in `csrf.origin` (#3538), rather than find that the RPC endpoint
+ * quietly answers everybody.
  */
-describe("no CORS surface (#3069)", () => {
+describe("no CORS surface by default (#3069)", () => {
   it("emits no Access-Control-* header on any path", async () => {
     registerServerFunction("hygiene-cors", async () => "ok");
     registerServerFunction("hygiene-cors-throw", async () => {
@@ -473,28 +476,6 @@ describe("server-function cache hygiene (#3071)", () => {
     );
     expect(plain.status).toBe(200);
     expect(plain.headers.get("Cache-Control")).toBe("public, max-age=60");
-  });
-
-  it("keeps the instance header inert at the bare address (#3094)", async () => {
-    declareGET(
-      "hygiene-inert-header",
-      async () => new Response(null, { headers: { "Cache-Control": "public, max-age=60" } })
-    );
-
-    // The bare address is plain HTTP no matter what headers ride along: the
-    // shape and the cache policy are functions of the url alone, so the
-    // author's policy survives and no codec shape can be summoned into a
-    // shared cache by a header the cache does not key on.
-    const tagged = await handleServerFunctionRequest(
-      new Request("https://app.example/_server/hygiene-inert-header", {
-        method: "GET",
-        headers: { "X-Server-Function-Instance": "server-function:test" }
-      }),
-      { provideEvent }
-    );
-    expect(tagged.status).toBe(200);
-    expect(tagged.headers.get("Cache-Control")).toBe("public, max-age=60");
-    expect(tagged.headers.has("X-Server-Function-Format")).toBe(false);
   });
 
   it("keeps no-store on the refusals built before dispatch, not only the ones above", async () => {

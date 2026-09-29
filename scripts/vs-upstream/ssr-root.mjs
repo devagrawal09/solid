@@ -63,7 +63,7 @@ for (const [fn, anchor] of [
 // A tree whose @solidjs/web imports `solid-js/internal` (upstream rc.9): alias
 // it to its dist next to the `solid-js` alias (which would otherwise map it
 // to "<solid dist file>/internal").
-if (existsSync(join(tree, "packages/solid/dist/internal.js"))) {
+if (existsSync(join(tree, "packages/solid/dist/internal.js")) && !lib.includes('"solid-js/internal"')) {
   const internal = '"solid-js/internal": join(ROOT, "packages/solid/dist/internal.js"), ';
   lib = replaceOnce(lib, 'alias: { "solid-js": DIST.solidServer,', `alias: { ${internal}"solid-js": DIST.solidServer,`);
   lib = replaceOnce(lib, ': { "solid-js": DIST.solid, "@solidjs/web": DIST.web,', `: { ${internal}"solid-js": DIST.solid, "@solidjs/web": DIST.web,`);

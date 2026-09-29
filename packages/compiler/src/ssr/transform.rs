@@ -48,10 +48,15 @@ pub(crate) struct AstSsrTransform<'a, 'source> {
     hydratable: bool,
     server_components: bool,
     wrap_conditionals: bool,
+    /// Babel's `sourceNames.components` on SSR output: keep the `createComponent`
+    /// call (instead of inlining `Comp(props)`) and pass the source tag text
+    /// as its third argument, so the server runtime labels the owner.
+    component_names: bool,
     /// The memo wrapper import name; `None` disables memo wrapping.
     memo_wrapper: Option<String>,
     static_marker: String,
     uses_ssr: bool,
+    uses_create_component: bool,
     uses_ssr_hydration_key: bool,
     uses_ssr_select_values: bool,
     uses_escape: bool,
@@ -60,6 +65,7 @@ pub(crate) struct AstSsrTransform<'a, 'source> {
     uses_scope: bool,
     uses_memo: bool,
     uses_ssr_attribute: bool,
+    uses_ssr_element_attribute: bool,
     uses_ssr_style: bool,
     uses_ssr_style_property: bool,
     uses_ssr_class_name: bool,
@@ -83,9 +89,23 @@ pub(crate) struct AstSsrTransform<'a, 'source> {
     /// Hoisted multi-part templates, deduped by content (Babel's program
     /// `templates` scope data): (parts, local name).
     templates: std::vec::Vec<(std::vec::Vec<String>, String)>,
+    /// Hoisted `ssrElement` skip predicates for baked static tails, deduped
+    /// by key set (Babel's `ssrSkips` scope data): (keys, local name).
+    skips: std::vec::Vec<(std::vec::Vec<String>, String)>,
+    skip_index: usize,
     /// Bare `var` names hoisted to program top for expression-position
     /// temp assignments (Babel's `path.scope.push`).
     hoisted_var_names: std::vec::Vec<String>,
+    /// Span starts of component elements whose props literals are candidates
+    /// for the hoisted shape (ssr/props.rs); `None` when the option is off.
+    props_sites: Option<std::collections::HashSet<u32>>,
+    /// Span starts of the module-level `_self$` capture IIFEs (see
+    /// `JsxTransform::note_module_capture_iife`); transparent to the pass.
+    pub(crate) module_capture_iifes: std::collections::HashSet<u32>,
+    /// Inside a class field initializer (see `lower_class_field_value`).
+    pub(crate) in_class_field: bool,
+    /// Module-level shapes `hoist_props` produced, placed by `prepend_helpers`.
+    hoisted_props: std::vec::Vec<Statement<'a>>,
     /// Declaration statements to insert before the statement currently being
     /// processed (Babel's `getStatementParent().insertBefore`).
     pending_statements: std::vec::Vec<Statement<'a>>,
@@ -189,6 +209,7 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
         hydratable: bool,
         server_components: bool,
         wrap_conditionals: bool,
+        component_names: bool,
         memo_wrapper: Option<String>,
         static_marker: String,
         built_ins: std::vec::Vec<String>,
@@ -202,9 +223,11 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
             hydratable,
             server_components,
             wrap_conditionals,
+            component_names,
             memo_wrapper,
             static_marker,
             uses_ssr: false,
+            uses_create_component: false,
             uses_ssr_hydration_key: false,
             uses_ssr_select_values: false,
             uses_escape: false,
@@ -213,6 +236,7 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
             uses_scope: false,
             uses_memo: false,
             uses_ssr_attribute: false,
+            uses_ssr_element_attribute: false,
             uses_ssr_style: false,
             uses_ssr_style_property: false,
             uses_ssr_class_name: false,
@@ -232,7 +256,13 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
             template_index: 0,
             statement_depth: 0,
             templates: std::vec::Vec::new(),
+            skips: std::vec::Vec::new(),
+            skip_index: 0,
             hoisted_var_names: std::vec::Vec::new(),
+            props_sites: None,
+            module_capture_iifes: std::collections::HashSet::new(),
+            in_class_field: false,
+            hoisted_props: std::vec::Vec::new(),
             pending_statements: std::vec::Vec::new(),
             statement_jsx_spans: std::vec::Vec::new(),
             component_child_depth: 0,
@@ -444,6 +474,29 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
         }
     }
 
+    /// Opts the component props literals in for the hoisted shape
+    /// (`hoistProps`, default on); call before `visit_program`.
+    pub(crate) fn enable_hoist_props(&mut self) {
+        self.props_sites = Some(std::collections::HashSet::new());
+    }
+
+    /// Rewrites the marked props literals (ssr/props.rs) after the transform
+    /// and before `prepend_helpers`, which places the resulting shapes.
+    pub(crate) fn hoist_props(&mut self, program: &mut Program<'a>, dev: bool) {
+        let Some(sites) = self.props_sites.take() else {
+            return;
+        };
+        let hoisted = crate::ssr::props::hoist_props(
+            self.allocator,
+            program,
+            &sites,
+            &self.module_capture_iifes,
+            &self.bindings.taken_names,
+            dev,
+        );
+        self.hoisted_props = hoisted;
+    }
+
     pub(crate) fn prepend_helpers(&mut self, program: &mut Program<'a>) {
         if !self.uses_ssr
             && !self.uses_ssr_hydration_key
@@ -451,11 +504,14 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
             && !self.uses_escape
             && !self.uses_ssr_element
             && !self.uses_merge_props
+            && !self.uses_create_component
             && !self.uses_scope
             && !self.uses_memo
             && !self.uses_apply_ref
             && self.templates.is_empty()
+            && self.skips.is_empty()
             && self.hoisted_var_names.is_empty()
+            && self.hoisted_props.is_empty()
             && self.built_in_imports.is_empty()
         {
             return;
@@ -498,8 +554,14 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
         if self.uses_ssr_element {
             statements.push(self.import_named("ssrElement", "_$ssrElement"));
         }
+        if self.uses_ssr_element_attribute {
+            statements.push(self.import_named("ssrElementAttribute", "_$ssrElementAttribute"));
+        }
         if self.uses_merge_props {
             statements.push(self.import_named("mergeProps", "_$mergeProps"));
+        }
+        if self.uses_create_component {
+            statements.push(self.import_named("createComponent", "_$createComponent"));
         }
         if self.uses_apply_ref {
             statements.push(self.import_named("applyRef", "_$applyRef"));
@@ -536,6 +598,21 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
                 init,
             ));
         }
+        // Spread-element skip predicates after the templates (Babel's
+        // `appendSkips`): `var _sk$N = k => k === "a" || k === "b";`.
+        for (keys, name) in std::mem::take(&mut self.skips) {
+            let init = self.skip_predicate(&keys);
+            statements.push(variable_statement(
+                self.allocator,
+                SPAN,
+                oxc_ast::ast::VariableDeclarationKind::Var,
+                &name,
+                init,
+            ));
+        }
+        // SSR hoisted props shapes after the templates they reference (Babel
+        // unshifts them right after its templates).
+        statements.extend(std::mem::take(&mut self.hoisted_props));
         if self.uses_ssr_select_values {
             // `_$ssrSelectValues();` — arms the runtime's select-value
             // resolution pass (only modules that bind a select value, or
@@ -582,6 +659,63 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
             crate::shared::utils::next_unique_template_id(&mut self.template_index, &self.bindings);
         self.templates.push((parts.to_vec(), name.clone()));
         name
+    }
+
+    /// Registers the skip predicate of an `ssrElement` call whose static tail
+    /// attributes were baked into its attribute string, deduped by key set,
+    /// and returns the `_sk$N` local (Babel's `registerSkip`).
+    fn register_skip(&mut self, keys: &[String]) -> String {
+        if let Some((_, name)) = self.skips.iter().find(|(existing, _)| existing == keys) {
+            return name.clone();
+        }
+        let name =
+            crate::shared::utils::next_unique_local("_sk", &mut self.skip_index, &self.bindings);
+        self.skips.push((keys.to_vec(), name.clone()));
+        name
+    }
+
+    /// `k => k === "a" || k === "b"` over the baked keys.
+    fn skip_predicate(&self, keys: &[String]) -> Expression<'a> {
+        let ast = self.ast();
+        let k = |ast: &AstBuilder<'a>| ast.expression_identifier(SPAN, ast.ident("k"));
+        let mut test = ast.expression_binary(
+            SPAN,
+            k(&ast),
+            oxc_ast::ast::BinaryOperator::StrictEquality,
+            ast.expression_string_literal(SPAN, ast.str(&keys[0]), None),
+        );
+        for key in &keys[1..] {
+            let right = ast.expression_binary(
+                SPAN,
+                k(&ast),
+                oxc_ast::ast::BinaryOperator::StrictEquality,
+                ast.expression_string_literal(SPAN, ast.str(key), None),
+            );
+            test = ast.expression_logical(SPAN, test, oxc_ast::ast::LogicalOperator::Or, right);
+        }
+        let param = ast.formal_parameter(
+            SPAN,
+            ast.vec(),
+            ast.binding_pattern_binding_identifier(SPAN, ast.ident("k")),
+            None,
+            None,
+            false,
+            None,
+            false,
+            false,
+        );
+        let params = ast.formal_parameters(
+            SPAN,
+            oxc_ast::ast::FormalParameterKind::ArrowFormalParameters,
+            ast.vec1(param),
+            None,
+        );
+        let body = ast.function_body(
+            SPAN,
+            ast.vec(),
+            ast.vec1(ast.statement_expression(SPAN, test)),
+        );
+        ast.expression_arrow_function(SPAN, true, false, None, params, None, body)
     }
 
     /// Babel's `getStaticExpression` (`path.evaluate()`): resolves constant
@@ -850,8 +984,18 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
         }
     }
 
+    /// Every props literal a component call (or a spread element's source
+    /// objects) emits carries a span the hoisted-shape pass (ssr/props.rs)
+    /// finds it by once every body is final.
+    fn note_props_site(&mut self, span: Span) {
+        if let Some(sites) = &mut self.props_sites {
+            sites.insert(span.start);
+        }
+    }
+
     fn lower_component(&mut self, element: &JSXElement<'a>) -> Result<Expression<'a>> {
         let root_tag = self.jsx_root_span == Some(element.span);
+        self.note_props_site(element.span);
         let component = component_callee_expression(self, &element.opening_element.name, root_tag)?;
         let mut prop_objects = std::vec::Vec::new();
         let mut running_props = std::vec::Vec::new();
@@ -1037,7 +1181,27 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
 
         flush_component_props(self, &mut running_props, &mut prop_objects, element.span);
         let props = component_props_expression(self, element.span, prop_objects, force_merge_props);
-        let call = self.call_expression(element.span, component, vec![props]);
+        // Babel: SSR inlines `createComponent(Comp, props)` to `Comp(props)`
+        // (the prod server wrapper is that call), except under
+        // `sourceNames.components`, where the wrapper carries the label:
+        // `_$createComponent(Comp, props, "Comp")`.
+        let call = if self.component_names {
+            self.uses_create_component = true;
+            let name = crate::shared::component::jsx_tag_name(
+                &|span| self.source.get(span.start as usize..span.end as usize) == Some("this"),
+                &element.opening_element.name,
+            );
+            let label =
+                self.ast()
+                    .expression_string_literal(element.span, self.ast().str(&name), None);
+            self.call_identifier(
+                element.span,
+                "_$createComponent",
+                vec![component, props, label],
+            )
+        } else {
+            self.call_expression(element.span, component, vec![props])
+        };
         if component_setup.is_empty() {
             return Ok(call);
         }
@@ -1275,12 +1439,14 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
             self.uses_ssr_select_values = true;
         }
         let do_not_escape = tag_name == "script" || tag_name == "style";
-        let props = self.spread_props(
+        let (props, tail, claims) = self.spread_props(
+            &tag_name,
             &element.opening_element.attributes,
             !element.children.is_empty(),
+            element.span,
         )?;
         let children = self.spread_children_expression(&tag_name, element, do_not_escape)?;
-        let args = self.ast().vec_from_array([
+        let mut args = self.ast().vec_from_array([
             Argument::StringLiteral(self.ast().alloc_string_literal(
                 element.span,
                 self.ast().str(&tag_name),
@@ -1293,6 +1459,36 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
                     .alloc_boolean_literal(element.span, top_level && self.hydratable),
             ),
         ]);
+        // The tail rides as `ssrElement`'s skip predicate (hoisted, one per
+        // key set) and attribute string — a literal when every part is
+        // static, else a thunk concatenating the parts in source order. A
+        // `false` static bakes to no markup but still skips its key.
+        if let Some((skip_keys, tail)) = tail {
+            let skip = self.register_skip(&skip_keys);
+            args.push(expression_to_argument(
+                self.ast()
+                    .expression_identifier(element.span, self.ast().ident(&skip)),
+            ));
+            let markup = self.tail_markup(element.span, tail);
+            args.push(expression_to_argument(markup));
+        }
+        // The claim map rides as a seventh argument, a thunk `ssrElement`
+        // reads only under an armed render context; `undefined` pads the
+        // skip/markup slots when the element has no tail.
+        if !claims.is_empty() {
+            if args.len() == 4 {
+                for _ in 0..2 {
+                    args.push(expression_to_argument(self.ast().expression_identifier(
+                        element.span,
+                        self.ast().ident("undefined"),
+                    )));
+                }
+            }
+            let map = self.claim_segments(element.span, claims);
+            args.push(expression_to_argument(
+                crate::shared::ast::concise_arrow_thunk(self.allocator, element.span, map),
+            ));
+        }
         Ok(self.ast().expression_call(
             element.span,
             self.ast()
@@ -1303,88 +1499,207 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
         ))
     }
 
+    /// The props argument of an `ssrElement` call, plus — when static
+    /// attributes follow the last spread — the keys to skip and the attribute
+    /// markup they bake to (Babel's `createElement` props section).
+    ///
+    /// Static attributes written AFTER the last spread are fixed markup: no
+    /// later source can override them, so they are baked into `ssrElement`'s
+    /// attribute string as the template path would write them, and their
+    /// keys are skipped on every source — the spread's own copy of `class`
+    /// is never read or emitted, exactly as if the statics were the winning
+    /// last source. What that saves per element is the trailing object
+    /// literal, its key list, and the "does a later source own this key"
+    /// check on every key of the spread; an element whose only other source
+    /// is the spread serializes from ONE plain object. Statics before a
+    /// spread stay a source: the spread may override them, and only the
+    /// runtime knows its keys.
+    #[allow(clippy::type_complexity)]
     fn spread_props(
         &mut self,
+        tag_name: &str,
         attributes: &[JSXAttributeItem<'a>],
         has_children: bool,
-    ) -> Result<Expression<'a>> {
+        element_span: Span,
+    ) -> Result<(
+        Expression<'a>,
+        Option<(std::vec::Vec<String>, std::vec::Vec<TailPart<'a>>)>,
+        std::vec::Vec<(usize, String, Expression<'a>)>,
+    )> {
+        // Server components (principles §9.2.3): the named `ref`/`on*`
+        // attributes of a spread element are handler positions like a
+        // template element's, and compile to the same claim map — `{ click:
+        // expr, ref: [a, b] }`, duplicate refs merged, a duplicate handler
+        // last-wins as the template path strips it — keyed by the index of
+        // the source each attribute sits before (`<b {...a} onClick={go}
+        // {...b}>` → `{ 1: { click: go } }`, the spreads being sources 0 and
+        // 2), and handed to `ssrElement` as a thunk it reads only inside a
+        // server component's render (the gate the template path's `ssrClaim`
+        // guard reads), so plain SSR never evaluates the expressions. The
+        // runtime settles each handler position in source order, as the
+        // client's `spread(el, [a, { onClick: go }, b])` does — a spread at
+        // that index or later that HAS the key owns it — and merges every
+        // ref. Plain SSR
+        // output is unchanged (dropped, as a server element has no handlers
+        // to run). Collected in the loop below (`spread_claim`), where the
+        // source index is known.
+        let mut claims: std::vec::Vec<(usize, String, Expression<'a>)> = std::vec::Vec::new();
         // The DOM transform handles `ref` outside its spread prop sources.
         let mut prop_attributes = attributes.iter().filter(|attr| {
             !matches!(attr, JSXAttributeItem::Attribute(attr)
                 if matches!(&attr.name, oxc_ast::ast::JSXAttributeName::Identifier(name)
                     if name.name == "ref"))
         });
+        // A `ref` beside the lone spread is a claim under `serverComponents`;
+        // the loop below places it.
         if let (Some(JSXAttributeItem::SpreadAttribute(spread)), None) =
             (prop_attributes.next(), prop_attributes.next())
+            && !(self.server_components && attributes.len() > 1)
         {
-            return Ok(spread.argument.clone_in(self.allocator));
+            return Ok((spread.argument.clone_in(self.allocator), None, claims));
         }
+        let last_spread = attributes
+            .iter()
+            .rposition(|attr| matches!(attr, JSXAttributeItem::SpreadAttribute(_)))
+            .unwrap_or(0);
+        let mut skip_keys = std::vec::Vec::new();
+        let mut tail: std::vec::Vec<TailPart<'a>> = std::vec::Vec::new();
         let mut prop_objects = std::vec::Vec::new();
         let mut running_props = std::vec::Vec::new();
-        let mut dynamic_spread = false;
-        for attr in attributes {
+        for (i, attr) in attributes.iter().enumerate() {
             match attr {
                 JSXAttributeItem::SpreadAttribute(spread) => {
+                    // A source object with getters is the same shape as a
+                    // component's props literal, and a candidate for the same
+                    // hoisted constructor (ssr/props.rs): the literal carries
+                    // the span the pass finds it by — this spread's for the
+                    // object flushed ahead of it, the element's for the tail.
+                    self.note_props_site(spread.span);
                     flush_component_props(self, &mut running_props, &mut prop_objects, spread.span);
                     let mut argument = spread.argument.clone_in(self.allocator);
-                    // Dynamic spreads defer behind a thunk and force the
-                    // mergeProps wrap (Babel's `dynamicSpread`).
+                    // A dynamic spread defers behind a thunk: evaluated in
+                    // argument position it would run before `ssrElement`
+                    // allocates the element's own hydration id, while the
+                    // client claims the element (getNextElement) before
+                    // applying the spread — shifting the element's id by one
+                    // and leaving it unclaimed. `ssrElement` calls function
+                    // sources after allocating the key, matching that order.
                     if self.classify().is_dynamic(None, &argument, false) {
-                        dynamic_spread = true;
                         argument = self.inline_call_expression(argument);
                     }
                     prop_objects.push(argument);
                 }
                 JSXAttributeItem::Attribute(attr) => {
-                    if let Some(property) = self.spread_prop_property(attr, has_children)? {
-                        running_props.push(property);
+                    if self.server_components
+                        && let Some((pos, expression)) = self.spread_claim(attr)
+                    {
+                        // The index of the source this attribute sits
+                        // before: the sources pushed so far, plus the running
+                        // literal if it will be pushed ahead of the next
+                        // spread. The literal never carries a handler key, so
+                        // a spread's index is either below this or at/after
+                        // it — never ambiguous.
+                        let index = prop_objects.len() + usize::from(!running_props.is_empty());
+                        claims.push((index, pos, expression));
+                        continue;
+                    }
+                    if let Some(property) =
+                        self.spread_prop_property(tag_name, attr, has_children, i > last_spread)?
+                    {
+                        match property {
+                            SpreadProp::Source(property) => running_props.push(property),
+                            SpreadProp::Tail(key, part) => {
+                                skip_keys.push(key);
+                                match (part, tail.last_mut()) {
+                                    (TailPart::Text(text), Some(TailPart::Text(last))) => {
+                                        last.push_str(&text)
+                                    }
+                                    (part, _) => tail.push(part),
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
         // Babel pushes the running object even when empty if no props exist.
         if !running_props.is_empty() || prop_objects.is_empty() {
-            flush_component_props(self, &mut running_props, &mut prop_objects, Span::new(0, 0));
+            self.note_props_site(element_span);
+            flush_component_props(self, &mut running_props, &mut prop_objects, element_span);
             if prop_objects.is_empty() {
-                prop_objects.push(
-                    self.ast()
-                        .expression_object(Span::new(0, 0), self.ast().vec()),
-                );
+                prop_objects.push(self.ast().expression_object(element_span, self.ast().vec()));
             }
         }
-        Ok(if prop_objects.len() > 1 || dynamic_spread {
-            self.uses_merge_props = true;
-            let merged = self.call_expression(
-                Span::new(0, 0),
-                self.ast()
-                    .expression_identifier(Span::new(0, 0), self.ast().ident("_$mergeProps")),
-                prop_objects,
-            );
-            // Defer the merge behind a thunk when hydratable: `mergeProps`
-            // with a function source creates a memo, which consumes a
-            // hydration child id. Evaluated in argument position it would
-            // run before `ssrElement` allocates the element's own id,
-            // while the client claims the element (getNextElement) before
-            // applying the spread — shifting the element's id by one and
-            // leaving it unclaimed. `ssrElement` resolves function props
-            // after allocating the hydration key, matching the client.
-            if self.hydratable {
-                self.arrow_return_expression(Span::new(0, 0), merged)
-            } else {
-                merged
-            }
+        // Several sources go as an ARRAY, not a mergeProps() call: ssrElement
+        // serializes straight from the sources (later wins per key, only the
+        // winner read) with no merged object to build and walk once, and a
+        // function source is a plain thunk called after the key — no memo,
+        // so no hydration id, matching the client spread() array form. A
+        // single source, thunk included, passes through as the props
+        // argument itself.
+        let props = if prop_objects.len() > 1 {
+            let elements = prop_objects.into_iter().map(expression_to_array_element);
+            self.ast()
+                .expression_array(Span::new(0, 0), self.ast().vec_from_iter(elements))
         } else {
             prop_objects
                 .pop()
                 .expect("single SSR spread prop object exists")
-        })
+        };
+        let tail = (!skip_keys.is_empty()).then_some((skip_keys, tail));
+        Ok((props, tail, claims))
     }
 
+    /// The handler position a named attribute of a spread element claims
+    /// (Babel's `claims` in `createElement`): a `ref`/`on*` whose value is
+    /// an expression that is not a literal; `onXxx` lowercases to the event
+    /// name as the template path derives it. `None` for every other
+    /// attribute — including a `ref`/`on*` with a literal or no value,
+    /// which `spread_prop_property` drops as before.
+    fn spread_claim(
+        &self,
+        attr: &oxc_ast::ast::JSXAttribute<'a>,
+    ) -> Option<(String, Expression<'a>)> {
+        let name = match &attr.name {
+            oxc_ast::ast::JSXAttributeName::Identifier(name) => name.name.to_string(),
+            oxc_ast::ast::JSXAttributeName::NamespacedName(name) => {
+                format!("{}:{}", name.namespace.name, name.name.name)
+            }
+        };
+        let pos = if name == "ref" {
+            "ref".to_string()
+        } else {
+            let pos = name.strip_prefix("on")?.to_lowercase();
+            if pos.is_empty() {
+                return None;
+            }
+            pos
+        };
+        let Some(JSXAttributeValue::ExpressionContainer(container)) = &attr.value else {
+            return None;
+        };
+        let expression = container.expression.as_expression()?;
+        if matches!(
+            expression,
+            Expression::StringLiteral(_)
+                | Expression::NumericLiteral(_)
+                | Expression::BooleanLiteral(_)
+        ) {
+            return None;
+        }
+        Some((pos, expression.clone_in(self.allocator)))
+    }
+
+    /// One attribute of a spread element: a property of the running source
+    /// object, or — after the last spread (`in_tail`) and static — the key
+    /// and markup it bakes to (see `spread_props`).
     fn spread_prop_property(
         &mut self,
+        tag_name: &str,
         attr: &oxc_ast::ast::JSXAttribute<'a>,
         has_children: bool,
-    ) -> Result<Option<ObjectPropertyKind<'a>>> {
+        in_tail: bool,
+    ) -> Result<Option<SpreadProp<'a>>> {
         let name = match &attr.name {
             oxc_ast::ast::JSXAttributeName::Identifier(name) => name.name.to_string(),
             oxc_ast::ast::JSXAttributeName::NamespacedName(name) => {
@@ -1394,18 +1709,33 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
         if has_children && name == "children" {
             return Ok(None);
         }
+        // `ref`/`on*` render nothing on the server; under `serverComponents`
+        // they are the element's claim map instead (`spread_claim`).
         if name == "ref" || name.starts_with("prop:") || name.starts_with("on") {
             return Ok(None);
         }
+        // `$key` on an intrinsic element compiles to the `_key` attribute
+        // the frame morph matches keyed elements by, in a spread element's
+        // sources and tail exactly as in the template path
+        // (shared/attr_plan.rs; Babel renames the JSX attribute up front in
+        // `renameElementKey`, ahead of both paths).
+        let name = if name == "$key" {
+            "_key".to_string()
+        } else {
+            name
+        };
+        if in_tail && let Some(part) = self.tail_attribute(tag_name, &name, attr) {
+            return Ok(Some(SpreadProp::Tail(name, part)));
+        }
         match &attr.value {
-            None => Ok(Some(self.object_property(
+            None => Ok(Some(SpreadProp::Source(self.object_property(
                 attr.span,
                 &name,
                 self.ast().expression_boolean_literal(attr.span, true),
-            ))),
+            )))),
             Some(JSXAttributeValue::StringLiteral(value)) => {
                 let value = decode_html_entities(&value.value);
-                Ok(Some(
+                Ok(Some(SpreadProp::Source(
                     self.object_property(
                         attr.span,
                         &name,
@@ -1415,7 +1745,7 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
                             None,
                         ),
                     ),
-                ))
+                )))
             }
             Some(JSXAttributeValue::ExpressionContainer(container)) => {
                 let Some(expression) = container.expression.as_expression() else {
@@ -1428,9 +1758,13 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
                     .classify()
                     .is_dynamic(Some(container.span.start), expression, true)
                 {
-                    Ok(Some(self.object_getter_property(attr.span, &name, value)))
+                    Ok(Some(SpreadProp::Source(
+                        self.object_getter_property(attr.span, &name, value),
+                    )))
                 } else {
-                    Ok(Some(self.object_property(attr.span, &name, value)))
+                    Ok(Some(SpreadProp::Source(
+                        self.object_property(attr.span, &name, value),
+                    )))
                 }
             }
             Some(JSXAttributeValue::Element(_) | JSXAttributeValue::Fragment(_)) => Err(
@@ -1458,6 +1792,11 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
                     let span = text.span;
                     let text = decode_html_entities(&trim_jsx_text(&text.value));
                     if !text.is_empty() {
+                        let text = if do_not_escape {
+                            text
+                        } else {
+                            escape_html_text_expression(&text)
+                        };
                         nodes.push(self.ast().expression_string_literal(
                             span,
                             self.ast().str(&text),
@@ -1656,8 +1995,9 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
             .plan_attributes(&element.opening_element.attributes, &tag_name)?;
         let has_children = !element.children.is_empty() || outcome.children_replacement.is_some();
         let mut attr_children: Option<AttrChildren<'a>> = None;
-        // Server-components behavior claims: ref/on* positions collected
-        // across the element's attributes (Babel's `claims`).
+        // Server-components handler positions: ref/on* expressions
+        // collected across the element's attributes (Babel's `claims`),
+        // emitted as one `ssrClaim` hole that marks attribute-slot reads.
         let mut claims: std::vec::Vec<(String, Expression<'a>)> = std::vec::Vec::new();
         for plan in outcome.plans {
             self.append_planned_attribute(
@@ -1790,15 +2130,11 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
             return Ok(());
         }
         if let Some(rest) = key.strip_prefix("on") {
-            // Capture-phase variants can't ride delegation; they drop as
-            // before. `on:x` keeps the raw name, `onXxx` lowercases — the
-            // same event-name derivation as the client runtime.
-            if self.server_components && !key.starts_with("oncapture:") {
-                let pos = if let Some(raw) = rest.strip_prefix(':') {
-                    raw.to_string()
-                } else {
-                    rest.to_lowercase()
-                };
+            // `onXxx` lowercases to the event name — the client runtime's
+            // own derivation (`onClick` -> `click`); the position is bound
+            // under it.
+            if self.server_components {
+                let pos = rest.to_lowercase();
                 if !pos.is_empty() {
                     claims.push((pos, expression));
                 }
@@ -1822,6 +2158,31 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
 
         let is_dynamic_value =
             !plan.marker_static && self.classify().is_dynamic(None, &expression, true);
+        // Server components (principles §9.2.3): a dynamic `class`/`style`
+        // is the one attribute shape the plain SSR output serializes INSIDE
+        // template quotes (`class="${ssrClassName(x)}"`), where an attribute-slot
+        // value read at that position — the whole value, or a name's
+        // condition in object form — would be stringified instead of
+        // bound. Under the option the whole attribute is a runtime hole,
+        // `ssrElementAttribute("class", x)`, whose helper emits the same
+        // bytes for a plain value and the position marker for a stand-in.
+        // Object literals stay objects (no inlining) for the same reason.
+        if self.server_components && (key == "class" || key == "style") {
+            self.uses_ssr_element_attribute = true;
+            let key_literal =
+                self.ast()
+                    .expression_string_literal(span, self.ast().str(&key), None);
+            let attr =
+                self.helper_call(span, "_$ssrElementAttribute", vec![key_literal, expression]);
+            let hole = if is_dynamic_value {
+                let arrow = self.arrow_return_expression(span, attr);
+                self.hoist_expression(template, span, arrow, true, false)
+            } else {
+                attr
+            };
+            template.push_expr(hole);
+            return Ok(());
+        }
         let is_boolean = matches!(expression, Expression::BooleanLiteral(_));
         let mut do_escape = !is_boolean;
         let mut value = expression;
@@ -2266,7 +2627,16 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
                     let dynamic =
                         self.classify()
                             .is_dynamic(Some(container.span.start), &expression, false);
-                    let allocates = self.hydratable && child_slot_allocates_ids(child);
+                    // A `children_replacement` is the textarea `value` /
+                    // `defaultValue` fold: text content on the server, but a
+                    // plain `value` property effect on the client that never
+                    // allocates a hydration id. Like the innerHTML/textContent
+                    // redirects (#3015) it must not take the `_$scope` id
+                    // reservation, or every keyed sibling after the textarea
+                    // hydrates one id off (#3691).
+                    let allocates = self.hydratable
+                        && children_replacement.is_none()
+                        && child_slot_allocates_ids(child);
                     // Function children are scope-eligible like dynamic ones —
                     // see the template-children path above.
                     let function_hole = expression_is_function_shaped(&expression);
@@ -2453,19 +2823,77 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
         )
     }
 
-    /// One guarded whole-attribute behavior-claim hole per element (Babel's
-    /// `claims` emission): duplicate positions merge into arrays (multiple
-    /// refs), and the expressions only evaluate when the render context's
-    /// claims flag is set —
-    /// `_$sharedConfig.context && _$sharedConfig.context.claims
-    ///    ? _$ssrClaim({...}) : ""`.
-    fn ssr_claim_hole(
-        &mut self,
+    /// A spread element's claim map by source index (Babel's
+    /// `claimSegments`): `{ 1: { click: go }, 3: { ref: el } }`. A handler
+    /// position keeps its LAST named attribute only — the template path's
+    /// duplicate strip, applied here to the claims (a later attribute wins
+    /// whatever sits between, so the earlier one is never read on either
+    /// side); refs merge within a segment as `claim_map` merges them, and
+    /// across segments at the runtime.
+    fn claim_segments(
+        &self,
+        span: Span,
+        claims: std::vec::Vec<(usize, String, Expression<'a>)>,
+    ) -> Expression<'a> {
+        let mut last_handler: std::vec::Vec<(String, usize)> = std::vec::Vec::new();
+        for (i, (_, pos, _)) in claims.iter().enumerate() {
+            if pos == "ref" {
+                continue;
+            }
+            if let Some(entry) = last_handler.iter_mut().find(|(name, _)| name == pos) {
+                entry.1 = i;
+            } else {
+                last_handler.push((pos.clone(), i));
+            }
+        }
+        let mut segments: std::vec::Vec<(usize, std::vec::Vec<(String, Expression<'a>)>)> =
+            std::vec::Vec::new();
+        for (i, (index, pos, expr)) in claims.into_iter().enumerate() {
+            if pos != "ref"
+                && last_handler
+                    .iter()
+                    .any(|(name, last)| *name == pos && *last != i)
+            {
+                continue;
+            }
+            if let Some(entry) = segments.iter_mut().find(|(at, _)| *at == index) {
+                entry.1.push((pos, expr));
+            } else {
+                segments.push((index, vec![(pos, expr)]));
+            }
+        }
+        let mut properties = self.ast().vec();
+        for (index, list) in segments {
+            let Expression::NumericLiteral(key) = self.ast().expression_numeric_literal(
+                span,
+                index as f64,
+                None,
+                oxc_ast::ast::NumberBase::Decimal,
+            ) else {
+                unreachable!("a numeric literal expression");
+            };
+            let value = self.claim_map(span, list);
+            properties.push(self.ast().object_property_kind_object_property(
+                span,
+                oxc_ast::ast::PropertyKind::Init,
+                oxc_ast::ast::PropertyKey::NumericLiteral(key),
+                value,
+                false,
+                false,
+                false,
+            ));
+        }
+        self.ast().expression_object(span, properties)
+    }
+
+    /// The compiled claim map of an element's handler positions, `{ click:
+    /// expr, ref: [a, b] }` (Babel's `claimMap`): duplicate positions merge
+    /// into arrays (multiple refs).
+    fn claim_map(
+        &self,
         span: Span,
         claims: std::vec::Vec<(String, Expression<'a>)>,
-        template: &mut SsrTemplate<'a>,
     ) -> Expression<'a> {
-        self.uses_ssr_claim = true;
         let mut by_pos: std::vec::Vec<(String, std::vec::Vec<Expression<'a>>)> =
             std::vec::Vec::new();
         for (pos, expr) in claims {
@@ -2489,7 +2917,24 @@ impl<'a, 'source> AstSsrTransform<'a, 'source> {
             };
             properties.push(self.object_property(span, &pos, value));
         }
-        let map = self.ast().expression_object(span, properties);
+        self.ast().expression_object(span, properties)
+    }
+
+    /// One guarded whole-attribute handler-position hole per element (Babel's
+    /// `claims` emission; `ssrClaim` marks attribute-slot reads as `_s:on:*` /
+    /// `_s:ref`): duplicate positions merge into arrays (multiple
+    /// refs), and the expressions only evaluate when the render context's
+    /// claims flag is set —
+    /// `_$sharedConfig.context && _$sharedConfig.context.claims
+    ///    ? _$ssrClaim({...}) : ""`.
+    fn ssr_claim_hole(
+        &mut self,
+        span: Span,
+        claims: std::vec::Vec<(String, Expression<'a>)>,
+        template: &mut SsrTemplate<'a>,
+    ) -> Expression<'a> {
+        self.uses_ssr_claim = true;
+        let map = self.claim_map(span, claims);
         let context_read = |transform: &Self| -> Expression<'a> {
             Expression::StaticMemberExpression(
                 transform.ast().alloc_static_member_expression(
@@ -3169,7 +3614,13 @@ impl<'a> AstSsrTransform<'a, '_> {
         }
 
         let mut value = value;
+        // A root inside the initializer wraps in a capture IIFE here as at
+        // module level, but Babel emits that IIFE too (no statement to insert
+        // the capture before), so it is a real function parent for the props
+        // pass — don't record it as transparent.
+        let was_in_class_field = std::mem::replace(&mut self.in_class_field, true);
         self.visit_expression(&mut value);
+        self.in_class_field = was_in_class_field;
         if let Some(capture) = self.take_this_capture_statement(span) {
             let mut statements = self.ast().vec();
             statements.push(capture);
@@ -3223,6 +3674,146 @@ impl<'a> crate::shared::mode_lower::ModeLower<'a> for AstSsrTransform<'a, '_> {
 
     fn memo_wrap_dynamic_child(&mut self, span: Span, thunk: Expression<'a>) -> Expression<'a> {
         self.memo_wrap_fragment_child(span, thunk)
+    }
+}
+
+/// One attribute of a spread element, as `spread_prop_property` classifies
+/// it.
+enum SpreadProp<'a> {
+    /// A property of the running source object.
+    Source(ObjectPropertyKind<'a>),
+    /// An attribute after the last spread: its key (skipped on every source)
+    /// and what it contributes to the attribute string.
+    Tail(String, TailPart<'a>),
+}
+
+/// A piece of a spread element's attribute string (Babel's `tail` array).
+enum TailPart<'a> {
+    /// Fixed markup (`""` for a `false` static).
+    Text(String),
+    /// `ssrElementAttribute("key", expr)`, evaluated when `ssrElement` calls
+    /// the thunk.
+    Dynamic(Expression<'a>),
+}
+
+impl<'a> AstSsrTransform<'a, '_> {
+    /// What an attribute after an element's last spread contributes to
+    /// `ssrElement`'s attribute string. A static is written as the template
+    /// path writes the same attribute (`append_planned_attribute`'s static
+    /// branches): a bare or `true` attribute as ` key`, a string or number as
+    /// ` key="value"` with the value attribute-escaped and class/style
+    /// whitespace normalized, `false` as nothing. An expression is
+    /// `ssrElementAttribute("key", expr)` — the spread walk's rules for one
+    /// key, evaluated when `ssrElement` calls the thunk. `None` when the
+    /// attribute is content rather than markup and must stay a source: a
+    /// child property (`innerHTML`, `textContent`, `children`), a textarea's
+    /// value (its text content on the server), a reserved namespace, or a JSX
+    /// value. Babel: `tailAttribute`.
+    fn tail_attribute(
+        &mut self,
+        tag_name: &str,
+        key: &str,
+        attr: &oxc_ast::ast::JSXAttribute<'a>,
+    ) -> Option<TailPart<'a>> {
+        if child_properties(key)
+            || key == "$ServerOnly"
+            || (tag_name == "textarea" && (key == "value" || key == "defaultValue"))
+            || matches!(&attr.name, oxc_ast::ast::JSXAttributeName::NamespacedName(name)
+                if reserved_namespace(&name.namespace.name))
+        {
+            return None;
+        }
+        let mut markup = String::new();
+        match &attr.value {
+            None => markup.push_str(&format!(" {key}")),
+            Some(JSXAttributeValue::StringLiteral(value)) => {
+                let text =
+                    normalize_static_attribute_value(key, &decode_html_entities(&value.value));
+                append_ssr_static_attribute(&mut markup, key, &text);
+            }
+            Some(JSXAttributeValue::ExpressionContainer(container)) => {
+                match &container.expression {
+                    JSXExpression::BooleanLiteral(literal) => {
+                        if literal.value {
+                            markup.push_str(&format!(" {key}"));
+                        }
+                    }
+                    JSXExpression::StringLiteral(literal) => {
+                        let text = normalize_static_attribute_value(key, &literal.value);
+                        append_ssr_static_attribute(&mut markup, key, &text);
+                    }
+                    JSXExpression::NumericLiteral(literal) => {
+                        let text =
+                            normalize_static_attribute_value(key, &format_number(literal.value));
+                        append_ssr_static_attribute(&mut markup, key, &text);
+                    }
+                    JSXExpression::EmptyExpression(_)
+                    | JSXExpression::JSXElement(_)
+                    | JSXExpression::JSXFragment(_) => return None,
+                    expression => {
+                        let expression = expression
+                            .as_expression()
+                            .expect("non-empty JSX expression")
+                            .clone_in(self.allocator);
+                        self.uses_ssr_element_attribute = true;
+                        let span = attr.span;
+                        let callee = self
+                            .ast()
+                            .expression_identifier(span, self.ast().ident("_$ssrElementAttribute"));
+                        let args = self.ast().vec_from_array([
+                            expression_to_argument(self.ast().expression_string_literal(
+                                span,
+                                self.ast().str(key),
+                                None,
+                            )),
+                            expression_to_argument(expression),
+                        ]);
+                        return Some(TailPart::Dynamic(
+                            self.ast().expression_call(span, callee, None, args, false),
+                        ));
+                    }
+                }
+            }
+            Some(JSXAttributeValue::Element(_) | JSXAttributeValue::Fragment(_)) => return None,
+        }
+        Some(TailPart::Text(markup))
+    }
+
+    /// The attribute-string argument for a tail: a string literal when every
+    /// part is fixed, else `() => "…" + ssrElementAttribute(…) + …`.
+    fn tail_markup(&self, span: Span, tail: std::vec::Vec<TailPart<'a>>) -> Expression<'a> {
+        let ast = self.ast();
+        if tail.iter().all(|part| matches!(part, TailPart::Text(_))) {
+            let text: String = tail
+                .into_iter()
+                .map(|part| match part {
+                    TailPart::Text(text) => text,
+                    TailPart::Dynamic(_) => unreachable!("all parts are text"),
+                })
+                .collect();
+            return ast.expression_string_literal(span, ast.str(&text), None);
+        }
+        let mut concat: Option<Expression<'a>> = None;
+        for part in tail {
+            let expression = match part {
+                TailPart::Text(text) => ast.expression_string_literal(span, ast.str(&text), None),
+                TailPart::Dynamic(expression) => expression,
+            };
+            concat = Some(match concat {
+                Some(left) => ast.expression_binary(
+                    span,
+                    left,
+                    oxc_ast::ast::BinaryOperator::Addition,
+                    expression,
+                ),
+                None => expression,
+            });
+        }
+        crate::shared::ast::concise_arrow_thunk(
+            self.allocator,
+            span,
+            concat.expect("a tail has at least one part"),
+        )
     }
 }
 

@@ -51,6 +51,40 @@ pub struct Renderer {
     pub elements: Vec<String>,
 }
 
+/// Babel's `sourceNames`, resolved: which names as written in source the
+/// output carries so the dev and observe runtimes can label the reactive
+/// graph after minification. The core takes every kind explicitly (the
+/// `Default` is all off); the Node adapter resolves the public `sourceNames`
+/// option against `dev`, so on the JavaScript surface each kind defaults to
+/// the `dev` flag. The production runtimes ignore the names.
+///
+/// These are the JSX-level kinds only. Primitive names (`createSignal(0,
+/// { name: "count" })`) come from the standalone `transformSourceNames`
+/// pass, which the build tool runs on every module independently of the
+/// JSX compiler.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SourceNames {
+    /// The tag as written, as `createComponent`'s third argument
+    /// (`createComponent(Home, props, "Home")`). DOM and SSR output; not
+    /// universal or dynamic.
+    pub components: bool,
+    /// Every compiled binding effect named by what it writes —
+    /// `span.textContent`, `div.class:active`, a hole `div.children`, a
+    /// spread `div.spread` — through an options argument on
+    /// `effect`/`insert`/`spread`. DOM output only.
+    pub bindings: bool,
+}
+
+impl SourceNames {
+    /// Every kind set to `enabled`.
+    pub fn all(enabled: bool) -> Self {
+        Self {
+            components: enabled,
+            bindings: enabled,
+        }
+    }
+}
+
 /// Default runtime import path — same as `@solidjs/babel-plugin` and the
 /// deleted `babel-preset-solid`.
 pub(crate) const DEFAULT_MODULE_NAME: &str = "@solidjs/web";
@@ -81,12 +115,18 @@ pub struct CompileOptions {
     pub module_name: String,
     pub generate: Generate,
     pub hydratable: bool,
-    /// SSR-only: behavior-claim (`_bnd`) marker emission for server components.
+    /// SSR-only: attribute-slot position holes (`ref`/`on*` claims, whole-attribute
+    /// `class`/`style`) for server components.
     pub server_components: bool,
+    /// SSR-only: emit each component's props literal with getters as a
+    /// module-level constructor with shared getters (one hidden class per
+    /// call site, no closure per getter per instance) instead of an object
+    /// literal, which V8 builds in dictionary mode. Same own keys, order,
+    /// descriptors and prototype; a getter is defined only for a read through
+    /// its own object (#3511). `false` keeps the literal everywhere.
+    pub hoist_props: bool,
     pub dev: bool,
-    /// DOM-only: emit the source tag name as `createComponent`'s third
-    /// argument for dev/observe owner labels.
-    pub component_names: bool,
+    pub source_names: SourceNames,
     pub source_map: bool,
     pub context_to_custom_elements: bool,
     pub delegate_events: bool,
@@ -170,8 +210,9 @@ impl Default for CompileOptions {
             generate: Generate::Dom,
             hydratable: false,
             server_components: false,
+            hoist_props: true,
             dev: false,
-            component_names: false,
+            source_names: SourceNames::default(),
             source_map: false,
             context_to_custom_elements: true,
             delegate_events: true,
@@ -266,17 +307,12 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
 
     let allocator = Allocator::default();
     #[cfg(feature = "tsrx")]
-    let (mut direct_program, direct_artifacts, direct_css, direct_css_hash) = if tsrx_route {
+    let (mut direct_program, direct_css, direct_css_hash) = if tsrx_route {
         let lowered =
             crate::tsrx::run_compiler_frontend(&allocator, source, options.filename.as_deref())?;
-        (
-            Some(lowered.program),
-            Some(lowered.artifacts),
-            Some(lowered.css),
-            lowered.css_hash,
-        )
+        (Some(lowered.program), Some(lowered.css), lowered.css_hash)
     } else {
-        (None, None, None, None)
+        (None, None, None)
     };
 
     let source_type = if tsrx_route {
@@ -326,13 +362,8 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
     }
 
     #[cfg(feature = "tsrx")]
-    if let Some(artifacts) = direct_artifacts.as_ref() {
-        crate::tsrx::apply_direct_rewrites(
-            &allocator,
-            &mut program,
-            artifacts,
-            options.source_map,
-        )?;
+    if tsrx_route {
+        crate::tsrx::clear_generated_spans(&mut program, options.source_map);
     }
 
     // Before JSX lowering: `yield*` reads inside JSX expression containers
@@ -538,14 +569,19 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
                 options.hydratable,
                 options.server_components,
                 options.wrap_conditionals,
+                options.source_names.components,
                 wrapper_name(&options.memo_wrapper, "memo"),
                 options.static_marker.clone(),
                 options.built_ins.clone(),
             );
+            if options.hoist_props {
+                transform.enable_hoist_props();
+            }
             transform.visit_program(&mut program);
             if let Some(error) = transform.error.take() {
                 return Err(CompileError::transform(error));
             }
+            transform.hoist_props(&mut program, options.dev);
             transform.prepend_helpers(&mut program);
         }
         Generate::Universal => {
@@ -649,7 +685,8 @@ fn dom_transform_config(options: &CompileOptions, built_ins: Vec<String>) -> Dom
     DomTransformConfig {
         hydratable: options.hydratable,
         dev: options.dev,
-        component_names: options.component_names,
+        component_names: options.source_names.components,
+        binding_names: options.source_names.bindings,
         context_to_custom_elements: options.context_to_custom_elements,
         delegate_events: options.delegate_events,
         delegated_events: options.delegated_events.clone(),

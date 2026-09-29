@@ -31,9 +31,9 @@ const Child = (props) => {
 		typeof _ref$ === "function" || Array.isArray(_ref$) ? _$ref(() => {
 			return _ref$;
 		}, _el$) : props.ref = _el$;
-		_$insert(_el$, () => {
+		_$insert(_el$, _$scope(() => {
 			return props.name;
-		}, _el$4, _el$5);
+		}), _el$4, _el$5);
 		return _el$;
 	})(), (() => {
 		var _el$6 = _$getNextElement(_tmpl$2);
@@ -95,7 +95,7 @@ const template2 = _$createComponent(Child, {
 	},
 	stale: /*@static*/ state.data,
 	handleClick: clickHandler,
-	get ["hyphen-ated"]() {
+	get "hyphen-ated"() {
 		return state.data;
 	},
 	ref: (el) => e = el
@@ -251,7 +251,7 @@ const Template18 = _$createComponent(Pre, { get children() {
 const Template19 = _$createComponent(Component, _$mergeProps(() => {
 	return s.dynamic();
 }));
-const Template20 = _$createComponent(Component, { get ["class"]() {
+const Template20 = _$createComponent(Component, { get "class"() {
 	return prop.red ? "red" : "green";
 } });
 const template21 = _$createComponent(Component, _$mergeProps(() => {

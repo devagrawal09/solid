@@ -27,7 +27,7 @@ import prettier from "rollup-plugin-prettier";
 // single sequential post-pass (scripts/mangle-props.mjs) with one shared
 // nameCache per output; per-chunk terser would mangle the same property to
 // different names in different modules and break every cross-module member
-// access. `_name` is reserved (the cross-package label field).
+// access. `_name` and `_parent` are reserved (the cross-package owner fields).
 //
 // Two entries per build: `index` (the core) and `attribution` (the engine
 // behind `@solidjs/signals/attribution`). The engine reads the core's live
@@ -155,7 +155,7 @@ export default [
   tree("dist/prod", false, false),
   // Observe tier: the ~40 wiring sites survive (attribution hooks, `_name`,
   // edge counters, the diagnostics channel), every check folds out. Selected
-  // by the `observe` export condition. Gets its own size-limit scenario; the
+  // by the `observe` export condition. Gets its own size scenario (scripts/size/scenarios.js); the
   // prod tree's caps must not move because of it.
   tree("dist/observe", false, true),
   syncTree("dist/sync"),

@@ -21,12 +21,15 @@ import {
 } from "../../src/response.js";
 import { COMPOSED_BODY_FRAMING, isHttpNavigationTarget } from "../../src/constants.js";
 import { RequestContext, commitEventResponse, getRequestEvent } from "../../src/server.js";
+import { reportServerError } from "solid-js/internal";
+import { requestErrorHook } from "../../src/request-error-hook.js";
+import { observeInvocation } from "../../src/server-observe.js";
+import { emitFinding, errorText } from "../../src/diagnostics.js";
 import { encodeFlashCookie, setFlashSecret } from "./flash.js";
 import {
   BODY_FORMAT_HEADER,
   BodyFormat,
   ERROR_HEADER,
-  INSTANCE_HEADER,
   LIVE_SOURCE,
   REDIRECT_HEADER,
   SERVER_FUNCTION_INVOKE,
@@ -46,31 +49,48 @@ import {
   isServerFunction,
   parseServerFunctionAddress,
   provideServerFunctionRPC,
+  serverFunctionActionUrlFor,
   serverFunctionAddress,
+  serverFunctionUrlFor,
   createChunk,
+  createEventChunk,
+  EVENT_STREAM_HEARTBEAT,
+  LAST_EVENT_ID_HEADER,
+  positionDigest,
   encodeErrorTrailer,
   withMeta
 } from "./shared.js";
 
 export {
+  // Wire-protocol utilities re-exported for the frame sink, the mirror of
+  // the client entry's block: the frames server artifact resolves its
+  // shared.js import HERE (rollup.config.js externalizeFramesServerRuntime)
+  // so the framing/addressing code and the streaming codec entry it uses
+  // are the handler's own instance — never a private copy. Transport
+  // building blocks, not for hand-written code.
+  ChunkReader,
   ERROR_HEADER,
   FLASH_COOKIE,
-  INSTANCE_HEADER,
   REDIRECT_HEADER,
   SERVER_FUNCTION_INVOKE,
   SINGLE_FLIGHT_HEADER,
   UNKNOWN_HEADER,
   clearFlashCookie,
+  createChunk,
+  createEventChunk,
   decodeErrorHeaderValue,
   decodeRedirectHeaderValue,
   decodeResponse,
   decodeResponsePayload,
   encodeErrorHeaderValue,
+  frameAddress,
   getServerFunctionMetadata,
   hasFlashCookie,
   invoke,
   isServerFunction,
+  serializeStream,
   subscribeFlightData,
+  textDigest,
   withMeta
 } from "./shared.js";
 export { decodeFlashCookie, encodeFlashCookie } from "./flash.js";
@@ -79,12 +99,12 @@ import { ResponseEnvelope } from "../../src/response.js";
 
 import { JSONCodecOptions } from "../../serialization/src/serializer-decode.js";
 
-import { RequestEvent } from "../../src/server.js";
+import { RequestEvent, ServerErrorHook } from "../../src/server.js";
 
 // Local bindings for the annotations below — the `export type` block only
 // re-exports these names without bringing them into scope, and declaration
 // emit would leave them dangling (implicit any for every consumer).
-import type { ServerFunction, ServerFunctionMetadata } from "./shared.js";
+import type { ServerFunction } from "./shared.js";
 
 export type {
   FlightDataConsumer,
@@ -150,7 +170,9 @@ export interface ServerFunctionOutcome {
   /**
    * The outcome's `X-Revalidate` keys, split — the invalidation scope the
    * mutation declared. Undefined when the outcome carries none (integrations
-   * typically collect everything for the target in that case).
+   * typically collect everything for the target in that case); `[""]` for
+   * an empty declaration (nothing); `["*"]` for `REVALIDATE_ALL`, delivered
+   * as declared so a collector can tell "everything" from named keys.
    */
   revalidateKeys: string[] | undefined;
   /**
@@ -228,13 +250,50 @@ export type ServerFunctionOriginMatcher =
 /** Same-origin validation options for server function requests. */
 export interface ServerFunctionCSRFOptions {
   /**
-   * Expected public origin. Defaults to the incoming request URL's origin.
-   * A function can validate origins dynamically for multi-tenant hosts.
+   * The origins allowed to call server functions: a single origin, a list,
+   * or a matcher `(origin, request) => boolean` (async allowed; anything
+   * but a literal `true` refuses, #3169) for multi-tenant hosts. Defaults
+   * to the incoming request URL's origin, which admits same-origin callers
+   * only.
+   *
+   * Listing an origin OTHER than the deployment's own is the opt-in for a
+   * cross-origin client — a static build in a WebView
+   * (`capacitor://localhost`), an embedded widget, a marketing site calling
+   * the app's API — whose `configureServerFunctionsClient({ endpoint })`
+   * names this handler's absolute URL. A `Sec-Fetch-Site: cross-site` (or
+   * `same-site`) request carrying a browser-set `Origin` is decided by this
+   * matcher, and an admitted cross-origin caller gets the CORS answer the
+   * browser needs to read the response: `Access-Control-Allow-Origin`
+   * echoing its exact `Origin` (with `Vary: Origin`), the protocol's
+   * response headers exposed, and the `OPTIONS` preflight answered for the
+   * transport's methods and headers. Without a configured matcher no
+   * cross-origin caller is admitted (#3538); `Sec-Fetch-Site: none` and a
+   * request carrying no `Origin` at all stay refused whatever is listed.
+   * Configuring a matcher also puts `Vary: Origin` on every `GET`-declared
+   * read (the one cacheable answer): its answer now depends on who asked,
+   * and a shared cache must not serve one caller's variant to another.
+   *
+   * The trust decision is the same one this option always claimed: a
+   * browser sets `Origin` and a page cannot forge it, so a listed origin's
+   * pages may call — with the user's cookies only if `allowCredentials`
+   * says so. A cross-origin client should prefer bearer tokens through the
+   * client's `prepareRequest`.
    */
   origin?: ServerFunctionOriginMatcher;
   /**
+   * Sends `Access-Control-Allow-Credentials: true` to an admitted
+   * cross-origin caller, letting a `credentials: "include"` fetch carry
+   * and receive cookies. Off by default so that listing an origin never
+   * silently turns on cookie sharing; a cookie that is meant to travel
+   * cross-site also needs `SameSite=None; Secure`. Has no effect on
+   * same-origin responses.
+   * @default false
+   */
+  allowCredentials?: boolean;
+  /**
    * Allows requests without `Sec-Fetch-Site`, `Origin`, or `Referer`.
-   * Cross-origin metadata is still rejected.
+   * Cross-origin metadata is still decided by `origin`: an unlisted origin
+   * stays refused.
    * @default false
    */
   allowRequestsWithoutOriginCheck?: boolean;
@@ -293,7 +352,6 @@ export interface ServerFunctionsServerConfig {
     context: {
       id: string;
       args: unknown[];
-      instance: string | null;
       request: Request;
       thrown?: boolean;
     }
@@ -310,7 +368,7 @@ export interface ServerFunctionsServerConfig {
   transformFlightResult?(
     event: ServerFunctionEvent,
     outcome: { value: unknown; data: unknown },
-    context: { id: string; args: unknown[]; instance: string | null; request: Request }
+    context: { id: string; args: unknown[]; request: Request }
   ): Response | undefined | Promise<Response | undefined>;
   /**
    * The in-process mirror of `transformResult` for direct (same-server)
@@ -349,7 +407,9 @@ export interface ServerFunctionsServerConfig {
   /**
    * Same-origin protection for HTTP server function calls. Enabled by
    * default. Set to `false` only when another trusted layer protects the
-   * endpoint.
+   * endpoint. `{ origin }` lists the origins allowed to call — the opt-in
+   * for a cross-origin client, answered with CORS (see
+   * `ServerFunctionCSRFOptions`).
    */
   csrf?: boolean | ServerFunctionCSRFOptions;
   /**
@@ -411,6 +471,17 @@ export interface ServerFunctionsServerConfig {
    * render reads "no flash".
    */
   secret?: string;
+  /**
+   * DEV ONLY — the chaos knob: end every live response this many
+   * milliseconds after it opens, the way a dying connection ends it (the
+   * body breaks off with the stream still open). The client's `live` loop
+   * reads it as a death and reconnects — backoff, `Last-Event-ID`, the
+   * digest-equal skip, `onstatus` — so the reconnect path is exercised
+   * continuously without a network to break. Applies to every event-stream
+   * response the live address answers, data and frames alike. Ignored
+   * outside the dev build; `0`/`undefined` is off.
+   */
+  chaosReconnectEvery?: number;
 }
 
 /**
@@ -450,6 +521,14 @@ export type LiveSource<R> = R & {
 /** Identity of the currently executing server function call. */
 export interface ServerFunctionInvocation {
   id: string;
+  /**
+   * The call arrived at the live address: a `live` loop is reading, and the
+   * answer is framed as an event stream for as long as it stands (RFC 10,
+   * `live(fn)` → Framing). A result policy building the answer's Response
+   * itself (`frameTransformResult`) reads this to frame it the same way.
+   * `false` for the data and bare addresses, and for in-process calls.
+   */
+  live: boolean;
 }
 
 /**
@@ -491,14 +570,24 @@ export interface HandleServerFunctionOptions {
    */
   wrapInvocation?: WrapInvocationHook;
   /**
+   * This request's server error hook, ahead of `configureServerErrors`' (see
+   * `ServerErrorHook` in `@solidjs/web`): the function's throw
+   * (`handling: "thrown"`) and a failure escaping through its result graph
+   * (`"channel"`), once per error, before the wire policy applies. Entry-only
+   * like `wrapInvocation`: a direct call the body makes during a render
+   * reports through the ambient hook.
+   */
+  onError?: ServerErrorHook;
+  /**
    * Observes or replaces the function's result before encoding — the
    * extension point for response metadata policies (headers, statuses,
    * substituted results). Runs for returned and thrown results alike
-   * (`context.thrown` distinguishes); `context.instance` is null for no-JS
-   * calls. The context carries the call's identity — the function `id` and
-   * the parsed `args` the implementation was invoked with — matching the
-   * direct-call mirror (`transformDirectResult`), so a policy keying state
-   * by the call works over either dispatch path. Return the result
+   * (`context.thrown` distinguishes). The context carries the call's
+   * identity — the function `id` and the parsed `args` the implementation
+   * was invoked with — matching the direct-call mirror
+   * (`transformDirectResult`), so a policy keying state by the call works
+   * over either dispatch path; `context.request` tells a scripted call (the
+   * `/data/` address) from a bare-address one. Return the result
    * unchanged to pass through, or a `ResponseEnvelope` (exposed through
    * the core entry) to send HTTP metadata plus a structured payload. Runs
    * before `collectFlightData`, so the flight hook sees the transformed
@@ -511,7 +600,6 @@ export interface HandleServerFunctionOptions {
     context: {
       id: string;
       args: unknown[];
-      instance: string | null;
       request: Request;
       thrown?: boolean;
     }
@@ -529,17 +617,17 @@ export interface HandleServerFunctionOptions {
   transformFlightResult?(
     event: ServerFunctionEvent,
     outcome: { value: unknown; data: unknown },
-    context: { id: string; args: unknown[]; instance: string | null; request: Request }
+    context: { id: string; args: unknown[]; request: Request }
   ): Response | undefined | Promise<Response | undefined>;
   /**
-   * Builds the response for calls made without the client runtime (no
-   * instance header — no-JS form posts, direct HTTP). Receives the
+   * Builds the response for calls made without the client runtime (at
+   * the bare address — no-JS form posts, direct HTTP). Receives the
    * (transformed) result, the request, and the decoded arguments; `thrown`
    * is set when the result was thrown rather than returned.
    *
    * Overrides the configured hook, which in turn overrides the built-in
    * `createNoJSHandler()` applied to browser form posts. Other
-   * no-instance callers get the normal serialized response.
+   * bare-address callers get the normal serialized response.
    */
   handleNoJS?(
     result: unknown,
@@ -566,26 +654,6 @@ export interface HandleServerFunctionOptions {
   maxArguments?: number;
 }
 
-export interface ServerFunctionRequestCall {
-  type: "request";
-  id: string;
-  instance: string;
-  request: Request;
-  meta: ServerFunctionMetadata | undefined;
-  time: number;
-}
-
-export interface ServerFunctionResponseCall {
-  type: "response";
-  id: string;
-  instance: string;
-  response: Response;
-  meta: ServerFunctionMetadata | undefined;
-  time: number;
-}
-
-export type ServerFunctionCall = ServerFunctionRequestCall | ServerFunctionResponseCall;
-
 const config = {
   provideEvent: undefined,
   wrapInvocation: undefined,
@@ -597,7 +665,8 @@ const config = {
   endpoint: "/_server",
   csrf: true,
   bodySizeLimit: 1_048_576,
-  maxArguments: 1000
+  maxArguments: 1000,
+  chaosReconnectEvery: 0
 }; /**
  * Configures the server runtime. Call once at server startup, before
  * handling requests. Only needed when deviating from the defaults (custom
@@ -637,7 +706,8 @@ export function configureServerFunctionsServer({
   codec,
   bodySizeLimit,
   maxArguments,
-  secret
+  secret,
+  chaosReconnectEvery
 } = {}) {
   if (provideEvent !== undefined) config.provideEvent = provideEvent;
   if (wrapInvocation !== undefined) config.wrapInvocation = wrapInvocation;
@@ -653,6 +723,7 @@ export function configureServerFunctionsServer({
   if (maxArguments !== undefined) config.maxArguments = maxArguments;
   // the flash codec owns the key (flash.js) — the option just names it
   if (secret !== undefined) setFlashSecret(secret);
+  if (chaosReconnectEvery !== undefined) config.chaosReconnectEvery = chaosReconnectEvery;
 }
 
 // Named flight-data collectors, keyed by source id. The unnamed
@@ -1031,6 +1102,18 @@ const REFERENCE_BINDINGS = processState(
   "solid.ServerFunctionReferenceBindings",
   () => new WeakMap()
 );
+// Ids whose grant is PROVISIONAL (dev only, #3564): a rebind found the
+// grant live and carried it to the new binding instead of revoking it, and
+// the live binding has not re-declared `GET()` since. A carried grant is
+// dispatch-only — `declaresRead` answers true so the method gate admits
+// the read, but the origin-gate exemption a declaration also grants
+// (#3114) is withheld: the new function never signed the safety assertion,
+// so `handleServerFunctionRequest` keeps the gate ON for a carried id
+// exactly as for a function that never declared GET. The mark clears when
+// the live binding's own `GET()` re-declares the grant; it chains across
+// further rebinds and never upgrades on its own. Always empty in prod,
+// where every rebind revokes (#3129).
+const CARRIED = processState("solid.ServerFunctionCarriedGrants", () => new Set());
 
 // Whether the id's CURRENT binding is the function a `GET()` grant was made
 // to — the one question both dispatch gates ask (#3237): the method gate
@@ -1041,7 +1124,10 @@ const REFERENCE_BINDINGS = processState(
 // (the grant then names a binding this id does not have). Neither is a
 // declared read — a stale or unverifiable grant fails CLOSED, so such a
 // call is gated exactly like a function that never declared GET: 405,
-// origin gate on.
+// origin gate on. The one carve-out is dev's provisional carry (#3564,
+// `CARRIED`): a rebind that finds the grant LIVE moves it to the new
+// binding, so this answers true for the rebound function — but only for
+// dispatch; the origin gate stays on until the new binding re-declares.
 function declaresRead(id) {
   const granted = METHODS.get(id);
   return granted !== undefined && granted === REGISTRATIONS.get(id);
@@ -1088,8 +1174,34 @@ export function registerServerFunction(id, callback) {
   // a mutation reachable over GET, from any origin, with ambient cookies
   // (#3129). A function that still declares GET re-runs `GET()` right
   // after re-registering — module order guarantees it — so the grant
-  // re-arms itself exactly when it is still meant.
-  if (REGISTRATIONS.get(id) !== callback) METHODS.delete(id);
+  // re-arms itself exactly when it is still meant. That is the production
+  // rule, and it holds without exception there.
+  //
+  // Dev carve-out (#3564): under `vite dev` a program reload invalidates
+  // every module, but the next `/_server` request re-evaluates only the
+  // module the requested id lives in. When the `GET()` declaration lives
+  // elsewhere — a router's `query()` in the app's data layer — nothing
+  // re-arms the grant until the next document render, and every read
+  // answers 405 in between. So in dev a rebind that finds the grant LIVE
+  // (`declaresRead`: made about the binding being replaced, not a stale
+  // one) carries it to the new binding as a PROVISIONAL, dispatch-only
+  // grant: the read dispatches, but the origin-gate exemption is withheld
+  // (`CARRIED`) until the live binding's own `GET()` re-declares. A
+  // cross-site GET at a carried id lands on the same 403 production gives
+  // — what the carry trades away is only dev's cache-friendliness of an
+  // ungated read, which dev never needed. A stale grant (the id rebound
+  // BEFORE the declaration, #3237) is not live and still revokes; so does
+  // every rebind in prod.
+  if (REGISTRATIONS.get(id) !== callback) {
+    if (DEV && declaresRead(id)) {
+      METHODS.set(id, callback);
+      // a carried id stays carried: a further rebind never upgrades it
+      CARRIED.add(id);
+    } else {
+      METHODS.delete(id);
+      CARRIED.delete(id);
+    }
+  }
   REGISTRATIONS.set(id, callback);
   return callback;
 } /**
@@ -1235,7 +1347,7 @@ export function createServerReference({ id, fn, name }) {
       const evt = { ...ogEvt, locals: { ...ogEvt.locals } };
       // Keyed on the derived event: the invocation is visible exactly within
       // this call's provideEvent scope and evaporates with the derived event.
-      INVOCATIONS.set(evt, { id });
+      INVOCATIONS.set(evt, { id, live: false });
       evt.serverOnly = true;
       const scope = run => provideEvent(evt, run);
       // Per-invocation wrap (see configureServerFunctionsServer): direct
@@ -1244,6 +1356,10 @@ export function createServerReference({ id, fn, name }) {
       // the function during a render. Resolved — and validated (#3238) —
       // per invocation, before the body can run.
       const wrap = resolveWrapInvocation(config.wrapInvocation);
+      // The call reports through the hook of the render serving the request
+      // it was made under, resolved now: when it fails, no render may be on
+      // the stack and the global SSR context may be another request's.
+      const hook = requestErrorHook(ogEvt);
       // Exactly-once is enforced on this leg too (#3246, see
       // provideEventOnce): a broken hook used to double-commit or skip the
       // body silently during a render, where there is no status line to
@@ -1251,8 +1367,16 @@ export function createServerReference({ id, fn, name }) {
       let result = provideEventOnce(provideEvent, evt, () => {
         const run = () => fn.apply(thisArg, args);
         // The wrapper must return run()'s value (this path stays
-        // synchronous for synchronous functions).
-        return wrap ? wrap(run, { id, args, event: evt, direct: true }) : run();
+        // synchronous for synchronous functions). Observed as a whole —
+        // policy included — as the `"invocation"` record on `OBSERVE.records`;
+        // a no-op with no listener and outside observe builds.
+        return observeInvocation({ id, direct: true, event: evt, args }, () =>
+          reportDirectFailure(
+            () => (wrap ? wrap(run, { id, args, event: evt, direct: true }) : run()),
+            id,
+            hook
+          )
+        );
       });
       // A generator or stream body runs when the caller pulls it, after the
       // call-time scope above has gone. Bind the WRAPPER'S result (not merely
@@ -1338,6 +1462,15 @@ export function GET<A extends readonly any[], R>(
  * binding the id no longer has grants nothing, for the same reason
  * (#3237).
  *
+ * Dev build only (#3564): a rebind that finds the grant live carries it to
+ * the new function as a PROVISIONAL grant — dispatch works, but the origin
+ * gate stays on — so a declaration made in a module the dev server did not
+ * re-evaluate (a router's `query()`) survives a program reload. The live
+ * function's own `GET()` turns the provisional grant back into a full one;
+ * a `GET()` on a reference from the earlier evaluation is stale, grants
+ * nothing, and leaves the provisional grant as it is. Production revokes on
+ * every rebind, no exceptions.
+ *
  * Wrap the reference at its declaration; the compiler round-trips the call
  * in both builds:
  *
@@ -1363,6 +1496,15 @@ export function GET(fn) {
   const binding = REFERENCE_BINDINGS.has(fn) ? REFERENCE_BINDINGS.get(fn) : REGISTRATIONS.get(id);
   const existing = METHODS.get(id);
   if (existing !== undefined && existing !== binding) {
+    // A carried grant (dev, #3564) names the id's LIVE binding, so a
+    // declaration about any other binding is a reference from before the
+    // reload — the declaring module re-ran against a reference it still
+    // holds from the earlier evaluation. That is a reload, not two live
+    // references colliding: the stale declaration grants nothing (#3237,
+    // fail closed) and the provisional grant stays exactly as it is —
+    // still dispatching, origin gate still on — until the live binding
+    // re-declares.
+    if (CARRIED.has(id)) return fn;
     // This declaration would CHANGE an existing grant's binding — an id
     // collision between two live references. Never rebind silently: the
     // grant is a safety assertion the new function did not sign.
@@ -1379,6 +1521,10 @@ export function GET(fn) {
     return fn;
   }
   METHODS.set(id, binding);
+  // the binding this declaration is about signed the assertion itself: a
+  // provisional grant carried to it across a dev rebind (#3564) is now a
+  // full one, origin-gate exemption included
+  CARRIED.delete(id);
   // the declaration records itself on the metadata channel
   const reference = withMeta(fn, { method: "GET" });
   guardDeclaredMethod(getServerFunctionMetadata(reference), id);
@@ -1462,13 +1608,7 @@ export function live(fn) {
     throw new Error("live expects a server function reference");
   }
   const metadata = { ...getServerFunctionMetadata(fn), live: true };
-  const wrapped = async (...args) => {
-    const result = await fn(...args);
-    if (result !== null && typeof result === "object" && result[Symbol.asyncIterator]) {
-      result[LIVE_SOURCE] = true;
-    }
-    return result;
-  };
+  const wrapped = async (...args) => brandLive(await fn(...args));
   wrapped[SERVER_FUNCTION_METADATA] = metadata;
   wrapped[SERVER_FUNCTION_INVOKE] = inProcessInvoker(wrapped);
   wrapped.id = fn.id;
@@ -1477,6 +1617,24 @@ export function live(fn) {
     configurable: true
   });
   return wrapped;
+}
+
+/**
+ * Brands a live declaration's answer, in process: the async iterable it IS
+ * (a standing answer — every yield the complete current value), or the
+ * function it is (a server component: its render is the stream). `live`
+ * claims the whole response (RFC 10, Lifetime), but sources NESTED in a
+ * value answer are not branded: they are bounded and end on their own —
+ * the loop holds the response for them and completes when they have.
+ */
+function brandLive(answer) {
+  if (
+    typeof answer === "function" ||
+    (answer !== null && typeof answer === "object" && answer[Symbol.asyncIterator])
+  ) {
+    answer[LIVE_SOURCE] = true;
+  }
+  return answer;
 } /**
  * Reads the in-flight server function invocation (its id) for the current
  * request event — usable inside a server function body, e.g. to key caches
@@ -1857,6 +2015,11 @@ async function foldFlightData(hooks, event, headers, outcome, context = {}) {
           owned.headers.set(key, value);
         }
       });
+      // The fold owns the single-flight header on every body shape: its
+      // value is the folded source list the client routes slices by, and
+      // only the fold knows it — a policy that stamped its own would drop
+      // the named sources (#3638).
+      owned.headers.set(SINGLE_FLIGHT_HEADER, headers.get(SINGLE_FLIGHT_HEADER));
       return owned;
     }
   }
@@ -2359,7 +2522,7 @@ export function guardFailures(value, state) {
               // catch would sanitize anyway, but a re-entrant walk (inside a
               // wrapped promise's continuation) turns this throw into that
               // channel's rejection, which rides the wire as-is.
-              throw sanitizeServerError(error);
+              throw wireServerFunctionError(error, "channel");
             }
             top.accessorRead = i;
           }
@@ -2501,7 +2664,7 @@ function enterGuard(value, state) {
             ? controller.close()
             : controller.enqueue(guardOperation(state, () => guardFailures(chunk, state)));
         } catch (error) {
-          controller.error(guardOperation(state, () => sanitizeServerError(error)));
+          controller.error(guardOperation(state, () => wireServerFunctionError(error, "channel")));
         }
       },
       cancel(reason) {
@@ -2518,7 +2681,7 @@ function enterGuard(value, state) {
     const guardedPromise = Promise.resolve(value).then(
       resolved => guardOperation(state, () => guardFailures(resolved, state)),
       error => {
-        throw guardOperation(state, () => sanitizeServerError(error));
+        throw guardOperation(state, () => wireServerFunctionError(error, "channel"));
       }
     );
     // The guard consumes the source rejection and moves its sanitized form
@@ -2568,7 +2731,7 @@ function enterGuard(value, state) {
                   };
                 },
                 error => {
-                  throw guardOperation(state, () => sanitizeServerError(error));
+                  throw guardOperation(state, () => wireServerFunctionError(error, "channel"));
                 }
               );
         return {
@@ -2709,9 +2872,30 @@ function keepGuarded(value, next, changed, state) {
  * every channel before the codec sees the value, so the demand gate and the
  * teardown registry are threaded through its state (`{ items: rows() }` —
  * a cursor beside a total — gets the same two guarantees as `return rows()`).
+ *
+ * `live` selects the event-stream framing a live address answers in (see
+ * encodeLiveResult): the same payloads one per event, a comment heartbeat
+ * while idle, and each yield's position — parked on `live.pending` by the
+ * live adapter — riding as the `id:` of the record that carries the yield.
  */
-export function serializeResponseStream(value, codecOptions, signal, scope) {
+export function serializeResponseStream(value, codecOptions, signal, scope, live) {
   let closed = false;
+  const frame = live
+    ? payload => {
+        const id = live.pending;
+        live.pending = undefined;
+        return createEventChunk(payload, id);
+      }
+    : createChunk;
+  // The live body's keepalive and its dev chaos (see armLiveBody), armed at
+  // start; disarmed on every road the stream ends by.
+  let stopLive = null;
+  const stopHeartbeat = () => {
+    if (stopLive !== null) {
+      stopLive();
+      stopLive = null;
+    }
+  };
   // Demand gate. seroval's pump pulls each source as fast as it resolves and
   // enqueues every node the moment it is parsed, so without this a slow
   // consumer never slows the producer: the whole result accumulates in the
@@ -2769,6 +2953,7 @@ export function serializeResponseStream(value, codecOptions, signal, scope) {
   const teardown = () => {
     if (closed) return;
     closed = true;
+    stopHeartbeat();
     if (onAbort) signal.removeEventListener("abort", onAbort);
     if (cancelSerialize) cancelSerialize();
     finishSource();
@@ -2779,6 +2964,7 @@ export function serializeResponseStream(value, codecOptions, signal, scope) {
     // promise — reads wait for it, so the stream's contract is unchanged
     async start(controller) {
       streamController = controller;
+      if (live) stopLive = armLiveBody(controller, teardown);
       if (signal) {
         if (signal.aborted) {
           teardown();
@@ -2812,11 +2998,12 @@ export function serializeResponseStream(value, codecOptions, signal, scope) {
       cancelSerialize = serializeJSON(value, {
         ...codecOptions,
         onParse(node) {
-          if (!closed) controller.enqueue(createChunk(JSON.stringify(node)));
+          if (!closed) controller.enqueue(frame(JSON.stringify(node)));
         },
         onDone() {
           if (closed) return;
           closed = true;
+          stopHeartbeat();
           if (onAbort) signal.removeEventListener("abort", onAbort);
           finishSource();
           controller.close();
@@ -2824,6 +3011,7 @@ export function serializeResponseStream(value, codecOptions, signal, scope) {
         onError(error) {
           if (closed) return;
           closed = true;
+          stopHeartbeat();
           if (onAbort) signal.removeEventListener("abort", onAbort);
           finishSource();
           // The head is committed by the time an encode failure arrives, so
@@ -2837,12 +3025,13 @@ export function serializeResponseStream(value, codecOptions, signal, scope) {
           // encode error's message can carry the value that refused to
           // encode; the dev build keeps the cause for DX.
           try {
-            const delivered = sanitizeServerError(
+            const delivered = wireServerFunctionError(
               DEV && error instanceof Error
                 ? new Error(`Server function result could not be encoded: ${error.message}`)
-                : error
+                : error,
+              "channel"
             );
-            controller.enqueue(createChunk(encodeErrorTrailer(delivered)));
+            controller.enqueue(frame(encodeErrorTrailer(delivered)));
             controller.close();
           } catch {
             try {
@@ -2865,6 +3054,152 @@ function serializedResponse(value, headers, codec, signal, scope) {
   headers.set(BODY_FORMAT_HEADER, BodyFormat.Serialized);
   headers.set("Content-Type", "text/plain");
   return new Response(serializeResponseStream(value, codec, signal, scope), { headers });
+}
+
+// Idle heartbeat period of a live response. Under the common proxy idle
+// timeouts (30s nginx `proxy_read_timeout` is the lowest default in wide
+// use; most hosts sit at 60s+).
+const LIVE_HEARTBEAT_INTERVAL = 20000;
+
+/**
+ * Arms what every live body carries beyond its payloads, whichever writer
+ * frames them — the codec stream (`serializeResponseStream`) and a frame
+ * stream (`serverComponentResponse` at the live address) alike:
+ *
+ * - the heartbeat: an event-stream comment every 20s while the response is
+ *   open, so a proxy's idle timeout never mistakes a waiting source for a
+ *   dead one. Not demand-gated — the two bytes ride ahead of any parked
+ *   pull. Unref'd where the runtime allows: the connection holds the
+ *   process open, not the timer;
+ * - the chaos knob (dev only, `chaosReconnectEvery`): end this response as
+ *   a dying connection would — `teardown` first (the producer's own), then
+ *   the body errors with the stream still open, so the client reads a
+ *   death, not a completion.
+ *
+ * Returns the disarm; the caller runs it on every road the body ends by, so
+ * a response that completed on its own is never touched.
+ * @internal
+ */
+export function armLiveBody(
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  teardown: () => void
+): () => void;
+
+export function armLiveBody(controller, teardown) {
+  let stopped = false;
+  const heartbeat = setInterval(() => {
+    if (stopped) return;
+    try {
+      controller.enqueue(EVENT_STREAM_HEARTBEAT);
+    } catch {}
+  }, LIVE_HEARTBEAT_INTERVAL);
+  if (typeof heartbeat === "object" && heartbeat && typeof heartbeat.unref === "function")
+    heartbeat.unref();
+  let chaos = null;
+  if (DEV && config.chaosReconnectEvery > 0) {
+    chaos = setTimeout(() => {
+      if (stopped) return;
+      teardown();
+      try {
+        controller.error(new Error("Live response ended by the chaos knob."));
+      } catch {}
+    }, config.chaosReconnectEvery);
+    if (typeof chaos === "object" && chaos && typeof chaos.unref === "function") chaos.unref();
+  }
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    clearInterval(heartbeat);
+    if (chaos !== null) clearTimeout(chaos);
+  };
+}
+
+/**
+ * The live adapter: positions and the first-emission skip (RFC 10, `live`
+ * → Position). Wraps the answer a live address dispatched so that each
+ * value-shaped yield's digest is parked for the framer to carry as the
+ * record's `id:`, and — when the reconnecting loop's `Last-Event-ID` equals
+ * the FIRST yield's digest — that yield is dropped: the client already
+ * holds it. Only the first emission is examined; every later yield is a
+ * change by definition. A yield that is not JSON-safe has no digest,
+ * carries no id and is never skipped. A cursor source ignores all of this
+ * by yielding what it likes and reading the header off the request itself.
+ *
+ * A one-value answer gets the same treatment: skipped, it is an empty
+ * stream — the iteration completes with nothing, exactly as it would have
+ * completed after one value the client already had.
+ */
+function liveSource(value, lastEventId, position, scope) {
+  const digestOf = v => (scope ? scope(() => positionDigest(v)) : positionDigest(v));
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    typeof value[Symbol.asyncIterator] !== "function"
+  ) {
+    const digest = digestOf(value);
+    if (digest !== undefined && digest === lastEventId) return (async function* () {})();
+    position.pending = digest;
+    return value;
+  }
+  const source = value;
+  return {
+    [Symbol.asyncIterator]() {
+      const iterator = source[Symbol.asyncIterator]();
+      let first = true;
+      const step = () =>
+        iterator.next().then(result => {
+          if (result.done) return result;
+          const digest = digestOf(result.value);
+          if (first) {
+            first = false;
+            if (digest !== undefined && digest === lastEventId) return step();
+          }
+          position.pending = digest;
+          return result;
+        });
+      return {
+        next: step,
+        return: v =>
+          iterator.return ? iterator.return(v) : Promise.resolve({ done: true, value: v }),
+        throw: e => (iterator.throw ? iterator.throw(e) : Promise.reject(e))
+      };
+    }
+  };
+}
+
+/**
+ * Encodes what a live address dispatched: the scripted codec stream in
+ * event-stream framing — `text/event-stream`, `no-store` (a live answer is
+ * a moment, never a cacheable value), `X-Accel-Buffering: no` (nginx's
+ * per-response buffering switch; the content type covers the rest). The
+ * format tag stays Serialized: the payloads are the same codec records, and
+ * the client's decoder picks the reader off the content type.
+ *
+ * Void answers, bodiless statuses and values with a natural HTTP encoding
+ * (a returned Response body, a Blob) take the ordinary road — there is
+ * nothing to stream and nothing to position.
+ */
+function encodeLiveResult(value, headers, status, codec, request, scope) {
+  if (NULL_BODY_STATUSES.has(status) || value === undefined || getHeadersAndBody(value)) {
+    return encodeResult(value, headers, status, codec, request.signal, scope);
+  }
+  const position = { pending: undefined };
+  const source = liveSource(value, request.headers.get(LAST_EVENT_ID_HEADER), position, scope);
+  headers.set(BODY_FORMAT_HEADER, BodyFormat.Serialized);
+  headers.set("Content-Type", "text/event-stream");
+  headers.set("Cache-Control", "no-store");
+  headers.set("X-Accel-Buffering", "no");
+  try {
+    return new Response(serializeResponseStream(source, codec, request.signal, scope, position), {
+      status,
+      headers
+    });
+  } catch (error) {
+    // same attribution as encodeResult's codec road (#3160)
+    throw DEV && error instanceof Error
+      ? new Error(`Server function result could not be encoded: ${error.message}`)
+      : error;
+  }
 }
 
 function encodeResult(value, headers, status, codec, signal, scope) {
@@ -3040,57 +3375,153 @@ export function sanitizeServerError(value: unknown): unknown;
  * that map errors express intent the same way — throw a Response/envelope,
  * or brand the mapped error safe — so core never second-guesses them.
  */
+// THE SERVER ERROR HOOK on this wire (sentry-integration-plan C6). Every
+// road a failure takes out of a server function meets the hook once — the
+// thrown tail, a channel in the result graph, the direct in-process call —
+// with the function named, before `sanitizeServerError` applies. The hook's
+// mapping, when it gives one, IS the wire value (intent, as a
+// `wrapInvocation` mapping is). The verdict is shared with the render side
+// through the same once-per-error cache (`reportServerError`), so a direct
+// call that throws during SSR is reported here as the function's failure
+// and the <Errored> that contains it reuses the answer without reporting
+// again. Per-request hooks ride the event (the handler's option); the
+// channel sites read the event off the scope their operations run in. A
+// direct call reports through the hook of the render serving its request
+// (`requestErrorHook`). None is ever read off the global SSR context: that
+// is whichever render touched it last, and may be another request's.
+const REQUEST_ERROR_HOOKS = new WeakMap();
+
+function siteFor(handling, event, direct) {
+  const invocation = event ? INVOCATIONS.get(event) : undefined;
+  const site = { kind: "server-function", handling, direct };
+  if (invocation) site.functionId = invocation.id;
+  if (event) site.event = event;
+  return site;
+}
+
+/**
+ * The wire value for a failure met on this leg: the hook's mapping when it
+ * gives one (now or on an earlier sight), else `sanitizeServerError`'s.
+ * `event` is the request's when the caller has it in hand; the channel sites
+ * read it off the scope their operation ran in.
+ */
+function wireServerFunctionError(value, handling, event = currentEvent()) {
+  const report = reportServerError(
+    value,
+    siteFor(handling, event, false),
+    null,
+    event ? REQUEST_ERROR_HOOKS.get(event) : undefined
+  );
+  return report.mapped ? report.value : sanitizeServerError(value);
+}
+
+/** The request event in scope, silently (`getRequestEvent` warns when there is none). */
+function currentEvent() {
+  const store = globalThis[RequestContext];
+  return store ? store.getStore() : undefined;
+}
+
+/**
+ * Reports a direct call's failure as the function's (`direct: true`) through
+ * `hook` (its request's render's) and rethrows the ORIGINAL: the render that
+ * made the call contains it, and the wire policy there reuses the verdict
+ * decided here.
+ */
+function reportDirectFailure(run, id, hook) {
+  const report = error => {
+    reportServerError(
+      error,
+      { kind: "server-function", handling: "thrown", functionId: id, direct: true },
+      null,
+      hook
+    );
+    throw error;
+  };
+  let result;
+  try {
+    result = run();
+  } catch (error) {
+    report(error);
+  }
+  return result && typeof result.then === "function" ? result.then(undefined, report) : result;
+}
+
 export function sanitizeServerError(value) {
   if (DEV) return value;
   if (isSafeError(value)) return value;
-  return new Error(GENERIC_SERVER_ERROR_MESSAGE);
+  const wire = new Error(GENERIC_SERVER_ERROR_MESSAGE);
+  // The observe tier's one record of what the wire did not carry: the
+  // original is gone for the client, so it is a finding here (`data.error`
+  // holds it) for the production consumer that wants the real failure. The
+  // invocation channel reports that the call errored; this reports what
+  // replaced the error. Same code as the SSR roads' replacement, told apart
+  // by `data.source`; `error` severity where SSR's is advisory because no
+  // other finding carries this failure.
+  if ("_SOLID_OBSERVE_")
+    emitFinding(
+      {
+        code: "SERVER_ERROR_SANITIZED",
+        kind: "ssr",
+        severity: "error",
+        message: `[SERVER_ERROR_SANITIZED] Server function error replaced with a generic Error before serialization: ${errorText(value)}`,
+        data: { source: "server-function", error: value, wire }
+      },
+      null
+    );
+  return wire;
 } /**
- * Client-only inspection seam. A no-op on this entry so isomorphic
+ * The url a `GET()` reference's own call requests — the address to preload
+ * (`<link rel="preload" as="fetch">`), prefetch, or fetch by hand — built the
+ * way the client transport builds it, so a fetch of it IS the call.
+ * Arguments ride the query as they do on the wire (`?args=`, JSON) and must
+ * be JSON-safe. Defined for declared reads only: a default-transport
+ * reference POSTs, and a POST is not described by its url — this throws with
+ * a pointer, as it does for a url long enough that the call would fall back
+ * to POST. A live reference's url is its live address — a standing stream
+ * to fetch by hand, not to preload. Present on both entries so a component rendering a preload link
+ * during SSR resolves the same import as on the client; see the client
+ * entry's docstring for the full contract.
+ */
+export function serverFunctionUrl<A extends readonly unknown[]>(
+  fn: ServerFunction<A, any>,
+  ...args: A
+): string;
+
+/** The url a `GET()` reference's call requests: `<endpoint>/data/<id>[?args=...]` (`/live/` for a live one). */
+export function serverFunctionUrl(fn, ...args) {
+  return serverFunctionUrlFor(config.endpoint, fn, args);
+} /**
+ * Builds the plain-HTTP address of a function — what a `<form action>` posts
+ * to without the runtime — for integrations composing action urls the
+ * runtime did not render: a router turning a bound action into a form
+ * action for the no-JS path. Takes the reference, or its id for an
+ * integration that has only that. `boundArgs` must be JSON-safe: the server
+ * reads them the way it reads a form post's, and that convention has no
+ * codec. Resolved against the configured endpoint. Without bound arguments
+ * this is `fn.url`; where the reference's own call goes is
+ * `serverFunctionUrl`. Present on both entries so isomorphic
  * `@solidjs/web/server-functions` imports resolve.
  */
-export function observeServerFunctionCalls(
-  observer: (call: ServerFunctionCall) => void
-): () => void;
+export function serverFunctionActionUrl(
+  fn: ServerFunction | string,
+  ...boundArgs: readonly unknown[]
+): string;
 
-// Client-only inspection seam. Present as a no-op so isomorphic
-// `@solidjs/web/server-functions` imports resolve on the server entry.
-export function observeServerFunctionCalls() {
-  return () => {};
-} /**
- * Builds the url a reference is called at, for integrations composing action
- * urls the runtime did not render — a router turning a bound action into a
- * `<form action>` for the no-JS path. `boundArgs` must be JSON-safe: the
- * server reads them the way it reads a form post's, and that convention has
- * no codec. Resolved against the configured endpoint, so a caller does not
- * have to know where the handler is mounted. Present on both entries so
- * isomorphic `@solidjs/web/server-functions` imports resolve.
- */
-export function serverFunctionUrl(id: string, boundArgs?: readonly unknown[]): string;
-
-/** Builds the url a reference is called at: `<endpoint>/<id>[?args=...]`. */
-export function serverFunctionUrl(id, boundArgs) {
-  const address = serverFunctionAddress(config.endpoint, id);
-  if (!boundArgs || !boundArgs.length) return address;
-  if (!isJSONSafe(boundArgs)) {
-    throw new Error(
-      "Bound arguments in an action url must be JSON-safe: the server reads them the way it " +
-        "reads a form post's, and that convention has no codec. Pass the value through the " +
-        "function's body, or call the reference instead of rendering a url for it."
-    );
-  }
-  return `${address}?args=${encodeURIComponent(JSON.stringify(boundArgs))}`;
+/** The plain-HTTP address of a function: `<endpoint>/<id>[?args=...]`. */
+export function serverFunctionActionUrl(fn, ...boundArgs) {
+  return serverFunctionActionUrlFor(config.endpoint, fn, boundArgs);
 } /**
  * Reads the function id back out of a server-rendered action url — the
- * deconstruction half of `serverFunctionUrl`, for an integration that meets an
- * action url before the module that declared it has loaded (a router
- * synthesizing an invocation for a server component's form). Answers `null`
- * when the url is not an address. Present on both entries so isomorphic
- * `@solidjs/web/server-functions` imports resolve.
+ * deconstruction half of `serverFunctionActionUrl`, for an integration that
+ * meets an action url before the module that declared it has loaded (a
+ * router synthesizing an invocation for a server component's form). Answers
+ * `null` when the url is not an address. Present on both entries so
+ * isomorphic `@solidjs/web/server-functions` imports resolve.
  */
-export function parseServerFunctionUrl(url: string): string | null;
+export function parseServerFunctionActionUrl(url: string): string | null;
 
 /** Reads the function id back out of a server-rendered action url. */
-export function parseServerFunctionUrl(url) {
+export function parseServerFunctionActionUrl(url) {
   const parsed = parseServerFunctionAddress(
     new URL(url, "http://localhost").pathname,
     config.endpoint
@@ -3108,15 +3539,45 @@ async function matchesOrigin(origin, request, matcher) {
   return Array.isArray(matcher) ? matcher.includes(origin) : origin === matcher;
 }
 
+// The gate's verdict: `false` refuses; `true` admits with nothing to add
+// (the caller proved same-origin, or proved nothing and the deployment
+// opted out of proof); an origin string admits a CROSS-ORIGIN caller the
+// `origin` allowlist named, and is the exact value to echo back in
+// `Access-Control-Allow-Origin` — without it the browser that made the
+// call never lets the page read the answer.
 async function allowsServerFunctionRequest(request, options) {
   const fetchSite = request.headers.get("Sec-Fetch-Site");
   if (fetchSite === "same-origin") return true;
-  if (fetchSite === "same-site" || fetchSite === "cross-site" || fetchSite === "none") {
-    return false;
-  }
+  // Address bar, bookmark, a user-initiated navigation: no page made this
+  // request, so no allowlist entry can speak for it.
+  if (fetchSite === "none") return false;
 
   const origin = request.headers.get("Origin");
-  if (origin !== null) return matchesOrigin(origin, request, options.origin);
+  if (fetchSite === "same-site" || fetchSite === "cross-site") {
+    // The browser's own word that a page on ANOTHER origin made the call.
+    // Only an explicit allowlist can admit it (#3538): the default matcher
+    // compares against the request's own origin, and a browser that says
+    // cross-site while sending that origin is contradicting itself. The
+    // matcher used to be unreachable from here — refused before it was
+    // consulted — so `csrf.origin` had no effect on any current browser
+    // for the one case it reads as being for. `Origin` is what makes the
+    // decision safe to delegate: it is browser-set, a page cannot forge
+    // it, and its absence (an opaque `null` is not an absence — it is a
+    // caller declining to say) leaves nothing to match.
+    if (origin === null || options.origin === undefined) return false;
+    return (await matchesOrigin(origin, request, options.origin)) ? origin : false;
+  }
+
+  if (origin !== null) {
+    if (!(await matchesOrigin(origin, request, options.origin))) return false;
+    // No fetch metadata (older WebKit), so `Origin` decided. An Origin
+    // other than the request's own is a cross-origin caller by Origin's
+    // definition, and it needs the CORS answer as much as one that says
+    // so in `Sec-Fetch-Site`. (A same-origin browser behind a proxy that
+    // rewrites the host lands here too; the extra `Allow-Origin` is inert
+    // on a same-origin response.)
+    return origin === new URL(request.url).origin ? true : origin;
+  }
 
   const referer = request.headers.get("Referer");
   if (referer !== null) {
@@ -3132,29 +3593,127 @@ async function allowsServerFunctionRequest(request, options) {
 
 const CSRF_VARY = ["Sec-Fetch-Site", "Origin", "Referer"];
 
-function withCSRFVary(response) {
-  const current = response.headers.get("Vary");
-  if (current === "*") return response;
-
+// Adds the named fields to `Vary`, deduplicated case-insensitively; a `*`
+// already says everything and is left alone.
+function appendVary(headers, names) {
+  const current = headers.get("Vary");
+  if (current === "*") return;
   const values = current ? current.split(",").map(value => value.trim()) : [];
-  const names = new Set(values.map(value => value.toLowerCase()));
-  for (const value of CSRF_VARY) {
-    if (!names.has(value.toLowerCase())) values.push(value);
+  const seen = new Set(values.map(value => value.toLowerCase()));
+  for (const name of names) {
+    if (!seen.has(name.toLowerCase())) values.push(name);
   }
-  const vary = values.join(", ");
+  headers.set("Vary", values.join(", "));
+}
 
+// Applies `write` to the response's headers — onto a copy when they are
+// immutable (a raw fetch() Response passed through). `write` must be
+// re-runnable: an immutable Headers throws on its first mutation, so the
+// copy sees every write from the start.
+function withHeaders(response, write) {
   try {
-    response.headers.set("Vary", vary);
+    write(response.headers);
     return response;
   } catch {
     const headers = new Headers(response.headers);
-    headers.set("Vary", vary);
+    write(headers);
     return new Response(response.body, {
       status: response.status,
       statusText: response.statusText,
       headers
     });
   }
+}
+
+function withCSRFVary(response) {
+  return withHeaders(response, headers => appendVary(headers, CSRF_VARY));
+}
+
+// The request headers the client transport sets on its own calls — what a
+// preflight that names none (a bare `Access-Control-Request-Method`) is
+// told it may send.
+const TRANSPORT_REQUEST_HEADERS = ["Content-Type", BODY_FORMAT_HEADER, SINGLE_FLIGHT_HEADER].join(
+  ", "
+);
+// How long a browser may reuse a preflight answer for one address. Each
+// function has an address of its own, so this is per function, and a
+// change to the allowlist is honoured within it (browsers cap the value
+// themselves — Chromium at two hours).
+const PREFLIGHT_MAX_AGE = "600";
+// Response headers a page may read across origins without being told
+// (Fetch's CORS-safelisted response-header names), so they need no
+// exposing — plus the ones it may never read, and this answer's own.
+const CORS_SAFELISTED_RESPONSE_HEADERS = new Set([
+  "cache-control",
+  "content-language",
+  "content-length",
+  "content-type",
+  "expires",
+  "last-modified",
+  "pragma"
+]);
+
+// The CORS answer for an admitted cross-origin caller (#3538), stamped on
+// EVERY response the handler sends it — results, refusals, the labelled
+// unknown-id 404 — because a browser lets the page read none of them
+// otherwise. `cors` is `null` for everyone else, and then this is the
+// identity: the same-origin path stays byte-identical.
+//
+// - `Access-Control-Allow-Origin` echoes the exact `Origin` the allowlist
+//   admitted, never `*` (a wildcard would also void the credentials answer),
+//   so the response varies by `Origin`.
+// - `Access-Control-Allow-Credentials` only when the deployment said so:
+//   an allowlist entry is not a cookie-sharing decision.
+// - `Access-Control-Expose-Headers` names what THIS response carries beyond
+//   the safelist: the protocol's tags (error, format, redirect,
+//   revalidation, single-flight, unknown-id), an integration's (frames'
+//   stream header), an author's own. The page may already read the body,
+//   so the headers are no more secret than it; `Set-Cookie` can never be
+//   exposed and is skipped.
+function withCORS(response, cors) {
+  if (cors === null) return response;
+  return withHeaders(response, headers => {
+    headers.set("Access-Control-Allow-Origin", cors.origin);
+    if (cors.credentials) headers.set("Access-Control-Allow-Credentials", "true");
+    const exposed = [];
+    for (const name of headers.keys()) {
+      if (
+        CORS_SAFELISTED_RESPONSE_HEADERS.has(name) ||
+        name === "set-cookie" ||
+        name === "vary" ||
+        name.startsWith("access-control-")
+      ) {
+        continue;
+      }
+      exposed.push(name);
+    }
+    if (exposed.length > 0) headers.set("Access-Control-Expose-Headers", exposed.join(", "));
+    appendVary(headers, ["Origin"]);
+  });
+}
+
+// The answer to a browser's preflight (`OPTIONS` + `Access-Control-Request-
+// Method`) from an admitted origin: the transport's methods, the headers the
+// preflight asked about (the page's own — a bearer token set through
+// `prepareRequest` — as much as the transport's; the ORIGIN is what was
+// trusted, and the request itself is still gated when it arrives), or the
+// transport's set when it asked about none. `Allow-Origin` and the
+// credentials answer are stamped by `withCORS` like everything else.
+function preflightResponse(request) {
+  const requested = request.headers.get("Access-Control-Request-Headers");
+  const response = new Response(null, {
+    status: 204,
+    headers: {
+      "Access-Control-Allow-Methods": "POST, GET, HEAD",
+      "Access-Control-Allow-Headers":
+        requested !== null && requested.trim() !== "" ? requested : TRANSPORT_REQUEST_HEADERS,
+      "Access-Control-Max-Age": PREFLIGHT_MAX_AGE,
+      "Cache-Control": "no-store"
+    }
+  });
+  // The answer depends on what was asked.
+  appendVary(response.headers, ["Access-Control-Request-Method", "Access-Control-Request-Headers"]);
+  return response;
 }
 
 function forbiddenResponse() {
@@ -3189,11 +3748,20 @@ function nativePromise(value) {
  *
  * Requests are same-origin by default. The handler accepts browser requests
  * proven by `Sec-Fetch-Site`, `Origin`, or `Referer`, and rejects requests
- * without usable metadata unless explicitly configured otherwise. GET/HEAD
- * requests to `GET`-declared functions skip this gate: they are reads by
- * contract, cross-site response READING is already blocked by same-origin
- * policy, and skipping it keeps the `Vary: Sec-Fetch-Site, Origin, Referer`
- * it would impose off the responses shared caches are meant to store.
+ * without usable metadata unless explicitly configured otherwise. A
+ * cross-origin browser call is admitted only when `csrf.origin` lists its
+ * `Origin`, and is then answered with CORS — `Access-Control-Allow-Origin`
+ * echoing that origin, the protocol's headers exposed, the `OPTIONS`
+ * preflight answered, credentials only when `csrf.allowCredentials` says so
+ * (#3538). GET/HEAD requests to `GET`-declared functions skip this gate:
+ * they are reads by contract, cross-site response READING is already
+ * blocked by same-origin policy, and skipping it keeps the
+ * `Vary: Sec-Fetch-Site, Origin, Referer` it would impose off the responses
+ * shared caches are meant to store. Once `csrf.origin` lists an origin,
+ * though, a read's answer depends on who asked — `Allow-Origin` for a
+ * listed caller, nothing for anyone else — so every declared read then
+ * carries `Vary: Origin` (and only that), or a shared cache would serve one
+ * caller's variant to the other.
  *
  * Every response leaves with `Cache-Control: no-store` unless the function
  * set its own cache policy (via `respond()` headers or a returned
@@ -3236,7 +3804,7 @@ function nativePromise(value) {
  *
  * @example
  * ```ts
- * import { handleServerFunctionRequest } from "@solidjs/web/server-functions";
+ * import { handleServerFunctionRequest } from "@solidjs/web/server-functions/server";
  * import "virtual:solid-server-function-manifest";
  *
  * // in the server's request handling:
@@ -3299,10 +3867,10 @@ export function handleServerFunctionRequest(
  *   (call headers and cookies copied on), returning undefined keeps the
  *   plain serialized envelope.
  * - `handleNoJS(result, request, args)`: response for calls made without
- *   the client runtime (no instance header) — the override for the no-JS
+ *   the client runtime (at the bare address) — the override for the no-JS
  *   form convention. Falls back to the configured hook, then to
  *   `createNoJSHandler()` for browser form posts (redirect back with the
- *   outcome in a flash cookie); other no-instance callers, such as direct
+ *   outcome in a flash cookie); other bare-address callers, such as direct
  *   HTTP requests, get the normal serialized response.
  * - `csrf`: configures same-origin request validation, or disables it with
  *   `false`. Enabled by default.
@@ -3334,10 +3902,84 @@ export async function handleServerFunctionRequest(request, options = {}) {
   const csrf = options.csrf !== undefined ? options.csrf : config.csrf;
   // The skip is `GET()`'s safety contract at work (see its notes and
   // #3114); `protectDeclaredReads` is the opt-in for deployments that
-  // would rather gate reads than share their cache entries.
+  // would rather gate reads than share their cache entries. A grant
+  // carried across a dev rebind (#3564, `CARRIED`) is provisional: the
+  // function dispatching under it never made the assertion, so it gets
+  // dispatch but not the skip — the gate stays on, and a cross-site GET
+  // lands on the 403 production gives it. Cache fragmentation is nothing
+  // in dev; the set is empty in prod.
   const protectsRequest =
     csrf !== false &&
-    (!declaredRead || (typeof csrf === "object" && csrf.protectDeclaredReads === true));
+    (!declaredRead ||
+      CARRIED.has(functionId) ||
+      (typeof csrf === "object" && csrf.protectDeclaredReads === true));
+  const csrfOptions = csrf === true ? {} : csrf;
+  // The gate's verdict (see `allowsServerFunctionRequest`): `false`
+  // refuses, `true` admits, an origin string admits a cross-origin caller
+  // the `csrf.origin` allowlist named — who then needs the CORS answer on
+  // EVERY response (#3538), the labelled unknown-id 404 below included: a
+  // browser lets the page read none of them otherwise, and the label's
+  // whole purpose is client-side recovery. So the verdict is read here,
+  // ahead of the lookup, and the refusal it may carry is ACTED on after it:
+  // #3136's ordering of answers — the label before the 403 — is kept. What
+  // moves is only the matcher call, which is user-authored and ran ahead
+  // of the lookup before #3136 as well.
+  let verdict = true;
+  // Declared reads are the one cacheable answer the handler gives, and a
+  // stored response is served to whoever asks next. Once an allowlist
+  // makes cross-origin admission POSSIBLE, a read's answer depends on the
+  // `Origin` that asked — `Allow-Origin` for a listed one, nothing for
+  // everyone else — so EVERY declared read then names that dependency with
+  // `Vary: Origin`, whether or not this request carried an `Origin` or was
+  // admitted. Varying only the admitted answer would let a same-origin
+  // page warm the cache with the header-less variant and have the shared
+  // cache serve it to the listed origin next: CORS failures that depend on
+  // who asked first. Without a matcher, admission is impossible, the answer
+  // does not depend on `Origin`, and reads stay byte-identical (no `Vary`)
+  // — the shared-cache entries the GET helper exists for (#3071) untouched.
+  let readVariesByOrigin = false;
+  if (protectsRequest) {
+    verdict = await allowsServerFunctionRequest(request, csrfOptions);
+  } else if (csrfOptions !== false && csrfOptions.origin !== undefined) {
+    // An ungated declared read (#3114) is still ANSWERED to a browser, and
+    // a listed origin's page can read that answer only through CORS. The
+    // verdict decides headers here, never dispatch: a refusal is dropped,
+    // and a same-origin or unlisted read is answered as before apart from
+    // the `Vary: Origin` above — no `Access-Control-*`. Only a deployment
+    // that listed an origin pays the matcher call, and only on a read
+    // carrying an `Origin`.
+    readVariesByOrigin = true;
+    const admitted = await allowsServerFunctionRequest(request, csrfOptions);
+    if (typeof admitted === "string") verdict = admitted;
+  }
+  const cors =
+    typeof verdict === "string"
+      ? { origin: verdict, credentials: csrfOptions.allowCredentials === true }
+      : null;
+  // Every exit leaves through here: transport hygiene, then the CORS
+  // answer for an admitted cross-origin caller (the identity for everyone
+  // else), then the read's `Origin` variance where an allowlist makes the
+  // answer depend on it (`withCORS` already named it for an admitted one).
+  const finish = response => {
+    const finalized = withCORS(finalizeTransportResponse(response, method), cors);
+    return readVariesByOrigin && cors === null
+      ? withHeaders(finalized, headers => appendVary(headers, ["Origin"]))
+      : finalized;
+  };
+  // A browser asks before it sends a cross-origin call with a body the
+  // transport's shape (`OPTIONS` + `Access-Control-Request-Method`). The
+  // question is whether the ORIGIN may send this method here, and the
+  // answer does not depend on the id — an unknown one is still answered,
+  // so the actual request can carry the labelled 404 to the client. Only
+  // an admitted origin gets an answer; anyone else lands on the refusal or
+  // the 405 a plain `OPTIONS` always got.
+  if (
+    cors !== null &&
+    method === "OPTIONS" &&
+    request.headers.has("Access-Control-Request-Method")
+  ) {
+    return finish(preflightResponse(request));
+  }
   // Labelled (#3110): the address is well-formed but its id is not part of
   // this deployment — the wire shape of version skew (a tab holding the
   // previous build's ids) or a genuinely removed function. Without the
@@ -3345,18 +3987,17 @@ export async function handleServerFunctionRequest(request, options = {}) {
   // one recovery that works — reload onto the current build — cannot be
   // targeted.
   //
-  // Answered BEFORE the origin gate, deliberately (#3136). A removed id is
-  // not in METHODS, so it can no longer be recognised as a declared read
-  // and the gate fired on it — hiding the label behind a 403 from exactly
-  // the callers that carry no fetch metadata (a CDN revalidating a
-  // declared read, a monitor, a server-to-server client; Node's fetch
-  // sends none of the three headers the gate reads). Nothing is registered
-  // at an unknown id, so the gate has nothing there to protect, and the
-  // ids themselves are public by construction: the compiler emits them
-  // into the shipped client bundle. The lookup is a side-effect-free Map
-  // read, so nothing user-authored runs earlier than it did. The
-  // meaningless-path 404 below stays bare and stays gated: a mistyped
-  // route is not skew.
+  // Answered BEFORE the origin gate's refusal, deliberately (#3136). A
+  // removed id is not in METHODS, so it can no longer be recognised as a
+  // declared read and the gate fired on it — hiding the label behind a 403
+  // from exactly the callers that carry no fetch metadata (a CDN
+  // revalidating a declared read, a monitor, a server-to-server client;
+  // Node's fetch sends none of the three headers the gate reads). Nothing
+  // is registered at an unknown id, so the gate has nothing there to
+  // protect, and the ids themselves are public by construction: the
+  // compiler emits them into the shipped client bundle. The lookup is a
+  // side-effect-free Map read. The meaningless-path 404 below stays bare
+  // and stays gated: a mistyped route is not skew.
   let serverFunction;
   if (functionId) {
     try {
@@ -3364,34 +4005,36 @@ export async function handleServerFunctionRequest(request, options = {}) {
     } catch {
       // no Vary: the answer does not depend on origin proof, so it must
       // not fragment shared-cache entries on it
-      return finalizeTransportResponse(
+      return finish(
         new Response(DEV ? `Unknown server function: ${functionId}` : null, {
           status: 404,
           headers: { [UNKNOWN_HEADER]: "true" }
-        }),
-        method
+        })
       );
     }
   }
-  if (protectsRequest && !(await allowsServerFunctionRequest(request, csrf === true ? {} : csrf))) {
-    return finalizeTransportResponse(forbiddenResponse(), method);
+  if (verdict === false) {
+    return finish(forbiddenResponse());
   }
-  const instance = request.headers.get(INSTANCE_HEADER);
-
   if (!functionId) {
     const response = new Response(DEV ? "Server function not found" : null, { status: 404 });
-    return finalizeTransportResponse(protectsRequest ? withCSRFVary(response) : response, method);
+    return finish(protectsRequest ? withCSRFVary(response) : response);
   }
 
-  // Which of the two answer shapes this call gets — codec encodings for the
-  // client transport, plain HTTP for everyone else — is decided by the
-  // ADDRESS: the data address IS the scripted protocol, the bare address is
+  // Which of the three answer shapes this call gets — codec encodings for
+  // the client transport, the same encodings framed as an event stream for
+  // a `live` loop, plain HTTP for everyone else — is decided by the
+  // ADDRESS: the data address IS the scripted protocol, the live address is
+  // the scripted protocol in event-stream framing, the bare address is
   // plain HTTP. On the url, not a header, because shared caches key on the
   // url and store one answer per key — a header-driven shape means one
-  // caller kind's cached answer can be replayed to the other (#3094). The
-  // instance header does not shape the answer; it still identifies the
-  // call (invocation context, no-JS gating).
-  const scripted = address.data;
+  // caller kind's cached answer can be replayed to the other (#3094). No
+  // header identifies the caller either: a GET-encoded read carries none
+  // of the transport's own, so to caches and preloads it is exactly its
+  // url (#3406). The one header the live address reads, `Last-Event-ID`,
+  // is a position within an answer that is never cached or preloaded.
+  const scripted = address.data || address.live;
+  const live = address.live;
 
   // Method allowlist: POST always dispatches (the default transport);
   // GET and HEAD dispatch only to functions that declared GET (the server
@@ -3410,7 +4053,7 @@ export async function handleServerFunctionRequest(request, options = {}) {
         headers: { Allow: declaresRead(functionId) ? "POST, GET, HEAD" : "POST" }
       }
     );
-    return finalizeTransportResponse(protectsRequest ? withCSRFVary(response) : response, method);
+    return finish(protectsRequest ? withCSRFVary(response) : response);
   }
 
   // The argument payload is buffered and decoded before dispatch, so its
@@ -3427,7 +4070,7 @@ export async function handleServerFunctionRequest(request, options = {}) {
       DEV ? "Server function arguments exceed the configured bodySizeLimit" : null,
       { status: 413 }
     );
-    return finalizeTransportResponse(protectsRequest ? withCSRFVary(response) : response, method);
+    return finish(protectsRequest ? withCSRFVary(response) : response);
   }
   if (method === "POST" && request.body !== null && bodySizeLimit !== Infinity) {
     // The one thing a declaration is good for: a CONFORMING one — digits,
@@ -3452,7 +4095,7 @@ export async function handleServerFunctionRequest(request, options = {}) {
         DEV ? "Server function request body exceeds the configured bodySizeLimit" : null,
         { status: 413 }
       );
-      return finalizeTransportResponse(protectsRequest ? withCSRFVary(response) : response, method);
+      return finish(protectsRequest ? withCSRFVary(response) : response);
     }
     let buffered;
     try {
@@ -3467,14 +4110,14 @@ export async function handleServerFunctionRequest(request, options = {}) {
       const response = new Response(DEV ? "Malformed server function arguments" : null, {
         status: 400
       });
-      return finalizeTransportResponse(protectsRequest ? withCSRFVary(response) : response, method);
+      return finish(protectsRequest ? withCSRFVary(response) : response);
     }
     if (buffered === null) {
       const response = new Response(
         DEV ? "Server function request body exceeds the configured bodySizeLimit" : null,
         { status: 413 }
       );
-      return finalizeTransportResponse(protectsRequest ? withCSRFVary(response) : response, method);
+      return finish(protectsRequest ? withCSRFVary(response) : response);
     }
     request = withBufferedBody(request, buffered);
   }
@@ -3506,7 +4149,7 @@ export async function handleServerFunctionRequest(request, options = {}) {
     const response = scripted
       ? encodeResult(safe, headers, 500, codec, request.signal)
       : new Response(DEV ? message : null, { status: 500 });
-    return finalizeTransportResponse(protectsRequest ? withCSRFVary(response) : response, method);
+    return finish(protectsRequest ? withCSRFVary(response) : response);
   }
   // Once an event exists, its response stub folds onto EVERY exit — the
   // refusals below included (#3159). A refusal that returned directly
@@ -3518,10 +4161,11 @@ export async function handleServerFunctionRequest(request, options = {}) {
   // instrumentation, same as the dispatch tail.
   const refuseCommitted = raw => {
     const response = commitEventResponse(raw, event);
-    return finalizeTransportResponse(protectsRequest ? withCSRFVary(response) : response, method);
+    return finish(protectsRequest ? withCSRFVary(response) : response);
   };
   const provide = options.provideEvent || provideEvent;
   const scope = run => provide(event, run);
+  if (options.onError !== undefined) REQUEST_ERROR_HOOKS.set(event, options.onError);
   const flightHook =
     options.collectFlightData !== undefined ? options.collectFlightData : config.collectFlightData;
   // Same fallback pattern: a generic dispatcher calling
@@ -3642,7 +4286,6 @@ export async function handleServerFunctionRequest(request, options = {}) {
   const flightContext = {
     id: functionId,
     args: parsed,
-    instance,
     request,
     collectsFlight,
     codec,
@@ -3666,11 +4309,18 @@ export async function handleServerFunctionRequest(request, options = {}) {
         // Identity is established BEFORE the wrapper runs, so
         // getServerFunctionInvocation() answers throughout the wrap — code
         // ahead of run() (auth, logging) included.
-        INVOCATIONS.set(event, { id: functionId });
+        INVOCATIONS.set(event, { id: functionId, live: !!live });
         const run = () => serverFunction(...parsed);
-        return wrapInvocation
-          ? wrapInvocation(run, { id: functionId, args: parsed, event, request, direct: false })
-          : run();
+        // Same observation as the direct leg (see `observeInvocation`): the
+        // wrapped execution as a whole, the error as thrown — before the
+        // catch below sanitizes it for the wire.
+        return observeInvocation(
+          { id: functionId, direct: false, event, request, args: parsed },
+          () =>
+            wrapInvocation
+              ? wrapInvocation(run, { id: functionId, args: parsed, event, request, direct: false })
+              : run()
+        );
       };
       let result = await provideEventOnce(provide, event, invokeOnce);
 
@@ -3775,6 +4425,11 @@ export async function handleServerFunctionRequest(request, options = {}) {
       }
 
       if (status === 304) warnScripted304(functionId);
+      // A live address answers in event-stream framing — the success path
+      // only: a refusal or a thrown outcome is a whole answer, delivered as
+      // the ordinary scripted encoding (the loop's reader is chosen off the
+      // content type, so it reads either).
+      if (live) return encodeLiveResult(result, headers, status, codec, request, scope);
       return encodeResult(result, headers, status, codec, request.signal, scope);
     } catch (x) {
       // Plain-thrown tail, hoisted so the thrown-path transformResult can
@@ -3784,7 +4439,7 @@ export async function handleServerFunctionRequest(request, options = {}) {
       // sanitizeServerError). Both the wire body and the ERROR_HEADER
       // message derive from the sanitized value.
       const respondThrown = value => {
-        const safe = sanitizeServerError(value);
+        const safe = wireServerFunctionError(value, "thrown", event);
         if (!scripted) {
           if (handleNoJS) return handleNoJS(safe, request, parsed, true);
           const message = safe instanceof Error ? safe.message : String(safe);
@@ -3923,7 +4578,7 @@ export async function handleServerFunctionRequest(request, options = {}) {
     enforceComposedHeaderInvariants(ownResponse(await dispatch())),
     event
   );
-  return finalizeTransportResponse(protectsRequest ? withCSRFVary(response) : response, method);
+  return finish(protectsRequest ? withCSRFVary(response) : response);
 }
 
 // A fresh Response around the same body: status, statusText and headers are

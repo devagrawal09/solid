@@ -10,7 +10,7 @@
  * re-runs, holds — can be keyed by what the user did.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { attribution } from "../src/attribution.js";
+import { attribution, formatRerun } from "../src/attribution.js";
 import {
   action,
   createEffect,
@@ -22,9 +22,17 @@ import {
   OBSERVE
 } from "../src/index.js";
 import type { ChangeOrigin, RerunEvent } from "../src/core/attribution.js";
-import type { DiagnosticEvent } from "../src/core/dev.js";
+import type { DiagnosticEvent, RecordListener, RecordType } from "../src/core/dev.js";
+
+// The engine's records arrive on the channel, whose subscriptions are the
+// consumer's — not dropped by `disable()` — so each test's are released here.
+const offs: (() => void)[] = [];
+function on<K extends RecordType>(type: K, listener: RecordListener<K>): void {
+  offs.push(OBSERVE!.records.subscribe(type, listener));
+}
 
 afterEach(() => {
+  for (const off of offs.splice(0)) off();
   attribution.disable();
   flush();
   vi.restoreAllMocks();
@@ -46,7 +54,7 @@ function arm() {
   vi.spyOn(console, "info").mockImplementation(() => {});
   attribution.enable({ log: false, hotRuns: false, hotTime: false, waterfalls: false });
   const runs: RerunEvent[] = [];
-  attribution.subscribe(e => runs.push(e));
+  on("rerun", e => runs.push(e));
   return runs;
 }
 
@@ -65,7 +73,7 @@ describe("write provenance", () => {
     flush();
     const cause = rootCause(runs, "reader");
     expect(cause.origin).toEqual({ kind: "external" });
-    expect(attribution.format(runs.at(-1)!)).not.toContain("—");
+    expect(formatRerun(runs.at(-1)!)).not.toContain("—");
   });
 
   it("stamps writes inside withInteraction with the interaction", () => {
@@ -85,8 +93,8 @@ describe("write provenance", () => {
     expect(cause.origin!.at).toBeGreaterThanOrEqual(before);
     const run = runs.at(-1)!;
     expect(run.interaction).toBe(cause.origin);
-    expect(attribution.format(run)).toContain(`n" write (#`);
-    expect(attribution.format(run)).toContain(`— click on button#next "Next →"`);
+    expect(formatRerun(run)).toContain(`n" write (#`);
+    expect(formatRerun(run)).toContain(`— click on button#next "Next →"`);
   });
 
   it("stamps an effect's writes with the effect, under the interaction that caused its run", () => {
@@ -112,7 +120,7 @@ describe("write provenance", () => {
       name: "sync",
       interaction: { kind: "interaction", name: "click" }
     });
-    expect(attribution.format(runs.at(-1)!)).toContain(
+    expect(formatRerun(runs.at(-1)!)).toContain(
       `— effect "sync" (under click on button#next "Next →")`
     );
     // The reader's run traces to the click through the relay.
@@ -263,7 +271,7 @@ describe("holds carry their interaction", () => {
     resolve("b");
     await until(() => shown.includes("b-p2"), "the held page to land");
 
-    const [hold] = attribution.holds();
+    const [hold] = attribution.history("hold");
     expect(hold.interaction).toMatchObject({ kind: "interaction", name: "click", at });
     expect(hold.holdMs).toBeGreaterThanOrEqual(1000);
     expect(hold.heldWrites[0].origin).toBe(hold.interaction);

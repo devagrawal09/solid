@@ -10,7 +10,9 @@ import {
   convertJSXIdentifier
 } from "./utils";
 import { transformNode, getCreateTemplate, thisTagIdentifiers } from "./transform";
-import type { PluginConfig } from "../config";
+import { markPropsLiteral } from "../ssr/props";
+import { decodedAttrValue } from "../universal/element";
+import { sourceNames, type PluginConfig } from "../config";
 import type { BabelPath, JSXNode, TransformResult } from "../types";
 
 type JSXAttributePath = BabelPath<t.JSXAttribute | t.JSXSpreadAttribute>;
@@ -61,7 +63,7 @@ function convertComponentIdentifier(
 
 /**
  * The tag as written in source (`Home`, `Ui.Button`, `this.Row`) — the label
- * `componentNames` emits. Read before `convertComponentIdentifier` since that
+ * `sourceNames.components` emits. Read before `convertComponentIdentifier` since that
  * retypes the JSX identifier nodes in place.
  */
 function jsxTagName(node: t.JSXIdentifier | t.JSXMemberExpression | t.JSXNamespacedName): string {
@@ -82,6 +84,13 @@ export default function transformComponent(
     runningObject: Array<t.ObjectProperty | t.ObjectMethod> = [],
     dynamicSpread = false,
     hasChildren = path.node.children.length > 0;
+  // Each props literal this call emits is a candidate for the SSR hoisted
+  // shape (ssr/props.ts), decided at Program exit once every body is final.
+  const propsLiteral = (properties: Array<t.ObjectProperty | t.ObjectMethod>) => {
+    const literal = t.objectExpression(properties);
+    markPropsLiteral(literal, path, config);
+    return literal;
+  };
 
   if (
     t.isIdentifier(tagId) &&
@@ -99,7 +108,7 @@ export default function transformComponent(
       const node = attribute.node;
       if (t.isJSXSpreadAttribute(node)) {
         if (runningObject.length) {
-          props.push(t.objectExpression(runningObject));
+          props.push(propsLiteral(runningObject));
           runningObject = [];
         }
         props.push(
@@ -115,10 +124,7 @@ export default function transformComponent(
             : (node.argument as t.Expression)
         );
       } else if (t.isJSXAttribute(node)) {
-        // handle weird babel bug around HTML entities
-        const value =
-            (t.isStringLiteral(node.value) ? t.stringLiteral(node.value.value) : node.value) ||
-            t.booleanLiteral(true),
+        const value = decodedAttrValue(node.value) || t.booleanLiteral(true),
           id = convertJSXIdentifier(node.name),
           key = t.isIdentifier(id) ? id.name : (id as t.StringLiteral).value;
         if (hasChildren && key === "children") return;
@@ -284,13 +290,19 @@ export default function transformComponent(
             ) {
               const expr = transformCondition(attribute.get("value").get("expression"), true);
 
+              // Getter keys are never computed: `id` is an identifier or a
+              // string literal (`get "aria-label"()`), the same property as
+              // `get ["aria-label"]()` but on V8's object-literal boilerplate
+              // path — a computed key drops the whole literal to per-property
+              // runtime definition (#3511). Same at every getter site below
+              // and in dom/ssr/universal element.ts.
               runningObject.push(
                 t.objectMethod(
                   "get",
                   id,
                   [],
                   t.blockStatement([t.returnStatement(expr.body)]),
-                  !t.isValidIdentifier(key)
+                  false
                 )
               );
             } else if (
@@ -303,7 +315,7 @@ export default function transformComponent(
                 ? callee.body
                 : t.blockStatement([t.returnStatement(callee.body)]);
 
-              runningObject.push(t.objectMethod("get", id, [], body, !t.isValidIdentifier(key)));
+              runningObject.push(t.objectMethod("get", id, [], body, false));
             } else {
               runningObject.push(
                 t.objectMethod(
@@ -311,7 +323,7 @@ export default function transformComponent(
                   id,
                   [],
                   t.blockStatement([t.returnStatement(value.expression as t.Expression)]),
-                  !t.isValidIdentifier(key)
+                  false
                 )
               );
             }
@@ -339,26 +351,35 @@ export default function transformComponent(
       );
     } else runningObject.push(t.objectProperty(t.identifier("children"), childResult[0]));
   }
-  if (runningObject.length || !props.length) props.push(t.objectExpression(runningObject));
+  if (runningObject.length || !props.length) props.push(propsLiteral(runningObject));
 
   if (props.length > 1 || dynamicSpread) {
     props = [t.callExpression(registerImportMethod(path, "mergeProps"), props)];
   }
   const componentArgs = [tagId, props[0]];
-  // `componentNames` carries the source tag name into the call so the
+  // `sourceNames.components` carries the source tag name into the call so the
   // dev/observe runtimes can label the owner after minification renames the
-  // function. DOM output only: SSR inlines the call below and the universal
-  // renderer's `createComponent` is user code with a two-argument contract.
-  if (config.componentNames && config.generate === "dom") {
+  // function — on the client (`createComponent` in solid-js's client entry)
+  // and on the server (its server entry's, which runs the body under a
+  // transparent `<Name>` owner in observe/dev so a server finding's
+  // `ownerPath` reads like the client's). Not for the universal renderer,
+  // whose `createComponent` is user code with a two-argument contract, nor
+  // the dynamic renderer's subtrees.
+  const labelled =
+    sourceNames(config).components && (config.generate === "dom" || config.generate === "ssr");
+  if (labelled) {
     componentArgs.push(t.stringLiteral(tagName));
   }
-  // SSR's `createComponent` is literally `Comp(props || {})`. Since the
+  // SSR's prod `createComponent` is literally `Comp(props || {})`. Since the
   // compiler always emits a real `props[0]` object expression above (see the
   // `props.push(t.objectExpression(runningObject))` line), the `|| {}` fallback
   // never fires in compiled output. Inline to a direct `Comp(props)` call to
   // drop one function-call frame per component invocation. (DOM/dev modes
   // keep the wrapper since it does real work — `untrack`, dev metadata.)
-  if (config.generate === "ssr") {
+  // With `sourceNames.components` the wrapper IS the work — the label has nowhere
+  // else to go — so SSR output keeps the call; the vite-plugin turns the
+  // option on for dev and observe builds only, so prod output stays inlined.
+  if (config.generate === "ssr" && !labelled) {
     exprs.push(t.callExpression(tagId, [props[0]]));
   } else {
     exprs.push(t.callExpression(registerImportMethod(path, "createComponent"), componentArgs));

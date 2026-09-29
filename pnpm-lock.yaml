@@ -336,8 +336,8 @@ importers:
   examples/hackernews:
     dependencies:
       '@solidjs/router':
-        specifier: 2.0.0-next.13
-        version: 2.0.0-next.13(@solidjs/web@packages+web)(solid-js@packages+solid)
+        specifier: 2.0.0-next.29
+        version: 2.0.0-next.29(@solidjs/web@packages+web)(solid-js@packages+solid)
       '@solidjs/web':
         specifier: workspace:*
         version: link:../../packages/web
@@ -402,8 +402,8 @@ importers:
   examples/hackernews-spa:
     dependencies:
       '@solidjs/router':
-        specifier: 2.0.0-next.13
-        version: 2.0.0-next.13(@solidjs/web@packages+web)(solid-js@packages+solid)
+        specifier: 2.0.0-next.29
+        version: 2.0.0-next.29(@solidjs/web@packages+web)(solid-js@packages+solid)
       '@solidjs/web':
         specifier: workspace:*
         version: link:../../packages/web
@@ -509,8 +509,8 @@ importers:
   examples/notes:
     dependencies:
       '@solidjs/router':
-        specifier: 2.0.0-next.13
-        version: 2.0.0-next.13(@solidjs/web@packages+web)(solid-js@packages+solid)
+        specifier: 2.0.0-next.29
+        version: 2.0.0-next.29(@solidjs/web@packages+web)(solid-js@packages+solid)
       '@solidjs/web':
         specifier: workspace:*
         version: link:../../packages/web
@@ -621,6 +621,28 @@ importers:
       vitest:
         specifier: ^4.1.6
         version: 4.1.6(@types/node@25.6.0)(@vitest/coverage-v8@4.1.6)(jsdom@25.0.1)(vite@7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0))
+
+  examples/room:
+    dependencies:
+      '@solidjs/router':
+        specifier: 2.0.0-next.29
+        version: 2.0.0-next.29(@solidjs/web@packages+web)(solid-js@packages+solid)
+      '@solidjs/web':
+        specifier: workspace:*
+        version: link:../../packages/web
+      solid-js:
+        specifier: workspace:*
+        version: link:../../packages/solid
+    devDependencies:
+      '@solidjs/vite-plugin':
+        specifier: 3.0.0-next.35
+        version: 3.0.0-next.35(@solidjs/web@packages+web)(@testing-library/jest-dom@6.9.1)(solid-js@packages+solid)(vite@8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0))
+      '@vitejs/plugin-basic-ssl':
+        specifier: ^2.3.0
+        version: 2.3.0(vite@8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0))
+      vite:
+        specifier: ^8.0.0
+        version: 8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0)
 
   examples/sierpinski:
     devDependencies:
@@ -748,6 +770,25 @@ importers:
         specifier: ^4.1.6
         version: 4.1.6(@types/node@25.6.0)(@vitest/coverage-v8@4.1.6)(jsdom@25.0.1)(vite@7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0))
 
+  examples/todos-server:
+    dependencies:
+      '@solidjs/web':
+        specifier: workspace:*
+        version: link:../../packages/web
+      solid-js:
+        specifier: workspace:*
+        version: link:../../packages/solid
+      unstorage:
+        specifier: ^1.17.5
+        version: 1.17.5
+    devDependencies:
+      '@solidjs/vite-plugin':
+        specifier: 3.0.0-next.35
+        version: 3.0.0-next.35(@solidjs/web@packages+web)(@testing-library/jest-dom@6.9.1)(solid-js@packages+solid)(vite@8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0))
+      vite:
+        specifier: ^8.0.0
+        version: 8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0)
+
   packages/babel-plugin:
     dependencies:
       '@babel/helper-module-imports':
@@ -828,12 +869,18 @@ importers:
         specifier: workspace:*
         version: link:../signals
     devDependencies:
+      '@solidjs/web':
+        specifier: workspace:*
+        version: link:../web
       '@types/node':
         specifier: ^25.0.8
         version: 25.6.0
       rimraf:
         specifier: ^5.0.1
         version: 5.0.10
+      solid-js:
+        specifier: workspace:*
+        version: link:../solid
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -2771,6 +2818,16 @@ packages:
       '@solidjs/web': workspace:*
       solid-js: workspace:*
 
+  '@solidjs/router@2.0.0-next.29':
+    resolution: {integrity: sha512-MyYoVYL3wCvU57poYki2dMfJGrGOfKSYg/pWgh76m9mproX/Dt+X/Ufw4ie3/9D3/IRrEbus0IqNaBaLgbriOA==}
+    peerDependencies:
+      '@solidjs/web': workspace:*
+      filesystem-routing: '>=0.4.0'
+      solid-js: workspace:*
+    peerDependenciesMeta:
+      filesystem-routing:
+        optional: true
+
   '@solidjs/vite-plugin@3.0.0-next.35':
     resolution: {integrity: sha512-8Mlftd+WfZkwOoCZRyMxA8innT8b2D/qawTu+28RW/Hj4eSmStSLx4dHjYeH9MxyOwo7DQStAyHAADk5LFQVRw==}
     engines: {node: ^20.19.0 || >=22.12.0}
@@ -2850,6 +2907,12 @@ packages:
 
   '@types/resolve@1.20.2':
     resolution: {integrity: sha512-60BCwRFOZCQhDncwQdxxeOEEkbc5dIMccYLwbxsS4TUNeVECQ/pBJ0j09mrHOl/JJvpRPGwO9SvE4nR2Nb/a4Q==}
+
+  '@vitejs/plugin-basic-ssl@2.3.0':
+    resolution: {integrity: sha512-bdyo8rB3NnQbikdMpHaML9Z1OZPBu6fFOBo+OtxsBlvMJtysWskmBcnbIDhUqgC8tcxNv/a+BcV5U+2nQMm1OQ==}
+    engines: {node: ^18.0.0 || ^20.0.0 || >=22.0.0}
+    peerDependencies:
+      vite: ^6.0.0 || ^7.0.0 || ^8.0.0
 
   '@vitest/coverage-v8@4.1.6':
     resolution: {integrity: sha512-36l628fQ/9a/8ihy97eOtEnvWQEdqULQOJtcaxtoNq0G1w3Mxd4szSahOaMM9/NGyZ+hyKcMtIW/WIxq0XQViQ==}
@@ -6412,6 +6475,11 @@ snapshots:
       '@solidjs/web': link:packages/web
       solid-js: link:packages/solid
 
+  '@solidjs/router@2.0.0-next.29(@solidjs/web@packages+web)(solid-js@packages+solid)':
+    dependencies:
+      '@solidjs/web': link:packages/web
+      solid-js: link:packages/solid
+
   '@solidjs/vite-plugin@3.0.0-next.35(@solidjs/web@packages+web)(@testing-library/jest-dom@6.9.1)(solid-js@packages+solid)(vite@7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0))':
     dependencies:
       '@ampproject/remapping': 2.3.0
@@ -6537,6 +6605,10 @@ snapshots:
       prettier: 3.8.1
 
   '@types/resolve@1.20.2': {}
+
+  '@vitejs/plugin-basic-ssl@2.3.0(vite@8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0))':
+    dependencies:
+      vite: 8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0)
 
   '@vitest/coverage-v8@4.1.6(vitest@4.1.6)':
     dependencies:

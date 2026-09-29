@@ -1,8 +1,9 @@
 import * as t from "@babel/types";
 import { getRendererConfig, registerImportMethod } from "./utils";
 import { appendTemplates as appendTemplatesDOM } from "../dom/template";
-import { appendTemplates as appendTemplatesSSR } from "../ssr/template";
+import { appendTemplates as appendTemplatesSSR, appendSkips } from "../ssr/template";
 import { isInvalidMarkup } from "./validate";
+import { hoistProps, takeHoistedProps } from "../ssr/props";
 import type { NodePath } from "@babel/traverse";
 import type { BabelHubWithMetadata, PluginPass, ProgramScopeData } from "../types";
 
@@ -13,6 +14,18 @@ export default (path: NodePath<t.Program>, state: PluginPass) => {
   const data = path.scope.data as ProgramScopeData;
   const config = (path.hub as unknown as BabelHubWithMetadata).file.metadata.config;
   if (!config) return;
+
+  // SSR hoisted props shapes: analysed now that every getter body is final,
+  // placed at the top of the module (before the templates, which unshift
+  // after this) so a shape exists before any component runs.
+  if (config.generate === "ssr" && config.hoistProps) {
+    hoistProps(path, config);
+    const hoisted = takeHoistedProps(path);
+    if (hoisted) path.node.body.unshift(...hoisted);
+  }
+  // Spread-element skip predicates sit between the templates and the hoisted
+  // props shapes (unshifted after them, before the templates unshift).
+  if (data.ssrSkips?.length) appendSkips(path, data.ssrSkips);
 
   if (data.events) {
     path.node.body.push(

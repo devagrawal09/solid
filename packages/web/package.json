@@ -1,7 +1,7 @@
 {
   "name": "@solidjs/web",
   "description": "Solid's web runtime: client rendering, hydration, SSR, and DOM-specific control flow (Portal, Dynamic).",
-  "version": "2.0.0-rc.8",
+  "version": "2.0.0-rc.11",
   "author": "Ryan Carniato",
   "license": "MIT",
   "homepage": "https://solidjs.com",
@@ -39,7 +39,11 @@
     "server-functions/package.json",
     "server-functions/rich-args/package.json",
     "frames/dist",
-    "frames/package.json"
+    "frames/package.json",
+    "performance-tracks/dist",
+    "performance-tracks/types",
+    "performance-tracks/package.json",
+    "skills"
   ],
   "exports": {
     ".": {
@@ -47,6 +51,10 @@
         "development": {
           "types": "./types/index.d.ts",
           "default": "./dist/server.dev.js"
+        },
+        "observe": {
+          "types": "./types/index.d.ts",
+          "default": "./dist/server.observe.js"
         },
         "types": "./types/index.d.ts",
         "default": "./dist/server.js"
@@ -68,6 +76,10 @@
           "types": "./types/index.d.ts",
           "default": "./dist/server.dev.js"
         },
+        "observe": {
+          "types": "./types/index.d.ts",
+          "default": "./dist/server.observe.js"
+        },
         "types": "./types/index.d.ts",
         "default": "./dist/server.js"
       },
@@ -75,6 +87,10 @@
         "development": {
           "types": "./types/index.d.ts",
           "default": "./dist/server.dev.js"
+        },
+        "observe": {
+          "types": "./types/index.d.ts",
+          "default": "./dist/server.observe.js"
         },
         "types": "./types/index.d.ts",
         "default": "./dist/server.js"
@@ -102,6 +118,42 @@
       "types": "./storage/types/index.d.ts",
       "default": "./storage/dist/storage.js"
     },
+    "./performance-tracks": {
+      "worker": {
+        "types": "./performance-tracks/types/index.d.ts",
+        "default": "./performance-tracks/dist/performance-tracks.js"
+      },
+      "browser": {
+        "development": {
+          "types": "./performance-tracks/types/index.d.ts",
+          "default": "./performance-tracks/dist/performance-tracks.dev.js"
+        },
+        "observe": {
+          "types": "./performance-tracks/types/index.d.ts",
+          "default": "./performance-tracks/dist/performance-tracks.observe.js"
+        },
+        "types": "./performance-tracks/types/index.d.ts",
+        "default": "./performance-tracks/dist/performance-tracks.js"
+      },
+      "deno": {
+        "types": "./performance-tracks/types/index.d.ts",
+        "default": "./performance-tracks/dist/performance-tracks.js"
+      },
+      "node": {
+        "types": "./performance-tracks/types/index.d.ts",
+        "default": "./performance-tracks/dist/performance-tracks.js"
+      },
+      "development": {
+        "types": "./performance-tracks/types/index.d.ts",
+        "default": "./performance-tracks/dist/performance-tracks.dev.js"
+      },
+      "observe": {
+        "types": "./performance-tracks/types/index.d.ts",
+        "default": "./performance-tracks/dist/performance-tracks.observe.js"
+      },
+      "types": "./performance-tracks/types/index.d.ts",
+      "default": "./performance-tracks/dist/performance-tracks.js"
+    },
     "./serialization": {
       "types": "./serialization/types/index.d.ts",
       "default": "./serialization/dist/serialization.js"
@@ -116,10 +168,22 @@
           "types": "./types/server-functions/server.d.ts",
           "default": "./server-functions/dist/server.dev.js"
         },
+        "observe": {
+          "types": "./types/server-functions/server.d.ts",
+          "default": "./server-functions/dist/server.observe.js"
+        },
         "types": "./types/server-functions/server.d.ts",
         "default": "./server-functions/dist/server.js"
       },
       "browser": {
+        "development": {
+          "types": "./types/server-functions/client.d.ts",
+          "default": "./server-functions/dist/client.dev.js"
+        },
+        "observe": {
+          "types": "./types/server-functions/client.d.ts",
+          "default": "./server-functions/dist/client.observe.js"
+        },
         "types": "./types/server-functions/client.d.ts",
         "default": "./server-functions/dist/client.js"
       },
@@ -127,6 +191,10 @@
         "development": {
           "types": "./types/server-functions/server.d.ts",
           "default": "./server-functions/dist/server.dev.js"
+        },
+        "observe": {
+          "types": "./types/server-functions/server.d.ts",
+          "default": "./server-functions/dist/server.observe.js"
         },
         "types": "./types/server-functions/server.d.ts",
         "default": "./server-functions/dist/server.js"
@@ -136,8 +204,20 @@
           "types": "./types/server-functions/server.d.ts",
           "default": "./server-functions/dist/server.dev.js"
         },
+        "observe": {
+          "types": "./types/server-functions/server.d.ts",
+          "default": "./server-functions/dist/server.observe.js"
+        },
         "types": "./types/server-functions/server.d.ts",
         "default": "./server-functions/dist/server.js"
+      },
+      "development": {
+        "types": "./types/server-functions/client.d.ts",
+        "default": "./server-functions/dist/client.dev.js"
+      },
+      "observe": {
+        "types": "./types/server-functions/client.d.ts",
+        "default": "./server-functions/dist/client.observe.js"
       },
       "types": "./types/server-functions/client.d.ts",
       "default": "./server-functions/dist/client.js"
@@ -147,10 +227,22 @@
         "types": "./types/server-functions/server.d.ts",
         "default": "./server-functions/dist/server.dev.js"
       },
+      "observe": {
+        "types": "./types/server-functions/server.d.ts",
+        "default": "./server-functions/dist/server.observe.js"
+      },
       "types": "./types/server-functions/server.d.ts",
       "default": "./server-functions/dist/server.js"
     },
     "./server-functions/client": {
+      "development": {
+        "types": "./types/server-functions/client.d.ts",
+        "default": "./server-functions/dist/client.dev.js"
+      },
+      "observe": {
+        "types": "./types/server-functions/client.d.ts",
+        "default": "./server-functions/dist/client.observe.js"
+      },
       "types": "./types/server-functions/client.d.ts",
       "default": "./server-functions/dist/client.js"
     },
@@ -164,6 +256,10 @@
           "types": "./types/frames/server.d.ts",
           "default": "./frames/dist/server.dev.js"
         },
+        "observe": {
+          "types": "./types/frames/server.d.ts",
+          "default": "./frames/dist/server.observe.js"
+        },
         "types": "./types/frames/server.d.ts",
         "default": "./frames/dist/server.js"
       },
@@ -171,6 +267,10 @@
         "development": {
           "types": "./types/frames/client.d.ts",
           "default": "./frames/dist/client.dev.js"
+        },
+        "observe": {
+          "types": "./types/frames/client.d.ts",
+          "default": "./frames/dist/client.observe.js"
         },
         "types": "./types/frames/client.d.ts",
         "default": "./frames/dist/client.js"
@@ -180,6 +280,10 @@
           "types": "./types/frames/server.d.ts",
           "default": "./frames/dist/server.dev.js"
         },
+        "observe": {
+          "types": "./types/frames/server.d.ts",
+          "default": "./frames/dist/server.observe.js"
+        },
         "types": "./types/frames/server.d.ts",
         "default": "./frames/dist/server.js"
       },
@@ -188,12 +292,20 @@
           "types": "./types/frames/server.d.ts",
           "default": "./frames/dist/server.dev.js"
         },
+        "observe": {
+          "types": "./types/frames/server.d.ts",
+          "default": "./frames/dist/server.observe.js"
+        },
         "types": "./types/frames/server.d.ts",
         "default": "./frames/dist/server.js"
       },
       "development": {
         "types": "./types/frames/client.d.ts",
         "default": "./frames/dist/client.dev.js"
+      },
+      "observe": {
+        "types": "./types/frames/client.d.ts",
+        "default": "./frames/dist/client.observe.js"
       },
       "types": "./types/frames/client.d.ts",
       "default": "./frames/dist/client.js"
@@ -203,10 +315,22 @@
         "types": "./types/frames/server.d.ts",
         "default": "./frames/dist/server.dev.js"
       },
+      "observe": {
+        "types": "./types/frames/server.d.ts",
+        "default": "./frames/dist/server.observe.js"
+      },
       "types": "./types/frames/server.d.ts",
       "default": "./frames/dist/server.js"
     },
     "./frames/client": {
+      "development": {
+        "types": "./types/frames/client.d.ts",
+        "default": "./frames/dist/client.dev.js"
+      },
+      "observe": {
+        "types": "./types/frames/client.d.ts",
+        "default": "./frames/dist/client.observe.js"
+      },
       "types": "./types/frames/client.d.ts",
       "default": "./frames/dist/client.js"
     },
@@ -218,26 +342,27 @@
     "build:clean": "rimraf dist/",
     "build:js": "rollup -c",
     "link": "symlink-dir . node_modules/@solidjs/web",
-    "types": "npm-run-all -nl types:clean types:copy-jsx types:web types:copy-web types:web-storage",
-    "types:clean": "rimraf types/ storage/types/ serialization/types/ frames/types/ .types-build/",
+    "types": "npm-run-all -nl types:clean types:copy-jsx types:web types:copy-web types:web-storage types:web-performance-tracks",
+    "types:clean": "rimraf types/ storage/types/ serialization/types/ frames/types/ performance-tracks/types/ .types-build/",
     "jsx-sync": "node ./scripts/jsx-sync.mjs --compile --element \"SolidElement | Node | ArrayElement\" --import \"import type { Element as SolidElement } from \\\"solid-js\\\";\"",
     "types:copy-jsx": "pnpm run jsx-sync",
     "types:web": "tsc --project ./tsconfig.build.json",
     "types:copy-web": "node ./scripts/copy-types.mjs",
     "types:web-storage": "tsc --project ./storage/tsconfig.build.json",
+    "types:web-performance-tracks": "tsc --project ./performance-tracks/tsconfig.build.json",
     "test": "vitest run && vitest run --config vite.config.server.mjs && vitest run --config vite.config.hydrate.mjs && vitest run --config vite.config.store-handles.mjs && vitest run --config vite.config.store-handles-server.mjs",
     "test:server": "vitest run --config vite.config.server.mjs",
     "coverage": "vitest run --coverage",
     "bench": "vitest bench --run",
     "bench:server": "vitest bench --run --config vite.config.server-bench.mjs",
-    "test-types": "tsc --project tsconfig.test.json"
+    "test-types": "tsc --project tsconfig.test.json && tsc --project tsconfig.test.augment.json"
   },
   "dependencies": {
     "seroval": "~1.6.7",
     "seroval-plugins": "~1.6.7"
   },
   "peerDependencies": {
-    "solid-js": "^2.0.0-rc.8"
+    "solid-js": "^2.0.0-rc.11"
   },
   "devDependencies": {
     "@codspeed/vitest-plugin": "^5.4.0",

@@ -1,9 +1,9 @@
 import { template as _$template } from "r-dom";
 import { getNextElement as _$getNextElement } from "r-dom";
 import { insert as _$insert } from "r-dom";
+import { scope as _$scope } from "r-dom";
 import { createComponent as _$createComponent } from "r-dom";
 import { spread as _$spread } from "r-dom";
-import { mergeProps as _$mergeProps } from "r-dom";
 import { ref as _$ref } from "r-dom";
 import { effect as _$effect } from "r-dom";
 import { setAttribute as _$setAttribute } from "r-dom";
@@ -24,9 +24,9 @@ const staticValue = _el$;
 var _el$2 = _$getNextElement(_tmpl$);
 _$effect(() => (() => {
 	var _el$10 = _$getNextElement(_tmpl$5);
-	_$insert(_el$10, () => {
+	_$insert(_el$10, _$scope(() => {
 		return state.value;
-	});
+	}));
 	return _el$10;
 })(), (_v$) => {
 	_$setAttribute(_el$2, "data", _v$);
@@ -42,16 +42,16 @@ _$effect(() => {
 	return {
 		e: (() => {
 			var _el$11 = _$getNextElement(_tmpl$5);
-			_$insert(_el$11, () => {
+			_$insert(_el$11, _$scope(() => {
 				return state.first;
-			});
+			}));
 			return _el$11;
 		})(),
 		t: (() => {
 			var _el$12 = _$getNextElement(_tmpl$6);
-			_$insert(_el$12, () => {
+			_$insert(_el$12, _$scope(() => {
 				return state.second;
-			});
+			}));
 			return _el$12;
 		})()
 	};
@@ -61,7 +61,7 @@ _$effect(() => {
 });
 const multiValues = _el$4;
 var _el$5 = _$getNextElement(_tmpl$3);
-_el$5.$$click = () => mount(_$getNextElement(_tmpl$7));
+_el$5._$$click = () => mount(_$getNextElement(_tmpl$7));
 _$runHydrationEvents();
 const handlerValue = _el$5;
 var _el$6 = _$getNextElement(_tmpl$2);
@@ -70,13 +70,13 @@ _$ref(() => {
 }, _el$6);
 const refValue = _el$6;
 var _el$7 = _$getNextElement(_tmpl$2);
-_$spread(_el$7, _$mergeProps(props, { get data() {
+_$spread(_el$7, [props, { get data() {
 	var _el$15 = _$getNextElement(_tmpl$5);
-	_$insert(_el$15, () => {
+	_$insert(_el$15, _$scope(() => {
 		return state.value;
-	});
+	}));
 	return _el$15;
-} }), false);
+} }], false);
 _$runHydrationEvents();
 const spreadValue = _el$7;
 var _el$8 = _$getNextElement(_tmpl$2);

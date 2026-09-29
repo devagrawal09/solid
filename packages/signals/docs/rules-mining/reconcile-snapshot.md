@@ -1,5 +1,7 @@
 # Mined rules: reconcile, snapshot, utilities
 
+> **Namespace `RS`.** Every rules-mining file numbers its rules from R1, so an R-id is only meaningful with its file: this one is `RS-R<n>` in [`../RULES-INDEX.md`](../RULES-INDEX.md), cited as `snap R<n>`; a bare `R<n>` in `store/next/reconcile.ts` resolves here. IDs are never renumbered.
+
 Source suites: `tests/store/reconcile.test.ts`, `tests/store/reconcile-captured-proxies.test.ts`, `tests/snapshot.test.ts`, `tests/snapshot-derived-store-rows.test.ts`, `tests/store/utilities.test.ts`.
 
 ## A. Reconcile contract
@@ -94,8 +96,8 @@ Source suites: `tests/store/reconcile.test.ts`, `tests/store/reconcile-captured-
 **R29 — Symbol-keyed data round-trips through snapshot**: enumerable symbols preserved in copies; writes inside symbol subtrees captured; added-after-snapshot appear; deleted dropped; NON-enumerable symbols excluded from written copies; cycles preserved (`snap.node[meta] === snap.node`); shared refs stay shared; symbol-keyed store-in-store unwraps; symbols survive assignment into another store.
 - Evidence: snapshot — 11 symbol tests.
 
-**R30 — Snapshot-scope machinery (setSnapshotCapture / markSnapshotScope / releaseSnapshotScope / clearSnapshots):** signals/memos created during capture freeze creation-time value for scoped readers; writes don't reach scoped readers until release; release schedules recompute (async) and is idempotent; nested scopes independent; pre-capture signals propagate normally; propagation skips snapshot-scoped subscribers; clearSnapshots resets; boundary-internal (ownedWrite) signals excluded.
-- Evidence: snapshot — capture/scope suites. Core-signal machinery; nodes-as-core-signals inherits it.
+**R30 — Snapshot-scope machinery (setSnapshotCapture / markSnapshotScope / releaseSnapshotScope / clearSnapshots):** signals/memos created during capture freeze creation-time value for scoped readers; writes don't reach scoped readers until release; release schedules recompute (async) and is idempotent; nested scopes independent; a pre-capture plain signal's FIRST write during capture snapshots its pre-write value (later writes keep it; out-of-scope readers see the write live; computeds landing through `setSignal`, firewall leaves and `_noSnapshot` signals are never captured this way); propagation skips snapshot-scoped subscribers; clearSnapshots resets; boundary-internal (ownedWrite) signals excluded.
+- Evidence: snapshot — capture/scope suites; "write-time snapshot" tests. Core-signal machinery; nodes-as-core-signals inherits it.
 
 **R31 — Store properties written during capture preserve pre-write value for scoped readers; unwritten use current.** CONFLICT: current mechanism (`STORE_SNAPSHOT_PROPS` in set trap) is layer-adjacent; the write may hit a node-less property — needs node materialization on capture-time writes or a separate capture map. Design decision.
 - Evidence: snapshot — 2 tests.

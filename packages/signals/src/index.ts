@@ -31,8 +31,16 @@ export {
   enableExternalSource,
   resetErrorHalt,
   statusFree,
-  iterateContext
+  iterateContext,
+  configureClientErrors,
+  ROOT_ERROR_HOOK
 } from "./core/index.js";
+/**
+ * @internal The dev console footer seam — registered by `solid-js`, which
+ * owns the repair skill the footer points at. Not part of `DEV`; a no-op
+ * outside dev builds.
+ */
+export { setConsoleFooter } from "./core/index.js";
 import { DEV as _DEV, OBSERVE as _OBSERVE, type Dev, type Observe } from "./core/index.js";
 /**
  * Observe tier (diagnostics channel, attribution hook slot + interaction
@@ -52,13 +60,23 @@ export type {
   ExternalSource,
   ExternalSourceConfig,
   Refreshable,
-  AttributionHooks,
   AttributionSlot,
+  ClientErrorContext,
+  ClientErrorHook,
+  ClientErrorsConfig,
   InteractionRef,
   NavigationRef,
-  OriginRef,
   Dev,
   Observe,
+  ServerObserve,
+  Records,
+  RecordTypes,
+  HostRecordTypes,
+  RecordType,
+  RecordEvent,
+  RecordLive,
+  RecordListener,
+  RecordSubscribeOptions,
   DevHooks,
   DiagnosticCapture,
   DiagnosticCode,

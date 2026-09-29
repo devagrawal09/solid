@@ -1,6 +1,27 @@
 //@ts-nocheck
 import type { RequestEvent, RequestEventLocals, ResponseStub } from "./client.js";
 import type { JSX } from "../jsx/jsx.js";
+import type { ServerErrorSite } from "solid-js";
+
+/**
+ * Where a server-side failure was met, as the server error hook hears it —
+ * the client's view of the server entry's type (see `configureServerErrors`
+ * there). `kind: "render"`: `fallback`/`client`/`failed`; `kind:
+ * "server-function"`: `thrown`/`channel`.
+ */
+export interface ServerErrorContext extends Omit<ServerErrorSite, "event"> {
+  event?: RequestEvent;
+}
+/** The server error hook (see the server entry's `configureServerErrors`). Its return is the wire value; nothing for the default. */
+export type ServerErrorHook = (error: unknown, context: ServerErrorContext) => unknown | void;
+export interface ServerErrorsConfig {
+  onError?: ServerErrorHook;
+}
+/**
+ * Registers the ambient server error hook. Server-only; on the client this
+ * is a no-op so isomorphic setup code can call it unguarded.
+ */
+export function configureServerErrors(_config: ServerErrorsConfig): void {}
 
 function throwInBrowser(func: Function) {
   const err = new Error(`${func.name} is not supported in the browser, returning undefined`);
@@ -143,7 +164,8 @@ export function renderToString<T>(
     noScripts?: boolean;
     plugins?: any[];
     manifest?: AssetManifest | AssetResolver | AssetResolverFn;
-    onError?: (err: any) => void;
+    /** This render's server error hook, ahead of `configureServerErrors`' (see the server entry). */
+    onError?: ServerErrorHook;
     /**
      * Embedded-render contract for hosts that own the document. When the
      * render output contains no `</head>`, everything head-bound (resolved
@@ -195,7 +217,8 @@ export function renderToStream<T>(
     manifest?: AssetManifest | AssetResolver | AssetResolverFn;
     onCompleteShell?: (info: { write: (v: string) => void }) => void;
     onCompleteAll?: (info: { write: (v: string) => void }) => void;
-    onError?: (err: any) => void;
+    /** This render's server error hook, ahead of `configureServerErrors`' (see the server entry). */
+    onError?: ServerErrorHook;
     /**
      * Embedded-render contract for hosts that own the document. When the
      * shell contains no `</head>`, everything head-bound at first flush
@@ -207,6 +230,14 @@ export function renderToStream<T>(
      * the shell has a `</head>` (splicing is automatic then).
      */
     onHead?: (head: string) => void;
+    /**
+     * The request's lifecycle. Aborting tears the render down exactly as a
+     * client disconnect does (`SSR_STREAM_ABANDONED`, `data.reason:
+     * "signal"`); the one teardown handle for a host whose transport cannot
+     * report a dead consumer through the sink or the readable view — pass
+     * `request.signal`.
+     */
+    signal?: AbortSignal;
   }
 ): {
   /**
@@ -338,10 +369,19 @@ export function ssr(template: string[] | string, ...nodes: any[]): { t: string }
  */
 export function ssrElement(
   name: string,
-  props: any,
+  props: any | any[] | (() => any | any[]),
   children: any,
-  needsId: boolean
+  needsId: boolean,
+  skip?: (key: string) => boolean,
+  attrs?: string | (() => string)
 ): { t: string } {}
+/**
+ * Compiler primitive — serializes one attribute of a spread element as
+ * `ssrElement` would, for a dynamic attribute after the element's last
+ * spread. Not meant for hand-written code.
+ * @internal
+ */
+export function ssrElementAttribute(key: string, value: any): string {}
 /**
  * Compiler primitive — serializes a class value (string, object map, or
  * array) for SSR output. Not meant for hand-written code.
@@ -383,7 +423,7 @@ export function ssrHydrationKey(): string {}
  * Not meant for hand-written code.
  * @internal
  */
-export function resolveSSRNode(node: any, result?: any, top?: boolean): any {}
+export function resolveSSRNode(node: any, result?: any, top?: boolean, nested?: boolean): any {}
 /**
  * Escapes a string for safe inclusion in HTML output. Used by the SSR
  * runtime; not generally part of user code.

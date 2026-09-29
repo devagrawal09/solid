@@ -10,15 +10,19 @@
 
 import type { Element as SolidElement } from "solid-js";
 // The container tier's server half, installed HERE as well as in the main
-// server entry: this entry and `@solidjs/web/server` each bundle their own
-// copy of the runtime (single-file outputs can't share a chunk), so each
-// copy's trace plugin needs the resolver. Wire compatibility across copies
-// is by plugin TAG, which every seam compares; the resolver function itself
-// comes from external solid-js, so both copies answer identically.
-import { setContainerTraceResolver } from "./frame-container-plugin.js";
-import { getProjectionTrace } from "solid-js";
+// server entry: the SSR runtime itself is external to this artifact
+// (`@solidjs/web`, see rollup.config.js externalizeFramesServerRuntime), but
+// the sink's own codec — createJSONSerializer and the container trace plugin
+// it carries — is bundled (single-file outputs can't share a chunk), so this
+// copy's trace plugin needs the resolver and the sharer too. Wire
+// compatibility across copies is by plugin TAG, which every seam compares;
+// the resolver and sharer functions themselves come from external solid-js,
+// so both copies answer identically.
+import { setAsyncIterableSharer, setContainerTraceResolver } from "./frame-container-plugin.js";
+import { getProjectionTrace, shareAsyncIterable } from "solid-js/internal";
 
 setContainerTraceResolver(getProjectionTrace);
+setAsyncIterableSharer(shareAsyncIterable);
 
 /**
  * A client position in a server component: a prop the server renders (as JSX
@@ -46,6 +50,33 @@ setContainerTraceResolver(getProjectionTrace);
  * @experimental
  */
 export type Slot<P = {}> = (props: P & { $key?: string | number }) => SolidElement;
+
+/**
+ * An attribute slot (principles §9.2.3): the client renders an object instead of
+ * markup, and the server template consumes it by reading properties at
+ * positions — `const row = props.row({ id, completed });` then
+ * `<li class={row.rowClass} hidden={row.removed}><input checked={row.done}
+ * onInput={row.toggle} /></li>`. One call is one data context: any element
+ * in the template may read from it, and the client owns exactly the values
+ * the template read. Keys are the client's names; the position decides what
+ * a property IS (attribute, class name, style property, handler, ref).
+ *
+ * `P` is the args the server passes (reactive props to the fill, as for
+ * `Slot`); `J` is the object the fill returns — the same type a shared
+ * component takes as a prop when the client renders it directly, so one
+ * `TodoRow` serves both sides. `$key` is occurrence identity, as for `Slot`,
+ * and optional: within a render, repeated calls with structurally equal
+ * args are one occurrence (a call in a component prop is re-evaluated per
+ * position the component binds), so the natural spelling needs no key;
+ * `$key` is for state inside the fill's scope that must follow the entity
+ * across responses. A slot with no args (`P` empty) is called bare —
+ * `const filters = props.filters();` — and is one occurrence named by the
+ * prop.
+ * @experimental
+ */
+export type AttributeSlot<P = {}, J extends object = Record<string, unknown>> = {} extends P
+  ? (props?: P & { $key?: string | number }) => J
+  : (props: P & { $key?: string | number }) => J;
 
 /**
  * Types an async value crossing the slot border (DR-2, value tier). What you
@@ -85,4 +116,9 @@ export {
   ServerComponentPlugin,
   SERVER_COMPONENT_BOOTSTRAP
 } from "./frame-sink.js";
-export { FRAME_STREAM_HEADER, isFrameStreamResponse } from "./frame-transport.js";
+export {
+  FRAME_STREAM_HEADER,
+  FRAME_HAVE_HEADER,
+  FRAME_HAVE_BUDGET,
+  isFrameStreamResponse
+} from "./frame-transport.js";

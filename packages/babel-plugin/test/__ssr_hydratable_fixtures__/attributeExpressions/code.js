@@ -390,3 +390,32 @@ const template98 = (
     <input type="checkbox" checked={checked()} />
   </div>
 );
+
+// solidjs/solid#3691: a textarea's dynamic value/defaultValue folds into its
+// text content on the server, but the client writes it as a plain `value`
+// property effect that never allocates a hydration id — the fold must not take
+// the _$scope reservation either, or the component after it hydrates one id off.
+const template99 = (
+  <div>
+    <textarea value={text()} />
+    <textarea defaultValue={initial()} />
+    <Counter />
+  </div>
+);
+
+// Static attributes after the last spread bake into ssrElement's attribute
+// string with their keys skipped on the spread; statics before a spread, and
+// anything between two spreads, stay a source the spread can override.
+const template110 = <li {...spread} class="row" data-kind="item" />;
+const template111 = <li class="row" data-kind="item" {...spread} />;
+const template112 = (
+  <li {...spread} class="row" data-id={dynamicAttribute()}>
+    {dynamicContent()}
+  </li>
+);
+const template113 = <div {...first} class="x" {...second} id="y" />;
+const template114 = (
+  <input {...spread} disabled={false} type="text" tabindex={0} style=" color: red; top: 0 " />
+);
+const template115 = <textarea {...spread} innerHTML="<b>x</b>" />;
+const template116 = <li {...spread} class="row" data-kind="item" ref={link} />;

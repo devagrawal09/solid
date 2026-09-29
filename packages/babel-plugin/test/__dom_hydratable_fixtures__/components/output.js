@@ -4,9 +4,9 @@ import { For as _$For } from "r-dom";
 import { createComponent as _$createComponent } from "r-dom";
 import { mergeProps as _$mergeProps } from "r-dom";
 import { applyRef as _$applyRef } from "r-dom";
-import { scope as _$scope } from "r-dom";
 import { getNextElement as _$getNextElement } from "r-dom";
 import { getNextMarker as _$getNextMarker } from "r-dom";
+import { scope as _$scope } from "r-dom";
 import { insert as _$insert } from "r-dom";
 import { ref as _$ref } from "r-dom";
 var _tmpl$ = /*#__PURE__*/ _$template(`<div>Hello <!$><!/>`),
@@ -36,7 +36,12 @@ const Child = props => {
       typeof _ref$ === "function" || Array.isArray(_ref$)
         ? _$ref(() => _ref$, _el$)
         : (props.ref = _el$);
-      _$insert(_el$, () => props.name, _el$4, _co$);
+      _$insert(
+        _el$,
+        _$scope(() => props.name),
+        _el$4,
+        _co$
+      );
       return _el$;
     })(),
     (() => {
@@ -136,7 +141,7 @@ const template2 = _$createComponent(Child, {
   },
   stale: state.data,
   handleClick: clickHandler,
-  get ["hyphen-ated"]() {
+  get "hyphen-ated"() {
     return state.data;
   },
   ref: el => (e = el)
@@ -410,7 +415,7 @@ const Template19 = _$createComponent(
   _$mergeProps(() => s.dynamic())
 );
 const Template20 = _$createComponent(Component, {
-  get ["class"]() {
+  get class() {
     return prop.red ? "red" : "green";
   }
 });

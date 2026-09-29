@@ -1,5 +1,221 @@
 # @solidjs/diagnostics
 
+## 2.0.0-rc.11
+
+### Patch Changes
+
+- Updated dependencies [58b9582]
+- Updated dependencies [d0ad11c]
+  - @solidjs/signals@2.0.0-rc.11
+  - @solidjs/web@2.0.0-rc.11
+  - solid-js@2.0.0-rc.11
+
+## 2.0.0-rc.10
+
+### Patch Changes
+
+- fd36d37: `captureDiagnostics` and the browser bridge hold the shared attribution engine through the release `attribution.enable()` now returns, and release only their own hold at the end of a capture — a profiler track or an APM adapter enabled beside the capture is left in place (previously `disable()` tore the engine down for every consumer).
+- 235173e: Prune the observability surface: `OBSERVE.attribution.install`, the `AttributionHooks` type, `DEV.setConsoleFooter`, the `TraceSlot` and `OriginRef` aliases, `PerformanceTracksOptions.group`, and the untested `solid-js/refresh` runtime modes (`esm`, `webpack5`, `rspack-esm`) are gone — `@solidjs/compiler`'s `transformRefresh({ bundler })` accepts only `"vite" | "standard"` to match. `ownerPath()` is now `OBSERVE.ownerPath(subject)` and `diagnosticGuideUrl()` is `DEV.guideUrl(code)`; `why()` also accepts a scope name. Engine record types (`RerunEvent`, `HoldEvent`, …) live on `solid-js/attribution` only, and `InteractionRef`/`NavigationRef` on the main entries only. `@solidjs/diagnostics` types its record tables off the runtimes' own catalogue (`RecordEvent<K>`), adds the `recovery` table, and bumps the artifact `formatVersion` to 8.
+- 384a631: One records channel: the attribution engine's records (`rerun`, `create`, `effect`, `flush`, `flight`, `fallback`, `interaction`, `hold`, `navigation`, `graph`) are `RecordTypes` entries delivered on `OBSERVE.records.subscribe(type, (event, live) => …)`, with the live node beside each record. Removed `attribution.subscribe` (both overloads), `OBSERVE.subjectOf`, the `AttributionRecords`/`AttributionRecordType` types, and the `isSilentHold`/`isLongHold` helpers — `HoldEvent` now carries `silent` and `long`, computed at settle. `attribution.history()`, `waterfalls()`, `holds()`, `navigations()` and `interactions()` collapse into `attribution.history(type)`. `DiagnosticListener` receives the subject as its second argument. The channel allocates nothing per emit (copy-on-write listener lists), and a `RerunEvent` is built only while a listener, a fold or the log wants it. Record listeners belong to the channel and are no longer dropped by `attribution.disable()`.
+- Updated dependencies [ce17c29]
+- Updated dependencies [fd36d37]
+- Updated dependencies [fd36d37]
+- Updated dependencies [fd36d37]
+- Updated dependencies [5e46732]
+- Updated dependencies [43fae6e]
+- Updated dependencies [21b9784]
+- Updated dependencies [56918c6]
+- Updated dependencies [fd36d37]
+- Updated dependencies [fd36d37]
+- Updated dependencies [fd36d37]
+- Updated dependencies [c74365d]
+- Updated dependencies [7599885]
+- Updated dependencies [6717d35]
+- Updated dependencies [663031d]
+- Updated dependencies [f884589]
+- Updated dependencies [1d3ec5d]
+- Updated dependencies [1d3ec5d]
+- Updated dependencies [75ed5e9]
+- Updated dependencies [fd36d37]
+- Updated dependencies [873187b]
+- Updated dependencies [a124577]
+- Updated dependencies [a360ad0]
+- Updated dependencies [2d64742]
+- Updated dependencies [bfc320c]
+- Updated dependencies [3af4696]
+- Updated dependencies [cf22713]
+- Updated dependencies [78523bf]
+- Updated dependencies [a10d33b]
+- Updated dependencies [ae2bc9f]
+- Updated dependencies [cf61b8e]
+- Updated dependencies [7742b28]
+- Updated dependencies [3613c3a]
+- Updated dependencies [7742b28]
+- Updated dependencies [ed60f05]
+- Updated dependencies [739404d]
+- Updated dependencies [ab254b0]
+- Updated dependencies [495db9c]
+- Updated dependencies [f41c6a4]
+- Updated dependencies [f41c6a4]
+- Updated dependencies [fd8b3df]
+- Updated dependencies [ebc1b03]
+- Updated dependencies [1d3ec5d]
+- Updated dependencies [1d3ec5d]
+- Updated dependencies [1d3ec5d]
+- Updated dependencies [1d3ec5d]
+- Updated dependencies [1d3ec5d]
+- Updated dependencies [886850b]
+- Updated dependencies [3218b7a]
+- Updated dependencies [d2d7bd4]
+- Updated dependencies [b149cd2]
+- Updated dependencies [7742b28]
+- Updated dependencies [40c65cd]
+- Updated dependencies [9c6c5cd]
+- Updated dependencies [5f28e7d]
+- Updated dependencies [7742b28]
+- Updated dependencies [7742b28]
+- Updated dependencies [7742b28]
+- Updated dependencies [7742b28]
+- Updated dependencies [7742b28]
+- Updated dependencies [c9e1954]
+- Updated dependencies [55779c0]
+- Updated dependencies [84562fc]
+- Updated dependencies [28fcc9b]
+- Updated dependencies [235173e]
+- Updated dependencies [b8ac688]
+- Updated dependencies [f2bd662]
+- Updated dependencies [756b1b3]
+- Updated dependencies [384a631]
+- Updated dependencies [658eecd]
+- Updated dependencies [1a7d14f]
+- Updated dependencies [5351a3e]
+- Updated dependencies [cb2fa7b]
+- Updated dependencies [53498dd]
+- Updated dependencies [c8a9d23]
+- Updated dependencies [fd36d37]
+- Updated dependencies [fd36d37]
+- Updated dependencies [fd36d37]
+- Updated dependencies [ed13427]
+- Updated dependencies [fd36d37]
+- Updated dependencies [fd36d37]
+- Updated dependencies [757d1eb]
+- Updated dependencies [310116a]
+- Updated dependencies [4b62bc2]
+- Updated dependencies [974506c]
+- Updated dependencies [e77087a]
+- Updated dependencies [dd53561]
+- Updated dependencies [777916a]
+- Updated dependencies [fb35efb]
+- Updated dependencies [1d3ec5d]
+- Updated dependencies [e10a4ba]
+- Updated dependencies [20204ec]
+- Updated dependencies [7742b28]
+- Updated dependencies [1f40560]
+- Updated dependencies [c1b68d9]
+- Updated dependencies [eb3d699]
+- Updated dependencies [709c02b]
+- Updated dependencies [c25d69f]
+- Updated dependencies [b7701b5]
+- Updated dependencies [27bb3fa]
+- Updated dependencies [9e65de2]
+  - @solidjs/web@2.0.0-rc.10
+  - @solidjs/signals@2.0.0-rc.10
+  - solid-js@2.0.0-rc.10
+
+## 2.0.0-rc.9
+
+### Patch Changes
+
+- eaa7e33: The attribution engine's folds, queries and formatters are named exports of `@solidjs/signals/attribution` (and `solid-js/attribution`), not methods of `attribution`.
+  - `costs()`, `feedback()`, `why(target)`, `subscriptions(target)`, `formatRerun(event)`, `formatOrigin(origin)` — import them by name. `attribution` keeps `enable`, `disable`, `subscribe`, `markFlight` and the record ring buffers (`history`, `holds`, `interactions`, `navigations`, `waterfalls`). `attribution.format` is `formatRerun`.
+  - Why: the fold tables (`costs`, `feedback`) are the dev/agent view of the records and the part of the engine that grows; a production adapter consumes records and never calls them. Each fold's module registers its accounting with the engine's fold seam when it is imported, so under the package's `sideEffects: false` a consumer that only subscribes to records ships neither the tables nor the work of filling them — importing `costs` or `feedback` is what turns them on. Measured: −1,150 B brotli for a records consumer (the size scenario's cap ratcheted to 27.25 KB); tree-shake tests pin it from source and from the built observe artifact.
+  - New types `AttributionCostTables`; `ScopeCost`/`WriteCost` and the feedback types move with their modules and are still exported from the entry. The prod tier's inert twin exports the same named surface, typed against the real one.
+  - `@solidjs/diagnostics`: `AttributionCosts`/`AttributionFeedback` are aliases of `AttributionCostTables`/`AttributionFeedbackTables`; the capture and the browser bridge import the folds by name. Artifact shape unchanged.
+
+- ebedb44: Attribution re-run records are serializable as emitted, and the observe tier's idle cost is a cap.
+  - `RerunEvent` no longer carries the live `node`. It names its scope by `nodeId` — the engine's per-node id, stable across the scope's runs in the process and distinct between scopes (so runs of unnamed effects still fold to one scope after the record has left the process). In-process consumers that want the node ask `OBSERVE.subjectOf(event)`, which now answers for re-run records as it did for diagnostic events, for as long as the caller holds the record object. `attribution.why(target)` and `subscriptions(target)` are unchanged.
+  - `@solidjs/diagnostics` artifact format v7: re-runs are stored verbatim (`RerunRecord` is now an alias of `RerunEvent`), and the artifact gains `timeOrigin` — the capturing process's `performance.timeOrigin` — so every relative `at` in it (re-runs, holds, records, diagnostic `data`) is convertible to absolute time after the fact, and a server capture lines up with the browser session it served. The JSONL meta line carries it too; the browser bridge payload includes it.
+  - New tripwire in the signals suite: the built observe artifact runs a graph-heavy workload within 1.25× of the built prod artifact with no hooks installed (measured 1.03–1.09). The idle wiring cost was informational before; it is capped now.
+
+- 3ae9e92: `OBSERVE.records` — one records channel on both platforms (observe/dev tiers); frame records from both ends; the client `"call"` record; `observeServerFunctionCalls` removed
+  - **`@solidjs/signals`**: `OBSERVE.records` — `subscribe(type, listener)`, `observed(type)`, `emit(type, event, live)` — the channel every runtime record rides, created once per process and registered on `globalThis` under `Symbol.for("@solidjs/signals/observe/records")` so a second copy of the core (a bundled server build instrumented through `--import`) and wire layers bundled without a framework import reach the same listener sets. Listeners are snapshotted per emit; a throwing listener is reported and the rest run. Types: `Records`, `RecordTypes` (extends `HostRecordTypes`; both declared empty, for the runtimes to augment — one augmenter per interface), `RecordType`, `RecordEvent`, `RecordLive`, `RecordListener`. Folds out of prod. New **`OBSERVE.attribution.currentOrigin()`** (and the `currentOrigin` hook on `AttributionHooks`): the provenance a root write performed now would be stamped with — the interaction whose handler is running, the navigation/effect/action frame open, or inside a recompute the origin of the change that caused it — as the engine's own `ChangeOrigin` object, `undefined` when external or with no engine; for a runtime stamping a record of its own. The installed hooks are also registered on `globalThis` under `Symbol.for("@solidjs/signals/observe/attribution")`, the same reach-without-an-import the channel has.
+  - **`solid-js`**: the `"boundary"` record moves from `OBSERVE.server.records` to `OBSERVE.records` (augmenting the core's `RecordTypes`). `OBSERVE.server` keeps only the `trace` slot; `ServerRecords` is gone.
+  - **`@solidjs/web`**: the `"invocation"` and `"frame"` records move to `OBSERVE.records` (augmenting `HostRecordTypes` through `solid-js`). New **`"call"` record** (`CallEvent`, `CallLive`, `CallListener`): one per server-function call made from the browser, at the caller's settle — `{ id, at, durationMs, method: "GET" | "POST", outcome, status?, origin?, deferred? }` with `{ args, response?, result? | error? }` beside it; joins the server's `"invocation"` by `id`, and — through `origin`, the engine's own interaction/navigation object read at dispatch via `currentOrigin()` — the attribution engine's `InteractionEvent` / `NavigationEvent` / `HoldEvent` by identity, so an observer files the call under the click that made it without a time join. The **`"frame"` record now has a client half**: `FrameEvent` is `FrameProducedEvent | FrameAppliedEvent`, discriminated by `side`, same census on both; the client half (`applyFrameResponse`, one per stream in a response) adds `address` (the `as` remap) and `outcome: "truncated"` for a body that ended before `complete`, with `live.response`. Server census fix: `regions` counts `html` chunks addressed to a child frame id (the former count read a chunk type that does not exist), and `shellMs` is set by the stream's own shell only. The emitters and their wrappers fold out of the prod client artifacts behind the observe literal (prod `applyFrameResponse` and the server-function dispatch are the pre-existing functions, no extra frame or promise hop). The server-functions and frames **client** entries gain `observe` and `development` builds and export conditions (`server-functions/dist/client.{observe,dev}.js`, `frames/dist/client.observe.js`); the server-functions client is now built with its flags replaced in every tier (before, `_SOLID_DEV_` there was an unreplaced truthy string).
+  - **Removed**: `observeServerFunctionCalls` and the `ServerFunctionCall` / `ServerFunctionRequestCall` / `ServerFunctionResponseCall` types, from both server-function entries. Subscribe to `OBSERVE.records` `"call"` (client) or `"invocation"` (server) instead.
+  - **`@solidjs/diagnostics`** (format v6): `artifact.server` is replaced by `artifact.records: { boundary, invocation, frame, call }` — always present, captured on both platforms including the browser bridge; types `BoundaryRecord`, `InvocationRecord`, `FrameRecord` (`FrameProducedRecord | FrameAppliedRecord`), `CallRecord` (with `origin?: ChangeOrigin`), `ArtifactRecords` replace the `Server*Record` / `ArtifactServer` names. JSONL: one line per record with `type` naming its table; the meta line's `boundaryCount`/`invocationCount`/`frameCount` become `recordCounts: { boundary, invocation, frame, call }`.
+
+- 0d8347a: Server records reach the diagnostics artifact and the dev checks (server-dev-build-plan P4)
+  - `@solidjs/diagnostics` artifact format **v5**: `artifact.server: { boundaries, invocations } | null` folds `OBSERVE.server.records` when the scenario runs under the server runtime — `captureArtifact(() => renderToStream(…))` — one row per `<Loading>` boundary that waited and per server-function execution; `null` for client captures and the browser bridge. New exported types `ArtifactServer`, `ServerBoundaryRecord`, `ServerInvocationRecord` (mirrors of the runtime's `BoundaryEvent`/`InvocationEvent`; the package still depends on `@solidjs/signals` alone). JSONL egress adds `boundary` and `invocation` lines and the header counts.
+  - `InvocationEvent.boundary`: a direct server-function call made during a `<Loading>` boundary's render pass carries that boundary's hydration id, the `"boundary"` record's `id` — the join between a boundary's wait and the calls under it.
+  - Two dev checks derived from the boundary facts in `ssrLoadingBoundary`: `ASYNC_WATERFALL` with `data.side: "server"` (`passes - 1` sequential flights; 2 → `info`, structured only; 3+ → console `warn`) and a new code `SSR_CLIENT_CONTENT_MASKED` (`warn`, `ssr`) for client-only content that surfaced only after a real server wait — the server's work discarded, the fallback shown for the wait. Dev tier only; the boundary clock now runs in dev without a listener.
+  - `solid-js`'s server `emitFinding` keeps `info` findings off the console (structured channel only), matching the core.
+
+- Updated dependencies [8ff4803]
+- Updated dependencies [e9c464b]
+- Updated dependencies [0da94f9]
+- Updated dependencies [8bf04ea]
+- Updated dependencies [eaa7e33]
+- Updated dependencies [ebedb44]
+- Updated dependencies [a8a8949]
+- Updated dependencies [d80cd1f]
+- Updated dependencies [d826cd3]
+- Updated dependencies [cc0396b]
+- Updated dependencies [d2a36f5]
+- Updated dependencies [50323b4]
+- Updated dependencies [53280e7]
+- Updated dependencies [d7cb456]
+- Updated dependencies [a0d6dd2]
+- Updated dependencies [c3ae310]
+- Updated dependencies [6095955]
+- Updated dependencies [e80f241]
+- Updated dependencies [84adf0b]
+- Updated dependencies [5c1f01f]
+- Updated dependencies [a5d8eae]
+- Updated dependencies [14ded24]
+- Updated dependencies [25c5064]
+- Updated dependencies [1ce0f85]
+- Updated dependencies [05c7e21]
+- Updated dependencies [9da7f0a]
+- Updated dependencies [62b0a22]
+- Updated dependencies [27b24aa]
+- Updated dependencies [549f482]
+- Updated dependencies [d80cd1f]
+- Updated dependencies [76230f9]
+- Updated dependencies [347a5ca]
+- Updated dependencies [a8a8949]
+- Updated dependencies [632e45c]
+- Updated dependencies [75c5113]
+- Updated dependencies [899c2c4]
+- Updated dependencies [ca05917]
+- Updated dependencies [3ae9e92]
+- Updated dependencies [328580f]
+- Updated dependencies [0bffee2]
+- Updated dependencies [f329a26]
+- Updated dependencies [c827758]
+- Updated dependencies [6e9243c]
+- Updated dependencies [7a09cd9]
+- Updated dependencies [61a114c]
+- Updated dependencies [0d8347a]
+- Updated dependencies [7623ce1]
+- Updated dependencies [af94f67]
+- Updated dependencies [e87d694]
+- Updated dependencies [dd19e9e]
+- Updated dependencies [c245532]
+- Updated dependencies [34287d8]
+- Updated dependencies [64f9266]
+- Updated dependencies [0148d58]
+- Updated dependencies [765a656]
+- Updated dependencies [9db33cf]
+- Updated dependencies [bfd6f6c]
+- Updated dependencies [2054045]
+- Updated dependencies [c410709]
+- Updated dependencies [f555ec2]
+- Updated dependencies [d8e35a3]
+- Updated dependencies [5f7da9d]
+- Updated dependencies [7f5f902]
+- Updated dependencies [31adfce]
+  - @solidjs/signals@2.0.0-rc.9
+
 ## 2.0.0-rc.8
 
 ### Patch Changes

@@ -235,7 +235,7 @@ export namespace JSX {
     | boolean
     | null
     | undefined
-    | Record<string, boolean>
+    | Record<string, boolean | undefined>
     | ClassValue[];
 
   const SERIALIZABLE: unique symbol;
@@ -254,6 +254,16 @@ export namespace JSX {
     ref?: Ref<T>;
     children?: Element | undefined;
     $ServerOnly?: boolean | undefined;
+    /**
+     * Entity identity for server markup: the frame morph matches keyed
+     * elements across responses by it, so client state attached to the
+     * element (an attribute slot's bound positions, focus) follows the entity
+     * through reorders and refetches. SSR compiles it to the `_key`
+     * attribute; a DOM compile strips it. On a component, `$key` is slot
+     * occurrence identity across responses (optional; a repeated call is
+     * one occurrence per render with or without it).
+     */
+    $key?: string | number | undefined;
   }
   interface ExplicitProperties {}
   type PropAttributes = {
@@ -1113,7 +1123,17 @@ export namespace JSX {
   type HTMLPreloadAs = "fetch" | "font" | "image" | "script" | "style" | "track";
   type HTMLLinkAs = HTMLPreloadAs | "audio" | "document" | "embed" | "object" | "video" | "worker";
 
-  interface AnchorHTMLAttributes<T> extends HTMLAttributes<T> {
+  /**
+   * `xmlns` on the tags that exist in both HTML and SVG (`a`, `script`, `style`,
+   * `title`). The compiler reads it to pick the namespace when the tag is not
+   * nested under `<svg>` at compile time (e.g. an XML partial), and `dynamic()`
+   * honors it the same way when creating a tag-name element at runtime.
+   */
+  interface AmbiguousNamespaceAttributes {
+    xmlns?: string | RemoveAttribute;
+  }
+
+  interface AnchorHTMLAttributes<T> extends HTMLAttributes<T>, AmbiguousNamespaceAttributes {
     download?: string | EnumeratedAcceptsEmpty | RemoveAttribute;
     href?: string | SerializableAttributeValue | RemoveAttribute;
     hreflang?: string | RemoveAttribute;
@@ -1132,7 +1152,7 @@ export namespace JSX {
     /** Serialized (JSON) history state pushed alongside the navigation. */
     state?: string | RemoveAttribute;
     /** Suppress scroll restoration/reset after the navigation. */
-    noScroll?: BooleanAttribute | RemoveAttribute;
+    noscroll?: BooleanAttribute | RemoveAttribute;
     /** Replace the current history entry instead of pushing a new one. */
     replace?: BooleanAttribute | RemoveAttribute;
     /** Route preload intent; `"false"` disables the integration's default eager preload. */
@@ -1702,7 +1722,7 @@ export namespace JSX {
     max?: number | string | RemoveAttribute;
     value?: string | string[] | number | RemoveAttribute;
   }
-  interface ScriptHTMLAttributes<T> extends HTMLAttributes<T> {
+  interface ScriptHTMLAttributes<T> extends HTMLAttributes<T>, AmbiguousNamespaceAttributes {
     async?: BooleanAttribute | RemoveAttribute;
     blocking?: "render" | RemoveAttribute;
     crossorigin?: HTMLCrossorigin | RemoveAttribute;
@@ -1764,7 +1784,7 @@ export namespace JSX {
     type?: string | RemoveAttribute;
     width?: number | string | RemoveAttribute;
   }
-  interface StyleHTMLAttributes<T> extends HTMLAttributes<T> {
+  interface StyleHTMLAttributes<T> extends HTMLAttributes<T>, AmbiguousNamespaceAttributes {
     blocking?: "render" | RemoveAttribute;
     media?: string | RemoveAttribute;
 
@@ -1865,6 +1885,7 @@ export namespace JSX {
   interface TimeHTMLAttributes<T> extends HTMLAttributes<T> {
     datetime?: string | RemoveAttribute;
   }
+  interface TitleHTMLAttributes<T> extends HTMLAttributes<T>, AmbiguousNamespaceAttributes {}
   interface TrackHTMLAttributes<T> extends HTMLAttributes<T> {
     default?: BooleanAttribute | RemoveAttribute;
     kind?:
@@ -3593,7 +3614,7 @@ export namespace JSX {
      * @url https://developer.mozilla.org/en-US/docs/Web/HTML/Element/title
      * @url https://developer.mozilla.org/en-US/docs/Web/API/HTMLTitleElement
      */
-    title: HTMLAttributes<HTMLTitleElement> & Properties<HTMLTitleElement>;
+    title: TitleHTMLAttributes<HTMLTitleElement> & Properties<HTMLTitleElement>;
     /**
      * @url https://developer.mozilla.org/en-US/docs/Web/HTML/Element/tr
      * @url https://developer.mozilla.org/en-US/docs/Web/API/HTMLTableRowElement

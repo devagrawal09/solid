@@ -2,7 +2,8 @@
 
 _Drafted 2026-09-06. Status: AGREED 2026-09-06 (decisions D1–D3 below
 resolved). **P0 implemented 2026-09-07** on branch `server-dev-build` (see the
-P0 status note); P1–P4 not started. `diagnostics-expansion` merged to `next`
+P0 status note); P1+P2 landed 2026-09-13, P3 resolved 2026-09-12, P4 landed
+2026-09-15 (see each section's note). `diagnostics-expansion` merged to `next`
 as #3302 on 2026-09-07, so D3's ordering constraint on P1/P2 is satisfied.
 Precedes every server item in
 `documentation/proposals/production-observability-sketch.md` (§9,
@@ -163,12 +164,65 @@ Decision: **reuse `@solidjs/signals`'s channel, do not fork it.**
 > **Update 2026-09-08.** `observe-tier-plan.md` PR A landed between P0 and
 > P1 and renames what the bullets below refer to: the channel is
 > `OBSERVE.diagnostics` (`OBSERVE` exists in dev and observe builds); the
-> console face is `DEV.report` / `DEV.setConsoleFooter` (dev only); the server
+> console face is `DEV.report` (dev only; the footer is registered through an
+> internal seam `solid-js` imports, no longer a `DEV` member); the server
 > gates wiring on the `"_SOLID_OBSERVE_"` literal and checks on
 > `"_SOLID_DEV_"`; `emit` accepts an explicit `ownerPath`, so the server
 > labels its own owners without signals walking `SSROwner._parent`.
 > `dist/server.observe.*` already exists (exporting a live `OBSERVE`); P1
 > gives it content. Read `DEV.diagnostics` below as `OBSERVE.diagnostics`.
+
+> **Landed 2026-09-13 (P1 + P2, one PR).** Two helper modules hold the
+> gates — `packages/solid/src/server/diagnostics.ts` and
+> `packages/web/src/diagnostics.ts` — with three verbs: `emitFinding`
+> (observe + dev: emit, and in dev report through `DEV.report`),
+> `recordFinding` (emit only, for a site that throws its message — the throw
+> is the console face), `devCheck` (`emitFinding` behind the dev gate, so the
+> observe artifact carries neither the call nor the text). Every call site is
+> additionally wrapped in a literal `if ("_SOLID_OBSERVE_")` / `if
+("_SOLID_DEV_")` so Rollup drops the message strings from the tiers below.
+> `ownerPath`: `createComponent` on the server wraps the call in a
+> transparent owner labelled `_name` (`createComponentOwner` — no hydration
+> id consumed, no `ownerCreations` tick) in observe/dev, and the core's
+> `ownerPath` walk reads `SSROwner._parent`/`_name` unchanged. The wiring
+> findings: `SSR_RENDER_ERROR_CONTAINED` (`data.handling`:
+> `fallback` from `createErrorBoundary`, `client`/`failed` from the Loading
+> boundary's routing, `failed` from the root), `SSR_SUBTREE_ABANDONED`
+> (`abandonSubtree` with pending work discarded), `SSR_STREAM_ABANDONED`
+> (`abandon("consumer" | "sink")`), `LATE_HEADER_WRITE` (recorded, then the
+> existing dev throw / prod log), `SERVER_ERROR_SANITIZED`
+> (`sanitizeServerError`, `data.source: "server-function"`, `data.error` the original). The server entry also
+> installs the client's repair-guide console footer (`src/console-footer.ts`,
+> shared). Specs: `packages/solid/test/server/server-diagnostics.spec.ts`,
+> `packages/web/test/server/server-diagnostics.spec.tsx`,
+> `packages/web/test/frames-marker-corruption.spec.tsx`. Docs: RFC 08
+> "Server rendering" + quick reference; the reactivity-diagnostics skill.
+>
+> Known gap at the time, closed in the follow-up (2026-09-14): the SSR
+> compiler inlined component calls (`Comp({})`) instead of `createComponent`,
+> so compiled JSX did not get the label — `ownerPath` was populated for
+> `createComponent` callers (the runtime's own flow components, `Dynamic`,
+> tests) and empty for a plain compiled `<Comp/>` tree. Both compilers now
+> honour `componentNames` for the `ssr` generate the way they do for `dom`:
+> the output keeps `createComponent(Comp, props, "Comp")` (the label has
+> nowhere else to go; the prod server `createComponent` is that same
+> `Comp(props)` call plus one frame), and without the option SSR still
+> inlines. The vite plugin already passes `componentNames` for its dev and
+> observe postures, so an app's server build labels every compiled component
+> in exactly the builds whose runtime reads the argument; prod output is
+> byte-identical to before. Boundaries are compiled components too, so a
+> server finding raised by a boundary reads `<App> › <Errored>` — as on the
+> client. Landing this surfaced a latent `ssrScope` bug: the virtual hole
+> scope swapped the CURRENT owner's `id`/`_childCount`, but content inside
+> the hole resolves ids by walking up past transparent owners — so with a
+> transparent owner in between (the server-component scope owner in every
+> tier; now the labelled `<Name>` owner under every component body) the
+> reserved slot was invisible and the hole's content took fresh ids from the
+> enclosing counter (`_hk=3` where the client expects `_hk=10`). The scope
+> now swaps the nearest id-bearing owner
+> (`packages/solid/test/server/ssr-scope.spec.ts`). The web server suite
+> compiles with `componentNames` (`vite.config.server.mjs`), so its
+> hydration-id and diagnostics specs run against the labelled shape.
 
 - The server facade imports `DEV` (and the `emitDiagnostic` /
   `DiagnosticEvent` types) from `@solidjs/signals`, every use behind
@@ -237,12 +291,82 @@ Output: a short section appended to the sketch choosing between (a) the same
 applicable subset, or (b) a smaller `ServerHooks` interface. Leaning (a) for
 type/tooling reuse, with unused members no-op.
 
+> **Resolved 2026-09-12 — (b), and not as a hooks interface.** The server
+> has no re-runs to attribute, so what an observer wants from it is not
+> engine hooks but _events_: a server-function execution settled, a render
+> failed, a boundary flushed. That surface is `OBSERVE.server` — an empty
+> `ServerObserve` interface declared in `@solidjs/signals`, re-exported by
+> `solid-js`, and populated (object at load, type by `declare module
+"solid-js"` augmentation) by `@solidjs/web`'s server entries. First channel:
+> `OBSERVE.server.invocations` (`subscribe("invocation", (event, live) =>
+…)`), emitted from both server-function legs. _(Since C3, 2026-09-14: the
+> channel is `OBSERVE.server.records`, generic over record type — the
+> `"boundary"` record from solid-js's server entry joined the `"invocation"`
+> one — and the objects and the `records`/`trace` members are solid-js's,
+> with web augmenting solid-js's `ServerRecords`/`ServerTrace`; see
+> `sentry-integration-plan.md` C3. Since C4's client half, 2026-09-15: the
+> channel is the core's `OBSERVE.records`, on both platforms — see C4
+> there; `OBSERVE.server` keeps only `trace`.)_ Observe-tier only: web now
+> ships `dist/server.observe.js`, `server-functions/dist/server.observe.js`
+> and `frames/dist/server.observe.js` under the `observe` condition (the P0
+> plumbing, third flavour), and every emit site folds out of prod behind
+> `"_SOLID_OBSERVE_"`. State hangs off the shared `OBSERVE` object under a
+> registered symbol because each web server bundle carries its own copy of
+> the runtime; `AttributionHooks` stays client-only. Spec:
+> `packages/web/test/server/server-observe-invocations.spec.tsx`; user docs
+> in RFC 08 (`OBSERVE.server`) and RFC 10 (observing invocations).
+
 ### P4 — `@solidjs/diagnostics` server scenario
 
 One test: `captureArtifact(() => renderToStream(<App/>))` on the dev server
 build asserts a seeded `HEAD_TAG_INVALID` and a seeded `SERVER_WRITE` appear
 in `artifact.diagnostics` with `ownerPath`. Proves P1's promise end to end and
 becomes the contract test for server codes.
+
+> **Landed 2026-09-15**, wider than the one test, because by then the server
+> had records (C3) and the artifact had nowhere to put them. Three parts:
+>
+> **(a) The join.** `InvocationEvent.boundary` — a direct call made during a
+> `<Loading>` boundary's render pass carries that boundary's hydration id
+> (read from `sharedConfig.context._currentBoundaryId` at call start, the id
+> `runWithBoundaryErrorContext` sets for the pass). A boundary's wait now
+> reads as the server-function calls it consisted of. Absent for HTTP
+> dispatch and for calls outside any boundary's pass.
+>
+> **(b) Checks off the record.** `ssrLoadingBoundary` derives two dev checks
+> from the same facts the `"boundary"` record carries (the clock now runs in
+> dev without a listener): `SSR_BOUNDARY_WATERFALL` —
+> `passes - 1` sequential flights, exact where the client's proof is
+> inferred, same thresholds (2 → `info`, structured only; 3+ → `warn`) — and
+> a new `SSR_CLIENT_CONTENT_MASKED` (`warn`, `ssr`) for a client-only outcome
+> that surfaced only after a real wait: the server did the work, streamed the
+> fallback, then handed the subtree off anyway. `emitFinding` now keeps
+> `info` off the console, as the core does. Not made a check: `heldMs` (a
+> `<Reveal>` hold is the ordering the author asked for; the record carries
+> it) and async under `renderToString` (a legitimate posture). Both are
+> readable off the tables if an agent wants them.
+>
+> **(c) The artifact.** `@solidjs/diagnostics` format v5 adds
+> `artifact.server: { boundaries, invocations } | null`, folded from
+> `OBSERVE.server.records` when the server runtime installed its surface
+> (`null` otherwise — client captures, the browser bridge). _(v6, with C4's
+> client half: `artifact.records.{boundary, invocation, frame, call}`,
+> folded from the core's `OBSERVE.records` on both platforms and always
+> present.)_ The package's runtime
+> imports are `@solidjs/signals` alone: it reads the channel by its contract
+> (`subscribe(type, listener)`). Its record tables are typed off the
+> runtimes' own catalogue (`RecordEvent<K>` for `boundary`, `recovery`,
+> `invocation`, `frame`, `call`; `solid-js` and `@solidjs/web` are type-only
+> peers) — the hand-mirrored `BoundaryRecord`/`InvocationRecord`/`FrameRecord`/
+> `CallRecord` this first shipped with are gone; the web server suite pins
+> the tables to the runtime types at compile time. JSONL egress adds one line per record. The contract
+> test is `packages/web/test/server/diagnostics-server-scenario.spec.tsx`
+> (harness aliased from source in `vite.config.server.mjs` and
+> `tsconfig.test.json`): the seeded `HEAD_TAG_INVALID` and `SERVER_WRITE`
+> with `ownerPath`, a boundary and the invocation under it joined by id, the
+> waterfall as a finding `expectNoDiagnostics` catches, and the tables
+> serializable line by line. The package's own suite covers the fold with
+> records emitted onto the real channel by hand (bare signals has no emitter).
 
 ## Decisions (resolved 2026-09-06)
 

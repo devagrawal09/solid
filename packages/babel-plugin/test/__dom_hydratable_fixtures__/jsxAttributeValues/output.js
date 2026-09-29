@@ -1,9 +1,9 @@
 import { template as _$template } from "r-dom";
 import { delegateEvents as _$delegateEvents } from "r-dom";
+import { scope as _$scope } from "r-dom";
 import { insert as _$insert } from "r-dom";
 import { createComponent as _$createComponent } from "r-dom";
 import { spread as _$spread } from "r-dom";
-import { mergeProps as _$mergeProps } from "r-dom";
 import { ref as _$ref } from "r-dom";
 import { runHydrationEvents as _$runHydrationEvents } from "r-dom";
 import { effect as _$effect } from "r-dom";
@@ -26,7 +26,10 @@ _$effect(
   () =>
     (() => {
       var _el$0 = _$getNextElement(_tmpl$5);
-      _$insert(_el$0, () => state.value);
+      _$insert(
+        _el$0,
+        _$scope(() => state.value)
+      );
       return _el$0;
     })(),
   _v$ => {
@@ -47,12 +50,18 @@ _$effect(
   () => ({
     e: (() => {
       var _el$1 = _$getNextElement(_tmpl$5);
-      _$insert(_el$1, () => state.first);
+      _$insert(
+        _el$1,
+        _$scope(() => state.first)
+      );
       return _el$1;
     })(),
     t: (() => {
       var _el$10 = _$getNextElement(_tmpl$6);
-      _$insert(_el$10, () => state.second);
+      _$insert(
+        _el$10,
+        _$scope(() => state.second)
+      );
       return _el$10;
     })()
   }),
@@ -63,7 +72,7 @@ _$effect(
 );
 const multiValues = _el$4;
 var _el$5 = _$getNextElement(_tmpl$3);
-_el$5.$$click = () => mount(_$getNextElement(_tmpl$7));
+_el$5._$$click = () => mount(_$getNextElement(_tmpl$7));
 _$runHydrationEvents();
 const handlerValue = _el$5;
 var _el$6 = _$getNextElement(_tmpl$2);
@@ -72,13 +81,19 @@ const refValue = _el$6;
 var _el$7 = _$getNextElement(_tmpl$2);
 _$spread(
   _el$7,
-  _$mergeProps(props, {
-    get data() {
-      var _el$13 = _$getNextElement(_tmpl$5);
-      _$insert(_el$13, () => state.value);
-      return _el$13;
+  [
+    props,
+    {
+      get data() {
+        var _el$13 = _$getNextElement(_tmpl$5);
+        _$insert(
+          _el$13,
+          _$scope(() => state.value)
+        );
+        return _el$13;
+      }
     }
-  }),
+  ],
   false
 );
 _$runHydrationEvents();

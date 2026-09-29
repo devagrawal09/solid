@@ -1,7 +1,9 @@
 import { OBSERVE, flush } from "@solidjs/signals";
-import { attribution as engine } from "@solidjs/signals/attribution";
+// The folds are named exports: importing them is what turns their accounting on.
+import { attribution as engine, costs, feedback } from "@solidjs/signals/attribution";
 import { ARTIFACT_FORMAT_VERSION } from "./artifact.js";
-import type { AttributionOptions, DiagnosticsArtifact, RerunEvent, RerunRecord } from "./types.js";
+import { captureRecords } from "./records.js";
+import type { AttributionOptions, DiagnosticsArtifact } from "./types.js";
 
 export interface CaptureOptions {
   /** Label stamped into the artifact meta. */
@@ -25,14 +27,9 @@ export interface CaptureResult<T> {
   artifact: DiagnosticsArtifact;
 }
 
-function toRerunRecord(event: RerunEvent): RerunRecord {
-  const { node: _node, ...record } = event;
-  return record;
-}
-
 /**
- * Run a scenario with both dev channels open and fold what they saw into a
- * single serializable artifact. This is the fixture everything else in this
+ * Run a scenario with the dev channels open — diagnostics, attribution, the
+ * records — and fold what they saw into a single serializable artifact. This is the fixture everything else in this
  * package consumes: assertions take the artifact, egress serializes it,
  * budgets compare against it.
  */
@@ -52,33 +49,39 @@ export async function captureArtifact<T>(
   const useAttribution = attributionOption !== false;
 
   const capture = OBSERVE.diagnostics.capture();
+  // The capture's own hold on the shared engine; releasing it leaves any
+  // other consumer's hold (a profiler track, an APM adapter) in place.
+  let release: (() => void) | undefined;
   if (useAttribution) {
     // Default log:false — the artifact is the output, not the console.
     const opts: AttributionOptions =
       typeof attributionOption === "object" ? { log: false, ...attributionOption } : { log: false };
-    engine.enable(opts);
+    release = engine.enable(opts);
   }
+  const records = captureRecords();
 
   const startedAt = new Date();
   const start = performance.now();
   let attribution: DiagnosticsArtifact["attribution"] = null;
   let events: DiagnosticsArtifact["diagnostics"];
+  let tables: DiagnosticsArtifact["records"];
   let result: T;
   try {
     result = await scenario();
     if (options.autoFlush !== false) flush();
   } finally {
-    // Read every table before disable(): aggregates reset on disable.
-    if (useAttribution) {
+    // Read every table before releasing: the last release resets the aggregates.
+    if (release) {
       attribution = {
-        reruns: engine.history().map(toRerunRecord),
-        costs: engine.costs(),
-        holds: [...engine.holds()],
-        feedback: engine.feedback()
+        reruns: [...engine.history("rerun")],
+        costs: costs(),
+        holds: [...engine.history("hold")],
+        feedback: feedback()
       };
-      engine.disable();
+      release();
     }
     events = capture.stop();
+    tables = records.stop();
   }
   const durationMs = performance.now() - start;
 
@@ -88,9 +91,11 @@ export async function captureArtifact<T>(
       formatVersion: ARTIFACT_FORMAT_VERSION,
       scenario: options.scenario,
       capturedAt: startedAt.toISOString(),
+      timeOrigin: performance.timeOrigin,
       durationMs,
       diagnostics: events,
-      attribution
+      attribution,
+      records: tables
     }
   };
 }

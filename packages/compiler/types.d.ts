@@ -1,3 +1,11 @@
+/** The object form of `sourceNames`: which kinds of source name to carry into output. */
+export interface SourceNamesOptions {
+  /** Component owner labels: the tag as written, as `createComponent`'s third argument. */
+  components?: boolean;
+  /** Binding effect labels: the element and attribute (or hole) each compiled effect writes. */
+  bindings?: boolean;
+}
+
 export interface TransformOptions {
   filename?: string;
   /** Default `"@solidjs/web"`. */
@@ -13,12 +21,24 @@ export interface TransformOptions {
   hydratable?: boolean;
   dev?: boolean;
   /**
-   * Emit the source tag name as a third `createComponent` argument
-   * (`createComponent(Home, props, "Home")`) so dev/observe runtimes can
-   * label owners after minification renames the function. DOM output only;
-   * the production runtime ignores the argument.
+   * Names as written in source, carried into output so the dev and observe
+   * runtimes can label the reactive graph after minification.
+   * `components`: the tag as a third `createComponent` argument
+   * (`createComponent(Home, props, "Home")`) — DOM and SSR output (SSR
+   * keeps the `createComponent` call it would otherwise inline to
+   * `Comp(props)`); not universal or dynamic. `bindings`: every compiled
+   * binding effect named by what it writes — `span.textContent`,
+   * `div.class:active`, a hole `div.children`, a spread `div.spread` — as
+   * an options argument on `effect`/`insert`/`spread`; DOM output only.
+   * The production runtimes ignore the names. Defaults to `dev`: unset,
+   * every kind is on in dev and off otherwise; `true`/`false` sets every
+   * kind; an object picks, and each kind it leaves unspecified follows
+   * `dev`. Primitive names (`createSignal(0, { name: "count" })`) are not a
+   * kind here — they come from the standalone `transformSourceNames` pass,
+   * which the build tool runs on every module independently of this
+   * transform.
    */
-  componentNames?: boolean;
+  sourceNames?: boolean | SourceNamesOptions;
   sourceMap?: boolean;
   contextToCustomElements?: boolean;
   delegateEvents?: boolean;
@@ -34,6 +54,8 @@ export interface TransformOptions {
   omitNestedClosingTags?: boolean;
   omitLastClosingTag?: boolean;
   serverComponents?: boolean;
+  /** SSR-only, default `true`: component props literals with getters compile to module-level constructors with shared getters (#3511). */
+  hoistProps?: boolean;
   /** Default `["For", "Show", "Switch", "Match", "Loading", "Reveal", "Portal", "Repeat", "Dynamic", "Errored"]`. */
   builtIns?: string[];
   requireImportSource?: false | string;
@@ -460,12 +482,12 @@ export interface TransformRefreshOptions {
    */
   filename?: string;
   /**
-   * Selects the HMR API: `import.meta.hot` (esm/vite),
-   * `import.meta.webpackHot` (webpack5/rspack-esm) or `module.hot`
-   * (standard).
+   * Selects the HMR API — the runtime modes `solid-js/refresh` knows:
+   * `import.meta.hot` (vite), or `module.hot` / `import.meta.webpackHot`
+   * (standard: webpack, Rspack — the runtime probes for whichever exists).
    * @default "standard"
    */
-  bundler?: "esm" | "vite" | "webpack5" | "rspack-esm" | "standard";
+  bundler?: "vite" | "standard";
   /**
    * Wrap top-level `render()`/`hydrate()` calls (imported from
    * `@solidjs/web`) with `hot.dispose` cleanup.
@@ -609,3 +631,32 @@ export interface CompileIslandsResult {
 }
 
 export function compileIslands(code: string, options?: CompileIslandsOptions): CompileIslandsResult;
+
+/**
+ * Options for the `sourceNames.primitives` pass: reactive primitives named
+ * after the identifier they are declared as. `const [count, setCount] =
+ * createSignal(0)` becomes `createSignal(0, { name: "count" })`; inside a
+ * non-component function the name is prefixed with that function's
+ * (`createCounter.count`). Only calls resolving to imports from `solid-js` /
+ * `@solidjs/signals` are named, and an explicit `name` is never overridden.
+ * Plain JavaScript in and out, so it applies to `.ts`/`.js` modules too.
+ * This standalone pass is the single owner of primitive naming: the build
+ * tool (`@solidjs/vite-plugin`) runs it on every module — `.ts`, `.js` and
+ * JSX files alike — independently of which JSX compiler (this one or
+ * `@solidjs/babel-plugin`) handles the file's JSX. `transform()`'s
+ * `sourceNames` option covers only the JSX-level kinds.
+ */
+export interface TransformSourceNamesOptions {
+  /** Picks the parser dialect (`.ts`, `.tsx`, `.js`, `.jsx`); TSX without one. */
+  filename?: string;
+  sourceMap?: boolean;
+}
+
+export function transformSourceNames(
+  code: string,
+  options?: TransformSourceNamesOptions | null
+): TransformResult;
+export function transformSourceNamesAsync(
+  code: string,
+  options?: TransformSourceNamesOptions | null
+): Promise<TransformResult>;

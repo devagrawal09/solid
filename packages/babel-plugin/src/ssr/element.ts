@@ -22,7 +22,9 @@ import {
   isFunctionShapedHole
 } from "../shared/utils";
 import { transformNode, getCreateTemplate } from "../shared/transform";
-import { createTemplate } from "./template";
+import { decodedAttrValue } from "../universal/element";
+import { createTemplate, registerSkip } from "./template";
+import { markPropsLiteral } from "./props";
 import type {
   BabelPath,
   JSXNode,
@@ -540,10 +542,12 @@ function transformAttributes(
   const hasChildren = path.node.children.length > 0,
     attributes = normalizeAttributes(path);
   let children: babelTypes.JSXExpressionContainer | undefined;
-  // Server-components claims: ref/on* positions on server-rendered
-  // intrinsics collect here and emit as one guarded whole-attribute hole
-  // (` _bnd="..."` or "") after the loop. Evaluation is gated on the render
-  // context's claims flag so plain SSR never runs the expressions.
+  // Server-components handler positions: ref/on* expressions on
+  // server-rendered intrinsics collect here and emit as one guarded
+  // whole-attribute hole after the loop, where `ssrClaim` turns attribute-slot
+  // reads into `_s:on:*` / `_s:ref` markers (and drops server-local
+  // functions). Evaluation is gated on the render context's claims flag so
+  // plain SSR never runs the expressions.
   const claims: [string, babelTypes.Expression][] = [];
 
   attributes.forEach(attribute => {
@@ -586,11 +590,10 @@ function transformAttributes(
       }
       if (key.startsWith("prop:")) return;
       if (key.startsWith("on")) {
-        // Capture-phase variants can't ride delegation; v1 drops them as
-        // before. `on:x` keeps the raw name, `onXxx` lowercases — the same
-        // event-name derivation as the client runtime.
-        if (info.serverComponents && !key.startsWith("oncapture:")) {
-          const pos = key.startsWith("on:") ? key.slice(3) : key.slice(2).toLowerCase();
+        // `onXxx` lowercases to the event name — the client runtime's own
+        // derivation (`onClick` -> `click`); the position is bound under it.
+        if (info.serverComponents) {
+          const pos = key.slice(2).toLowerCase();
           if (pos) claims.push([pos, value.expression as babelTypes.Expression]);
         }
         return;
@@ -626,6 +629,30 @@ function transformAttributes(
           checkMember: true,
           checkTags: true
         });
+        // Server components (principles §9.2.3): a dynamic `class`/`style`
+        // is the one attribute shape the plain SSR output serializes INSIDE
+        // template quotes (`class="${ssrClassName(x)}"`), where an attribute-slot
+        // value read at that position — the whole value, or a name's
+        // condition in object form — would be stringified instead of
+        // bound. Under the option the whole attribute is a runtime hole,
+        // `ssrElementAttribute("class", x)`, whose helper emits the same
+        // bytes for a plain value and the position marker for a stand-in.
+        // Object literals stay objects (no inlining) for the same reason.
+        if (info.serverComponents && (key === "class" || key === "style")) {
+          const attr = t.callExpression(registerImportMethod(path, "ssrElementAttribute"), [
+            t.stringLiteral(key),
+            value.expression as babelTypes.Expression
+          ]);
+          results.template.push("");
+          results.templateValues.push(
+            isDynamicValue
+              ? hoistExpression(path, results, t.arrowFunctionExpression([], attr), {
+                  group: true
+                })
+              : attr
+          );
+          return;
+        }
         let doEscape = true;
         let isBoolean =
           t.isBooleanLiteral(value) ||
@@ -769,23 +796,7 @@ function transformAttributes(
     }
   });
   if (claims.length) {
-    // Duplicate event keys were already last-wins-stripped above; `ref` is
-    // exempt from that pass (client semantics fire every ref), so multiple
-    // refs merge into an array value.
-    const byPos = new Map<string, babelTypes.Expression[]>();
-    for (const [pos, expr] of claims) {
-      let list = byPos.get(pos);
-      if (!list) byPos.set(pos, (list = []));
-      list.push(expr);
-    }
-    const map = t.objectExpression(
-      [...byPos].map(([pos, exprs]) =>
-        t.objectProperty(
-          t.stringLiteral(pos),
-          exprs.length === 1 ? exprs[0] : t.arrayExpression(exprs)
-        )
-      )
-    );
+    const map = claimMap(claims);
     // `_$sharedConfig.context && _$sharedConfig.context.claims
     //    ? _$ssrClaim({...}) : ""`
     // — the claims flag is only set inside a server component's render
@@ -931,7 +942,7 @@ function transformChildren(
 
 function createElement(
   path: BabelPath<babelTypes.JSXElement> & { doNotEscape?: boolean },
-  { topLevel, hydratable }: SSRTransformInfo
+  { topLevel, hydratable, serverComponents }: SSRTransformInfo
 ): SSRSpreadTransformResult {
   const tagName = getTagName(path.node),
     config = getConfig(path),
@@ -944,7 +955,7 @@ function createElement(
     childNodes = filteredChildren.reduce((memo: babelTypes.Expression[], path: JSXChildPath) => {
       if (t.isJSXText(path.node)) {
         const v = decode(trimWhitespace((path.node.extra?.raw as string | undefined) ?? ""));
-        if (v.length) memo.push(t.stringLiteral(v));
+        if (v.length) memo.push(t.stringLiteral(doNotEscape ? v : (escapeHTML(v) as string)));
       } else {
         if (path.isJSXFragment()) {
           throw new Error(
@@ -952,7 +963,7 @@ function createElement(
           );
         }
         const allocatesIds = hydratable && canChildSlotAllocateIds(path);
-        const child = transformNode(path);
+        const child = transformNode(path, { doNotEscape });
         if (!child) return memo;
         if (markers && child.exprs.length && !child.spreadElement)
           memo.push(t.stringLiteral("<!--$-->"));
@@ -984,40 +995,127 @@ function createElement(
     const node = attribute.node;
     return !(t.isJSXAttribute(node) && t.isJSXIdentifier(node.name) && node.name.name === "ref");
   });
+  // Server components (principles §9.2.3): the named `ref`/`on*` attributes
+  // of a spread element are handler positions like a template element's,
+  // and compile to the same claim map — `{ click: expr, ref: [a, b] }`,
+  // duplicate refs merged, a duplicate handler last-wins as the template
+  // path strips it — keyed by the index of the source each attribute sits
+  // before (`<b {...a} onClick={go} {...b}>` → `{ 1: { click: go } }`, the
+  // spreads being sources 0 and 2), and handed to `ssrElement` as a thunk
+  // it reads only inside a server component's render (the gate the template
+  // path's `ssrClaim` guard reads), so plain SSR never evaluates the
+  // expressions. The runtime settles each handler position in source order,
+  // as the client's `spread(el, [a, { onClick: go }, b])` does — a spread at
+  // that index or later that HAS the key owns it — and merges every ref.
+  // Plain SSR output is unchanged (dropped, as a server element has no
+  // handlers to run).
+  const claims: [number, string, babelTypes.Expression][] = [];
 
   let props: babelTypes.Expression[];
-  if (propAttributes.length === 1 && t.isJSXSpreadAttribute(propAttributes[0].node)) {
+  // Attributes written AFTER the last spread are markup, not a source: no
+  // later source can override them, so they go to `ssrElement` as its
+  // attribute string and their keys are skipped on every source — the
+  // spread's own copy of `class` is never read or emitted, exactly as if they
+  // were the winning last source. A static is written as the template path
+  // writes it; a dynamic one is `ssrElementAttribute(key, expr)`, the spread
+  // walk's own rules for one key, and makes the string a thunk that
+  // `ssrElement` calls after the walk — the point where the trailing source's
+  // getters were read, so the expressions keep their place in the
+  // hydration-id sequence. What goes away per element is the trailing object
+  // literal (with getters, a dictionary-mode object and a closure per
+  // getter), its key list, and the "does a later source own this key" check
+  // on every key of the spread; an element whose only other source is the
+  // spread serializes from ONE plain object. Attributes before a spread stay
+  // a source: the spread may override them, and only the runtime knows its
+  // keys.
+  const tail: Array<string | babelTypes.Expression> = [];
+  const skipKeys: string[] = [];
+  if (
+    propAttributes.length === 1 &&
+    t.isJSXSpreadAttribute(propAttributes[0].node) &&
+    // A `ref` beside the lone spread is a claim under `serverComponents`;
+    // the loop below places it.
+    !(serverComponents && attributes.length > 1)
+  ) {
     props = [propAttributes[0].node.argument];
   } else {
     props = [];
     let runningObject: Array<babelTypes.ObjectProperty | babelTypes.ObjectMethod> = [],
-      dynamicSpread = false,
       hasChildren = path.node.children.length > 0;
+    // A source object with getters is the same shape as a component's props
+    // literal, and a candidate for the same hoisted constructor (ssr/props.ts).
+    const sourceLiteral = (properties: typeof runningObject) => {
+      const literal = t.objectExpression(properties);
+      markPropsLiteral(literal, path, config);
+      return literal;
+    };
+    let lastSpread = -1;
+    attributes.forEach((attribute, i) => {
+      if (t.isJSXSpreadAttribute(attribute.node)) lastSpread = i;
+    });
 
-    attributes.forEach(attribute => {
+    attributes.forEach((attribute, i) => {
       const node = attribute.node;
       if (t.isJSXSpreadAttribute(node)) {
         if (runningObject.length) {
-          props.push(t.objectExpression(runningObject));
+          props.push(sourceLiteral(runningObject));
           runningObject = [];
         }
+        // A dynamic spread defers behind a thunk: evaluated in argument
+        // position it would run before `ssrElement` allocates the element's
+        // own hydration id, while the client claims the element
+        // (getNextElement) before applying the spread — shifting the
+        // element's id by one and leaving it unclaimed. `ssrElement` calls
+        // function sources after allocating the key, matching that order.
         props.push(
           isDynamic(attribute.get("argument"), {
             checkMember: true
-          }) && (dynamicSpread = true)
+          })
             ? inlineCallExpression(node.argument)
             : node.argument
         );
       } else if (t.isJSXAttribute(node)) {
-        const value = node.value || t.booleanLiteral(true),
+        const value = decodedAttrValue(node.value) || t.booleanLiteral(true),
           id = convertJSXIdentifier(node.name),
           key = t.isJSXNamespacedName(node.name)
             ? `${node.name.namespace.name}:${node.name.name.name}`
             : node.name.name;
 
         if (hasChildren && key === "children") return;
-        if (key === "ref") return;
-        if (key.startsWith("prop:") || key.startsWith("on")) return;
+        if (key === "ref" || key.startsWith("on")) {
+          if (serverComponents && t.isJSXExpressionContainer(value)) {
+            const expression = value.expression;
+            const pos = key === "ref" ? "ref" : key.slice(2).toLowerCase();
+            if (
+              pos &&
+              !(
+                t.isJSXEmptyExpression(expression) ||
+                t.isStringLiteral(expression) ||
+                t.isNumericLiteral(expression) ||
+                t.isBooleanLiteral(expression)
+              )
+            ) {
+              // The index of the source this attribute sits before: the
+              // sources pushed so far, plus the running literal if it will
+              // be pushed ahead of the next spread. The literal never
+              // carries a handler key, so a spread's index is either below
+              // this or at/after it — never ambiguous.
+              claims.push([props.length + (runningObject.length ? 1 : 0), pos, expression]);
+            }
+          }
+          return;
+        }
+        if (key.startsWith("prop:")) return;
+        if (i > lastSpread) {
+          const part = tailAttribute(path, tagName, key, node);
+          if (part !== undefined) {
+            if (typeof part === "string" && typeof tail[tail.length - 1] === "string")
+              tail[tail.length - 1] += part;
+            else tail.push(part);
+            skipKeys.push(key);
+            return;
+          }
+        }
         if (t.isJSXExpressionContainer(value)) {
           if (t.isJSXEmptyExpression(value.expression)) return;
           const expression = value.expression as babelTypes.Expression;
@@ -1033,7 +1131,7 @@ function createElement(
                 id,
                 [],
                 t.blockStatement([t.returnStatement(expression)]),
-                !t.isValidIdentifier(key)
+                false // never computed; see shared/component.ts (#3511)
               )
             );
           } else runningObject.push(t.objectProperty(id, expression));
@@ -1041,41 +1139,152 @@ function createElement(
       }
     });
 
-    if (runningObject.length || !props.length) props.push(t.objectExpression(runningObject));
+    if (runningObject.length || !props.length) props.push(sourceLiteral(runningObject));
 
-    if (props.length > 1 || dynamicSpread) {
-      let merged: babelTypes.Expression = t.callExpression(
-        registerImportMethod(path, "mergeProps"),
-        props
-      );
-      // Defer the merge behind a thunk when hydratable: `mergeProps` with a
-      // function source creates a memo, which consumes a hydration child id.
-      // Evaluated in argument position it would run before `ssrElement`
-      // allocates the element's own id, while the client claims the element
-      // (getNextElement) before applying the spread — shifting the element's
-      // id by one and leaving it unclaimed. `ssrElement` resolves function
-      // props after allocating the hydration key, matching the client order.
-      if (hydratable) merged = t.arrowFunctionExpression([], merged);
-      props = [merged];
-    }
+    // Several sources go as an ARRAY, not a mergeProps() call: ssrElement
+    // serializes straight from the sources (later wins per key, only the
+    // winner read) with no merged object to build and walk once, and a
+    // function source is a plain thunk called after the key — no memo, so no
+    // hydration id, matching the client spread() array form. A single
+    // source, thunk included, passes through as the props argument itself.
+    if (props.length > 1) props = [t.arrayExpression(props)];
   }
 
-  const exprs = [
-    t.callExpression(registerImportMethod(path, "ssrElement"), [
-      t.stringLiteral(tagName),
-      props[0],
-      childNodes.length
-        ? hydratable
-          ? t.arrowFunctionExpression(
-              [],
-              childNodes.length === 1 ? childNodes[0] : t.arrayExpression(childNodes)
-            )
-          : childNodes.length === 1
-            ? childNodes[0]
-            : t.arrayExpression(childNodes)
-        : t.identifier("undefined"),
-      t.booleanLiteral(Boolean(topLevel && config.hydratable))
-    ])
+  const args: babelTypes.Expression[] = [
+    t.stringLiteral(tagName),
+    props[0],
+    childNodes.length
+      ? hydratable
+        ? t.arrowFunctionExpression(
+            [],
+            childNodes.length === 1 ? childNodes[0] : t.arrayExpression(childNodes)
+          )
+        : childNodes.length === 1
+          ? childNodes[0]
+          : t.arrayExpression(childNodes)
+      : t.identifier("undefined"),
+    t.booleanLiteral(Boolean(topLevel && config.hydratable))
   ];
+  // The tail rides as `ssrElement`'s skip predicate (hoisted, one per key
+  // set) and attribute string — a literal when every part is static, else a
+  // thunk concatenating the parts in source order. A `false` static bakes to
+  // no markup but still skips its key.
+  if (skipKeys.length) {
+    let markup: babelTypes.Expression;
+    if (tail.every(part => typeof part === "string")) markup = t.stringLiteral(tail.join(""));
+    else {
+      let concat: babelTypes.Expression | undefined;
+      for (const part of tail) {
+        const expr = typeof part === "string" ? t.stringLiteral(part) : part;
+        concat = concat ? t.binaryExpression("+", concat, expr) : expr;
+      }
+      markup = t.arrowFunctionExpression([], concat!);
+    }
+    args.push(registerSkip(path, skipKeys), markup);
+  }
+  if (claims.length) {
+    if (!skipKeys.length) args.push(t.identifier("undefined"), t.identifier("undefined"));
+    args.push(t.arrowFunctionExpression([], claimSegments(claims)));
+  }
+  const exprs = [t.callExpression(registerImportMethod(path, "ssrElement"), args)];
   return { exprs, template: "", declarations: [], dynamics: [], spreadElement: true };
+}
+
+/**
+ * A spread element's claim map by source index (`createElement`): `{ 1: {
+ * click: go }, 3: { ref: el } }`. A handler position keeps its LAST named
+ * attribute only — the template path's duplicate strip, applied here to the
+ * claims (a later attribute wins whatever sits between, so the earlier one
+ * is never read on either side); refs merge within a segment as `claimMap`
+ * merges them, and across segments at the runtime.
+ */
+function claimSegments(
+  claims: [number, string, babelTypes.Expression][]
+): babelTypes.ObjectExpression {
+  const lastHandler = new Map<string, number>();
+  claims.forEach(([, pos], i) => {
+    if (pos !== "ref") lastHandler.set(pos, i);
+  });
+  const segments = new Map<number, [string, babelTypes.Expression][]>();
+  claims.forEach(([index, pos, expr], i) => {
+    if (pos !== "ref" && lastHandler.get(pos) !== i) return;
+    let list = segments.get(index);
+    if (!list) segments.set(index, (list = []));
+    list.push([pos, expr]);
+  });
+  return t.objectExpression(
+    [...segments].map(([index, list]) => t.objectProperty(t.numericLiteral(index), claimMap(list)))
+  );
+}
+
+/**
+ * The compiled claim map of an element's handler positions, `{ click: expr,
+ * ref: [a, b] }`: duplicate event keys were last-wins-stripped by the
+ * template path's duplicate strip (or `claimSegments`); `ref` is exempt from
+ * that pass (client semantics fire every ref), so multiple refs merge into
+ * an array value.
+ */
+function claimMap(claims: [string, babelTypes.Expression][]): babelTypes.ObjectExpression {
+  const byPos = new Map<string, babelTypes.Expression[]>();
+  for (const [pos, expr] of claims) {
+    let list = byPos.get(pos);
+    if (!list) byPos.set(pos, (list = []));
+    list.push(expr);
+  }
+  return t.objectExpression(
+    [...byPos].map(([pos, exprs]) =>
+      t.objectProperty(
+        t.stringLiteral(pos),
+        exprs.length === 1 ? exprs[0] : t.arrayExpression(exprs)
+      )
+    )
+  );
+}
+
+/**
+ * What an attribute after an element's last spread contributes to
+ * `ssrElement`'s attribute string. A static is written as the template path
+ * writes the same attribute (`transformAttributes`' static branch): a bare or
+ * `true` attribute as ` key`, a string or number as ` key="value"` with the
+ * value attribute-escaped and class/style whitespace normalized, `false` as
+ * nothing. An expression is `ssrElementAttribute("key", expr)` — the spread
+ * walk's rules for one key, evaluated when `ssrElement` calls the thunk.
+ * `undefined` when the attribute is content rather than markup and must stay
+ * a source: a child property (`innerHTML`, `textContent`, `children`), a
+ * textarea's value (its text content on the server), a reserved namespace,
+ * or a JSX value.
+ */
+function tailAttribute(
+  path: BabelPath,
+  tagName: string,
+  key: string,
+  node: babelTypes.JSXAttribute
+): string | babelTypes.Expression | undefined {
+  if (
+    ChildProperties.has(key) ||
+    key === "$ServerOnly" ||
+    (tagName === "textarea" && (key === "value" || key === "defaultValue")) ||
+    (t.isJSXNamespacedName(node.name) && reservedNameSpaces.has(node.name.namespace.name))
+  )
+    return undefined;
+  const value = node.value;
+  const literal: babelTypes.Node | null | undefined = t.isJSXExpressionContainer(value)
+    ? value.expression
+    : value;
+  if (literal == null) return ` ${key}`;
+  if (t.isBooleanLiteral(literal)) return literal.value ? ` ${key}` : "";
+  if (t.isStringLiteral(literal) || t.isNumericLiteral(literal)) {
+    let text = String(literal.value);
+    if (key === "style" || key === "class") {
+      text = trimWhitespace(text);
+      if (key === "style") text = text.replace(/; /g, ";").replace(/: /g, ":");
+    }
+    return text === "" ? ` ${key}` : ` ${key}="${escapeHTML(text, true)}"`;
+  }
+  if (t.isJSXEmptyExpression(literal) || t.isJSXElement(literal) || t.isJSXFragment(literal))
+    return undefined;
+  return t.callExpression(registerImportMethod(path, "ssrElementAttribute"), [
+    t.stringLiteral(key),
+    literal as babelTypes.Expression
+  ]);
 }

@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { createComponent, createRoot, createSignal, flush } from "../src/index.js";
+import {
+  createComponent,
+  createMemo,
+  createRoot,
+  createSignal,
+  flush,
+  getOwner,
+  OBSERVE
+} from "../src/index.js";
+import { attribution } from "../src/attribution.js";
 import {
   $$component,
   $$decline,
@@ -84,6 +93,86 @@ function renderDisposable(proxy: (props: any) => any): {
 
 afterEach(() => {
   configureRefresh({ invalidate: undefined });
+});
+
+describe("$$component proxy owner paths", () => {
+  test("the wrapper adds no segment: a body's owner path is the component's root alone", () => {
+    const { hot } = createViteHot();
+    let inner: string[] | undefined;
+    const { proxies } = executeModule(hot, {
+      Counter: {
+        impl: () => {
+          // A node the body owns, located the way a finding or a tracks span
+          // locates it — through the owners above it.
+          createMemo(
+            () => {
+              inner = OBSERVE!.ownerPath(getOwner());
+              return 0;
+            },
+            { name: "total" }
+          )();
+          return null;
+        }
+      }
+    });
+    render(proxies.Counter);
+    flush();
+    expect(inner).toEqual(["<Counter>", "total"]);
+  });
+
+  test("the wrapper is nobody's node: the engine records the body's nodes, never the memo", () => {
+    const { hot, fireAccept } = createViteHot();
+    const release = attribution.enable({ log: false });
+    const creates: [string, string][] = [];
+    const reruns: string[] = [];
+    const offCreate = OBSERVE!.records.subscribe("create", e =>
+      creates.push([e.nodeName, e.nodeKind])
+    );
+    const offRerun = OBSERVE!.records.subscribe("rerun", e => reruns.push(e.nodeName));
+    try {
+      const first = executeModule(hot, {
+        Counter: {
+          impl: () => {
+            createMemo(() => 1, { name: "total" })();
+            return null;
+          },
+          options: { signature: "sig-a" }
+        }
+      });
+      render(first.proxies.Counter);
+      flush();
+      expect(creates).toEqual([["total", "memo"]]);
+
+      // A swap re-runs the wrapper's memo; that run is not a record either —
+      // only the new body's nodes are.
+      executeModule(hot, {
+        Counter: {
+          impl: () => {
+            createMemo(() => 2, { name: "total2" })();
+            return null;
+          },
+          options: { signature: "sig-b" }
+        }
+      });
+      fireAccept({});
+      flush();
+      expect(creates).toEqual([
+        ["total", "memo"],
+        ["total2", "memo"]
+      ]);
+      expect(reruns).toEqual([]);
+    } finally {
+      offCreate();
+      offRerun();
+      release();
+    }
+  });
+
+  test("the proxy carries the component's name for an unlabelled createComponent", () => {
+    const { hot } = createViteHot();
+    const { proxies } = executeModule(hot, { Counter: { impl: () => null } });
+    expect(proxies.Counter.name).toBe("Counter");
+  });
 });
 
 describe("$$component proxy swapping (vite mode)", () => {

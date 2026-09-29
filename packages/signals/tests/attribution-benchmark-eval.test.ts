@@ -9,7 +9,7 @@
  * one render effect per row binding.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { attribution } from "../src/attribution.js";
+import { attribution, costs } from "../src/attribution.js";
 import {
   createEffect,
   createMemo,
@@ -19,10 +19,18 @@ import {
   flush,
   OBSERVE
 } from "../src/index.js";
-import type { DiagnosticEvent } from "../src/core/dev.js";
+import type { DiagnosticEvent, RecordListener, RecordType } from "../src/core/dev.js";
 import type { RerunEvent } from "../src/core/attribution.js";
 
+// The engine's records arrive on the channel, whose subscriptions are the
+// consumer's — not dropped by `disable()` — so each test's are released here.
+const offs: (() => void)[] = [];
+function on<K extends RecordType>(type: K, listener: RecordListener<K>): void {
+  offs.push(OBSERVE!.records.subscribe(type, listener));
+}
+
 afterEach(() => {
+  for (const off of offs.splice(0)) off();
   attribution.disable();
   flush();
   vi.restoreAllMocks();
@@ -38,7 +46,7 @@ function arm(opts: Parameters<typeof attribution.enable>[0] = {}) {
   const diagnostics: DiagnosticEvent[] = [];
   OBSERVE!.diagnostics.subscribe(e => diagnostics.push(e));
   const reruns: RerunEvent[] = [];
-  attribution.subscribe(e => reruns.push(e));
+  on("rerun", e => reruns.push(e));
   return { diagnostics, reruns };
 }
 
@@ -60,7 +68,7 @@ describe("JSFB select-row (naive: every row reads the selected signal)", () => {
     return setSelected;
   }
 
-  it("WIDE_WRITE identifies the selection fan-out at default thresholds", () => {
+  it("HUGE_FAN_OUT identifies the selection fan-out at the engine's default threshold", () => {
     const setSelected = naiveRows(1000);
     const { diagnostics, reruns } = arm();
 
@@ -70,11 +78,11 @@ describe("JSFB select-row (naive: every row reads the selected signal)", () => {
     flush();
 
     // The culprit is named: the write to selectedId, with its subscriber count.
-    const wide = diagnostics.filter(e => e.code === "WIDE_WRITE");
+    const wide = diagnostics.filter(e => e.code === "HUGE_FAN_OUT");
     expect(wide).toHaveLength(1);
     expect(wide[0].nodeName).toBe("selectedId");
-    expect(wide[0].data!.subscribers).toBe(1000);
-    expect(wide[0].message).toContain("store used as a map keyed by id");
+    expect(wide[0].data).toEqual({ count: 1000, write: "write" });
+    expect(wide[0].message).toContain("per-key store or projection");
     expect(wide[0].message).not.toContain("createSelector");
 
     // FINDING (F2), now fixed engine-side: effects run with `_equals: false`,
@@ -85,14 +93,14 @@ describe("JSFB select-row (naive: every row reads the selected signal)", () => {
     expect(reruns).toHaveLength(2000);
     const unchanged = reruns.filter(r => !r.changed).length;
     expect(unchanged).toBeGreaterThanOrEqual(1996);
-    const { scopes } = attribution.costs();
+    const { scopes } = costs();
     const wastedTotal = scopes
       .filter(s => s.name.endsWith(".class"))
       .reduce((sum, s) => sum + s.wastedMs, 0);
     expect(wastedTotal).toBeGreaterThan(0);
 
     // The write-cost table ranks selectedId as the top root cause.
-    const { writes } = attribution.costs();
+    const { writes } = costs();
     expect(writes[0].name).toBe("selectedId");
     expect(writes[0].runs).toBe(2000);
 
@@ -109,7 +117,7 @@ describe("JSFB select-row (naive: every row reads the selected signal)", () => {
     const setSelected = naiveRows(50);
     const { diagnostics } = arm({
       hotRuns: { count: 10, windowMs: 60_000 },
-      wideWrites: 25,
+      fanOut: 25,
       hotTime: false
     });
 
@@ -125,8 +133,8 @@ describe("JSFB select-row (naive: every row reads the selected signal)", () => {
     expect(fanout[1].data).toMatchObject({ cause: "selectedId", scopes: 50 });
     expect(fanout[1].message).toContain("store used as a map keyed by id");
     expect(fanout[1].message).not.toContain("createSelector");
-    // WIDE_WRITE fired once and named the actual culprit.
-    expect(diagnostics.filter(e => e.code === "WIDE_WRITE")).toHaveLength(1);
+    // HUGE_FAN_OUT fired once and named the actual culprit.
+    expect(diagnostics.filter(e => e.code === "HUGE_FAN_OUT")).toHaveLength(1);
   });
 
   it("stays quiet on the selector-inverted version (the correct fix)", () => {

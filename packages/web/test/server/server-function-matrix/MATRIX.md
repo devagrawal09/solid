@@ -28,6 +28,7 @@ Status legend: **pass** (ordinary green guard) · **audit** (reported by
 | Address resolves to the function granted for that method | **pass** | n/a | n/a | n/a | n/a | `server-functions-addressing`, `server-functions-csrf`; #3237 **audit** |
 | `wrapInvocation` applies exactly once and cannot be bypassed | **pass** | **pass** | #3240 **audit** | **pass** | #3242 **audit** | `server-functions-invocation-wrap`, `server-functions-request-event-scope` |
 | A missing per-handler hook preserves configured policy | #3238 **audit** | #3238 **audit** | #3238 **audit** | n/a | #3238 **audit** | new focused spec required |
+| A cross-origin browser caller is admitted only by the `csrf.origin` allowlist, and then answered with CORS | **pass** | n/a | n/a | n/a | **pass** | `server-functions-cors-origin`, `server-functions-csrf`; #3538 **ruling** |
 | `provideEvent` establishes one request event per logical invocation | **pass** | #3246 **ruling** | #3246 **ruling** | **pass** | #3246 **ruling** | `server-functions-event-hook`, `server-functions-request-event-scope` |
 | `transformResult` observes the agreed success/failure surface | #3247 **ruling** | #3247 **ruling** | #3247 **ruling** | #3247 **ruling** | n/a | contract decision required |
 
@@ -39,6 +40,7 @@ Status legend: **pass** (ordinary green guard) · **audit** (reported by
 | Body-format tags are recognized before decoding | **pass** | n/a | **pass** | `server-functions-body-formats`; #3245 covers the client half |
 | Unsafe own keys are removed at every untrusted decode boundary | **pass** | n/a | #3233 **audit** | `server-functions-proto-keys`, `server-functions-open-gaps` |
 | Decoded promises are always owned, even when their container is abandoned | n/a | n/a | #3232 **audit** | new focused spec required |
+| The bound `?args=` fast path applies only when the trailing argument is a body-like object; an `undefined` before a trailing string rides the codec | **pass** | n/a | **pass** | `server-functions-undefined-arguments`, `server-functions-body-formats`; #3622 **ruling** |
 
 ## Result graph and request scope
 
@@ -57,6 +59,8 @@ Status legend: **pass** (ordinary green guard) · **audit** (reported by
 | Each requested source id executes at most once | #3251 **audit** | `server-functions-single-flight` |
 | One failed/unencodable slice cannot erase the mutation result or healthy slices | **pass** / #3243 **audit** | `server-functions-single-flight`, `server-functions-open-gaps` |
 | Redirecting mutations preserve folding without trusting attacker-controlled navigation metadata | #3252 **ruling** | contract decision required |
+| The envelope is one shape on every body — `data` keyed by source, the header naming the folded sources — and consumers receive their slice identically over the plain and the frames transport | #3638 **pass** | `server-functions-flight-markup`, `frames-flight-delivery` |
+| A single-flight call whose own result is markup names its function in `X-Frame-Stream` and the primary frame — the frames artifacts share the handler's runtime instance by construction (external imports, never a bundled copy), so the invocation the handler records is the one the transform reads | #3641 **pass** | `dist-frames-server-instance` (built artifacts, every tier), `frames-flight-delivery` |
 
 ## No-JS form and flash replay
 
@@ -165,6 +169,177 @@ record the pre-triage state and read as resolved per this section.
   a channel on a non-enumerable own DATA slot (`cause`) escaped the walk.
   Now descended; hidden accessors stay the codec's read per `47995412`'s
   ruling. Pinned in `server-functions-failure-sanitization`.
+
+## Ruling — cross-origin callers (#3538, 2026-09-18)
+
+`csrf.origin` reads as "these origins may call server functions", but the
+gate refused `Sec-Fetch-Site: cross-site` and `same-site` before the
+matcher was consulted, so a listed origin was refused by every current
+browser and WebView; the matcher only ever ran for clients sending no
+fetch metadata. Motivating case: a client-only build in a Capacitor
+WebView (`capacitor://localhost`) calling the server bundle on another
+host. Resolved as the maintainer proposed:
+
+1. **The allowlist decides cross-origin.** A `cross-site` or `same-site`
+   request carrying an `Origin` is admitted iff `csrf.origin` is configured
+   and the matcher answers `true` for that exact `Origin` (string, list, or
+   function; `matchesOrigin` keeps failing closed on any other return,
+   #3169). No matcher configured — today's default, `csrf: true`, or
+   `csrf: {}` — admits no cross-origin caller, even one whose `Origin`
+   equals the request's own (the browser said cross-site; the default
+   matcher is not an allowlist). `none` stays refused whatever is listed:
+   no page made that request. A cross-site request with no `Origin` stays
+   refused. `Origin: null` matches nothing an allowlist would name.
+   `same-origin` is untouched.
+2. **An admitted cross-origin caller gets the CORS answer on every
+   response** — results, thrown errors, refusals after admission (405,
+   413, 400, 500), and the labelled unknown-id 404 (#3110/#3136), which is
+   why the verdict is now READ before the id lookup while the refusal is
+   still ACTED on after it: the label exists for client-side recovery and
+   a cross-origin client reads it only through CORS. The answer is
+   `Access-Control-Allow-Origin` echoing the exact `Origin` (never `*`)
+   with `Vary: Origin`; `Access-Control-Expose-Headers` naming what the
+   response carries beyond the CORS safelist (the protocol's tags, an
+   integration's such as frames' stream header, an author's own —
+   `Set-Cookie` excluded, it can never be exposed); and
+   `Access-Control-Allow-Credentials: true` ONLY when
+   `csrf.allowCredentials` is set. An allowlist entry is not a
+   cookie-sharing decision; a cross-origin client should prefer
+   `prepareRequest` bearer tokens, and a cookie meant to travel needs
+   `SameSite=None; Secure` besides.
+3. **The preflight is answered for an admitted origin only.** `OPTIONS` +
+   `Access-Control-Request-Method` from a listed origin gets `204` with
+   `Allow-Methods: POST, GET, HEAD`, `Allow-Headers` echoing what the
+   preflight asked about (the page's bearer token as much as the
+   transport's `Content-Type`/format/single-flight headers; the origin is
+   what was trusted, and the actual request is gated when it arrives) or
+   the transport's set when it asked about none, `Max-Age: 600`, `Vary` on
+   the request headers it echoes, and the CORS answer above. It is answered
+   ahead of the id lookup — the question is whether the origin may send
+   this method here, and an unknown id's preflight failing would hide the
+   labelled 404. An unlisted origin's preflight lands on the same 403 as
+   before; a plain `OPTIONS` (no preflight header) lands on the 405 it
+   always got.
+4. **The same-origin path is byte-identical**, with one exception spelled
+   out in (5): a declared read gains `Vary: Origin` under a configured
+   matcher. No `Access-Control-*` header is emitted unless the verdict
+   admitted a cross-origin caller; a same-origin gated call answers
+   identically whether or not an allowlist (and `allowCredentials`) is
+   configured. The metadata-less road (older WebKit:
+   `Origin` without `Sec-Fetch-Site`) is decided by the matcher as before;
+   an admitted `Origin` that differs from the request's own is a
+   cross-origin caller by `Origin`'s definition and now gets the CORS
+   answer too. A same-origin browser behind a host-rewriting proxy can
+   land there with a listed public origin and receive an inert
+   `Allow-Origin`; accepted as harmless.
+5. **Declared reads.** The gate stays skipped for `GET`-declared reads
+   (#3114, #3071) — a read is never refused by this ruling. But a read is
+   answered TO A BROWSER, and a listed origin's page can read it only
+   through CORS, so when `csrf.origin` is configured and the matcher admits
+   a cross-origin `Origin`, the read carries `Allow-Origin`. Declared reads
+   are also the handler's one CACHEABLE answer, and a stored response is
+   served to whoever asks next; once an allowlist makes admission possible
+   the answer depends on the asking `Origin` (`Allow-Origin` for a listed
+   one, nothing for anyone else). So the rule is: **whenever a matcher is
+   configured, EVERY declared read carries `Vary: Origin`** — same-origin,
+   bare (no `Origin` at all), unlisted and admitted alike — while
+   `Allow-Origin` appears only on an admitted cross-origin answer. Varying
+   only the admitted answer would let a same-origin page warm a shared
+   cache with the header-less variant and have it served to the listed
+   origin next: CORS failures that depend on who asked first. With no
+   matcher (`undefined`, `csrf: true`, `csrf: {}`) admission is impossible,
+   the answer does not depend on `Origin`, and reads stay byte-identical to
+   before — no `Vary`, shared-cache entries whole. A read under
+   `protectDeclaredReads` is gated and already varies on all three proofs.
+   The matcher runs on a read only for a deployment that listed an origin,
+   and only when the read carries an `Origin`. No other exit needs the
+   rule: every gated answer already carries `Vary: Sec-Fetch-Site, Origin,
+   Referer`, and the ungated answers that are not declared reads — the
+   labelled unknown-id 404, the preflight — leave with `Cache-Control:
+   no-store`, so no shared cache stores a variant to misserve.
+
+Security posture: `Origin` is browser-enforced and a page cannot forge it,
+so admitting a listed origin is the trust decision the option always
+claimed. CSRF protection is for cookie-bearing browser users; a non-browser
+caller could always hit the endpoint with any headers, and that is
+unchanged. Default remains same-origin only. Pinned in
+`server-functions-cors-origin` (admission, refusals, CORS answer,
+preflight, credentials, declared reads, same-origin byte-identity) and
+`server-functions-csrf` (the decision matrix, updated: `same-site` is now
+decided by the allowlist rather than refused outright).
+
+## Ruling — dev rebind of a GET grant (#3564, 2026-09-22)
+
+A GET grant binds to function identity, not id (#3237): registering a
+different function under a granted id revokes the grant (#3129), and the new
+function's own `GET()` — run right after by module order — re-grants it.
+Under `vite dev` that order breaks: a program reload invalidates every
+module, but the next `/_server` request re-evaluates only the module the
+requested id lives in. When the declaration lives elsewhere — a router's
+`query()` in the app's data layer — nothing re-arms the grant until the next
+document render, and every read answers 405 (`Allow: POST`) in between.
+Carrying the whole grant would also carry the origin-gate exemption to a
+function that never signed it. Resolved as a dispatch-only provisional
+grant, dev build only:
+
+1. **The dev rebind carries a LIVE grant, provisionally.** When
+   `registerServerFunction` rebinds an id whose grant is live
+   (`declaresRead`: made about the binding being replaced), it moves the
+   grant to the new binding and marks the id carried (`CARRIED`, process
+   state beside the other registries). A grant that is not live — the id
+   rebound before its declaration, #3237's stale case — still revokes;
+   stale never revives.
+2. **A carried grant is dispatch-only: the origin gate stays on.**
+   `declaresRead` answers true for the rebound function, so the method gate
+   admits GET/HEAD and a same-origin router fetch answers 200 — the 405 is
+   gone. But `handleServerFunctionRequest` forces `protectsRequest` for a
+   carried id: the #3114 skip is the declaration's safety assertion, and
+   the new function never made it. A cross-site GET lands on the 403
+   production gives. `Vary`/cache fragmentation is irrelevant in dev.
+3. **The live binding's own `GET()` restores the full grant.** A
+   declaration whose binding is the id's current registration
+   (`existing === binding`) clears the carried mark — the data layer
+   re-ran, the assertion is signed, the exemption returns.
+4. **A stale `GET()` against a carried grant is discarded, not thrown.** A
+   declaration about any other binding while the id is carried is a
+   reference from before the reload, not two live functions colliding: it
+   grants nothing (#3237, fail closed) and leaves the provisional grant as
+   it is — still dispatching, gate still on. The two-references throw is
+   kept for the genuine collision (no carried grant at the id).
+5. **Provisional chains and never self-upgrades.** A further rebind of a
+   carried id stays carried; only (3) upgrades it.
+6. **Production is byte-for-byte unchanged.** Every rebind revokes; the
+   carried set is always empty. The carve-out is under the runtime `DEV`
+   flag, so a build whose packaging cannot replace `_SOLID_DEV_` selects it
+   through `setServerFunctionsDev`.
+
+Pinned in `server-functions-dev-rebind-grant` (carry, origin gate on a
+carried id, re-declaration upgrade, stale re-declaration, chained rebinds,
+stale-grant refusal, production revocation).
+
+## Ruling — `undefined` before a trailing string (#3622, 2026-09-23)
+
+The bound fast path (`action.with(id)` posting a body: leading arguments in
+`?args=` as JSON, `undefined` coerced to `null` as in the router-rendered
+action url) admitted a trailing plain string, because `getHeadersAndBody`
+gives strings a natural encoding. A string call reaches that path only when
+the JSON fast path refused the list — in practice only over a leading
+`undefined` — so `search(1, undefined, "milk")` ran with `limit = null` and
+the default parameter never applied, rich arguments or not. Resolved:
+
+1. **The fast path is for body-like objects only** — FormData,
+   URLSearchParams, File, Blob, ArrayBuffer, Uint8Array. A trailing string is
+   excluded; those bound calls keep their `?args=[...,null]` shape.
+2. **`undefined` otherwise rides the codec, like any other `undefined`
+   argument.** With `enableRichArguments()` the function receives a real
+   `undefined`; under the default config the call rejects with the existing
+   "sent as JSON by default" error, exactly as `search(1, undefined)` does.
+   The fast path was the exception, not the rule; a default-config app that
+   observed `null` was relying on the defect.
+
+Pinned in `server-functions-undefined-arguments` (default-config refusal,
+rich-argument delivery, plain-JSON string call, FormData/URLSearchParams/File
+controls).
 
 ## Extraction and merge discipline
 

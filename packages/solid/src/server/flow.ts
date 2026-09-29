@@ -11,9 +11,11 @@ import {
   runWithOwner,
   setContext,
   RevealGroupContext,
-  lazyView
+  lazyView,
+  ownerId
 } from "./signals.js";
 import { createLoadingBoundary } from "./hydration.js";
+import { IS_DEV, IS_OBSERVE, devCheck } from "./diagnostics.js";
 import { sharedConfig } from "./shared.js";
 import type { Accessor, RevealOrder } from "./signals.js";
 import type { Element as SolidElement, RowBlock } from "../types.js";
@@ -350,7 +352,11 @@ export function Errored(props: {
     () => props.children,
     (err, reset) => {
       const f = props.fallback;
-      return typeof f === "function" && f.length ? f(err, reset) : f;
+      // Called whatever its arity, under the boundary's output owner —
+      // mirrors the client: a zero-arity thunk handed back unresolved was
+      // built by the consuming hole inside the ssr() walk, on the enclosing
+      // counter, after every scoped sibling had reserved its slot (#3620).
+      return typeof f === "function" ? f(err, reset) : f;
     }
   ) as unknown as SolidElement;
 }
@@ -380,9 +386,13 @@ export function Loading(props: {
 }): any {
   // Called inside a running block (uncompiled view): defer to where it renders.
   if (inBlock()) return lazyView(() => Loading(props as any));
+  // Same condition as the client's Loading: the presence of `on` shapes the
+  // boundary's hydration ids, so both sides must decide it the same way.
+  const onOpt = "on" in props ? { on: () => props.on } : undefined;
   return createLoadingBoundary(
     () => props.children,
-    () => props.fallback
+    () => props.fallback,
+    onOpt
   ) as unknown as SolidElement;
 }
 
@@ -430,7 +440,8 @@ export type RevealProps = {
  */
 export function Reveal(props: RevealProps): SolidElement {
   const o = createOwner();
-  const id = o.id!;
+  // Own, just-created owner — never a swapped hole scope.
+  const id = ownerId(o)!;
   const order: RevealOrder = props.order ?? "sequential";
   const collapsed = order === "sequential" && !!props.collapsed;
 
@@ -442,10 +453,16 @@ export function Reveal(props: RevealProps): SolidElement {
       const reg = parentGroup.register(id);
       collapsedByParent = reg.collapseFallback;
       // Natural has no coordination requirement — it degrades cleanly to sync rendering.
-      if (order === "together" || collapsed)
-        console.warn(
-          "Nested <Reveal> with collapsed/together won't coordinate correctly with renderToString. Use renderToStream for full support."
-        );
+      if (IS_DEV && (order === "together" || collapsed))
+        devCheck({
+          code: "REVEAL_IN_RENDER_TO_STRING",
+          kind: "ssr",
+          severity: "warn",
+          message:
+            "[REVEAL_IN_RENDER_TO_STRING] Nested <Reveal> with collapsed/together won't coordinate " +
+            "correctly with renderToString. Use renderToStream for full support.",
+          data: { order, collapsed }
+        });
     }
     let count = 0;
     return runWithOwner(o, () => {
@@ -510,6 +527,26 @@ export function Reveal(props: RevealProps): SolidElement {
     heldByParent = reg.held;
   }
 
+  // Observe tier: a leaf's `onReveal` (see `ServerRevealGroup.register`),
+  // fired as its swap is issued. Only the observe/dev boundary registers
+  // one, so the plumbing is gated on the tier constant and folds out of the
+  // prod artifact entirely (the spec pins it), not merely left unallocated.
+  let revealHooks: Map<string, () => void> | undefined;
+
+  // Every leaf swap this group issues goes through here, so the boundary
+  // behind each key learns the moment it was revealed.
+  function revealLeaves(leafKeys: string[]) {
+    ctx.revealFragments?.(leafKeys);
+    if (!IS_OBSERVE || revealHooks === undefined) return;
+    for (const key of leafKeys) {
+      const hook = revealHooks.get(key);
+      if (hook !== undefined) {
+        revealHooks.delete(key);
+        hook();
+      }
+    }
+  }
+
   function notifyParentIfDone() {
     if (registering || notifiedParentDone) return;
     if (parentGroup && resolved.size === keys.length) {
@@ -542,7 +579,7 @@ export function Reveal(props: RevealProps): SolidElement {
       // A composite that we're walking past must be activated so it drains its
       // own stash (the inner subtree's stashed swaps).
       if (composites.has(k)) activateComposite(k);
-      else ctx.revealFragments?.([k]);
+      else revealLeaves([k]);
       frontier++;
     }
     if (frontier < keys.length) {
@@ -560,7 +597,7 @@ export function Reveal(props: RevealProps): SolidElement {
     // into every inner composite (they're minimally ready too, so this releases
     // their own stashes in one pass).
     if (stash.length) {
-      ctx.revealFragments?.([...stash]);
+      revealLeaves([...stash]);
       stash.length = 0;
     }
     composites.forEach((_, key) => activateComposite(key));
@@ -574,7 +611,7 @@ export function Reveal(props: RevealProps): SolidElement {
     // where natural does not hold composites back. `activateComposite` is
     // idempotent, and each inner's own order governs when its leaves reveal.
     if (stash.length) {
-      ctx.revealFragments?.([...stash]);
+      revealLeaves([...stash]);
       stash.length = 0;
     }
     composites.forEach((_, key) => activateComposite(key));
@@ -584,10 +621,13 @@ export function Reveal(props: RevealProps): SolidElement {
   return runWithOwner(o, () => {
     setContext(RevealGroupContext, {
       id,
-      register(key: string, options?: { onActivate?: () => void }) {
+      register(key: string, options?: { onActivate?: () => void; onReveal?: () => void }) {
         keys.push(key);
         const isComposite = !!options?.onActivate;
         if (isComposite) composites.set(key, options!.onActivate!);
+        else if (IS_OBSERVE) {
+          if (options?.onReveal) (revealHooks ||= new Map()).set(key, options.onReveal);
+        }
         const selfCollapse = order === "sequential" && collapsed && keys.length > 1;
         const collapseFallback = collapsedByParent || selfCollapse;
         // Track leaf keys that render collapsed so we can emit revealFallbacks
@@ -622,7 +662,7 @@ export function Reveal(props: RevealProps): SolidElement {
             // until naturalRelease() drains it.
             stash.push(key);
           } else if (order === "natural") {
-            ctx.revealFragments?.([key]);
+            revealLeaves([key]);
           }
           // sequential: no stash needed — advanceFrontier re-reads `resolved`
           // when we're released (if held) or runs inline below.

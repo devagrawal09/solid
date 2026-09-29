@@ -26,10 +26,15 @@ class Node {
     this.v = undefined;
     this.ev = null;
   }
-  // Delegated handlers are assigned as `el.$$click = handler`.
-  set $$click(handler) {
+  // Delegated handlers are assigned as `el._$$click = handler` (upstream
+  // 6d2bdeb5 moved the key off Solid 1's `$$click`, which older compiled
+  // output still uses).
+  set _$$click(handler) {
     this.ev = handler;
     listeners.push(handler);
+  }
+  set $$click(handler) {
+    this._$$click = handler;
   }
 }
 function node() {

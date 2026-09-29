@@ -4,6 +4,20 @@
 // the function body never reaches this bundle. Hoisted from SolidStart's
 // fns/client.ts with neutral header names and a configurable endpoint.
 import { REVALIDATE_HEADER } from "../../src/response.js";
+import { observeCall } from "../../src/observe.js";
+
+// Replaced per build (see src/observe.ts): the observe emitter and its
+// wrapper fold out of the prod artifact behind it.
+const IS_OBSERVE = "_SOLID_OBSERVE_" as unknown as boolean;
+// Replaced per build too; dev-only diagnostics fold out behind it.
+const IS_DEV = "_SOLID_DEV_" as unknown as boolean;
+// Observe tier: the call's observation rides the per-call options down to
+// `createRequest`, where the dispatched request takes its final shape —
+// the way a live loop's wire slot rides (LIVE_WIRE) — and is lifted off
+// before the init is built. A trailing parameter through `initializeResponse`
+// and its five `createRequest` sites would cost the prod artifact bytes for a
+// value it never carries; every read of this key sits behind `IS_OBSERVE`.
+const CALL_OBSERVATION = Symbol("solid.CallObservation");
 // Local bindings for the annotations below — the `export type` block only
 // re-exports these names without bringing them into scope, and declaration
 // emit would leave them dangling (implicit any for every consumer).
@@ -12,8 +26,12 @@ import {
   BODY_FORMAT_HEADER,
   BodyFormat,
   ERROR_HEADER,
-  INSTANCE_HEADER,
+  EventStreamReader,
+  LAST_EVENT_ID_HEADER,
+  LIVE_LOCAL,
+  LIVE_RESUME_FROM,
   LIVE_SOURCE,
+  LIVE_WIRE,
   REDIRECT_HEADER,
   SERVER_FUNCTION_INVOKE,
   SERVER_FUNCTION_METADATA,
@@ -21,18 +39,24 @@ import {
   UNKNOWN_HEADER,
   configureServerFunctionsCodec,
   decodeResponse,
+  deliverFlightData,
   extractBody,
-  getFlightDataConsumer,
   getFlightDataSourceIds,
   getHeadersAndBody,
+  hasFlightMetadata,
   getServerFunctionMetadata,
   getServerFunctionsCodec,
   isJSONSafe,
   isServerFunction,
+  MAX_GET_URL_LENGTH,
   parseServerFunctionAddress,
+  positionDigest,
   provideServerFunctionRPC,
+  serverFunctionActionUrlFor,
   serverFunctionAddress,
   serverFunctionDataAddress,
+  serverFunctionLiveAddress,
+  serverFunctionUrlFor,
   withMeta
 } from "./shared.js";
 
@@ -48,18 +72,25 @@ export {
   // shared built instance by construction.
   ChunkReader,
   ERROR_HEADER,
+  EVENT_STREAM_HEARTBEAT,
+  EventStreamReader,
   FLASH_COOKIE,
-  INSTANCE_HEADER,
+  LAST_EVENT_ID_HEADER,
+  // the live loop's wire slot: the frames transport reads it off the
+  // handler ctx to run a frame stream under the loop's lifetime
+  LIVE_WIRE,
   REDIRECT_HEADER,
   SERVER_FUNCTION_INVOKE,
   SINGLE_FLIGHT_HEADER,
   UNKNOWN_HEADER,
   clearFlashCookie,
   createChunk,
+  createEventChunk,
   decodeErrorHeaderValue,
   decodeRedirectHeaderValue,
   decodeResponse,
   decodeResponsePayload,
+  deliverFlightData,
   deserializeStream,
   encodeErrorHeaderValue,
   frameAddress,
@@ -68,8 +99,11 @@ export {
   getServerFunctionMetadata,
   getServerFunctionsCodec,
   hasFlashCookie,
+  hasFlightMetadata,
   invoke,
+  isEventStream,
   isServerFunction,
+  positionDigest,
   // the rich-args entry's codec write half: its bundled form (solid-web's
   // server-functions/dist/rich-args.js) resolves shared.js imports here so
   // the codec config it reads is the shared built instance
@@ -124,6 +158,19 @@ export interface ServerFunctionsClientConfig {
    * reference `url`s (e.g. form actions) and client fetches both derive
    * from it. Prefix it when the app serves from a base path
    * (e.g. `` `${BASE_URL}_server` ``).
+   *
+   * An absolute URL (`"https://api.example.com/_server"`) targets a handler
+   * on another origin — for a client-only build served from elsewhere: a
+   * static site, a browser extension, a WebView (`capacitor://localhost`)
+   * whose local server owns every path on its own hostname. The call is
+   * then cross-origin, and the server admits it only when its
+   * `configureServerFunctionsServer({ csrf: { origin } })` allowlist names
+   * the page's origin; it answers with the CORS headers the browser needs
+   * (`Access-Control-Allow-Origin`, the preflight, the protocol's headers
+   * exposed). Authenticate such a client with a bearer token through
+   * `prepareRequest` rather than cookies; cookies travel cross-site only
+   * with a `credentials: "include"` init, `SameSite=None; Secure` on the
+   * cookie, and `csrf.allowCredentials` on the server.
    * @default "/_server"
    */
   endpoint?: string;
@@ -137,7 +184,7 @@ export interface ServerFunctionsClientConfig {
    * Sends every server-function request — retries, telemetry, a test
    * double, or an app's own route. Always called as `(address, init)`, the
    * address relative to the document as the global one receives it, so
-   * `parseServerFunctionUrl` reads the id back out for telemetry. `null`
+   * `parseServerFunctionActionUrl` reads the id back out for telemetry. `null`
    * restores the global.
    *
    * ```ts
@@ -148,9 +195,10 @@ export interface ServerFunctionsClientConfig {
    *
    * Forward `init` — the call's `signal` rides on it, and dropping it voids
    * both the caller's abort and the teardown a live source's `break`
-   * performs. Keep the call same-origin, since a cross-origin send is
-   * stamped `Sec-Fetch-Site: cross-site` and the handler's origin gate
-   * refuses it, and hand back what the peer answered, unread.
+   * performs. Keep the call on the configured `endpoint`'s origin: a send
+   * to any other is stamped `Sec-Fetch-Site: cross-site`, and the handler
+   * admits it only when its `csrf.origin` allowlist names the page's
+   * origin (see `endpoint`). Hand back what the peer answered, unread.
    *
    * A retrying wrapper may re-send a request that got NO response; it must
    * never replay one whose response ended. A response that dies mid-body may
@@ -195,6 +243,17 @@ export interface ServerFunctionsClientConfig {
       response: Response,
       ctx: { id: string; meta: unknown; args: unknown[]; context: unknown }
     ): unknown;
+    /**
+     * What a `live` (re)connect of the call resumes from, when the handler
+     * shows it: `position` becomes the request's `Last-Event-ID`, `headers`
+     * ride beside it (a frames handler's have-list). Asked per connect;
+     * `undefined` when the handler holds nothing for the call.
+     */
+    resume?(info: {
+      id: string;
+      meta: unknown;
+      args: unknown[];
+    }): { position?: string; headers?: Record<string, string> } | undefined;
   };
   /**
    * Encoder for argument lists JSON can't carry faithfully. JSON-safe args
@@ -204,26 +263,6 @@ export interface ServerFunctionsClientConfig {
    */
   serializeArgs?(args: unknown[]): string | Promise<string>;
 }
-
-export interface ServerFunctionRequestCall {
-  type: "request";
-  id: string;
-  instance: string;
-  request: Request;
-  meta: ServerFunctionMetadata | undefined;
-  time: number;
-}
-
-export interface ServerFunctionResponseCall {
-  type: "response";
-  id: string;
-  instance: string;
-  response: Response;
-  meta: ServerFunctionMetadata | undefined;
-  time: number;
-}
-
-export type ServerFunctionCall = ServerFunctionRequestCall | ServerFunctionResponseCall;
 
 /** Wire-state transitions a live call's iterable can report. */
 export type LiveSourceStatus = "connected" | "reconnecting" | "closed";
@@ -257,66 +296,83 @@ const config = {
   serializeArgs: undefined
 };
 
-const CALL_OBSERVERS = new Set();
-
-function notifyCallObservers(type, id, instance, value, meta) {
-  if (CALL_OBSERVERS.size === 0) return;
-  const field = type === "request" ? "request" : "response";
-  const time = performance.now();
-  for (const observer of new Set(CALL_OBSERVERS)) {
-    try {
-      observer({ type, id, instance, [field]: value.clone(), meta, time });
-    } catch (error) {
-      console.error(error);
-    }
-  }
-} /**
- * Observes cloned requests and responses without handling them. Subscribe
- * from devtools; do not use this to replace `prepareRequest` /
- * `responseHandler`. The server entry exports a no-op of the same name so
- * isomorphic `@solidjs/web/server-functions` imports resolve.
+/**
+ * The url a `GET()` reference's own call requests — the address to preload
+ * (`<link rel="preload" as="fetch">`), prefetch, warm in a service worker, or
+ * fetch by hand — built the way the transport builds it, so a fetch of it IS
+ * the call and matches the reference's later call in every cache that keys
+ * on the url. Arguments ride the query as they do on the wire (`?args=`,
+ * JSON), and must be JSON-safe here: the codec's encoding is asynchronous,
+ * and a url rendered as a value cannot wait for it. Resolved against the
+ * configured endpoint. The answer at this url is the transport's (codec
+ * shape) — read one by hand with `decodeResponse`.
+ *
+ * Defined for declared reads only. A reference on the default transport
+ * POSTs, and a POST is not described by its url; this throws with a pointer
+ * (declare `GET(fn)`, or start the call with `invoke(fn, { priority: "low"
+ * }, ...args)`). Also throws when the url would be long enough for the call
+ * to fall back to POST — a url you hold is always one the transport would
+ * request.
+ *
+ * ```tsx
+ * const getUser = GET(async (id: string) => { "use server"; ... });
+ * <link rel="preload" as="fetch" crossorigin href={serverFunctionUrl(getUser, id)} />
+ * ```
+ *
+ * A `live(GET(fn))` reference's call connects at the live address, so that
+ * is the url returned for one (`<endpoint>/live/<id>[?args=...]`): a
+ * standing event stream of the answer — fetch it by hand (`curl -N`) to
+ * watch it; do not preload or prefetch it, which would open a stream
+ * nothing reads. Warm a live address by calling the reference (readers of
+ * one call share one connection).
+ *
+ * The form-post address is a different url — `fn.url`, or
+ * `serverFunctionActionUrl` for one with bound arguments. The server entry
+ * exports the same function so isomorphic imports resolve.
  */
-export function observeServerFunctionCalls(
-  observer: (call: ServerFunctionCall) => void
-): () => void;
+export function serverFunctionUrl<A extends readonly unknown[]>(
+  fn: ServerFunction<A, any>,
+  ...args: A
+): string;
 
-export function observeServerFunctionCalls(observer) {
-  CALL_OBSERVERS.add(observer);
-  return () => CALL_OBSERVERS.delete(observer);
+/** The url a `GET()` reference's call requests: `<endpoint>/data/<id>[?args=...]` (`/live/` for a live one). */
+export function serverFunctionUrl(fn, ...args) {
+  return serverFunctionUrlFor(config.endpoint, fn, args);
 } /**
- * Builds the url a reference is called at, for integrations composing action
- * urls the runtime did not render — a router turning a bound action into a
- * `<form action>` for the no-JS path. `boundArgs` must be JSON-safe: the
- * server reads them the way it reads a form post's, and that convention has
- * no codec. Resolved against the configured endpoint, so a caller does not
- * have to know where the handler is mounted. The server entry exports the
- * same function so isomorphic `@solidjs/web/server-functions` imports resolve.
+ * Builds the plain-HTTP address of a function — what a `<form action>` posts
+ * to without the runtime — for integrations composing action urls the
+ * runtime did not render: a router turning a bound action into a form
+ * action for the no-JS path. Takes the reference, or its id for an
+ * integration that has only that (one reconstructing a callable from a
+ * server-rendered url, before the declaring module has loaded).
+ * `boundArgs` must be JSON-safe: the server reads them the way it reads a
+ * form post's, and that convention has no codec. Resolved against the
+ * configured endpoint, so a caller does not have to know where the handler
+ * is mounted. Without bound arguments this is `fn.url`.
+ *
+ * Not where the reference's own call goes — for that (preloading, a fetch by
+ * hand) see `serverFunctionUrl`. The server entry exports the same function
+ * so isomorphic `@solidjs/web/server-functions` imports resolve.
  */
-export function serverFunctionUrl(id: string, boundArgs?: readonly unknown[]): string;
+export function serverFunctionActionUrl(
+  fn: ServerFunction | string,
+  ...boundArgs: readonly unknown[]
+): string;
 
-/** Builds the url a reference is called at: `<endpoint>/<id>[?args=...]`. */
-export function serverFunctionUrl(id, boundArgs) {
-  const address = serverFunctionAddress(config.endpoint, id);
-  if (!boundArgs || !boundArgs.length) return address;
-  if (!isJSONSafe(boundArgs)) {
-    throw new Error(
-      "Bound arguments in an action url must be JSON-safe: the server reads them the way it " +
-        "reads a form post's, and that convention has no codec. Pass the value through the " +
-        "function's body, or call the reference instead of rendering a url for it."
-    );
-  }
-  return `${address}?args=${encodeURIComponent(JSON.stringify(boundArgs))}`;
+/** The plain-HTTP address of a function: `<endpoint>/<id>[?args=...]`. */
+export function serverFunctionActionUrl(fn, ...boundArgs) {
+  return serverFunctionActionUrlFor(config.endpoint, fn, boundArgs);
 } /**
  * Reads the function id back out of a server-rendered action url — the
- * deconstruction half of `serverFunctionUrl`, for an integration that meets an
- * action url before the module that declared it has loaded (a router
- * synthesizing an invocation for a server component's form). Answers `null`
- * when the url is not an address.
+ * deconstruction half of `serverFunctionActionUrl`, for an integration that
+ * meets an action url before the module that declared it has loaded (a
+ * router synthesizing an invocation for a server component's form). Answers
+ * `null` when the url is not an address.
  */
-export function parseServerFunctionUrl(url: string): string | null;
+export function parseServerFunctionActionUrl(url: string): string | null;
 
 /** Reads the function id back out of a server-rendered action url. */
-export function parseServerFunctionUrl(url) {
+export function parseServerFunctionActionUrl(url) {
   const parsed = parseServerFunctionAddress(
     new URL(url, globalThis.location?.href || "http://localhost").pathname,
     config.endpoint
@@ -377,14 +433,13 @@ export function configureServerFunctionsClient({
   if (serializeArgs !== undefined) config.serializeArgs = serializeArgs;
 }
 
-let INSTANCE = 0;
-
 // Longest url the GET transport will build before falling back to POST.
 // Every proxy, CDN and server in a request's path draws its own line — the
 // lowest in common use is around 2 KB — so the transport stays under the
 // smallest of them rather than discovering the limit as a 414 in production.
-// Measured on the absolute url, which is what those limits apply to.
-const MAX_GET_URL_LENGTH = 2000;
+// Measured on the absolute url, which is what those limits apply to. The
+// constant lives in shared.js: `serverFunctionUrl` refuses to render a url
+// the transport would not request, on both entries.
 
 // Fills the late-bound RPC seam (registry.js) with this transport's
 // surface. Called from createServerReference/GET — the code compiled
@@ -405,16 +460,20 @@ function provideRPC() {
 // A reconstructed callable's base is a rendered PLAIN-HTTP address
 // (`/_server/<id>?args=...`) — what a form posts to without the runtime.
 // The transport's own calls belong at the data address, where answers are
-// the codec's (#3094), so the data segment is spliced in ahead of the id;
-// mount, origin and the query (bound arguments) ride along untouched.
-function dataAddressFor(base) {
+// the codec's (#3094) — or at the live address, where they are the codec's
+// in event-stream framing — so the kind's segment is spliced in ahead of
+// the id; mount, origin and the query (bound arguments) ride along
+// untouched.
+function siblingAddressFor(base, kind) {
   const splitAt = base.search(/[?#]/);
   const path = splitAt < 0 ? base : base.slice(0, splitAt);
   const rest = splitAt < 0 ? "" : base.slice(splitAt);
   const slash = path.lastIndexOf("/");
-  if (path.endsWith("/data/", slash + 1)) return base; // already one
-  return `${path.slice(0, slash + 1)}data/${path.slice(slash + 1)}${rest}`;
+  if (path.endsWith(`/${kind}/`, slash + 1)) return base; // already one
+  return `${path.slice(0, slash + 1)}${kind}/${path.slice(slash + 1)}${rest}`;
 }
+const dataAddressFor = base => siblingAddressFor(base, "data");
+const liveAddressFor = base => siblingAddressFor(base, "live");
 
 function serverFunctionFailure(response, value) {
   // The labelled unknown-id 404 (#3110): the deployment that answered does
@@ -460,28 +519,53 @@ function parseRetryAfter(header) {
   return undefined;
 }
 
-async function createRequest(base, id, instance, options, meta) {
-  const headers = {
-    ...options.headers,
-    [INSTANCE_HEADER]: instance
-  };
+// A call is a read when it is GET-encoded (a cacheable url) or declared one
+// with `read: true` (a POST-shaped read: live sources, say — streams have no
+// envelope story). Flight hooks and the consumer delivery that mirrors them
+// are mutation policy, so both halves of the transport decide on this.
+function isReadCall(options) {
+  return !!options.read || (!!options.method && options.method.toUpperCase() === "GET");
+}
+
+async function createRequest(base, id, options, meta) {
+  const headers = { ...options.headers };
+  // A live loop's reconnect names where it left off. The one transport
+  // header a read may carry (see below): it rides only to the live address,
+  // which is `no-store` and never preloaded, so nothing keys on it.
+  const wire = options[LIVE_WIRE];
+  if (wire) {
+    options = { ...options };
+    delete options[LIVE_WIRE];
+    if (wire.position !== undefined) headers[LAST_EVENT_ID_HEADER] = wire.position;
+    // The resume's have-list (a frames handler's, see `responseHandler.resume`)
+    // rides beside the position, under the same rule.
+    if (wire.headers) Object.assign(headers, wire.headers);
+  }
+  // Observe tier: lift the call's observation off before the init is built
+  // (see CALL_OBSERVATION); it sees the final init below, after
+  // `prepareRequest` has had its say.
+  const observation = IS_OBSERVE ? options[CALL_OBSERVATION] : undefined;
+  if (observation) {
+    options = { ...options };
+    delete options[CALL_OBSERVATION];
+  }
+  // A GET-encoded call's identity is its url, and nothing else: caches key
+  // on it, and a `<link rel="preload" as="fetch">` is reused only by a
+  // fetch matching it exactly, headers included, so a read carries no
+  // header of the transport's own (#3406) — the scripted-caller signal is
+  // the data address (#3094), and cross-wire correlation is the trace
+  // context's job.
+  //
   // Subscribing to flight data IS the single-flight opt-in: with consumers
   // registered the transport asks the server for collection on every
   // mutation call; a consumer-less app never asks the server to do
   // collection work. The header value is the registered source ids — the
   // server runs only the collectors the client can consume; the unnamed
   // registration rides under its reserved id "true" (see
-  // getFlightDataSourceIds).
-  // GET-encoded calls are reads (cacheable URLs) and stay plain — folding
-  // per-request flight data into them would defeat caching. `read: true`
-  // marks a POST-shaped call as a read the same way (e.g. live sources:
-  // streams have no envelope story and flight hooks are mutation policy).
+  // getFlightDataSourceIds). Reads stay plain — folding per-request flight
+  // data into a cacheable url would defeat caching.
   const flightSources = getFlightDataSourceIds();
-  if (
-    flightSources.length > 0 &&
-    !options.read &&
-    (!options.method || options.method.toUpperCase() !== "GET")
-  ) {
+  if (flightSources.length > 0 && !isReadCall(options)) {
     headers[SINGLE_FLIGHT_HEADER] = flightSources.join(",");
   }
   let init = {
@@ -499,11 +583,12 @@ async function createRequest(base, id, instance, options, meta) {
     // spreading — used to silently drop the argument payload, the abort
     // signal and every protocol header, and the call still dispatched (as
     // a bare GET the handler answers 405, with nothing naming the cause).
-    // The transport headers are the sentinel: the instance header rides
-    // every call, so a returned init that lost it did not carry the
-    // original forward. Everything else stays the hook's to change — a
-    // deliberate body/signal replacement is in contract (streaming
-    // uploads), dropping the protocol is not.
+    // The method the transport set is the sentinel: it is the one field
+    // every call carries (a read has no body and no header of its own), and
+    // a fresh `{ headers }` has none — `fetch` would default it to GET and
+    // a POST call would dispatch without its payload. Everything else stays
+    // the hook's to change — a deliberate body/signal replacement is in
+    // contract (streaming uploads), dropping the protocol is not.
     if (prepared && prepared !== init) {
       if (typeof prepared !== "object") {
         throw new Error(
@@ -512,40 +597,30 @@ async function createRequest(base, id, instance, options, meta) {
             "init => ({ ...init, headers: { ...init.headers, ... } })"
         );
       }
-      if (!new Headers(prepared.headers).has(INSTANCE_HEADER)) {
+      if (
+        typeof prepared.method !== "string" ||
+        prepared.method.toUpperCase() !== init.method.toUpperCase()
+      ) {
         throw new Error(
-          "prepareRequest returned an init without the transport headers " +
-            `(${INSTANCE_HEADER}), which would send the call without its payload or ` +
-            "protocol. Spread the init it received: " +
-            "init => ({ ...init, headers: { ...init.headers, ... } })"
+          `prepareRequest returned an init without the transport's ${init.method} method, ` +
+            "which would send the call without its payload or protocol. Spread the init it " +
+            "received: init => ({ ...init, headers: { ...init.headers, ... } })"
         );
       }
     }
     init = prepared || init;
   }
+  // The send, as observed: the `"request"` record leaves from here — the
+  // final address and init, immediately before `fetch` receives them.
+  if (IS_OBSERVE && observation) observation.request(base, init);
   const send = config.fetch || fetch;
-  if (CALL_OBSERVERS.size === 0) return send(base, init);
-
-  // The send keeps the `(address, init)` shape it has on the path without
-  // observers — whether devtools are attached is not something a configured
-  // `fetch` should have to branch on — so what observers receive is a
-  // reconstruction of the dispatched request, not the object itself — built
-  // without a streaming body, which reconstructing would consume before the
-  // send could use it.
-  const request = new Request(new URL(base, globalThis.location?.href || "http://localhost"), {
-    ...init,
-    body: init.body instanceof ReadableStream ? undefined : init.body
-  });
-  notifyCallObservers("request", id, instance, request, meta);
-  const response = await send(base, init);
-  notifyCallObservers("response", id, instance, response, meta);
-  return response;
+  return send(base, init);
 }
 
-async function initializeResponse(base, id, instance, options, args, meta) {
+async function initializeResponse(base, id, options, args, meta) {
   // No args, skip serialization
   if (args.length === 0) {
-    return createRequest(base, id, instance, options, meta);
+    return createRequest(base, id, options, meta);
   }
   // A single argument with a natural HTTP encoding goes as-is
   if (args.length === 1) {
@@ -554,7 +629,6 @@ async function initializeResponse(base, id, instance, options, args, meta) {
       return createRequest(
         base,
         id,
-        instance,
         {
           ...options,
           body: result.body,
@@ -579,7 +653,6 @@ async function initializeResponse(base, id, instance, options, args, meta) {
       return createRequest(
         base,
         id,
-        instance,
         {
           ...options,
           body: JSON.stringify(args),
@@ -601,10 +674,12 @@ async function initializeResponse(base, id, instance, options, args, meta) {
   // handler prepends url arguments before natural-encoding bodies) and the
   // trailing argument IS the body. The same wire shape the no-JS fallback
   // produces, so bound form actions need no codec. `undefined` coerces to
-  // null exactly as it does in a rendered action url (JSON has none).
+  // null as it does in a router-rendered action url (JSON has none).
+  // Strings are excluded so an `undefined` before one reaches the codec.
   if (args.length > 1) {
     try {
-      const trailing = getHeadersAndBody(args[args.length - 1]);
+      const last = args[args.length - 1];
+      const trailing = typeof last !== "string" && getHeadersAndBody(last);
       const leading = args.slice(0, -1).map(arg => (arg === undefined ? null : arg));
       if (trailing && isJSONSafe(leading)) {
         const target =
@@ -615,7 +690,6 @@ async function initializeResponse(base, id, instance, options, args, meta) {
         return createRequest(
           target,
           id,
-          instance,
           {
             ...options,
             body: trailing.body,
@@ -635,7 +709,6 @@ async function initializeResponse(base, id, instance, options, args, meta) {
   return createRequest(
     base,
     id,
-    instance,
     {
       ...options,
       body: await serializeArguments(args),
@@ -653,8 +726,35 @@ async function initializeResponse(base, id, instance, options, args, meta) {
 // arguments for the handler's context. They differ for GET calls, whose
 // arguments ride pre-encoded in the url (wire args empty) — a handler keying
 // state by the call (function + arguments) must still see the real ones.
-async function fetchServerFunction(base, id, options, args, meta, callArgs = args) {
-  const instance = `server-function:${INSTANCE++}`;
+// Observe tier: the `"call"` record (`OBSERVE.records`, see `CallEvent`) —
+// the call as the caller awaited it, request through decode — and the
+// `"request"` record beside it (see `CallRequestEvent`), delivered from
+// `createRequest` at the send; with no listener for either the dispatch
+// runs bare, not even reading the clock. The wrapper
+// exists in the observe and dev artifacts only: `fetchServerFunction` below
+// is the dispatch itself where the literal folds, so prod pays neither the
+// extra frame nor the promise hop.
+async function observedFetch(base, id, options, args, meta, callArgs = args) {
+  const observation = observeCall(
+    id,
+    options.method && options.method.toUpperCase() === "GET" ? "GET" : "POST",
+    callArgs,
+    meta && meta.name
+  );
+  if (!observation) return dispatchServerFunction(base, id, options, args, meta, callArgs);
+  let result;
+  try {
+    result = await dispatchServerFunction(base, id, options, args, meta, callArgs, observation);
+  } catch (error) {
+    observation.settle("error", error);
+    throw error;
+  }
+  observation.settle("ok", result);
+  return result;
+}
+const fetchServerFunction = IS_OBSERVE ? observedFetch : dispatchServerFunction;
+
+async function dispatchServerFunction(base, id, options, args, meta, callArgs = args, observation) {
   // Captured synchronously at the call site (an async function body runs
   // sync up to its first await), so ambient call context is still live.
   const handler = config.responseHandler;
@@ -669,13 +769,21 @@ async function fetchServerFunction(base, id, options, args, meta, callArgs = arg
   // owns the wire, and cancellation stays theirs.
   const controller = options.signal ? undefined : new AbortController();
   if (controller) options = { ...options, signal: controller.signal };
+  // See CALL_OBSERVATION: the observation rides to `createRequest`.
+  if (IS_OBSERVE && observation) options = { ...options, [CALL_OBSERVATION]: observation };
 
-  const response = await initializeResponse(base, id, instance, options, args, meta);
+  const response = await initializeResponse(base, id, options, args, meta);
+  if (IS_OBSERVE && observation) observation.response(response);
 
   // The integration seam sees the response first: a handler that claims it
-  // (returns non-undefined) owns the call's result.
+  // (returns non-undefined) owns the call's result — and, when a `live` loop
+  // made the call, its lifetime: the loop's wire slot rides along (see
+  // LIVE_WIRE) so the handler can read the body through the loop's reader
+  // and hang the connection's end on the slot as the decoder would.
   if (handler) {
-    const handled = handler.handle(response, { id, meta, args: callArgs, context });
+    const ctx = { id, meta, args: callArgs, context };
+    if (options[LIVE_WIRE]) ctx[LIVE_WIRE] = options[LIVE_WIRE];
+    const handled = handler.handle(response, ctx);
     if (handled !== undefined) return handled;
   }
 
@@ -698,55 +806,72 @@ async function fetchServerFunction(base, id, options, args, meta, callArgs = arg
   // nothing.
   const failed = response.headers.has(ERROR_HEADER);
 
-  // Single-flight responses: with a registered consumer the transport owns
-  // the unwrap — the standardized `{ value, data }` body is decoded, the
-  // data is delivered (with the response as envelope context: redirect
-  // location, revalidation keys, status), and `value` returns to the
-  // caller as if the call were plain. The response header names the folded
-  // sources; `data` is the keyed envelope and each slice goes to its
-  // source's consumer (the unnamed one subscribes under the reserved id
-  // "true"). Error semantics mirror the passthrough path below: responses
-  // carrying integration metadata (the redirect carrier/X-Revalidate) are
-  // control flow for the consumer to interpret, bare error-tagged ones
-  // throw the value.
-  if (response.headers.has(SINGLE_FLIGHT_HEADER)) {
-    const folded = response.headers.get(SINGLE_FLIGHT_HEADER).split(",");
-    const consumers = folded
-      .map(source => [source, getFlightDataConsumer(source)])
-      .filter(([, consumer]) => consumer);
-    if (consumers.length > 0) {
+  // Mutation responses with registered flight consumers: the transport owns
+  // the unwrap, and the consumers own what the response MEANS beyond its
+  // value. Two things reach them, on one delivery:
+  //
+  // - Folded data: the standardized `{ value, data }` body is decoded and
+  //   each slice of the keyed envelope goes to its source's consumer (the
+  //   unnamed one subscribes under the reserved id "true"); the response
+  //   header names the folded sources.
+  // - Integration metadata — the redirect carrier and `X-Revalidate` keys —
+  //   is envelope-level: it describes what the mutation did to every cache
+  //   on the page (navigate here, these keys went stale), not a slice of
+  //   data for one of them. So a response carrying it is delivered to EVERY
+  //   registered consumer, folded or not, its slice `undefined` where the
+  //   server folded none for it. An integration that subscribed applies
+  //   redirects and revalidation without wrapping the call, and a redirect
+  //   the server collected no data for — a cross-origin target, a declined
+  //   or failing collector, no hook registered at all — still navigates
+  //   instead of landing on the caller as a raw `Response`.
+  //
+  // `value` returns to the caller as if the call were plain. Reads stay
+  // out of this: a GET (or `read: true`) response is the caller's data, and
+  // a read path that answers a redirect is the reading integration's to
+  // interpret in place (holding the read across the navigation, say), so
+  // it passes through whole below. Error semantics mirror that passthrough:
+  // metadata-bearing responses are control flow for the consumers, bare
+  // error-tagged ones throw the value.
+  //
+  // The delivery itself — which consumer gets which slice, in what order —
+  // is `deliverFlightData`, the one implementation every transport that can
+  // carry the envelope shares (the frames client's flight application
+  // decodes its envelope from `outcome` chunks and then calls the same
+  // function), so a mutation reads identically whichever body shape it
+  // arrived in. What stays here is the plain body's decode and the
+  // read-call exclusion, which are this transport's.
+  if (!isReadCall(options) && getFlightDataSourceIds().length > 0) {
+    const folded = response.headers.has(SINGLE_FLIGHT_HEADER);
+    const metadata = hasFlightMetadata(response);
+    if (metadata || folded) {
       // Decoded from the response ITSELF: the transport owns this body, the
       // consumers' contract says it arrives consumed (`FlightDataContext`),
       // and a clone would tee the whole envelope into a branch nobody reads
-      // (#3244).
-      const payload = response.body
+      // (#3244). Only a folded response carries the envelope; a metadata
+      // response the server folded nothing into is the plain value.
+      const decoded = response.body
         ? await extractBody(response, getServerFunctionsCodec())
         : undefined;
-      // Sequential, awaited delivery: caches are seeded before the caller
-      // sees the value, whichever source they subscribe through.
-      for (const [source, consumer] of consumers) {
-        await consumer(payload.data[source], { response });
+      const enveloped = folded && decoded !== undefined;
+      const value = enveloped ? decoded.value : decoded;
+      await deliverFlightData(response, enveloped ? decoded.data : undefined);
+      if (failed && !metadata) {
+        throw serverFunctionFailure(response, value);
       }
-      if (
-        failed &&
-        !response.headers.has(REDIRECT_HEADER) &&
-        !response.headers.has(REVALIDATE_HEADER)
-      ) {
-        throw serverFunctionFailure(response, payload.value);
-      }
-      return payload.value;
+      return value;
     }
   }
 
-  // Responses the caller's integration needs to see whole (redirects,
-  // revalidation, single-flight payloads without a registered consumer)
-  // pass through untouched — the integration decodes the body itself with
-  // `decodeResponse`. The runtime's redirects ride REDIRECT_HEADER (#3102;
-  // an authored `Location` on a forwarding status like 201 is data, not
-  // control flow, and decodes normally). A real 3xx status is a peer's
-  // control flow: fetch follows the followable set before the transport
-  // sees it, so one only arrives where something opted out of following —
-  // except 304, which is the answer to a conditional read, not navigation.
+  // Responses the caller's integration needs to see whole — redirects,
+  // revalidation and single-flight payloads on a read or with no consumer
+  // registered — pass through untouched; the integration decodes the body
+  // itself with `decodeResponse`. The runtime's redirects ride
+  // REDIRECT_HEADER (#3102; an authored `Location` on a forwarding status
+  // like 201 is data, not control flow, and decodes normally). A real 3xx
+  // status is a peer's control flow: fetch follows the followable set
+  // before the transport sees it, so one only arrives where something
+  // opted out of following — except 304, which is the answer to a
+  // conditional read, not navigation.
   if (
     response.headers.has(REDIRECT_HEADER) ||
     response.headers.has(REVALIDATE_HEADER) ||
@@ -791,7 +916,9 @@ async function fetchServerFunction(base, id, options, args, meta, callArgs = arg
   // returned above — so a clone would only tee it into a branch nobody
   // reads, which queues the whole payload for the life of the read.
   // `decodeResponse` keeps its clone for integrations, who still own theirs.
-  const result = response.body ? await extractBody(response, getServerFunctionsCodec()) : undefined;
+  const result = response.body
+    ? await extractBody(response, getServerFunctionsCodec(), options[LIVE_WIRE])
+    : undefined;
   if (failed) {
     throw serverFunctionFailure(response, result);
   }
@@ -860,18 +987,20 @@ export function createServerReference(id, name, base) {
     // boundary at hydration time) answers without a promise — so async
     // consumers (dynamic under a hydrating Loading) never observe a pending
     // beat that would commit them to a fallback and discard SSR'd content.
+    const send = () =>
+      fetchServerFunction(
+        base ? dataAddressFor(base) : serverFunctionDataAddress(config.endpoint, id),
+        id,
+        invokeOptions ? { ...invokeOptions } : {},
+        args,
+        metadata
+      );
     const handler = config.responseHandler;
-    if (handler && handler.intercept) {
+    if (handler && handler.intercept && !adoptedCall(invokeOptions)) {
       const hit = handler.intercept({ id, meta: metadata, args });
-      if (hit !== undefined) return hit;
+      if (hit !== undefined) return localOrSend(hit, send);
     }
-    return fetchServerFunction(
-      base ? dataAddressFor(base) : serverFunctionDataAddress(config.endpoint, id),
-      id,
-      invokeOptions ? { ...invokeOptions } : {},
-      args,
-      metadata
-    );
+    return send();
   };
   const fn = (...args) => run(args);
   fn[SERVER_FUNCTION_METADATA] = metadata;
@@ -965,12 +1094,20 @@ export function GET(fn) {
   // { signal })` goes over the query encoding, POST fallback included.
   const run = async (args, invokeOptions) => {
     const handler = config.responseHandler;
-    if (handler && handler.intercept) {
+    if (handler && handler.intercept && !adoptedCall(invokeOptions)) {
       const hit = handler.intercept({ id, meta: metadata, args });
-      if (hit !== undefined) return hit;
+      if (hit !== undefined) return localOrSend(hit, () => send(args, invokeOptions));
     }
+    return send(args, invokeOptions);
+  };
+  const send = async (args, invokeOptions) => {
     const opts = invokeOptions || {};
-    const address = serverFunctionDataAddress(config.endpoint, id);
+    // A live loop calling through the declaration is the third caller kind
+    // and gets the third address (see serverFunctionLiveAddress); the query
+    // encoding and the POST fallback are the same at either.
+    const address = opts[LIVE_WIRE]
+      ? serverFunctionLiveAddress(config.endpoint, id)
+      : serverFunctionDataAddress(config.endpoint, id);
     if (!args.length) {
       return fetchServerFunction(address, id, { ...opts, method: "GET" }, [], metadata, args);
     }
@@ -1003,6 +1140,41 @@ export function GET(fn) {
   });
   // the declaration itself is a metadata write like any other
   return withMeta(wrapped, { method: "GET" });
+}
+
+// Dev-only: the open live connections on this page, by function id. `live`
+// holds one connection per source for as long as the source is alive, and
+// a browser allows six per origin under HTTP/1.1 — the seventh request to
+// the origin (a navigation, a fetch, an image) waits behind them. HTTP/2 is
+// part of `live`'s precondition; the warning fires once, when the sixth
+// connection opens on a page whose own document came over HTTP/1.x (the
+// resource timing entry for a live response only exists once it has ended,
+// so the navigation's protocol stands in for the origin's).
+const openLiveConnections = IS_DEV ? new Map() : undefined;
+let warnedHttp1 = false;
+function trackLiveConnection(id, open) {
+  const count = openLiveConnections.get(id) || 0;
+  if (open) openLiveConnections.set(id, count + 1);
+  else if (count > 1) openLiveConnections.set(id, count - 1);
+  else openLiveConnections.delete(id);
+  if (!open || warnedHttp1) return;
+  let total = 0;
+  for (const n of openLiveConnections.values()) total += n;
+  if (total <= 5) return;
+  const navigation =
+    typeof performance !== "undefined" && typeof performance.getEntriesByType === "function"
+      ? performance.getEntriesByType("navigation")[0]
+      : undefined;
+  const protocol = navigation && navigation.nextHopProtocol;
+  if (typeof protocol !== "string" || !/^http\/1(\.[01])?$/.test(protocol)) return;
+  warnedHttp1 = true;
+  const names = [...openLiveConnections].map(([fnId, n]) => (n > 1 ? `${fnId} ×${n}` : fnId));
+  console.warn(
+    `live: ${total} live connections are open (${names.join(", ")}) and this page was served ` +
+      `over ${protocol}. Browsers allow six connections per origin under HTTP/1.1, so the next ` +
+      `request to this origin — a navigation, a fetch, an image — waits behind them. live ` +
+      `requires HTTP/2: the dev server speaks it with \`server.https\`; production hosts do by default.`
+  );
 } /**
  * A live reference: calling it opens an iteration and hands back the
  * reconnecting iterable ITSELF, synchronously — not a promise of one (the
@@ -1096,6 +1268,28 @@ export function live<A extends readonly any[], R>(
  * const price = createMemo(() => src);
  * ```
  */
+/**
+ * A local hit's resolution: a synchronous hit IS the answer; a deferred hit
+ * (a promise — the integration's answer has not landed yet, e.g. a boundary
+ * the document is still delivering) answers when it settles, and settling
+ * to nothing is a miss after all — the call goes to the wire then.
+ */
+function localOrSend(hit, send) {
+  if (hit === null || typeof hit.then !== "function") return hit;
+  return hit.then(answer => (answer === undefined ? send() : answer));
+}
+
+/**
+ * Whether a call is a `live` iteration's connect AFTER the document's
+ * answer was yielded (the wire slot rides on the invoke options, see
+ * LIVE_WIRE): the intercept that answered it locally must not answer
+ * again — this connect is the one that goes to the wire.
+ */
+function adoptedCall(options) {
+  const wire = options && options[LIVE_WIRE];
+  return !!(wire && wire.adopted);
+}
+
 export function live(fn) {
   if (!isServerFunction(fn)) {
     throw new Error("live expects a server function reference");
@@ -1103,6 +1297,17 @@ export function live(fn) {
   const id = fn.id;
   const metadata = { ...getServerFunctionMetadata(fn), live: true };
   const makeIterable = (args, invokeOptions) => {
+    // The document's answer, SYNCHRONOUSLY at the call (the local-answer
+    // seam the plain proxy has, see dispatchServerFunction): an integration
+    // showing this call at t=0 — a frames boundary the page carries, adopted
+    // at hydration — answers without a wire. The answer rides on the
+    // iterable as LIVE_LOCAL: a hydrating node adopts it as its value now
+    // and takes over at its scope's release (solid-js's compute wrapper);
+    // any other consumer's iteration yields it first, then connects. Either
+    // way the connect that follows is not answered locally again (`adopted`).
+    const handler = config.responseHandler;
+    const local =
+      handler && handler.intercept ? handler.intercept({ id, meta: metadata, args }) : undefined;
     const iterable = {
       [LIVE_SOURCE]: true,
       [Symbol.asyncIterator]() {
@@ -1110,7 +1315,12 @@ export function live(fn) {
         let connected = false; // a connect succeeded once — later deaths reconnect
         let attempts = 0;
         let stopped = false;
-        let ended = false; // "closed" fires exactly once per iteration
+        let closed = false; // "closed" fires exactly once per iteration
+        // The current connection's lifetime signal (see LIVE_WIRE): set by
+        // the decoder when the answer arrived as a codec stream, undefined
+        // for an answer with no stream behind it (a void or intercepted
+        // answer), whose local iterator's end is then the whole story.
+        let ended;
         let timer, wake; // interruptible backoff sleep
         const DONE = { done: true, value: undefined };
         // The iteration owns a controller so ending consumption (`break`)
@@ -1120,8 +1330,53 @@ export function live(fn) {
         // cancels the CURRENT connection whichever attempt it is.
         const invokeSignal = invokeOptions && invokeOptions.signal;
         const controller = new AbortController();
+        // The iteration's wire slot (see LIVE_WIRE): the reader it opens
+        // records each event's `id:` as the position, and every (re)connect
+        // sends the position back as `Last-Event-ID` — a cursor for a source
+        // that named one, the runtime's value digest otherwise, which lets
+        // the server skip a first emission this iteration already holds.
+        // The reader is built here so that `live` is what carries it.
+        // `connection` is renewed per connect; the decoder hangs the body's
+        // end on it (see deserializeStream) — the lifetime signal below.
+        // A hydration takeover seeds the position from the value the page
+        // was served with (LIVE_RESUME_FROM, stamped by the hydrating node's
+        // compute wrapper), so a takeover that finds the same value on the
+        // server costs nothing on the wire. The iteration yields that value
+        // FIRST, before it connects: the server's digest-equal skip means the
+        // wire may never carry a first emission, and the node that re-ran its
+        // compute for the takeover has no other way to land — left pending,
+        // it holds every write of the tick that released it (the root pass's
+        // held writes replay in that same tick) until the source changes.
+        // Landing the value the consumer already holds is equality-quiet for
+        // a memo and a no-op reconcile for a projection.
+        let resume = iterable[LIVE_RESUME_FROM];
+        // The document's answer (see LIVE_LOCAL above): yielded first, like
+        // a resume value, and it marks the iteration adopted — the connect
+        // after it goes to the wire. A resume marks it too: the page already
+        // shows what a local answer would hand over.
+        let seed = iterable[LIVE_LOCAL];
+        const wire = {
+          position: resume !== undefined ? positionDigest(resume) : undefined,
+          connection: undefined,
+          adopted: resume !== undefined,
+          open: body => new EventStreamReader(body, wire)
+        };
+        // Ends handed over by connections that died while this iteration
+        // meant to go on: their open deferreds are left pending (the
+        // re-yielded answer supersedes them) until the iteration ends for
+        // good, when they are settled by HOW it ended — see emitClosed.
+        const ends = [];
+        const settle = (end, error) => {
+          try {
+            error !== undefined ? end.sweep() : end.close();
+          } catch {}
+        };
+        const settleAll = error => {
+          while (ends.length) settle(ends.pop(), error);
+        };
         const wireOptions = {
           ...invokeOptions,
+          [LIVE_WIRE]: wire,
           signal: invokeSignal
             ? AbortSignal.any([invokeSignal, controller.signal])
             : controller.signal
@@ -1141,12 +1396,36 @@ export function live(fn) {
             iterable.onstatus && iterable.onstatus(state, error);
           } catch {}
         };
+        // dev connection accounting (see trackLiveConnection); idempotent
+        // per connection so every road a connection ends by can call it
+        let counted = false;
+        const track = open => {
+          if (!IS_DEV || open === counted) return;
+          counted = open;
+          trackLiveConnection(id, open);
+        };
         const emitClosed = error => {
-          if (ended) return;
-          ended = true;
+          track(false);
+          // Ending for good: settle whatever is still open — the deferreds
+          // outlived deaths left pending, and the current connection's once
+          // its body ends (severed by the controller, or already done) — by
+          // how the iteration ended. BY ERROR (a 4xx, the caller's signal):
+          // fail them, so no consumer of a nested value hangs on a failure
+          // it needs to hear about. BY THE CONSUMER (`return()` — a memo
+          // re-invoking with new arguments) or by the source completing:
+          // nested streams complete and nested promises stay pending. Their
+          // readers are superseded by the next answer — reactivity moves
+          // everything downstream — and an error here would reach a child
+          // still attached to the old answer as a failure it did not cause
+          // (an AbortError from our own controller halting the page).
+          settleAll(error);
+          if (ended) ended.then(end => settle(end, error));
+          if (closed) return;
+          closed = true;
           emit("closed", error);
         };
         const closeIt = value => {
+          track(false);
           const current = it;
           it = undefined;
           if (current) {
@@ -1157,21 +1436,33 @@ export function live(fn) {
           }
         };
         const callOnce = () => {
+          const handler = config.responseHandler;
+          // What this connect resumes FROM, when the handler showing the
+          // call holds a ledger for it (a frames handler: the address's
+          // version ordinal as the position, its have-list as headers —
+          // §9.5 Resume request). Asked per connect, so a reconnect names
+          // what the page shows NOW; a handler with nothing for the call
+          // leaves the position to the reader's own cursor.
+          if (handler && handler.resume) {
+            const from = handler.resume({ id, meta: metadata, args });
+            wire.headers = from ? from.headers : undefined;
+            if (from && from.position !== undefined) wire.position = from.position;
+          }
           // A GET-composed reference is already a flight-free read with its
           // own query-string encoding — delegate through its invocation
-          // channel so the wire options (the combined signal included) reach
-          // its fetch. Otherwise call the transport directly so the POST is
-          // marked a read: live responses are streams, which have no
-          // single-flight envelope story (and flight collection is mutation
-          // policy).
+          // channel so the wire options (the combined signal and the wire
+          // slot, which moves it to the live address) reach its fetch.
+          // Otherwise call the transport directly, at the live address, with
+          // the POST marked a read: live responses are streams, which have
+          // no single-flight envelope story (and flight collection is
+          // mutation policy).
           if (metadata.method === "GET") return fn[SERVER_FUNCTION_INVOKE](args, wireOptions);
-          const handler = config.responseHandler;
-          if (handler && handler.intercept) {
+          if (handler && handler.intercept && !wire.adopted) {
             const hit = handler.intercept({ id, meta: metadata, args });
             if (hit !== undefined) return hit;
           }
           return fetchServerFunction(
-            fn.url,
+            liveAddressFor(fn.url),
             id,
             { ...wireOptions, read: true },
             args,
@@ -1180,11 +1471,30 @@ export function live(fn) {
           );
         };
         const pull = async () => {
+          if (resume !== undefined) {
+            const value = resume;
+            resume = undefined;
+            if (!stopped) return { done: false, value };
+          }
+          if (seed !== undefined) {
+            // A deferred local answer (the boundary is still arriving) is
+            // awaited: it lands with the reveal, and the connect follows it
+            // — never ahead of the document's own render. Settling to
+            // nothing is a miss after all: straight to the wire.
+            const value = typeof seed.then === "function" ? await seed : seed;
+            seed = undefined;
+            if (value !== undefined) {
+              wire.adopted = true;
+              if (!stopped) return { done: false, value };
+            }
+          }
           while (!stopped) {
             try {
               if (!it) {
+                const connection = (wire.connection = { ended: undefined });
                 const result = await callOnce();
                 connected = true;
+                ended = connection.ended;
                 // a plain-value answer is a one-value stream
                 it =
                   result !== null && typeof result === "object" && result[Symbol.asyncIterator]
@@ -1199,10 +1509,34 @@ export function live(fn) {
                   controller.abort();
                   return DONE;
                 }
+                track(true);
                 emit("connected");
               }
-              const r = await it.next();
-              if (r.done) {
+              // The answer is alive while its RESPONSE is (RFC 10, Lifetime):
+              // a nested stream or promise inside a yielded object keeps the
+              // connection open after the top-level iterable is done, and a
+              // body that ends on open deferreds is a death whichever level
+              // they sit at. So the read races the body's end — values still
+              // buffered win the race, the loop reads them first — and a
+              // finished top-level iterator waits for the end to say which
+              // it was: completion (nothing owed) completes the iteration;
+              // death reconnects and re-yields the whole answer.
+              const r = await (ended
+                ? Promise.race([it.next(), ended.then(end => ({ end }))])
+                : it.next());
+              if (r.end || r.done) {
+                const end = r.end || (ended && (await ended));
+                if (end && end.open > 0) {
+                  // a death this iteration will outlive: the open deferreds
+                  // stay pending until it ends for good (see ends); the
+                  // body's error goes down the reconnect path like a
+                  // rejected read would
+                  ends.push(end);
+                  throw end.error;
+                }
+                // completion: nothing is open, so settling is a no-op, but
+                // it is what a decoder without a live loop would have run
+                if (end) settle(end);
                 emitClosed();
                 return DONE;
               }
@@ -1253,7 +1587,7 @@ export function live(fn) {
                 emitClosed(error);
                 throw error;
               }
-              it = undefined;
+              closeIt();
               emit("reconnecting", error);
               await new Promise(resolve => {
                 wake = resolve;
@@ -1303,6 +1637,7 @@ export function live(fn) {
         };
       }
     };
+    if (local !== undefined) iterable[LIVE_LOCAL] = local;
     return iterable;
   };
   const wrapped = (...args) => makeIterable(args);

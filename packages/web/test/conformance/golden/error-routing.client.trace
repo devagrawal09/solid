@@ -16,8 +16,11 @@ caught boundary = NotFound(typed)
 html = <p class="err">NotFound</p>
 ## fix source and reset boundary
 write mode = "ok"
+read mode = "typed"
+run value(typed)
 read mode = "ok"
 run value(ok)
+caught boundary = NotFound(typed)
 html = <p>ok</p>
 ## synchronous throw routes to boundary
 write mode = "sync"

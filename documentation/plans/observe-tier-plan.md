@@ -60,14 +60,20 @@ byte-identical to today under every bundler.
   explicit `ownerPath`, and the server computes its own (P1).
 - **D5 — Split, don't extend.** `OBSERVE` = `{ diagnostics: { subscribe,
 capture, emit }, attribution: { install, installed, withInteraction },
-subjectOf }`; `DEV` = `{ hooks, getChildren, getSignals, getParent,
-getSources, getObservers, report, setConsoleFooter }`.
+records: { subscribe, observed, emit } }` (the live node travels as a
+  listener's second argument, not through a lookup); `DEV` = `{ hooks, getChildren, getSignals, getParent,
+getSources, getObservers, report, setConsoleFooter }`. _(As landed, then
+  pruned: `attribution.install` is internal to `@solidjs/signals` — only
+  `installed` is public, as an opaque presence check; `setConsoleFooter` is an
+  `@internal` seam `solid-js` imports, not a `DEV` member; `OBSERVE` also
+  carries `ownerPath(subject)`, and `DEV` carries `guideUrl(code)`.)_
 - **D6 — The engine is an entry, not a member.** `OBSERVE.attribution` is the
-  core's side only: the hook slot (`install(hooks)`, `installed`) and the
+  core's side only: the hook slot (`install(hooks)` — since made internal;
+  `installed` stays public — and
   interaction frame (`withInteraction`, which the web runtime calls on every
   dispatch and which is `fn()` with no engine installed). The engine —
-  `enable/disable/history/why/costs/waterfalls/holds/feedback/markFlight/
-format/formatOrigin` — is `@solidjs/signals/attribution` (re-exported as
+  `enable/disable/history(type)/why/costs/feedback/markFlight/
+formatRerun/formatOrigin` — is `@solidjs/signals/attribution` (re-exported as
   `solid-js/attribution`). Nothing reachable from the core index may import
   `core/attribution.ts`. Measured 2026-09-08: with the engine referenced
   statically from `OBSERVE.attribution` the observe CSR scenario was 23.79 KB
@@ -106,7 +112,7 @@ Site migration `__DEV__` → `__OBSERVE__` (everything not listed stays
 | `core/scheduler.ts`                                            | 223, 488, 1259, 1290                                                                  | hooks                             |
 | `core/action.ts`                                               | 140, 144, 147                                                                         | hooks                             |
 | `core/effect.ts`                                               | 210                                                                                   | hooks                             |
-| `core/graph.ts`                                                | 18, 194                                                                               | edge counters (`WIDE_WRITE`)      |
+| `core/graph.ts`                                                | 18, 194                                                                               | edge counters (`HUGE_FAN_OUT`)    |
 | `boundaries.ts`                                                | 334, 372                                                                              | hooks                             |
 | `map.ts`                                                       | 281, 290, 331 (hooks); 76, 102, 370 (name plumbing)                                   | hooks; labels                     |
 | `signals.ts`                                                   | 373, 1085 (`registerGraph` → `_owner` half); 515, 557, 612, 677, 1189 (name defaults) | labels                            |
@@ -180,7 +186,7 @@ skills and README text `DEV.attribution` → `OBSERVE.attribution`;
 
 ## PR B — serializable events, origin, engine diet
 
-The engine entry landed in PR A (D6). What remains is the engine's public
+The engine entry landed in PR A (D6). What remained was the engine's public
 record shape: `RerunEvent` drops the live `node` (`OBSERVE.subjectOf`-style
 lookup for in-process consumers), events gain `ts` and `origin`, and `origin`
 unifies client interaction and server request as the external cause of work
@@ -189,6 +195,68 @@ should also shed what a production consumer never calls (console formatters
 ride along with `enable()` today). Details in the sketch §4–§5; specified
 alongside server-dev-build-plan P1, which supplies the request half of
 `origin`.
+
+_Status (2026-09-16)._ Landed, in three pieces:
+
+- **`origin`** came through the Sentry workstream (`ChangeOrigin` /
+  `withOrigin`, stamped on `ChangeRecord`, `HoldEvent` and the client
+  `"call"` record; `OBSERVE.attribution.currentOrigin()` for wire layers; the
+  request half via server-dev-build-plan P1). The runtimes' records
+  (`OBSERVE.records`: boundary, invocation, call, frame) were designed
+  serializable from the start and already leave the process.
+- **`RerunEvent` is serializable as emitted.** `node` is gone; `nodeId` (the
+  engine's per-node id — the same one `ChangeOrigin.run` joins and the
+  cycle/relay checks key on) names the scope, stable across its runs in the
+  process and distinct between scopes, so unnamed effects still fold to one
+  scope offline. `OBSERVE.subjectOf` — the lookup diagnostics already had —
+  then answered for re-run records too, keyed by the record object for as long
+  as any consumer held it (the lifetime the node had when the record carried
+  it); since superseded — the lookup is gone, and the node arrives beside the
+  record as the listener's second argument (`OBSERVE.records.subscribe("rerun",
+(event, live) => …)`, `OBSERVE.diagnostics.subscribe((event, subject) =>
+…)`). `@solidjs/diagnostics` stores re-runs verbatim (as `RerunEvent`
+  itself — the `RerunRecord` alias it carried for a while is gone).
+- **Clocks: no per-record `ts`.** Every `at` the engine and the runtimes emit
+  is on the `performance.now()` clock, consistently; a second clock per
+  record would cost bytes on every record and drift against the first. The
+  anchor travels once instead: `DiagnosticsArtifact.timeOrigin` (format v7,
+  the process's `performance.timeOrigin`) makes every `at` in an artifact
+  absolute after the fact and lines a server capture up with the browser
+  session it served. In-process exporters keep doing `timeOrigin + at`
+  themselves (RFC 08 documents the contract).
+
+**Engine diet — measured, then done (2026-09-16, second PR).** The fold
+surface is named exports: `costs()`, `feedback()`, `why()`,
+`subscriptions()`, `formatRerun()`, `formatOrigin()` from
+`@solidjs/signals/attribution`; `attribution` keeps `enable`/`disable`/
+`subscribe`/`markFlight` and the ring buffers. Each fold module registers its
+accumulators with an internal fold seam (`registerFold`: rerun, hold,
+navigation, flightStart, flightLanded, fallback, reset) when evaluated, so
+under the package's `sideEffects: false` a records-only consumer ships neither
+the tables nor the work of filling them. Measured: the attribution scenario
+27,192 B, −1,150 B brotli; cap ratcheted to 27.25 KB. The formatters stayed
+in the engine — `log: true` prints through them and they are ~0.5 KB — so the
+diet is the folds. Tree-shake tests in `treeshake.test.ts` pin it from src and
+from `dist/observe`. The measurement that led here: Ranking the engine's functions by
+minified weight (esbuild, per top-level declaration): the console face
+(`formatRerun`/`formatCause`/`logRerun`) is ~1.7 KB minified, ~0.45 KB gz —
+4% of the engine's 11.7 KB gz — and `formatOrigin` another ~0.15 KB gz, which
+the spike's adapter calls for span names. The premise of the diet (formatters
+ride along) is true but small. The weight is spread across the checks (~15 KB
+min, a third), hold/interaction/navigation tracking, and the in-process query
+and fold surfaces (`costs`, `feedback`, `why`, `history`, ~3.5 KB min /
+~1.5 KB gz) — the last being what a production adapter that consumes records
+never calls. Shedding those needs the object split into tree-shakable named
+exports (`import { feedback } from "@solidjs/signals/attribution"`), an API
+change worth ~2 KB gz (17%). Deferred to a decision: it is the same shape
+freeze the record types just got, and better taken once than in pieces.
+
+**Idle wiring is now a cap.** `tests/observe-idle-cost.test.ts` runs one
+graph-heavy workload against the built prod and observe artifacts in one
+process, interleaved, best-of-k, and caps the observe/prod ratio at 1.25
+(measured 1.03–1.09 with no hooks installed; re-measured on a round over the
+cap so worker-thread contention does not fail it, a real regression does).
+`SIGNALS_TIER=observe pnpm bench` stays for the absolute number.
 
 ## Open questions
 

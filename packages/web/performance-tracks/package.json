@@ -1,0 +1,7 @@
+{
+  "main": "./dist/performance-tracks.js",
+  "module": "./dist/performance-tracks.js",
+  "types": "./types/index.d.ts",
+  "type": "module",
+  "sideEffects": false
+}

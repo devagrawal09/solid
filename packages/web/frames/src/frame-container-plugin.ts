@@ -7,6 +7,7 @@
  * the reactive core injects both halves. See frame-container-plugin.js.
  * @experimental
  */
+import { DESCEND, rewriteTree } from "./tree-rewrite.js";
 
 /** A container's border serialization: one subscribe() per consumer. */
 import { markFeature } from "./features.js";
@@ -58,6 +59,7 @@ export interface ContainerTraceMarker {
 /**
  * @type {{
  *   resolveTrace?: (value: unknown) => ({ subscribe(): AsyncIterable<any>, array: boolean } | undefined),
+ *   shareIterable?: (source: AsyncIterable<any>) => AsyncIterable<any>,
  *   materializeTrace?: (marker: { $tr: any, $ta?: number }) => unknown,
  *   streamOf?: (iterable: AsyncIterable<any>) => any,
  *   materialized: WeakMap<object, unknown>,
@@ -76,6 +78,21 @@ export function setContainerTraceResolver(fn: (value: unknown) => ContainerTrace
 /** Server half: install the reactive core's trace resolver. */
 export function setContainerTraceResolver(fn) {
   state.resolveTrace = fn;
+} /** Server half: install the reactive core's async-iterable sharer. */
+export function setAsyncIterableSharer(
+  fn: (source: AsyncIterable<any>) => AsyncIterable<any>
+): void;
+
+/**
+ * Server half: install the reactive core's async-iterable sharer (solid:
+ * `shareAsyncIterable`). A generator yields to ONE reader; the serializer
+ * pumping a value and a memo reading the same source inside it would split
+ * its yields between them. The sharer answers with a seat on a multicast
+ * of the source — every seat sees the whole sequence — and the border walk
+ * below swaps each async iterable it meets for one.
+ */
+export function setAsyncIterableSharer(fn) {
+  state.shareIterable = fn;
 } /** Client half: install the reactive core's trace materializer. */
 export function setContainerTraceMaterializer(fn: (marker: ContainerTraceMarker) => unknown): void;
 
@@ -129,49 +146,73 @@ export function isContainerTraced(value) {
 // per-instance Symbol() would silently never match across copies (the
 // envelope then serializes as `{}`: an empty object, no error anywhere).
 const TRACE = Symbol.for("solid.container-trace"); /**
- * Replace traced containers anywhere in a value with serialization
- * envelopes (copy-on-write). What the sink passes to the serializer —
- * seroval's own classification (constructor reads, array claims) runs
- * before plugins, so raw containers can't be intercepted reliably.
+ * A value's form at the serialization border (copy-on-write): traced
+ * containers become envelopes, async iterables become seats on a shared
+ * multicast. What a face passes to the serializer — seroval's own
+ * classification (constructor reads, array claims) runs before plugins, so
+ * raw containers can't be intercepted reliably, and a generator handed to
+ * seroval raw is consumed by seroval alone.
  */
-export function envelopeContainerTraces(value: unknown): unknown;
+export function toBorderForm(value: unknown, envelopeContainers: boolean): unknown;
 
 /**
- * Replace traced containers ANYWHERE in a value (a container can sit at any
- * depth of an argument — `{ filters: { user: proj } }` is one arg) with
- * their serialization envelopes. Copy-on-write: author objects are never
- * mutated, untouched subtrees pass through by reference. Only plain
- * objects/arrays are walked — anything exotic is either a container (probed
- * first, by WeakMap — property-read safe) or an app value the serializer
- * owns. No-op until the resolver is installed.
+ * A value's form at the serialization border. Two swaps, ANYWHERE in the
+ * value (a container or a stream can sit at any depth of an argument or a
+ * memo's answer — `{ filters: { user: proj } }`, `{ meta, progress: gen }`):
+ *
+ * - a traced container → its serialization envelope (`{ [TRACE] }`), when
+ *   `envelopeContainers` — the frame sink's slot-arg records, whose
+ *   receiving side materializes traces (the document face's memo values
+ *   don't opt in: no revival exists there yet, a marker literal would reach
+ *   the reading memo);
+ * - an async iterable → a seat on the source's shared multicast (see
+ *   setAsyncIterableSharer), every face: a generator yields to one reader,
+ *   and the serializer is rarely the only one (a memo reading `answer()
+ *   .progress` is the common case). A seat handed back in is left alone.
+ *   Seroval's own async carriers (its streams, ReadableStream) are not
+ *   touched.
+ *
+ * Copy-on-write: author objects are never mutated, untouched subtrees pass
+ * through by reference. Only plain objects/arrays are walked — anything
+ * exotic is a container (probed FIRST, by WeakMap — property-read safe), an
+ * iterable (probed under a guard: an unknown proxy's reads may throw), or
+ * an app value the serializer owns. No-op until the hooks are installed.
+ * A cyclic value is rewritten as a cycle (see rewriteTree).
  */
-export function envelopeContainerTraces(value) {
-  if (!state.resolveTrace || value == null || typeof value !== "object") return value;
-  const trace = state.resolveTrace(value);
-  if (trace) return { [TRACE]: trace };
-  if (Array.isArray(value)) {
-    let out = value;
-    for (let i = 0; i < value.length; i++) {
-      const next = envelopeContainerTraces(value[i]);
-      if (next !== value[i]) {
-        if (out === value) out = value.slice();
-        out[i] = next;
+export function toBorderForm(value, envelopeContainers) {
+  if (value == null || typeof value !== "object") return value;
+  const resolve = envelopeContainers ? state.resolveTrace : undefined;
+  const share = state.shareIterable;
+  if (!resolve && !share) return value;
+  return rewriteTree(
+    value,
+    v => {
+      if (resolve) {
+        const trace = resolve(v);
+        if (trace) return { [TRACE]: trace };
       }
-    }
-    return out;
+      // Before the plain-object walk: an iterable spelled as a literal
+      // (`{ [Symbol.asyncIterator]() {} }`) is a source, not a record.
+      if (share && isShareableIterable(v)) return share(v);
+      return DESCEND;
+    },
+    false
+  );
+}
+
+// An async iterable the sharer may take over: not one of seroval's own
+// async carriers (a seroval stream — `.on()`-shaped, not iterable, but
+// probed by its tag to be explicit; a ReadableStream, which seroval encodes
+// as itself). The probe reads one well-known symbol off an unknown exotic
+// value under a guard — a proxy whose reads throw is not ours.
+function isShareableIterable(value) {
+  try {
+    if (value.__SEROVAL_STREAM__ === true) return false;
+    if (typeof ReadableStream !== "undefined" && value instanceof ReadableStream) return false;
+    return typeof value[Symbol.asyncIterator] === "function";
+  } catch {
+    return false;
   }
-  if (Object.getPrototypeOf(value) === Object.prototype) {
-    let out = value;
-    for (const key of Object.keys(value)) {
-      const next = envelopeContainerTraces(value[key]);
-      if (next !== value[key]) {
-        if (out === value) out = { ...value };
-        out[key] = next;
-      }
-    }
-    return out;
-  }
-  return value;
 }
 
 // One live container per trace, however many places reference it: seroval's

@@ -1,6 +1,7 @@
+import { RECORD_TYPES } from "./records.js";
 import type { DiagnosticsArtifact } from "./types.js";
 
-export const ARTIFACT_FORMAT_VERSION = 4 as const;
+export const ARTIFACT_FORMAT_VERSION = 8 as const;
 
 /** Pretty JSON for humans and for checked-in golden files. */
 export function serializeArtifact(artifact: DiagnosticsArtifact): string {
@@ -20,10 +21,14 @@ export function artifactToJSONL(artifact: DiagnosticsArtifact): string {
       formatVersion: artifact.formatVersion,
       scenario: artifact.scenario,
       capturedAt: artifact.capturedAt,
+      timeOrigin: artifact.timeOrigin,
       durationMs: artifact.durationMs,
       diagnosticCount: artifact.diagnostics.length,
       rerunCount: artifact.attribution?.reruns.length ?? null,
-      holdCount: artifact.attribution?.holds.length ?? null
+      holdCount: artifact.attribution?.holds.length ?? null,
+      recordCounts: Object.fromEntries(
+        RECORD_TYPES.map(type => [type, artifact.records[type].length])
+      )
     })
   );
   for (const event of artifact.diagnostics) {
@@ -38,6 +43,13 @@ export function artifactToJSONL(artifact: DiagnosticsArtifact): string {
       lines.push(JSON.stringify({ type: "hold", ...hold }));
     }
     lines.push(JSON.stringify({ type: "feedback", ...artifact.attribution.feedback }));
+  }
+  // One line per record, its table's name as the discriminator — the same
+  // name the record rides `OBSERVE.records` under.
+  for (const type of RECORD_TYPES) {
+    for (const record of artifact.records[type]) {
+      lines.push(JSON.stringify({ type, ...record }));
+    }
   }
   return lines.join("\n") + "\n";
 }

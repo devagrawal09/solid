@@ -1,7 +1,7 @@
 {
   "name": "solid-js",
   "description": "Reactive JavaScript library for building user interfaces. Compiles JSX to real DOM with fine-grained signal-based updates — no virtual DOM.",
-  "version": "2.0.0-rc.8",
+  "version": "2.0.0-rc.11",
   "author": "Ryan Carniato",
   "license": "MIT",
   "homepage": "https://solidjs.com",
@@ -102,6 +102,10 @@
       "default": "./dist/attribution.js"
     },
     "./capabilities.json": "./capabilities.json",
+    "./internal": {
+      "types": "./types/internal.d.ts",
+      "default": "./dist/internal.js"
+    },
     "./package.json": "./package.json"
   },
   "scripts": {
@@ -125,7 +129,7 @@
     "performance"
   ],
   "dependencies": {
-    "@solidjs/signals": "^2.0.0-rc.8",
+    "@solidjs/signals": "^2.0.0-rc.11",
     "csstype": "^3.1.0",
     "seroval": "~1.6.7",
     "seroval-plugins": "~1.6.7"

@@ -1,5 +1,7 @@
 # Store Storage Model Rewrite — Semantic Rules & Working Notes
 
+> **Index:** every rule ID cited from `src/` or `tests/` — this file's §-sections and RUL-ids, the rules-mining R-ids (namespaced per file: CS/OL/OS/PJ/RS), the spec's A-ids — is listed with status, definition and citations in [`RULES-INDEX.md`](./RULES-INDEX.md) (generated; `node scripts/rules-index.mjs`). IDs are never renumbered.
+
 Companion to `INTERNALS-ASYNC-STATE.md`, same method: pin the semantic contract
 as rules first, wire the checkable ones as `__TEST__` assertions, then let the
 implementation land against them. Nothing below is final until it survives the
@@ -663,7 +665,9 @@ implementation, deduplicated across reports.
   writes must not entangle lanes (opt R38); equal-value action writes must
   still register ownership and dirty downstream (lanes R17); same-value
   manual writes on derived stores must mask the recompute for the tick (core
-  R31) despite equality-checked core signals.
+  R31; within a synchronous frame — across a hold the write is the
+  re-derivation's `prev`, A34 (3), #3612) despite equality-checked core
+  signals.
 - **RUL-11 — SPEC'D (2026-08-17): §6d.** Sticky descendants flag ported from
   `STORE_DESC`; reference-skip precedes reachability; monotone by design.
 - **RUL-12 — Smaller rulings, each with a proposed default** (proceeding on

@@ -16,7 +16,8 @@ import {
 import { ssrHandleError } from "../../src/server/hydration.js";
 import { Loading } from "../../src/server/flow.js";
 import { sharedConfig } from "../../src/server/shared.js";
-import { createErrorBoundary } from "../../src/server/signals.js";
+import { createErrorBoundary, shareAsyncIterable } from "../../src/server/signals.js";
+import { inClaimedRender } from "./render-root.js";
 
 // ============================================================================
 // Mock SSR Context Infrastructure
@@ -151,7 +152,9 @@ function deferred<T = void>() {
   return { promise, resolve, reject };
 }
 
-function createMockSSRContext(options: { async?: boolean; fragmentFlushed?: boolean } = {}) {
+function createMockSSRContext(
+  options: { async?: boolean; fragmentFlushed?: boolean; flushed?: boolean } = {}
+) {
   const serialized = new Map<string, any>();
   const registeredFragments = new Set<string>();
   const fragmentResults = new Map<string, string | undefined>();
@@ -164,7 +167,6 @@ function createMockSSRContext(options: { async?: boolean; fragmentFlushed?: bool
     async: options.async !== false,
     assets: [],
     nonce: undefined,
-    noHydrate: false,
     escape,
     resolve: resolveSSRNode,
     ssr,
@@ -185,6 +187,10 @@ function createMockSSRContext(options: { async?: boolean; fragmentFlushed?: bool
       };
     }
   };
+  // The renderer's "has the shell left?" probe (`ctx.flushed`). Absent by
+  // default, as the older tests were written; a boundary that consults it
+  // (the pre-flush client handoff) sees this answer when set.
+  if (options.flushed !== undefined) context.flushed = () => options.flushed;
 
   return {
     context,
@@ -2021,6 +2027,47 @@ describe("ssrSource server modes", () => {
       expect([...serialized.values()]).not.toContain("$$f");
     });
 
+    test("streaming: final hole masked by a real await that settles PRE-FLUSH inlines the fallback + $$f", async () => {
+      const { context, serialized, registeredFragments, fragmentResults, fragmentErrors } =
+        createMockSSRContext({ flushed: false });
+      sharedConfig.context = context;
+
+      const d = deferred<string>();
+      let result: any;
+      createRoot(
+        () => {
+          result = Loading({
+            fallback: "Shell",
+            get children() {
+              const data = createMemo(() => d.promise);
+              const v = data();
+              const widget = (createMemo as any)(() => 42, { ssrSource: "client" });
+              return ssr(
+                ["<div>", "-", "</div>"],
+                () => v,
+                () => widget()
+              ) as any;
+            }
+          });
+        },
+        { id: "t" }
+      );
+      expect(registeredFragments.size).toBe(1);
+      expect(result().t[0]).toContain("Shell");
+
+      d.resolve("real");
+      await tick();
+
+      // The shell had not left when the hole surfaced: the position is still
+      // the shell's to shape, so this is the at-discovery route one pass
+      // late — plain fallback inlined, "$$f" serialized, fragment settled
+      // clean — not a rejected fragment over an empty region (#3659).
+      const bid = [...registeredFragments][0];
+      expect(fragmentResults.get(bid)).toBe("Shell");
+      expect(fragmentErrors.size).toBe(0);
+      expect(serialized.get(bid)).toBe("$$f");
+    });
+
     test("renderToString: client hole takes the existing fallback + $$f route", () => {
       const { context, serialized, registeredFragments } = createMockSSRContext({ async: false });
       sharedConfig.context = context;
@@ -2098,6 +2145,331 @@ describe("ssrSource server modes", () => {
       expect(registeredFragments.size).toBe(0);
       expect([...serialized.values()]).toContain("$$f");
       expect(result()).toBe("Shell");
+    });
+
+    // #3657: the shared client hole is read by every request that touches a
+    // bare client source, and derived reads (a `<Show when={client().length}>`
+    // memo, an Errored aggregate's `Promise.all`) subscribe to it as their
+    // retry source. A native never-settling Promise records each of those
+    // subscriptions in a reaction list rooted in module scope — one retained
+    // computation (props, data, owner tree) per request, forever. The hole is
+    // therefore not a Promise: a frozen thenable whose `then` drops its
+    // callbacks, so no call site can accumulate anything on it.
+    test("the client hole is an inert thenable, not a native promise (#3657)", async () => {
+      const { context } = createSerializeTrackingContext();
+      sharedConfig.context = context;
+
+      let hole: any;
+      createRoot(
+        () => {
+          const read = (createMemo as any)(() => 1, { ssrSource: "client" });
+          (context as any)._loadingPhase = true;
+          try {
+            read();
+          } catch (e) {
+            hole = (e as NotReadyError).source;
+          } finally {
+            (context as any)._loadingPhase = undefined;
+          }
+        },
+        { id: "t" }
+      );
+
+      expect(hole.$clientHole).toBe(true);
+      // No reaction list exists to grow: not a promise by brand or by prototype.
+      expect(hole instanceof Promise).toBe(false);
+      expect(Object.prototype.toString.call(hole)).not.toBe("[object Promise]");
+      expect(Object.isFrozen(hole)).toBe(true);
+
+      // Every subscription shape the server takes against a pending source is
+      // dropped on the floor: direct `then` (subscribePendingRetry), `catch`
+      // (the boundary's await guard), the Promise combinators and `await`
+      // (which route through Promise.resolve and mint a fresh promise — no
+      // reference back to the hole).
+      const spy = vi.fn();
+      hole.then(spy, spy);
+      hole.catch(spy);
+      hole.finally(spy);
+      Promise.all([hole]).then(spy, spy);
+      Promise.resolve(hole).then(spy, spy);
+      expect(Promise.resolve(hole)).not.toBe(hole);
+      await tick();
+      await tick();
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    test("derived read of a client hole (Show over client().length) still hands off to $$f", () => {
+      const { context, serialized, registeredFragments } = createMockSSRContext();
+      sharedConfig.context = context;
+
+      let result: any;
+      createRoot(
+        () => {
+          result = Loading({
+            fallback: "Shell",
+            get children() {
+              const data = (createMemo as any)(() => [1, 2, 3], { ssrSource: "client" });
+              // The reporter's shape (#3657): the read is in a DERIVED memo —
+              // Show's `when` — whose update() catches the NotReady and
+              // subscribes its retry to the hole's source.
+              return ssr(["<div>", "</div>"], () =>
+                Show({
+                  get when() {
+                    return data().length;
+                  },
+                  children: "loaded"
+                })
+              ) as any;
+            }
+          });
+        },
+        { id: "t" }
+      );
+
+      expect(registeredFragments.size).toBe(0);
+      expect([...serialized.values()]).toContain("$$f");
+      expect(result()).toBe("Shell");
+    });
+  });
+
+  // #3659: a DERIVED ASYNC computation whose compute reads a client hole has
+  // no server answer and never will — it classifies FINAL like the bare
+  // source it derives from, and the boundary hands off to the client instead
+  // of awaiting a pending source that can never settle. Before the fix the
+  // derived node's own deferred (untagged, never settling) was what the
+  // boundary and the serialized channel waited on: the response never ended.
+  describe("derived async computations over a client hole (#3659)", () => {
+    const clientSource = () =>
+      (createMemo as any)(() => [1, 2, 3], { ssrSource: "client" }) as () => number[];
+
+    test("async memo, pre-flush: the deferred settles, the boundary inlines the fallback + $$f", async () => {
+      const { context, serialized, registeredFragments, fragmentResults, fragmentErrors } =
+        createMockSSRContext({ flushed: false });
+      sharedConfig.context = context;
+
+      let result: any;
+      createRoot(
+        () => {
+          result = Loading({
+            fallback: "Shell",
+            get children() {
+              const client = clientSource();
+              // The compute is async: its rejection — the tagged NotReady the
+              // hole read threw inside it — lands a microtask after discovery,
+              // so the fragment is already registered when the node turns FINAL.
+              const derived = createMemo(async () => client().length);
+              return ssr(["<div>", "</div>"], () => derived()) as any;
+            }
+          });
+        },
+        { id: "t" }
+      );
+
+      // Discovery saw an untagged pending source: streaming route, fragment registered.
+      expect(registeredFragments.size).toBe(1);
+      expect(result().t[0]).toContain("Shell");
+
+      await tick();
+
+      // The derived node's serialized channel settled (`undefined`, the
+      // abandonment ledger's value for a channel nobody consumes) — seroval
+      // can finish; and the boundary took the client-continue route with the
+      // shell still open: the placeholder inlined to the PLAIN fallback, "$$f"
+      // serialized, the fragment settled clean.
+      const bid = [...registeredFragments][0];
+      const channel = [...serialized.entries()].find(([, v]) => v && typeof v.then === "function");
+      expect(channel).toBeDefined();
+      await expect(channel![1]).resolves.toBeUndefined();
+      expect(serialized.get(bid)).toBe("$$f");
+      expect(fragmentResults.get(bid)).toBe("Shell");
+      expect(fragmentErrors.size).toBe(0);
+    });
+
+    test("async memo, post-flush: the fragment rejects as client-only content", async () => {
+      const { context, serialized, registeredFragments, fragmentResults, fragmentErrors } =
+        createMockSSRContext({ flushed: true });
+      sharedConfig.context = context;
+
+      let result: any;
+      createRoot(
+        () => {
+          result = Loading({
+            fallback: "Shell",
+            get children() {
+              const client = clientSource();
+              const derived = createMemo(async () => client().length);
+              return ssr(["<div>", "</div>"], () => derived()) as any;
+            }
+          });
+        },
+        { id: "t" }
+      );
+      expect(registeredFragments.size).toBe(1);
+      expect(result().t[0]).toContain("Shell");
+
+      await tick();
+
+      // Past the flush "settle but keep the fallback" is inexpressible: the
+      // existing late-handoff route — reject, the client renders the content
+      // fresh (resume(false)). No "$$f" on this route.
+      expect(fragmentResults.size).toBe(1);
+      expect([...fragmentResults.values()][0]).toBeUndefined();
+      expect(String([...fragmentErrors.values()][0])).toMatch(/client-only content/);
+      expect([...serialized.values()]).not.toContain("$$f");
+    });
+
+    test("async memo: the node's error becomes the tagged client-hole NotReady (FINAL on re-pull)", async () => {
+      const { context } = createSerializeTrackingContext();
+      sharedConfig.context = context;
+
+      let derived: any;
+      createRoot(
+        () => {
+          const client = clientSource();
+          (context as any)._loadingPhase = true;
+          try {
+            derived = createMemo(async () => client().length);
+          } finally {
+            (context as any)._loadingPhase = undefined;
+          }
+        },
+        { id: "t" }
+      );
+      await tick();
+
+      // Inside a Loading pass: the tagged FINAL suspension, the same one a
+      // direct read of the source throws.
+      (context as any)._loadingPhase = true;
+      let caught: any;
+      try {
+        derived();
+      } catch (e) {
+        caught = e;
+      } finally {
+        (context as any)._loadingPhase = undefined;
+      }
+      expect(caught).toBeInstanceOf(NotReadyError);
+      expect(caught.source.$clientHole).toBe(true);
+      // Outside one: the loud error, never a hang.
+      expect(() => derived()).toThrow(/outside a <Loading> boundary/);
+    });
+
+    test("projection deriving synchronously from the hole is FINAL at discovery: $$f, no fragment", () => {
+      const { context, serialized, registeredFragments } = createMockSSRContext();
+      sharedConfig.context = context;
+
+      let result: any;
+      createRoot(
+        () => {
+          result = Loading({
+            fallback: "Shell",
+            get children() {
+              const client = clientSource();
+              const proj = (createProjection as any)(
+                (d: any) => {
+                  d.n = client().length;
+                },
+                { n: 0 }
+              );
+              return ssr(["<div>", "</div>"], () => proj.n) as any;
+            }
+          });
+        },
+        { id: "t" }
+      );
+
+      // The derive threw the hole synchronously: no deferred, no channel, the
+      // structural bare-client-projection form — handed off at once.
+      expect(registeredFragments.size).toBe(0);
+      expect([...serialized.values()]).toEqual(["$$f"]);
+      expect(result()).toBe("Shell");
+    });
+
+    test("async projection (async derive) reclassifies FINAL and hands off; loud outside a boundary", async () => {
+      const { context, serialized, registeredFragments, fragmentResults, fragmentErrors } =
+        createMockSSRContext({ flushed: false });
+      sharedConfig.context = context;
+
+      let result: any;
+      let proj: any;
+      createRoot(
+        () => {
+          result = Loading({
+            fallback: "Shell",
+            get children() {
+              const client = clientSource();
+              proj = (createProjection as any)(
+                async (d: any) => {
+                  d.n = client().length;
+                },
+                { n: 0 }
+              );
+              return ssr(["<div>", "</div>"], () => proj.n) as any;
+            }
+          });
+        },
+        { id: "t" }
+      );
+      expect(result().t[0]).toContain("Shell");
+
+      await tick();
+
+      const bid = [...registeredFragments][0];
+      expect(serialized.get(bid)).toBe("$$f");
+      expect(fragmentResults.get(bid)).toBe("Shell");
+      expect(fragmentErrors.size).toBe(0);
+      // The pending proxy errored with the tagged NotReady; read outside a
+      // Loading pass it takes the bare client store's loud path.
+      expect(() => proj.n).toThrow(/outside a <Loading> boundary/);
+    });
+
+    test("outside <Loading>: an async memo over the hole errors loudly at its read, never hangs", async () => {
+      const { context } = createSerializeTrackingContext();
+      sharedConfig.context = context;
+
+      let derived: any;
+      createRoot(
+        () => {
+          const client = clientSource();
+          // No loading pass: the hole read inside the async compute throws
+          // the loud error synchronously (before any await) — the compute's
+          // promise rejects with it, and the memo surfaces it as a real error.
+          derived = createMemo(async () => client().length);
+        },
+        { id: "t" }
+      );
+      await tick();
+      expect(() => derived()).toThrow(/ASYNC_OUTSIDE_LOADING_BOUNDARY/);
+    });
+
+    test("a real (server-fillable) async dependency still retries and lands", async () => {
+      const { context, registeredFragments, fragmentResults } = createMockSSRContext({
+        flushed: false
+      });
+      sharedConfig.context = context;
+
+      const d = deferred<number[]>();
+      let result: any;
+      createRoot(
+        () => {
+          result = Loading({
+            fallback: "Shell",
+            get children() {
+              const data = createMemo(() => d.promise);
+              const derived = createMemo(async () => data().length);
+              return ssr(["<div>", "</div>"], () => derived()) as any;
+            }
+          });
+        },
+        { id: "t" }
+      );
+      expect(registeredFragments.size).toBe(1);
+
+      d.resolve([1, 2]);
+      await tick();
+      await tick();
+
+      expect(fragmentResults.get([...registeredFragments][0])).toBe("<div>2</div>");
     });
   });
 
@@ -4066,7 +4438,7 @@ describe("Asset Manifest + lazy()", () => {
       undefined,
       "./Route.tsx"
     );
-    await LazyRoute.preload!();
+    await inClaimedRender(context, () => LazyRoute.preload!());
 
     expect(registered).toEqual([
       { type: "style", value: "/assets/Route.css" },
@@ -4100,8 +4472,8 @@ describe("Asset Manifest + lazy()", () => {
       undefined,
       "./Once.tsx"
     );
-    await LazyOnce.preload!();
-    await LazyOnce.preload!();
+    await inClaimedRender(context, () => LazyOnce.preload!());
+    await inClaimedRender(context, () => LazyOnce.preload!());
     createRoot(
       () => {
         LazyOnce({});
@@ -4290,7 +4662,7 @@ describe("Asset Manifest + lazy()", () => {
 
     const Comp = (props: any) => "async-dev";
     const LazyComp = lazy(() => Promise.resolve({ default: Comp }), undefined, "./AsyncDev.tsx");
-    await LazyComp.preload!();
+    await inClaimedRender(context, () => LazyComp.preload!());
     // preload() now hints the module too; this case covers the render pass.
     registered.length = 0;
 
@@ -4361,9 +4733,11 @@ describe("Asset Manifest + lazy()", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining('asset resolution failed for "./Broken.tsx"'),
-      expect.any(Error)
+    // A `LAZY_ASSET_UNMAPPED` finding: the console face is the message (the
+    // error's text folded in), the Error itself rides the structured record.
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain(
+      '[LAZY_ASSET_UNMAPPED] lazy() asset resolution failed for "./Broken.tsx": Error: graph walk failed'
     );
     expect(thunk()).toBe("survives");
     warn.mockRestore();
@@ -4387,7 +4761,7 @@ describe("Asset Manifest + lazy()", () => {
     const LazyComp = lazy(() =>
       Promise.resolve({ default: Comp, $$moduleUrl: "src/Glob.tsx" } as any)
     );
-    await LazyComp.preload!();
+    await inClaimedRender(context, () => LazyComp.preload!());
 
     let thunk: any;
     createRoot(
@@ -5770,5 +6144,229 @@ describe("Promise-of-AsyncIterable flattening", () => {
     );
     expect(third()).toBe("v1");
     expect(stream.openCalls).toBe(1);
+  });
+
+  // --------------------------------------------------------------------------
+  // Shared sources: one generator, every reader (shareAsyncIterable)
+  // --------------------------------------------------------------------------
+  //
+  // A generator yields to ONE reader. Under a render the serializer pumping
+  // a memo's answer and a memo reading a source inside it (or two memos over
+  // one source) would split its values between them, so every iterable read
+  // the runtime makes goes through a seat on a shared multicast: one pump,
+  // the whole sequence for every seat, the last seat out closes the source.
+  // The border walk in @solidjs/web hands the serializer its seat
+  // (`toBorderForm`); these tests cover the runtime half.
+
+  describe("shared sources", () => {
+    const LIVE = Symbol.for("solid.LiveSource");
+
+    async function drain(iterable: AsyncIterable<any>) {
+      const out: any[] = [];
+      for await (const v of iterable) out.push(v);
+      return out;
+    }
+
+    test("every seat sees the whole sequence; the source is opened and pumped once", async () => {
+      const stream = controlledStream<string>();
+      const a = drain(shareAsyncIterable(stream.iterable));
+      const b = drain(shareAsyncIterable(stream.iterable));
+      stream.yield("v1");
+      stream.yield("v2");
+      stream.end();
+      expect(await a).toEqual(["v1", "v2"]);
+      expect(await b).toEqual(["v1", "v2"]);
+      expect(stream.openCalls).toBe(1);
+      // completion, not a close: nothing to return
+      expect(stream.returnCalls).toBe(0);
+    });
+
+    test("a seat joining mid-stream starts where the slowest open seat is", async () => {
+      const stream = controlledStream<string>();
+      const a = shareAsyncIterable(stream.iterable)[Symbol.asyncIterator]();
+      const firstA = a.next();
+      stream.yield("v1");
+      expect((await firstA).value).toBe("v1");
+      // a has passed v1 and nobody else holds it: the log is trimmed to the
+      // slowest open seat, so a late seat starts after it
+      const late = drain(shareAsyncIterable(stream.iterable));
+      stream.yield("v2");
+      stream.end();
+      expect((await a.next()).value).toBe("v2");
+      expect(await late).toEqual(["v2"]);
+    });
+
+    test("the last seat out closes the source; a seat leaving early does not", async () => {
+      const stream = controlledStream<string>();
+      const early = shareAsyncIterable(stream.iterable)[Symbol.asyncIterator]();
+      const reader = shareAsyncIterable(stream.iterable)[Symbol.asyncIterator]();
+      const firstEarly = early.next();
+      const firstReader = reader.next();
+      stream.yield("v1");
+      expect((await firstEarly).value).toBe("v1");
+      expect((await firstReader).value).toBe("v1");
+      await early.return!();
+      // the reader still holds the source open
+      expect(stream.returnCalls).toBe(0);
+      const second = reader.next();
+      stream.yield("v2");
+      expect((await second).value).toBe("v2");
+      await reader.return!();
+      expect(stream.returnCalls).toBe(1);
+      // a seat opened after the close sees what remains, then done
+      expect(await drain(shareAsyncIterable(stream.iterable))).toEqual([]);
+      expect(stream.openCalls).toBe(1);
+    });
+
+    test("a seat is reserved when handed out, before it is pulled", async () => {
+      const stream = controlledStream<string>();
+      const reader = shareAsyncIterable(stream.iterable)[Symbol.asyncIterator]();
+      // handed out (as the border walk does for the serializer) but not yet
+      // iterated: it must hold its place against the reader leaving
+      const reserved = shareAsyncIterable(stream.iterable);
+      const first = reader.next();
+      stream.yield("v1");
+      expect((await first).value).toBe("v1");
+      await reader.return!();
+      expect(stream.returnCalls).toBe(0);
+      const rest = drain(reserved);
+      stream.yield("v2");
+      stream.end();
+      expect(await rest).toEqual(["v1", "v2"]);
+    });
+
+    test("a failure is replayed to each seat once, after the values before it", async () => {
+      let opens = 0;
+      const failing: AsyncIterable<string> = {
+        [Symbol.asyncIterator]: () => {
+          opens++;
+          let n = 0;
+          return {
+            next: () =>
+              n++ === 0
+                ? Promise.resolve({ done: false, value: "v1" })
+                : Promise.reject(new Error("stream boom"))
+          };
+        }
+      };
+      const results = await Promise.all(
+        [0, 1].map(async () => {
+          const seen: string[] = [];
+          try {
+            for await (const v of shareAsyncIterable(failing)) seen.push(v);
+          } catch (e: any) {
+            seen.push("!" + e.message);
+          }
+          return seen;
+        })
+      );
+      expect(results).toEqual([
+        ["v1", "!stream boom"],
+        ["v1", "!stream boom"]
+      ]);
+      expect(opens).toBe(1);
+    });
+
+    test("a seat handed back in is returned as is; the live brand carries over", () => {
+      const stream = controlledStream<string>();
+      (stream.iterable as any)[LIVE] = true;
+      const seat = shareAsyncIterable(stream.iterable);
+      expect(shareAsyncIterable(seat)).toBe(seat);
+      expect((seat as any)[LIVE]).toBe(true);
+      expect(stream.openCalls).toBe(0);
+    });
+
+    test("two memos over one source both read V1 and both channels carry the sequence", async () => {
+      const { context, serialized } = createMockSSRContext();
+      sharedConfig.context = context;
+
+      const stream = controlledStream<string>();
+      const answer = { progress: stream.iterable };
+      let parent: any;
+      let a: any;
+      let b: any;
+      createRoot(
+        () => {
+          parent = createMemo(() => Promise.resolve(answer) as any);
+          a = createMemo(() => parent().progress);
+          b = createMemo(() => parent().progress);
+        },
+        { id: "t" }
+      );
+      await tick();
+      expect(() => a()).toThrow(NotReadyError);
+      expect(() => b()).toThrow(NotReadyError);
+      stream.yield("v1");
+      await tick();
+      expect(a()).toBe("v1");
+      expect(b()).toBe("v1");
+      expect(stream.openCalls).toBe(1);
+      // the two serialized channels (the parent's is the answer itself —
+      // the border walk is the web face's) each carry every yield
+      const channels = [...serialized.entries()]
+        .filter(([key]) => key !== "t0")
+        .map(([, value]) => value);
+      expect(channels).toHaveLength(2);
+      const drained = channels.map(c => drain(c));
+      stream.yield("v2");
+      stream.end();
+      expect(await Promise.all(drained)).toEqual([
+        ["v1", "v2"],
+        ["v1", "v2"]
+      ]);
+    });
+
+    test("a hybrid read leaves its seat after V1 without closing a source another reader holds", async () => {
+      const { context, serialized } = createMockSSRContext();
+      sharedConfig.context = context;
+
+      const stream = controlledStream<string>();
+      (stream.iterable as any)[LIVE] = true; // brand: hybrid under server mode
+      const answer = { progress: stream.iterable };
+      let parent: any;
+      let child: any;
+      createRoot(
+        () => {
+          parent = createMemo(() => Promise.resolve(answer) as any);
+          child = createMemo(() => parent().progress);
+        },
+        { id: "t" }
+      );
+      // the serializer's seat, as the border walk would reserve it
+      await tick();
+      const seat = shareAsyncIterable(parent().progress);
+      stream.yield("v1");
+      await tick();
+      expect(child()).toBe("v1");
+      // the child left; the seat holds the source open
+      expect(stream.returnCalls).toBe(0);
+      const rest = drain(seat);
+      stream.yield("v2");
+      stream.end();
+      expect(await rest).toEqual(["v1", "v2"]);
+      expect(stream.openCalls).toBe(1);
+      expect(await [...serialized.values()][1]).toBe("v1");
+    });
+
+    test("a hybrid read alone closes the source after V1", async () => {
+      const { context } = createMockSSRContext();
+      sharedConfig.context = context;
+
+      const stream = controlledStream<string>();
+      (stream.iterable as any)[LIVE] = true;
+      let read: any;
+      createRoot(
+        () => {
+          read = createMemo(() => Promise.resolve(stream.iterable) as any);
+        },
+        { id: "t" }
+      );
+      await tick();
+      stream.yield("v1");
+      await tick();
+      expect(read()).toBe("v1");
+      expect(stream.openCalls).toBe(1);
+      expect(stream.returnCalls).toBe(1);
+    });
   });
 });

@@ -9,15 +9,15 @@
  * vite plugin inject it) and call `installDiagnosticsBridge()`.
  */
 import { OBSERVE, flush } from "@solidjs/signals";
-import { attribution as engine } from "@solidjs/signals/attribution";
+import { attribution as engine, costs, feedback, why } from "@solidjs/signals/attribution";
+import { captureRecords, type RecordsCapture } from "./records.js";
 import type {
-  AttributionCosts,
-  AttributionFeedback,
+  AttributionCostTables,
+  AttributionFeedbackTables,
   AttributionOptions,
   DiagnosticsArtifact,
   HoldEvent,
-  RerunEvent,
-  RerunRecord
+  RerunEvent
 } from "./types.js";
 
 export const BRIDGE_GLOBAL = "__SOLID_DIAGNOSTICS__";
@@ -29,23 +29,26 @@ export interface BridgeBeginOptions {
 /** The serializable half of an artifact — assembled into a full one Node-side. */
 export interface BridgePayload {
   capturedAt: string;
+  /** The page's `performance.timeOrigin` — see `DiagnosticsArtifact.timeOrigin`. */
+  timeOrigin: number;
   durationMs: number;
   diagnostics: DiagnosticsArtifact["diagnostics"];
   attribution: DiagnosticsArtifact["attribution"];
+  records: DiagnosticsArtifact["records"];
 }
 
 export interface DiagnosticsBridge {
   begin(options?: BridgeBeginOptions): void;
   end(): BridgePayload;
   active(): boolean;
-  /** Re-runs of one scope (by name) recorded by the open session. */
-  whyDidRun(name: string): RerunRecord[];
+  /** Re-runs of one scope (by name) recorded by the open session — the engine's `why(name)`. */
+  whyDidRun(name: string): RerunEvent[];
   /** Cost tables of the open session so far, without closing it. */
-  costs(): AttributionCosts;
+  costs(): AttributionCostTables;
   /** Transition holds the open session has recorded so far. */
   holds(): HoldEvent[];
   /** Feedback tables (what the user waited on) of the open session so far. */
-  feedback(): AttributionFeedback;
+  feedback(): AttributionFeedbackTables;
 }
 
 /**
@@ -80,7 +83,9 @@ export function installDiagnosticsBridge(
 
   interface Session {
     capture: ReturnType<NonNullable<typeof OBSERVE>["diagnostics"]["capture"]>;
-    useAttribution: boolean;
+    records: RecordsCapture;
+    /** The session's engine hold; undefined when begun with attribution disabled. */
+    release: (() => void) | undefined;
     startedAt: Date;
     start: number;
   }
@@ -94,14 +99,22 @@ export function installDiagnosticsBridge(
       const attributionOption = options.attribution ?? true;
       const useAttribution = attributionOption !== false;
       const capture = OBSERVE!.diagnostics.capture();
+      // The session's own hold on the shared engine (see `capture.ts`).
+      let release: (() => void) | undefined;
       if (useAttribution) {
         const opts: AttributionOptions =
           typeof attributionOption === "object"
             ? { log: false, ...attributionOption }
             : { log: false };
-        engine.enable(opts);
+        release = engine.enable(opts);
       }
-      session = { capture, useAttribution, startedAt: new Date(), start: performance.now() };
+      session = {
+        capture,
+        records: captureRecords(),
+        release,
+        startedAt: new Date(),
+        start: performance.now()
+      };
     },
     end() {
       if (!session) {
@@ -112,21 +125,24 @@ export function installDiagnosticsBridge(
       // Drain scheduled work so trailing writes are attributed to the capture.
       flush();
       let attribution: DiagnosticsArtifact["attribution"] = null;
-      if (active.useAttribution) {
+      if (active.release) {
         attribution = {
-          reruns: engine.history().map(({ node: _node, ...record }: RerunEvent) => record),
-          costs: engine.costs(),
-          holds: [...engine.holds()],
-          feedback: engine.feedback()
+          reruns: [...engine.history("rerun")],
+          costs: costs(),
+          holds: [...engine.history("hold")],
+          feedback: feedback()
         };
-        engine.disable();
+        active.release();
       }
       const events = active.capture.stop();
+      const records = active.records.stop();
       return toSerializable({
         capturedAt: active.startedAt.toISOString(),
+        timeOrigin: performance.timeOrigin,
         durationMs: performance.now() - active.start,
         diagnostics: events,
-        attribution
+        attribution,
+        records
       });
     },
     active() {
@@ -134,24 +150,20 @@ export function installDiagnosticsBridge(
     },
     whyDidRun(name) {
       requireAttributionSession("whyDidRun");
-      return toSerializable(
-        engine
-          .history()
-          .filter(event => event.nodeName === name)
-          .map(({ node: _node, ...record }: RerunEvent) => record)
-      );
+      // The engine's own query, by name: an out-of-process driver holds no node.
+      return toSerializable(why(name));
     },
     costs() {
       requireAttributionSession("costs");
-      return toSerializable(engine.costs());
+      return toSerializable(costs());
     },
     holds() {
       requireAttributionSession("holds");
-      return toSerializable([...engine.holds()]);
+      return toSerializable([...engine.history("hold")]);
     },
     feedback() {
       requireAttributionSession("feedback");
-      return toSerializable(engine.feedback());
+      return toSerializable(feedback());
     }
   };
 
@@ -161,7 +173,7 @@ export function installDiagnosticsBridge(
         `Diagnostics bridge ${caller}() requires an open session; call begin() first.`
       );
     }
-    if (!session.useAttribution) {
+    if (!session.release) {
       throw new Error(
         `Diagnostics bridge ${caller}() requires attribution; the open session was begun with attribution disabled.`
       );

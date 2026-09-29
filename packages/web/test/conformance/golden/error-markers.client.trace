@@ -7,6 +7,9 @@ html = <div><p class="err">NotFound</p></div>
 ## fix and reset
 write ok = true
 run value
+read ok = false
+caught boundary = NotFound(missing)
+run value
 read ok = true
 html = <div><p class="ok">fine</p></div>
 ## teardown

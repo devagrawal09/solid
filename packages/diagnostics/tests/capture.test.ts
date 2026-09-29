@@ -1,4 +1,11 @@
-import { createEffect, createMemo, createRoot, createSignal, flush } from "@solidjs/signals";
+import {
+  OBSERVE,
+  createEffect,
+  createMemo,
+  createRoot,
+  createSignal,
+  flush
+} from "@solidjs/signals";
 import {
   artifactToJSONL,
   captureArtifact,
@@ -24,8 +31,10 @@ describe("captureArtifact — diagnostics channel", () => {
       { scenario: "orphan effect", attribution: deterministicAttribution }
     );
 
-    expect(artifact.formatVersion).toBe(4);
+    expect(artifact.formatVersion).toBe(8);
     expect(artifact.scenario).toBe("orphan effect");
+    // The anchor for every relative `at` in the artifact.
+    expect(artifact.timeOrigin).toBe(performance.timeOrigin);
     expectDiagnostic(artifact, "NO_OWNER_EFFECT");
     expect(() => expectNoDiagnostics(artifact)).toThrow(DiagnosticsAssertionError);
     expectNoDiagnostics(artifact, { allow: ["NO_OWNER_EFFECT"] });
@@ -76,6 +85,16 @@ describe("captureArtifact — attribution channel", () => {
     const updates = reruns.filter(rerun => rerun.causes.length > 0);
     expect(updates.length).toBe(2);
     expect(updates.map(rerun => rerun.nodeName).sort()).toEqual(["double", "render"]);
+    // Stored as the engine emitted them: a scope id, no live node, and every
+    // `at` on the clock `artifact.timeOrigin` anchors.
+    for (const rerun of reruns) {
+      expect(rerun).not.toHaveProperty("node");
+      expect(typeof rerun.nodeId).toBe("number");
+      expect(rerun.at).toBeGreaterThan(0);
+      expect(rerun.at).toBeLessThan(performance.now());
+    }
+    expect(new Set(reruns.map(r => r.nodeId)).size).toBe(new Set(reruns.map(r => r.nodeName)).size);
+    expect(JSON.parse(JSON.stringify(artifact))).toEqual(artifact);
     // Every update traces back to the "count" write.
     for (const rerun of updates) {
       const roots = new Set<string>();
@@ -153,5 +172,130 @@ describe("artifact egress", () => {
     expect(types).toContain("costs");
     // Every line must round-trip as standalone JSON (no live node refs).
     for (const line of lines) expect(() => JSON.parse(line)).not.toThrow();
+  });
+});
+
+// The records tables fold `OBSERVE.records` — the core's channel, which the
+// runtimes (`solid-js`, `@solidjs/web`) emit onto. This suite runs against
+// bare signals, where nothing emits, so records are put on the real channel
+// by hand; the web suites exercise the real emitters end to end
+// (`diagnostics-server-scenario.spec.tsx`, `client-records.spec.tsx`).
+describe("captureArtifact — records tables", () => {
+  const channel = OBSERVE!.records as unknown as {
+    observed(type: string): boolean;
+    emit(type: string, event: unknown, live: unknown): void;
+  };
+
+  it("is present, with empty tables, when nothing was recorded", async () => {
+    const { artifact } = await captureArtifact(() => {}, { attribution: false });
+    expect(artifact.records).toEqual({
+      boundary: [],
+      recovery: [],
+      invocation: [],
+      frame: [],
+      call: []
+    });
+  });
+
+  it("collects every record type in delivery order, copied, and ends its subscriptions", async () => {
+    const boundary = {
+      id: "0-0-1",
+      at: 10,
+      durationMs: 40,
+      heldMs: 0,
+      passes: 2,
+      outcome: "settled",
+      streamed: true,
+      ownerPath: ["App", "Loading"]
+    };
+    const invocation = {
+      id: "getUser",
+      direct: true,
+      at: 12,
+      durationMs: 30,
+      outcome: "ok",
+      boundary: "0-0-1"
+    };
+    const produced = {
+      side: "server",
+      id: "getUser",
+      version: 1,
+      at: 8,
+      durationMs: 60,
+      shellMs: 12,
+      outcome: "complete",
+      chunks: 4,
+      fragments: 1,
+      slots: 0,
+      regions: 0,
+      errors: 0
+    };
+    const applied = { ...produced, side: "client", version: 4, address: "local-1", durationMs: 75 };
+    const call = {
+      id: "getUser",
+      at: 5,
+      durationMs: 90,
+      method: "POST",
+      outcome: "ok",
+      status: 200
+    };
+    const recovery = { id: "0-0-1", at: 120, waitedMs: 110, renderMs: 3 };
+    expect(channel.observed("boundary")).toBe(false);
+    const { artifact } = await captureArtifact(
+      () => {
+        expect(channel.observed("boundary")).toBe(true);
+        channel.emit("invocation", invocation, {});
+        channel.emit("boundary", boundary, {});
+        channel.emit("frame", produced, {});
+        channel.emit("call", call, {});
+        channel.emit("frame", applied, {});
+        channel.emit("recovery", recovery, {});
+        channel.emit("hydration", { id: "unknown-type" }, {});
+      },
+      { scenario: "records", attribution: false }
+    );
+    expect(artifact.records).toEqual({
+      boundary: [boundary],
+      recovery: [recovery],
+      invocation: [invocation],
+      frame: [produced, applied],
+      call: [call]
+    });
+    // A copy: the record object is shared with every listener.
+    expect(artifact.records.boundary[0]).not.toBe(boundary);
+    expect(artifact.records.invocation[0]!.boundary).toBe(artifact.records.boundary[0]!.id);
+    // The subscriptions end with the capture.
+    for (const type of ["boundary", "recovery", "invocation", "frame", "call"]) {
+      expect(channel.observed(type), type).toBe(false);
+    }
+
+    const lines = artifactToJSONL(artifact)
+      .trim()
+      .split("\n")
+      .map(line => JSON.parse(line));
+    expect(lines[0]).toMatchObject({
+      type: "meta",
+      recordCounts: { boundary: 1, recovery: 1, invocation: 1, frame: 2, call: 1 }
+    });
+    expect(lines.slice(1)).toEqual([
+      { type: "boundary", ...boundary },
+      { type: "recovery", ...recovery },
+      { type: "invocation", ...invocation },
+      { type: "frame", ...produced },
+      { type: "frame", ...applied },
+      { type: "call", ...call }
+    ]);
+  });
+
+  it("reports zero counts in the JSONL header when nothing was recorded", async () => {
+    const { artifact } = await captureArtifact(() => {}, { attribution: false });
+    const meta = JSON.parse(artifactToJSONL(artifact).split("\n")[0]!);
+    expect(meta.recordCounts).toEqual({
+      boundary: 0,
+      recovery: 0,
+      invocation: 0,
+      frame: 0,
+      call: 0
+    });
   });
 });

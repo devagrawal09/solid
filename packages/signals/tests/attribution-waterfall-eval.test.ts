@@ -24,11 +24,33 @@ import type { DiagnosticEvent } from "../src/core/dev.js";
 afterEach(() => {
   attribution.disable();
   flush();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
 const sleep = <T>(ms: number, v: T) => new Promise<T>(r => setTimeout(() => r(v), ms));
 const wait = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+/**
+ * The tests that check the chain's MEASUREMENT (`expectSerialized`) run on a
+ * fake clock that covers `performance.now()` — the engine's own clock (see
+ * `now()` in core/attribution.ts) — so a flight's origin and landing stamps,
+ * and the test's observation window, all read the same frozen time. Every
+ * `advance(ms)` is then exactly `ms` on both. On the wall clock the window
+ * raced the stamps: the origin is stamped when the memo RUNS (inside the
+ * flush, after `t0`), and a loaded runner stretched the run and the timer
+ * callbacks by several ms each, so the summed link times exceeded the window
+ * (`46.9 <= 45.1`, `35.6 <= 31.3` on CI).
+ */
+function fakeClock() {
+  vi.useFakeTimers({
+    toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"]
+  });
+}
+async function advance(ms: number) {
+  await vi.advanceTimersByTimeAsync(ms);
+  flush();
+}
 
 /**
  * Deadline-poll a condition instead of sleeping a fixed interval: the sleeps
@@ -66,8 +88,26 @@ function arm(minFlightMs = 5) {
 
 const chainNames = (e: DiagnosticEvent) => (e.data!.chain as { name: string }[]).map(l => l.name);
 
+/**
+ * `sequentialMs` is the SUM of the chain's per-link flight times, each of
+ * which the engine measured on its own clock (`performance.now()` at flight
+ * start and landing). What the number pins is the serialization: every
+ * link's time is counted, each link was a real wait, and the total is no
+ * more than the window the test observed on the SAME clock. Under
+ * `fakeClock()` the window is exact — the chain's flights ran back to back
+ * for the whole of it, so the sum can equal the window but never exceed it.
+ */
+function expectSerialized(e: DiagnosticEvent, observedMs: number) {
+  const links = e.data!.chain as { ms: number }[];
+  const sum = links.reduce((acc, l) => acc + l.ms, 0);
+  expect(e.data!.sequentialMs as number).toBeCloseTo(sum, 6);
+  for (const l of links) expect(l.ms).toBeGreaterThan(0);
+  expect(e.data!.sequentialMs as number).toBeLessThanOrEqual(observedMs);
+}
+
 describe("ASYNC_WATERFALL", () => {
   it("catches the lazy dependent fetch (story -> author) at info severity", async () => {
+    fakeClock();
     const events = arm();
     const [id, setId] = createSignal(1, { name: "storyId" });
     const story = createMemo(() => sleep(15, `story-${id()}`), { name: "story" });
@@ -78,6 +118,7 @@ describe("ASYNC_WATERFALL", () => {
       },
       { name: "author" }
     );
+    const t0 = performance.now();
     createRoot(() =>
       createEffect(
         () => author(),
@@ -86,25 +127,33 @@ describe("ASYNC_WATERFALL", () => {
       )
     );
     flush();
-    await until(() => events.length >= 1, "the story->author advisory");
+    // +15: story lands; only now does author's flight start — the lazy chain.
+    await advance(15);
+    expect(events).toHaveLength(0);
+    // +30: author lands; the verdict.
+    await advance(15);
+    const observed = performance.now() - t0;
+    expect(observed).toBe(30); // the fake clock covers performance.now()
 
     expect(events).toHaveLength(1);
     expect(events[0].severity).toBe("info"); // depth 2: advisory, not accusatory
     expect(events[0].nodeName).toBe("author");
     expect(chainNames(events[0])).toEqual(["story", "author"]);
-    expect(events[0].data!.sequentialMs as number).toBeGreaterThanOrEqual(25);
+    expectSerialized(events[0], observed);
 
     // The fact surface has it too.
-    const chains = attribution.waterfalls();
+    const chains = attribution.history("waterfall");
     expect(chains.some(c => c.chain.map(l => l.name).join(">") === "story>author")).toBe(true);
     void setId;
   });
 
   it("escalates a 3-deep chain to warn severity with the full path", async () => {
+    fakeClock();
     const events = arm();
     const a = createMemo(() => sleep(12, "a"), { name: "fetch-a" });
     const b = createMemo(() => sleep(12, a() + "b"), { name: "fetch-b" });
     const c = createMemo(() => sleep(12, b() + "c"), { name: "fetch-c" });
+    const t0 = performance.now();
     createRoot(() =>
       createEffect(
         () => c(),
@@ -113,12 +162,19 @@ describe("ASYNC_WATERFALL", () => {
       )
     );
     flush();
-    await until(() => events.some(e => e.severity === "warn"), "the depth-3 warn escalation");
+    // +12: a lands, b starts. +24: b lands (a depth-2 advisory), c starts.
+    await advance(12);
+    await advance(12);
+    expect(events.some(e => e.severity === "warn")).toBe(false);
+    // +36: c lands — the depth-3 escalation.
+    await advance(12);
+    const observed = performance.now() - t0;
+    expect(observed).toBe(36); // the fake clock covers performance.now()
 
     const worst = events.at(-1)!;
     expect(worst.severity).toBe("warn");
     expect(chainNames(worst)).toEqual(["fetch-a", "fetch-b", "fetch-c"]);
-    expect(worst.data!.sequentialMs as number).toBeGreaterThanOrEqual(30);
+    expectSerialized(worst, observed);
   });
 
   it("does not flag a dependent whose promise was preloaded (markFlight)", async () => {
@@ -153,7 +209,7 @@ describe("ASYNC_WATERFALL", () => {
 
     expect(events).toHaveLength(0);
     // Not even recorded as a chain fact — the origin test broke the link.
-    expect(attribution.waterfalls()).toHaveLength(0);
+    expect(attribution.history("waterfall")).toHaveLength(0);
   });
 
   it("does not flag an already-settled cached dependent (duration gate)", async () => {

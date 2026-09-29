@@ -24,6 +24,7 @@ import {
 } from "../src/core/constants.js";
 import {
   action,
+  syncAction,
   createLoadingBoundary,
   createOptimistic,
   createMemo,
@@ -149,22 +150,24 @@ describe("H2 direct: commit a memo without the staging round-trip", () => {
     }
   });
 
-  it("tears for a plain read after a mid-batch pull (latest() in an event handler)", () => {
+  // The tear this oracle was measured against — latest() in an event
+  // handler pulling the memo's recompute before the flush, then a plain read
+  // seeing the pulled value beside the unflushed source (a = 1, doubled = 4)
+  // — no longer happens: upstream's A28 ("a write becomes visible at flush",
+  // merged 2026-09-29) makes latest() answer the committed value for an
+  // unflushed write without pulling, and a reader created before the flush
+  // is served the committed value too. The frame is whole under both, so the
+  // pin is now the equivalence; H2's premise ("no untracked reader reads the
+  // memo mid-batch") is still what the oracle assumes.
+  it("no longer tears for a plain read after latest() in an event handler (A28)", () => {
     const frame = (direct: boolean) => {
       const { a, setA, doubled } = program(direct);
       setA(2);
-      // An event handler peeks at the fresh derivation (latest() pulls the
-      // memo's recompute before the flush), then reads plainly.
       const fresh = latest(doubled);
       return [fresh, a(), doubled()];
     };
-    // Reference: latest() sees the fresh value, plain reads stay on the
-    // committed frame until the flush — source and derivation agree.
-    expect(frame(false)).toEqual([4, 1, 2]);
-    // Direct commit publishes the pulled derivation into the committed slot
-    // before its source: a torn frame (a = 1, doubled = 4) ordinary Solid
-    // never shows.
-    expect(frame(true)).toEqual([4, 1, 4]);
+    expect(frame(false)).toEqual([2, 1, 2]);
+    expect(frame(true)).toEqual([2, 1, 2]);
   });
 });
 
@@ -358,12 +361,17 @@ describe("A1 sync action: a body with no yield runs as a plain batch", () => {
   // by itself because it learns the body is synchronous only after running
   // it, and adopting the first slice into a transaction afterwards breaks
   // store, optimistic and until() tests (scripts/heuristics/rspec, R5).
+  // The lowering is `syncAction` (core/action.ts): a plain batch that keeps
+  // the action step (owned-scope guard, provenance, the flush-in-action
+  // guard). Upstream's #3427 ends an action's optimism at its body's end,
+  // which a bare `(body(), Promise.resolve())` does not reproduce for an
+  // optimistic write; the step does.
   const call = (asAction: boolean, body: () => void) =>
     asAction
       ? action(function* () {
           body();
         })()
-      : (body(), Promise.resolve());
+      : syncAction(body)();
 
   it("is equivalent with an optimistic write in the body", async () => {
     const run = async (asAction: boolean) => {

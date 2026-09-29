@@ -4,6 +4,7 @@ use oxc_ast::ast::{JSXAttributeItem, JSXAttributeValue, ObjectPropertyKind, Stat
 use oxc_span::Span;
 
 use crate::dom::element::AstDomTransform;
+use crate::shared::array::expression_to_array_element;
 use crate::shared::ast::arrow_return_expression;
 use crate::shared::condition::zero_arg_call_thunk;
 use crate::shared::constants::dom_with_state;
@@ -68,6 +69,14 @@ impl<'a> AstDomTransform<'a, '_> {
                     {
                         continue;
                     }
+                    // `$key` is server markup identity: a DOM compile strips
+                    // it (Babel's `renameElementKey` removes the attribute
+                    // before the spread is processed; shared/attr_plan.rs is
+                    // the template path's copy of the same rule).
+                    if matches!(&attr.name, oxc_ast::ast::JSXAttributeName::Identifier(name) if name.name == "$key")
+                    {
+                        continue;
+                    }
                     running_props.push(self.spread_attribute_property(attr, tag_name)?);
                 }
             }
@@ -82,28 +91,44 @@ impl<'a> AstDomTransform<'a, '_> {
         // A lone spread — reactive included — passes straight through:
         // spread() resolves a function source inside its own tracking
         // scopes, and merging one source would mint a memo that consumes a
-        // hydration id the SSR fast path never allocates (#3105).
+        // hydration id the SSR fast path never allocates (#3105). Several
+        // sources go as an ARRAY, not a mergeProps() call: spread() reads
+        // the sources directly (later wins per key, only the winner read)
+        // with no merge proxy to build and walk, and a reactive source is
+        // called inside the tracking scope with no memo — so no hydration id
+        // here either, matching the ssrElement array form.
         let props = if prop_objects.len() == 1 {
             prop_objects
                 .pop()
                 .expect("single spread props object exists")
         } else {
-            self.template_state.uses_merge_props = true;
-            self.call_identifier(Span::default(), "_$mergeProps", prop_objects)
+            let elements = prop_objects.into_iter().map(expression_to_array_element);
+            self.ast()
+                .expression_array(Span::default(), self.ast().vec_from_iter(elements))
         };
+
+        let mut args = vec![
+            self.identifier_expression(Span::default(), element_id),
+            props,
+            self.ast()
+                .expression_boolean_literal(Span::default(), skip_children),
+        ];
+        // `sourceNames.bindings`: the tag as written rides as spread's
+        // trailing argument (past the runtime-only `skip` slot); the runtime
+        // labels its attribute effect `<tag>.spread` and its children insert
+        // `<tag>.children`.
+        if self.binding_names {
+            args.push(self.identifier_expression(Span::default(), "undefined"));
+            args.push(self.ast().expression_string_literal(
+                Span::default(),
+                self.ast().str(tag_name),
+                None,
+            ));
+        }
 
         Ok(self.ast().statement_expression(
             Span::default(),
-            self.call_identifier(
-                Span::default(),
-                "_$spread",
-                vec![
-                    self.identifier_expression(Span::default(), element_id),
-                    props,
-                    self.ast()
-                        .expression_boolean_literal(Span::default(), skip_children),
-                ],
-            ),
+            self.call_identifier(Span::default(), "_$spread", args),
         ))
     }
 

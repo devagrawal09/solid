@@ -325,7 +325,7 @@ describe("@solidjs/compiler transform", () => {
     });
 
     expect(result.code).not.toContain("_$delegateEvents");
-    expect(result.code).not.toContain("$$click");
+    expect(result.code).not.toContain("_$$click");
     expect(result.code).toContain('_el$.addEventListener("click",');
   });
 
@@ -337,7 +337,7 @@ describe("@solidjs/compiler transform", () => {
     });
 
     expect(result.code).toContain('import { delegateEvents as _$delegateEvents } from "r-dom";');
-    expect(result.code).toContain("_el$.$$change =");
+    expect(result.code).toContain("_el$._$$change =");
     expect(result.code).toContain('_$delegateEvents(["change"]);');
   });
 
@@ -513,6 +513,74 @@ describe("@solidjs/compiler transform", () => {
     ).toThrow(/unknown option `notARealOption`/);
   });
 
+  it("sourceNames takes a boolean or a per-kind object, and rejects anything else", () => {
+    const code = "const view = <div class={cls()}><Home /></div>;";
+    const opts = { filename: "input.jsx", moduleName: "r-dom" };
+    const label = '_$createComponent(Home, {}, "Home")';
+    const binding = '{ name: "div.class" }';
+
+    const every = transform(code, { ...opts, sourceNames: true }).code;
+    expect(every).toContain(label);
+    expect(every).toContain(binding);
+    const components = transform(code, { ...opts, sourceNames: { components: true } }).code;
+    expect(components).toContain(label);
+    expect(components).not.toContain(binding);
+    const bindings = transform(code, { ...opts, sourceNames: { bindings: true } }).code;
+    expect(bindings).not.toContain('"Home"');
+    expect(bindings).toContain(binding);
+    for (const off of [false, {}, { components: false, bindings: false }]) {
+      const plain = transform(code, { ...opts, sourceNames: off }).code;
+      expect(plain).not.toContain('"Home"');
+      expect(plain).not.toContain("name:");
+    }
+
+    expect(() => transform(code, { ...opts, sourceNames: "components" })).toThrow(
+      /`sourceNames` option must be boolean or an object/
+    );
+    expect(() => transform(code, { ...opts, sourceNames: { owners: true } })).toThrow(
+      /unknown `sourceNames` kind `owners`/
+    );
+    expect(() => transform(code, { ...opts, sourceNames: { components: 1 } })).toThrow(
+      /`sourceNames.components` must be boolean/
+    );
+    expect(() => transform(code, { ...opts, sourceNames: { bindings: "yes" } })).toThrow(
+      /`sourceNames.bindings` must be boolean/
+    );
+    expect(() => transform(code, { ...opts, componentNames: true })).toThrow(
+      /unknown option `componentNames`/
+    );
+  });
+
+  // Same source and expectations as babel-plugin/test/dom-source-names.spec.js
+  // "sourceNames defaults".
+  it("sourceNames follows dev when unset; production output is byte-identical", () => {
+    const code = "const view = <div class={cls()}><Home /></div>;";
+    const opts = { filename: "input.jsx", moduleName: "r-dom" };
+    const label = '_$createComponent(Home, {}, "Home")';
+    const binding = 'name: "div.class"';
+
+    const dev = transform(code, { ...opts, dev: true }).code;
+    expect(dev).toContain(label);
+    expect(dev).toContain(binding);
+
+    const prod = transform(code, { ...opts, dev: false }).code;
+    expect(prod).not.toContain('"Home"');
+    expect(prod).not.toContain("name:");
+    expect(prod).toBe(transform(code, opts).code);
+    expect(prod).toBe(transform(code, { ...opts, dev: false, sourceNames: false }).code);
+    expect(prod).toBe(transform(code, { ...opts, dev: false, sourceNames: {} }).code);
+
+    const off = transform(code, { ...opts, dev: true, sourceNames: false }).code;
+    expect(off).not.toContain('"Home"');
+    expect(off).not.toContain("name:");
+    const picked = transform(code, { ...opts, dev: true, sourceNames: { components: false } }).code;
+    expect(picked).not.toContain('"Home"');
+    expect(picked).toContain(binding);
+    const prodPicked = transform(code, { ...opts, sourceNames: { components: true } }).code;
+    expect(prodPicked).toContain(label);
+    expect(prodPicked).not.toContain(binding);
+  });
+
   it("rejects unsupported dynamic renderer config instead of ignoring it", () => {
     expect(() =>
       transform("const view = <div />;", {
@@ -647,6 +715,72 @@ describe("@solidjs/compiler transform", () => {
     expect(csr.code).not.toContain("_$scope(");
   });
 
+  it("scope-wraps property-read holes in hydratable mode (both generates)", () => {
+    // A property read can be a getter that builds JSX at read time, so it
+    // takes a hole scope like `props.children` always did (#3567); only
+    // provably-primitive holes stay unscoped.
+    const source = `
+      const a = <main>{props.header}{props.children}</main>;
+      const b = <main>{p.slots.header}{p.slots[name]}</main>;
+      const c = <main>{p.renderItem?.("x")}{rows() || "none"}</main>;
+      const d = <main>{cond() ? [<b />, " text"] : null}</main>;
+      const e = <main>{props.title + "!"}{-props.count()}{\`n=\${props.n}\`}{props.a === props.b}</main>;
+      const f = <main>{(track(), props.header)}{cond() ? renderHead : null}</main>;
+      `;
+
+    const flat = code => code.replace(/\s+/g, " ");
+    const ssr = flat(
+      transform(source, {
+        filename: "prop-holes.jsx",
+        moduleName: "r-server",
+        generate: "ssr",
+        hydratable: true
+      }).code
+    );
+    expect(ssr).toContain("_$scope(() => { return _$escape(props.header); })");
+    expect(ssr).toContain("_$scope(() => { return _$escape(p.slots[name]); })");
+    expect(ssr).toContain('_$scope(() => { return _$escape(p.renderItem?.("x")); })');
+    expect(ssr).toContain('_$scope(() => { return _$escape(rows() || "none"); })');
+    expect(ssr).toContain("_$scope(() => { return _$escape((track(), props.header)); })");
+    expect(ssr.match(/_\$scope\(/g)).toHaveLength(9);
+
+    const dom = flat(
+      transform(source, {
+        filename: "prop-holes.jsx",
+        moduleName: "r-dom",
+        generate: "dom",
+        hydratable: true
+      }).code
+    );
+    expect(dom).toContain("_$scope(() => { return props.header; })");
+    expect(dom).toContain("_$scope(() => { return p.slots[name]; })");
+    expect(dom).toContain('_$scope(() => { return p.renderItem?.("x"); })');
+    expect(dom).toContain('_$scope(() => { return rows() || "none"; })');
+    expect(dom).toContain("_$scope(() => { return track(), props.header; })");
+    expect(dom.match(/_\$scope\(/g)).toHaveLength(9);
+
+    // Holes that can only yield a primitive stay unscoped on both sides.
+    expect(ssr).toContain('_v$13 = () => { return _$escape(props.title) + "!"; }');
+    expect(ssr).toContain("_v$14 = () => { return -props.count(); }");
+    expect(dom).toContain('_$insert(_el$23, () => { return props.title + "!"; }');
+    expect(dom).toContain("_$insert(_el$23, () => { return -props.count(); }");
+    expect(dom).toContain("_$insert(_el$23, () => { return \`n=\${props.n}\`; }");
+    expect(dom).toContain("_$insert(_el$23, () => { return props.a === props.b; }");
+
+    // `#x in obj` is a boolean; oxc parses it as its own node kind.
+    const privateIn = flat(
+      transform("class A { #b; m() { return <main>{#b in this.p}{this.count()}</main>; } }", {
+        filename: "private-in.jsx",
+        moduleName: "r-dom",
+        generate: "dom",
+        hydratable: true
+      }).code
+    );
+    expect(privateIn).toContain("_$insert(_el$, () => { return #b in _self$.p; }");
+    expect(privateIn).toContain("_$scope(() => { return _self$.count(); })");
+    expect(privateIn.match(/_\$scope\(/g)).toHaveLength(1);
+  });
+
   it("lowers dynamic children in SSR mode through escape", () => {
     const result = transform("const view = <div>Hello {name}</div>;", {
       filename: "input.jsx",
@@ -676,18 +810,21 @@ describe("@solidjs/compiler transform", () => {
     expect(result.code).not.toContain('url("${');
   });
 
-  it("lowers DOM spread attributes through spread and mergeProps", () => {
+  it("lowers DOM spread attributes through spread with a sources array", () => {
     const result = transform('<div id="main" {...props} title={title()} />', {
       filename: "input.jsx",
       moduleName: "r-dom"
     });
 
+    // Several sources go as an array, never through mergeProps(): no merge
+    // proxy, and no memo that would consume a hydration id.
     expect(result.code).toContain('import { spread as _$spread } from "r-dom";');
-    expect(result.code).toContain('import { mergeProps as _$mergeProps } from "r-dom";');
-    expect(result.code).toContain("_$spread(");
-    expect(result.code).toContain("_$mergeProps(");
+    expect(result.code).not.toContain("mergeProps");
+    expect(result.code).toMatch(/_\$spread\(_el\$\d*, \[\s*\{/);
     expect(result.code).toContain('id: "main"');
     expect(result.code).toContain("get title()");
+    expect(result.code).toMatch(/\},\s*props,\s*\{\s*get title\(\)/);
+    expect(result.code).toMatch(/\}\s*\], false\)/);
   });
 
   it("lowers plain dynamic DOM attributes through effect and setAttribute", () => {
@@ -710,7 +847,7 @@ describe("@solidjs/compiler transform", () => {
     });
 
     expect(result.code).toContain('import { delegateEvents as _$delegateEvents } from "r-dom";');
-    expect(result.code).toContain("_el$.$$click =");
+    expect(result.code).toContain("_el$._$$click =");
     expect(result.code).toContain("increment();");
     expect(result.code).toContain('_$delegateEvents(["click"]);');
   });

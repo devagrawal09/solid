@@ -102,7 +102,22 @@ run("node", ["scripts/verify-release-artifacts.mjs"]);
 // shapes (rc.5 shipped a settle-walk regression that only the adapter's
 // suite could see) — a release candidate that breaks the flagship adapter
 // must fail here, not on npm.
-run("pnpm", ["--filter", "test-integration", "run", "test:solid-query"]);
+//
+// The gate packs this tree's compiler (@solidjs/compiler with the binding
+// built above, @solidjs/babel-plugin) alongside the core, so compiled output
+// and runtime are always the same release (#3534). A failure here is the
+// adapter disagreeing with this release's semantics. SKIP_SOLID_QUERY_GATE is
+// the emergency valve: it names the ONE version allowed through without the
+// gate, so a skip expires with that release and must be set deliberately in
+// release.yml — never left on.
+const coreVersion = JSON.parse(
+  fs.readFileSync(new URL("../packages/solid/package.json", import.meta.url), "utf8")
+).version;
+if (process.env.SKIP_SOLID_QUERY_GATE === coreVersion) {
+  console.log(`SKIP_SOLID_QUERY_GATE=${coreVersion}: skipping the TanStack Solid Query gate.`);
+} else {
+  run("pnpm", ["--filter", "test-integration", "run", "test:solid-query"]);
+}
 
 const compiler = JSON.parse(
   fs.readFileSync(new URL("../packages/compiler/package.json", import.meta.url), "utf8")

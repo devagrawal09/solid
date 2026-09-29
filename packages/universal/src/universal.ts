@@ -8,8 +8,22 @@ import {
   flatten,
   createMemo,
   createRenderEffect,
-  flush
+  flush,
+  $PROXY
 } from "solid-js";
+import {
+  viewOf,
+  OmitView,
+  sourceKeys,
+  sourceHas,
+  sourceGet,
+  hasStaticKeys,
+  resolvedTable,
+  SOURCE_PLAIN,
+  SOURCE_OMIT,
+  SOURCE_PROXY,
+  SOURCE_MEMO
+} from "solid-js/internal";
 
 export interface RendererOptions<NodeType> {
   createElement(tag: string, staticProps?: Record<string, unknown>): NodeType;
@@ -60,7 +74,7 @@ export interface Renderer<NodeType> {
   ): NodeType;
   spread<T extends object>(
     node: any,
-    props: T,
+    props: T | (() => T) | (T | (() => T) | null | undefined)[] | null | undefined,
     skipChildren?: boolean,
     options?: RendererEffectOptions
   ): void;
@@ -355,55 +369,195 @@ export function createRenderer({
     }
   }
 
-  // TODO: make this better
+  // Same contract as @solidjs/web's spread (#3388, #3419), minus the DOM
+  // specifics: at most TWO reactive nodes per element, one when nothing
+  // flows through `children`.
+  //
+  // - The children `insert` stays separate. It OWNS the child subtree —
+  //   components, memos and effects created while the children getter runs
+  //   are disposed when it reruns — so folding it into the props effect
+  //   would tear the children down and rebuild them on every prop change.
+  //   A plain object whose `children` is a data property inserts the value
+  //   directly, with no effect at all; a getter keeps the tracking scope.
+  // - `ref` FOLDS into the props effect: collected with the other props and
+  //   applied in the commit half only when its identity changed. `ref()`
+  //   runs the callback untracked with NO owner, so anything a ref creates
+  //   survives the effect rerunning.
+  //
+  // Sources. A single source is an object, a mergeProps() proxy or a bare
+  // accessor; an accessor resolves inside each tracking scope, so a lone
+  // reactive spread needs no merge and no memo. An ARRAY of sources is the
+  // union of their keys, later sources winning per key — only the winning
+  // source's value is read, so a shadowed getter never runs — with function
+  // sources called inline, once per run. Nullish sources are empty.
+  //
+  // A caller-supplied name is shared by the child insertion and the props
+  // effect (#3063); without one, each gets its own stable dev fallback.
   function spread(node, props, skipChildren, options) {
     const prevProps = {};
-    props || (props = {});
-    // A caller-supplied name is shared by the child insertion and both
-    // internal effects (#3063); without one, each gets its own stable
-    // dev fallback.
-    if (!skipChildren)
-      insert(
-        node,
-        () => props.children,
-        undefined,
-        undefined,
-        named(options, "renderer spread children")
+    const apply = newProps => {
+      for (const prop in prevProps) {
+        if (prop in newProps) continue;
+        if (prop !== "ref") setProperty(node, prop, undefined, prevProps[prop]);
+        delete prevProps[prop];
+      }
+      for (const prop in newProps) {
+        const value = newProps[prop];
+        if (value === prevProps[prop]) continue;
+        if (prop === "ref") {
+          (typeof value === "function" || Array.isArray(value)) && ref(() => value, node);
+        } else setProperty(node, prop, value, prevProps[prop]);
+        prevProps[prop] = value;
+      }
+    };
+    const childrenOptions = () => named(options, "renderer spread children");
+    if (Array.isArray(props)) {
+      if (!skipChildren)
+        insert(
+          node,
+          () => {
+            for (let i = props.length - 1; i >= 0; i--) {
+              const s = resolveSource(props[i]);
+              if (s != null && entryHas(s, "children")) return entryGet(s, "children");
+            }
+          },
+          undefined,
+          undefined,
+          childrenOptions()
+        );
+      effect(
+        () => collectSources({}, props, undefined),
+        apply,
+        named(options, "renderer spread props")
       );
+      return prevProps;
+    }
+    if (!skipChildren) {
+      if (typeof props !== "function" && props != null && hasStaticKeys(props)) {
+        // A plain object's key set can't change reactively — nor can a
+        // merge/omit view's over plain objects, and its descriptor trap
+        // tells the truth about the owning leaf: no `children` key means
+        // nothing to insert, a data property inserts its value with no
+        // effect, only a getter needs the tracking scope.
+        const desc = Object.getOwnPropertyDescriptor(props, "children");
+        if (desc !== undefined) {
+          if (desc.get === undefined)
+            insert(node, desc.value, undefined, undefined, childrenOptions());
+          else insert(node, () => props.children, undefined, undefined, childrenOptions());
+        }
+      } else
+        insert(
+          node,
+          () => {
+            const s = resolveSource(props);
+            return s != null ? entryGet(s, "children") : undefined;
+          },
+          undefined,
+          undefined,
+          childrenOptions()
+        );
+    }
     effect(
       () => {
-        const r = props.ref;
-        (typeof r === "function" || Array.isArray(r)) && ref(() => r, node);
-      },
-      () => {},
-      named(options, "renderer spread ref")
-    );
-    effect(
-      () => {
+        const s = resolveSource(props);
         const newProps = {};
-        for (const prop in props) {
-          if (prop === "children" || prop === "ref") continue;
-          newProps[prop] = props[prop];
+        // A merge() proxy is read through its sources and an omit() proxy
+        // through its view record, never through their traps; a view over
+        // plain objects through its resolved table, one read per key on
+        // every rerun (see @solidjs/web).
+        const table = resolvedTable(s);
+        if (table !== undefined) {
+          for (const [prop, leaf] of table) {
+            if (typeof prop !== "string" || prop === "children") continue;
+            newProps[prop] = leaf[prop];
+          }
+          return newProps;
+        }
+        if (s != null) {
+          const view = viewOf(s);
+          if (view instanceof OmitView) collectProps(newProps, view, SOURCE_OMIT);
+          else if (view !== undefined) collectSources(newProps, view.sources, view.kinds);
+          else collectProps(newProps, s, $PROXY in s ? SOURCE_PROXY : SOURCE_PLAIN);
         }
         return newProps;
       },
-      props => {
-        for (const prop in prevProps) {
-          if (!(prop in props)) {
-            setProperty(node, prop, undefined, prevProps[prop]);
-            delete prevProps[prop];
-          }
-        }
-        for (const prop in props) {
-          const value = props[prop];
-          if (value === prevProps[prop]) continue;
-          setProperty(node, prop, value, prevProps[prop]);
-          prevProps[prop] = value;
-        }
-      },
+      apply,
       named(options, "renderer spread props")
     );
     return prevProps;
+  }
+
+  function resolveSource(s) {
+    return typeof s === "function" ? s() : s;
+  }
+
+  // `key in s` / `s[key]` for one resolved, non-null spread source: an
+  // omit() proxy answers from its view record, anything else as itself.
+  function entryHas(s, key) {
+    const view = viewOf(s);
+    return view instanceof OmitView ? sourceHas(view, SOURCE_OMIT, key) : key in s;
+  }
+  function entryGet(s, key) {
+    const view = viewOf(s);
+    return view instanceof OmitView ? sourceGet(view, SOURCE_OMIT, key) : s[key];
+  }
+
+  // Layered sources into `out`. Every function source is resolved once, up
+  // front, a merge() proxy among them contributes its flattened sources in
+  // place — each entry with its KIND, so the per-key walk asks nothing of a
+  // proxy but the read; keys are then collected left-to-right (Object.assign
+  // order), and a key any LATER source has is skipped unread. `sourceHas` is
+  // merge()'s own resolution test, so a proxy source answers through its
+  // `has` trap and an omit view from its filter.
+  function collectSources(out, sources, kinds) {
+    const resolved = [];
+    const resolvedKinds = [];
+    for (let i = 0; i < sources.length; i++)
+      pushEntry(resolved, resolvedKinds, sources[i], kinds !== undefined ? kinds[i] : SOURCE_MEMO);
+    for (let i = 0; i < resolved.length; i++)
+      collectProps(out, resolved[i], resolvedKinds[i], resolved, resolvedKinds, i + 1);
+    return out;
+  }
+
+  // One source into the resolved entry lists (see @solidjs/web).
+  function pushEntry(resolved, kinds, s, kind) {
+    if (kind !== SOURCE_MEMO) {
+      resolved.push(s);
+      kinds.push(kind);
+      return;
+    }
+    s = resolveSource(s);
+    if (s == null) return;
+    const view = viewOf(s);
+    if (view instanceof OmitView) {
+      resolved.push(view);
+      kinds.push(SOURCE_OMIT);
+    } else if (view !== undefined) {
+      const f = view.sources,
+        k = view.kinds;
+      for (let j = 0; j < f.length; j++) pushEntry(resolved, kinds, f[j], k[j]);
+    } else {
+      resolved.push(s);
+      kinds.push($PROXY in s ? SOURCE_PROXY : SOURCE_PLAIN);
+    }
+  }
+
+  // One layer of a spread source into `out`: own string keys (one `ownKeys`
+  // trap for a renderer's proxy props, no descriptor trap per key),
+  // `children` excluded (it has its own insert), `ref` carried through for
+  // the commit half. With `later` (the sources after this one, from index
+  // `from`), a key one of them defines is shadowed and never read here.
+  function collectProps(out, s, kind, later?, laterKinds?, from?) {
+    const keys = sourceKeys(s, kind);
+    outer: for (let i = 0; i < keys.length; i++) {
+      const prop = keys[i];
+      if (typeof prop !== "string" || prop === "children") continue;
+      if (later !== undefined)
+        for (let j = from; j < later.length; j++)
+          if (sourceHas(later[j], laterKinds[j], prop)) continue outer;
+      out[prop] = sourceGet(s, kind, prop);
+    }
+    return out;
   }
 
   function applyRef(r, element) {

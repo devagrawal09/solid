@@ -1,5 +1,5 @@
+import { scope as _$scope } from "r-server";
 import { ssrElement as _$ssrElement } from "r-server";
-import { mergeProps as _$mergeProps } from "r-server";
 import { ssrGroup as _$ssrGroup } from "r-server";
 import { escape as _$escape } from "r-server";
 import { ssr as _$ssr } from "r-server";
@@ -28,7 +28,7 @@ var _v$3 = _$ssrHydrationKey(),
     return _$ssrAttribute(
       "data",
       ((_v$15 = _$ssrHydrationKey()),
-      (_v$16 = () => _$escape(state.value)),
+      (_v$16 = _$scope(() => _$escape(state.value))),
       _$ssr(_tmpl$6, _v$15, _v$16))
     );
   };
@@ -43,13 +43,13 @@ var _v$7 = _$ssrHydrationKey(),
       _$ssrAttribute(
         "first",
         ((_v$17 = _$ssrHydrationKey()),
-        (_v$18 = () => _$escape(state.first)),
+        (_v$18 = _$scope(() => _$escape(state.first))),
         _$ssr(_tmpl$6, _v$17, _v$18))
       ),
       _$ssrAttribute(
         "second",
         ((_v$19 = _$ssrHydrationKey()),
-        (_v$20 = () => _$escape(state.second)),
+        (_v$20 = _$scope(() => _$escape(state.second))),
         _$ssr(_tmpl$9, _v$19, _v$20))
       )
     ];
@@ -65,14 +65,16 @@ var _v$1 = _$ssrHydrationKey(),
 const refValue = _$ssr(_tmpl$5, _v$1);
 const spreadValue = _$ssrElement(
   "div",
-  () =>
-    _$mergeProps(props, {
+  [
+    props,
+    {
       get data() {
         var _v$10 = _$ssrHydrationKey(),
-          _v$11 = () => _$escape(state.value);
+          _v$11 = _$scope(() => _$escape(state.value));
         return _$ssr(_tmpl$6, _v$10, _v$11);
       }
-    }),
+    }
+  ],
   undefined,
   true
 );

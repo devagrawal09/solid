@@ -12,7 +12,7 @@
  * the frame is the whole contract.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { attribution } from "../src/attribution.js";
+import { attribution, feedback, formatOrigin, formatRerun } from "../src/attribution.js";
 import {
   action,
   createEffect,
@@ -26,10 +26,18 @@ import {
   OBSERVE
 } from "../src/index.js";
 import type { NavigationRef } from "../src/index.js";
-import type { RerunEvent } from "../src/core/attribution.js";
-import type { DiagnosticEvent } from "../src/core/dev.js";
+import type { NavigationEvent, RerunEvent } from "../src/core/attribution.js";
+import type { DiagnosticEvent, RecordListener, RecordType } from "../src/core/dev.js";
+
+// The engine's records arrive on the channel, whose subscriptions are the
+// consumer's — not dropped by `disable()` — so each test's are released here.
+const offs: (() => void)[] = [];
+function on<K extends RecordType>(type: K, listener: RecordListener<K>): void {
+  offs.push(OBSERVE!.records.subscribe(type, listener));
+}
 
 afterEach(() => {
+  for (const off of offs.splice(0)) off();
   attribution.disable();
   flush();
   vi.restoreAllMocks();
@@ -57,7 +65,7 @@ function arm(opts: { holds?: false } = {}) {
     holds: opts.holds ?? { infoMs: 0, warnMs: 0 }
   });
   const runs: RerunEvent[] = [];
-  attribution.subscribe(e => runs.push(e));
+  on("rerun", e => runs.push(e));
   const silent: DiagnosticEvent[] = [];
   OBSERVE!.diagnostics.subscribe(e => {
     if (e.code === "SILENT_HOLD") silent.push(e);
@@ -122,7 +130,7 @@ describe("withOrigin — navigation provenance", () => {
     expect(origin.at).toBeGreaterThanOrEqual(before);
     // Downstream facts still key by the interaction that paid for it.
     expect(run.interaction).toBe(origin.interaction);
-    const text = attribution.format(run);
+    const text = formatRerun(run);
     expect(text).toContain(`— navigation to /users/:id (/users/42) (under click on a.nav "Alice")`);
   });
 
@@ -142,7 +150,7 @@ describe("withOrigin — navigation provenance", () => {
     expect(run.causes[0].origin!.interaction).toBeUndefined();
     expect(run.interaction).toBeUndefined();
     // Pattern equal to the concrete path: no redundant parenthetical.
-    expect(attribution.formatOrigin(run.causes[0].origin!)).toBe("navigation to /login");
+    expect(formatOrigin(run.causes[0].origin!)).toBe("navigation to /login");
   });
 
   it("inherits the interaction of an action step it runs in, after the click is long gone", async () => {
@@ -166,7 +174,7 @@ describe("withOrigin — navigation provenance", () => {
       name: "/todos/:id",
       interaction: { kind: "interaction", name: "click" }
     });
-    expect(attribution.navigations().at(-1)!.interaction).toMatchObject({ name: "click" });
+    expect(attribution.history("navigation").at(-1)!.interaction).toMatchObject({ name: "click" });
   });
 
   it("is a plain call when no engine is installed", () => {
@@ -180,11 +188,11 @@ describe("withOrigin — navigation provenance", () => {
     expect(result).toBe(42);
     flush();
     expect(location()).toBe("/b");
-    expect(attribution.navigations()).toEqual([]);
+    expect(attribution.history("navigation")).toEqual([]);
   });
 });
 
-describe("navigations() — one settled record per frame", () => {
+describe('history("navigation") — one settled record per frame', () => {
   it("settles a navigation no transition held as committed at the end of the drain", () => {
     arm();
     const [location, setLocation] = createSignal("/users", { name: "location" });
@@ -193,7 +201,7 @@ describe("navigations() — one settled record per frame", () => {
     OBSERVE!.attribution.withInteraction(CLICK, () =>
       OBSERVE!.attribution.withOrigin(NAV, () => setLocation("/users/42"))
     );
-    const [open] = attribution.navigations();
+    const [open] = attribution.history("navigation");
     expect(open).toMatchObject({
       name: "/users/:id",
       to: "/users/42",
@@ -208,7 +216,7 @@ describe("navigations() — one settled record per frame", () => {
     expect(open.outcome).toBe("committed");
     expect(open.settledMs).toBeGreaterThanOrEqual(0);
     expect(open.hold).toBeUndefined();
-    expect(attribution.navigations()).toHaveLength(1);
+    expect(attribution.history("navigation")).toHaveLength(1);
   });
 
   it("settles immediately when no write survived the equality gate", () => {
@@ -217,7 +225,7 @@ describe("navigations() — one settled record per frame", () => {
     OBSERVE!.attribution.withOrigin({ kind: "navigation", name: "/users", to: "/users" }, () =>
       setLocation("/users")
     );
-    const [nav] = attribution.navigations();
+    const [nav] = attribution.history("navigation");
     expect(nav.writes).toBe(0);
     expect(nav.outcome).toBe("committed");
   });
@@ -230,7 +238,7 @@ describe("navigations() — one settled record per frame", () => {
     OBSERVE!.attribution.withOrigin({ kind: "navigation", name: "/b", to: "/b" }, () =>
       flush(() => setLocation("/b"))
     );
-    const [nav] = attribution.navigations();
+    const [nav] = attribution.history("navigation");
     expect(nav.writes).toBe(1);
     expect(nav.outcome).toBe("committed");
   });
@@ -257,7 +265,7 @@ describe("navigations() — one settled record per frame", () => {
     setAuthed(false);
     flush();
     expect(location()).toBe("/login");
-    const [nav] = attribution.navigations();
+    const [nav] = attribution.history("navigation");
     expect(nav).toMatchObject({ name: "/login", writes: 1, outcome: "committed" });
     expect(nav.origin.interaction).toBeUndefined();
   });
@@ -274,16 +282,20 @@ describe("navigations() — one settled record per frame", () => {
     );
     flush();
     expect(app.shown).toEqual(["alice@/users"]); // held: nothing painted
-    const [nav] = attribution.navigations();
+    const [nav] = attribution.history("navigation");
     expect(nav.outcome).toBeUndefined(); // still waiting on the page
+    // Bracket the wait on the engine's own clock: a 10ms timer can fire a
+    // hair under 10ms of `performance.now()`.
+    const armed = performance.now();
     await wait(10);
+    const waited = performance.now() - armed;
     app.resolve("alice");
     await until(() => app.shown.includes("alice@/users/42"), "the held page to land");
 
     expect(nav.outcome).toBe("held");
     expect(nav.hold).toBeDefined();
-    expect(nav.settledMs).toBeGreaterThanOrEqual(10);
-    const [hold] = attribution.holds();
+    expect(nav.settledMs).toBeGreaterThanOrEqual(waited);
+    const [hold] = attribution.history("hold");
     expect(nav.hold).toBe(hold);
     // The hold names the navigation, and joins to it by identity.
     expect(hold.origin).toBe(nav.origin);
@@ -317,7 +329,7 @@ describe("navigations() — one settled record per frame", () => {
     expect(silent[0].message).toContain(
       `[SILENT_HOLD] navigation to /users/:id (/users/42) wrote "location"`
     );
-    expect(attribution.holds()[0].interaction).toBeUndefined();
+    expect(attribution.history("hold")[0].interaction).toBeUndefined();
   });
 
   it("still settles a held navigation when hold tracking is off", async () => {
@@ -329,7 +341,7 @@ describe("navigations() — one settled record per frame", () => {
 
     OBSERVE!.attribution.withOrigin(NAV, () => app.setLocation("/users/42"));
     flush();
-    const [nav] = attribution.navigations();
+    const [nav] = attribution.history("navigation");
     expect(nav.outcome).toBeUndefined();
     await wait(10);
     app.resolve("b");
@@ -337,7 +349,7 @@ describe("navigations() — one settled record per frame", () => {
 
     expect(nav.outcome).toBe("held");
     expect(nav.hold).toBeUndefined(); // nothing recorded it
-    expect(attribution.holds()).toEqual([]);
+    expect(attribution.history("hold")).toEqual([]);
   });
 
   it("marks a navigation superseded when a later one replaces its write before it lands", async () => {
@@ -354,7 +366,7 @@ describe("navigations() — one settled record per frame", () => {
       () => app.setLocation("/users/43")
     );
     flush();
-    const [first, second] = attribution.navigations();
+    const [first, second] = attribution.history("navigation");
     expect(first.outcome).toBe("superseded");
     expect(first.hold).toBeUndefined();
     expect(second.outcome).toBeUndefined();
@@ -363,7 +375,7 @@ describe("navigations() — one settled record per frame", () => {
     await until(() => app.shown.includes("b@/users/43"), "the second page to land");
     expect(second.outcome).toBe("held");
     expect(second.hold!.origin).toBe(second.origin);
-    expect(attribution.navigations()).toHaveLength(2);
+    expect(attribution.history("navigation")).toHaveLength(2);
   });
 
   it("folds settled navigations into feedback().navigations by route", async () => {
@@ -390,11 +402,15 @@ describe("navigations() — one settled record per frame", () => {
       () => app.setLocation("/users/3")
     );
     flush();
+    // Bracket the wait on the engine's own clock: a 10ms timer can fire a
+    // hair under 10ms of `performance.now()`.
+    const armed = performance.now();
     await wait(10);
+    const waited = performance.now() - armed;
     app.resolve("b");
     await until(() => app.shown.includes("b@/users/3"), "the last page to land");
 
-    const [row] = attribution.feedback().navigations;
+    const [row] = feedback().navigations;
     expect(row).toMatchObject({
       name: "/users/:id",
       navigations: 3,
@@ -405,7 +421,7 @@ describe("navigations() — one settled record per frame", () => {
     // heldMs is the hold's own clock: it opened with the superseded
     // navigation's write and the surviving one inherited it, so it can run
     // longer than the survivor's own request-to-settle time.
-    expect(row.heldMs).toBeGreaterThanOrEqual(10);
+    expect(row.heldMs).toBeGreaterThanOrEqual(waited);
     expect(row.settledMs).toBeGreaterThan(0);
     expect(row.worstMs).toBeGreaterThan(0);
   });
@@ -423,7 +439,7 @@ describe("navigations() — one settled record per frame", () => {
       OBSERVE!.attribution.withOrigin(ref, () => app.setLocation("/admin/users/42"))
     );
     flush();
-    const [nav] = attribution.navigations();
+    const [nav] = attribution.history("navigation");
     expect(nav.name).toBe("/admin/*");
     expect(nav.params).toBeUndefined();
     // The subtree resolves inside the hold; the router fills in the exact match.
@@ -439,14 +455,12 @@ describe("navigations() — one settled record per frame", () => {
     // hold's verdict and the feedback row all read the refined name.
     const run = runs.filter(r => r.nodeName === "page").at(-1)!;
     expect(run.causes[0].origin).toBe(nav.origin);
-    expect(attribution.formatOrigin(nav.origin)).toBe(
-      "navigation to /admin/users/:id (/admin/users/42)"
-    );
+    expect(formatOrigin(nav.origin)).toBe("navigation to /admin/users/:id (/admin/users/42)");
     expect(silent[0].message).toContain("(navigation to /admin/users/:id (/admin/users/42))");
     expect(silent[0].data).toMatchObject({
       navigation: { name: "/admin/users/:id", params: { id: "42" } }
     });
-    expect(attribution.feedback().navigations[0].name).toBe("/admin/users/:id");
+    expect(feedback().navigations[0].name).toBe("/admin/users/:id");
   });
 
   it("clears its records on disable() and enable()", () => {
@@ -456,12 +470,12 @@ describe("navigations() — one settled record per frame", () => {
       setLocation("/b")
     );
     flush();
-    expect(attribution.navigations()).toHaveLength(1);
+    expect(attribution.history("navigation")).toHaveLength(1);
     attribution.disable();
-    expect(attribution.navigations()).toEqual([]);
+    expect(attribution.history("navigation")).toEqual([]);
     arm();
-    expect(attribution.navigations()).toEqual([]);
-    expect(attribution.feedback().navigations).toEqual([]);
+    expect(attribution.history("navigation")).toEqual([]);
+    expect(feedback().navigations).toEqual([]);
   });
 });
 
@@ -480,20 +494,24 @@ describe("redirects — one navigation, several destinations", () => {
       OBSERVE!.attribution.withOrigin(NAV, () => app.setLocation("/users/42"))
     );
     flush();
+    // Bracket both waits on the engine's own clock: a 10ms timer can fire a
+    // hair under 10ms of `performance.now()`.
+    const armed = performance.now();
     await wait(10);
     // The guard behind /users/:id sends the user to /login — the click is long
     // gone, and the router knows only that a navigation is pending.
     const hopAt = performance.now();
     OBSERVE!.attribution.withOrigin(LOGIN, () => app.setLocation("/login"));
     flush();
-    expect(attribution.navigations()).toHaveLength(1);
-    const [nav] = attribution.navigations();
+    expect(attribution.history("navigation")).toHaveLength(1);
+    const [nav] = attribution.history("navigation");
     expect(nav.outcome).toBeUndefined();
     await wait(10);
+    const waited = performance.now() - armed;
     app.resolve("b");
     await until(() => app.shown.includes("b@/login"), "the redirect target to land");
 
-    expect(attribution.navigations()).toHaveLength(1);
+    expect(attribution.history("navigation")).toHaveLength(1);
     expect(nav).toMatchObject({
       name: "/login",
       to: "/login",
@@ -510,20 +528,18 @@ describe("redirects — one navigation, several destinations", () => {
     // Timing runs from the user's request, not the hop.
     expect(nav.at).toBeGreaterThanOrEqual(before);
     expect(nav.at).toBeLessThan(hopAt);
-    expect(nav.settledMs).toBeGreaterThanOrEqual(20);
+    expect(nav.settledMs).toBeGreaterThanOrEqual(waited);
     // One hold, joined by identity, named by the whole chain.
-    const [hold] = attribution.holds();
+    const [hold] = attribution.history("hold");
     expect(nav.hold).toBe(hold);
     expect(hold.origin).toBe(nav.origin);
-    expect(attribution.formatOrigin(nav.origin)).toBe(
-      "navigation to /login (redirected from /users/42)"
-    );
+    expect(formatOrigin(nav.origin)).toBe("navigation to /login (redirected from /users/42)");
     expect(silent).toHaveLength(1);
     expect(silent[0].message).toContain(
       `[SILENT_HOLD] click on a.nav "Alice" (navigation to /login (redirected from /users/42)) wrote "location"`
     );
     expect(silent[0].data).toMatchObject({ navigation: { name: "/login", to: "/login" } });
-    expect(attribution.feedback().navigations).toEqual([
+    expect(feedback().navigations).toEqual([
       expect.objectContaining({
         name: "/login",
         navigations: 1,
@@ -553,11 +569,11 @@ describe("redirects — one navigation, several destinations", () => {
     app.resolve("b");
     await until(() => app.shown.includes("b@/sso?next=%2Flogin"), "the final target to land");
 
-    const [nav] = attribution.navigations();
-    expect(attribution.navigations()).toHaveLength(1);
+    const [nav] = attribution.history("navigation");
+    expect(attribution.history("navigation")).toHaveLength(1);
     expect(nav).toMatchObject({ name: "/sso", writes: 3, outcome: "held" });
     expect(nav.redirects!.map(h => h.to)).toEqual(["/users/42", "/login"]);
-    expect(attribution.formatOrigin(nav.origin)).toBe(
+    expect(formatOrigin(nav.origin)).toBe(
       "navigation to /sso (/sso?next=%2Flogin, redirected from /users/42 → /login)"
     );
   });
@@ -580,11 +596,11 @@ describe("redirects — one navigation, several destinations", () => {
         }
       )
     );
-    const [nav] = attribution.navigations();
+    const [nav] = attribution.history("navigation");
     // Neither close settled it early: the outer frame was still open.
     expect(nav.outcome).toBeUndefined();
     flush();
-    expect(attribution.navigations()).toHaveLength(1);
+    expect(attribution.history("navigation")).toHaveLength(1);
     expect(nav).toMatchObject({
       name: "/dashboard",
       from: "/start",
@@ -604,10 +620,10 @@ describe("redirects — one navigation, several destinations", () => {
     flush();
     OBSERVE!.attribution.withOrigin(LOGIN, () => setLocation("/login"));
     flush();
-    const [nav] = attribution.navigations();
+    const [nav] = attribution.history("navigation");
     expect(nav).toMatchObject({ name: "/login", writes: 1, outcome: "committed" });
     expect(nav.redirects).toBeUndefined();
-    expect(attribution.feedback().navigations[0].redirected).toBe(0);
+    expect(feedback().navigations[0].redirected).toBe(0);
   });
 });
 
@@ -644,12 +660,12 @@ describe("hold census — a router's own reads are not acknowledgement", () => {
     r.resolve("b");
     await until(() => r.shown.includes("b@/users/42"), "the held page to land");
 
-    const [hold] = attribution.holds();
+    const [hold] = attribution.history("hold");
     expect(hold.acknowledgements).toEqual([]);
     expect(silent).toHaveLength(1);
-    const [source] = attribution.feedback().sources;
+    const [source] = feedback().sources;
     expect(source).toMatchObject({ holds: 1, silent: 1, latestOnly: 0 });
-    expect(attribution.feedback().navigations[0]).toMatchObject({ held: 1, silent: 1 });
+    expect(feedback().navigations[0]).toMatchObject({ held: 1, silent: 1 });
   });
 
   it("is acknowledged once the app renders the router's pending state", async () => {
@@ -666,12 +682,12 @@ describe("hold census — a router's own reads are not acknowledgement", () => {
     r.resolve("b");
     await until(() => r.shown.includes("b@/users/42"), "the held page to land");
 
-    const [hold] = attribution.holds();
+    const [hold] = attribution.history("hold");
     expect(hold.acknowledgements).toContainEqual(
       expect.objectContaining({ kind: "isPending", source: "location" })
     );
     expect(silent).toHaveLength(0);
-    expect(attribution.feedback().navigations[0]).toMatchObject({ held: 1, silent: 0 });
+    expect(feedback().navigations[0]).toMatchObject({ held: 1, silent: 0 });
   });
 });
 
@@ -686,15 +702,176 @@ describe("at — a router whose request predates the write it wraps", () => {
     // wraps, with the user's request time carried in.
     const requested = performance.now();
     await wait(10);
+    // The wait actually taken on the engine's clock (a 10ms timer can fire a
+    // hair under 10ms of `performance.now()`); settledMs must cover it.
+    const waited = performance.now() - requested;
     OBSERVE!.attribution.withOrigin({ ...NAV, at: requested }, () => app.setLocation("/users/42"));
     flush();
-    const [nav] = attribution.navigations();
+    const [nav] = attribution.history("navigation");
     expect(nav.at).toBe(requested);
     expect(nav.origin.at).toBe(requested);
     app.resolve("b");
     await until(() => app.shown.includes("b@/users/42"), "the held page to land");
     expect(nav.outcome).toBe("held");
-    expect(nav.settledMs).toBeGreaterThanOrEqual(10);
+    expect(nav.settledMs).toBeGreaterThanOrEqual(waited);
     expect(nav.hold!.origin).toBe(nav.origin);
+  });
+});
+
+describe("interaction — a router that awaited before writing hands the click back", () => {
+  it("joins the write to the interaction captured in the request, not what is on the stack", async () => {
+    const { runs } = arm();
+    const [location, setLocation] = createSignal("/todos", { name: "location" });
+    createRoot(() => createEffect(location, () => {}, { name: "reader" }));
+    flush();
+    // The router's core resolves its loaders outside the graph; by the time
+    // it publishes, the click's frame is gone. It captured the origin in the
+    // handler and declares it on the ref. The handler returns the router's
+    // promise, so the interaction stays open until the write lands.
+    const navigate = () => {
+      const captured = OBSERVE!.attribution.currentOrigin();
+      return wait(5).then(() =>
+        OBSERVE!.attribution.withOrigin(
+          { kind: "navigation", name: "/todos/:id", to: "/todos/7", interaction: captured },
+          () => setLocation("/todos/7")
+        )
+      );
+    };
+    await OBSERVE!.attribution.withInteraction(CLICK, navigate);
+    flush();
+    await until(() => runs.some(r => r.nodeName === "reader"), "the reader's re-run");
+    const nav = attribution.history("navigation").at(-1)!;
+    expect(nav.interaction).toMatchObject({ kind: "interaction", name: "click" });
+    expect(runs.filter(r => r.nodeName === "reader").at(-1)!.causes[0].origin).toMatchObject({
+      kind: "navigation",
+      interaction: { name: "click" }
+    });
+    // And the click's own record lists the navigation it caused.
+    expect(attribution.history("interaction").at(-1)!.navigations).toContain(nav);
+  });
+
+  it("declared beats ambient: an unrelated interaction on the stack does not claim the write", () => {
+    arm();
+    const [location, setLocation] = createSignal("/a", { name: "location" });
+    createRoot(() => createEffect(location, () => {}, { name: "reader" }));
+    flush();
+    let first: ReturnType<typeof OBSERVE.attribution.currentOrigin>;
+    OBSERVE!.attribution.withInteraction({ type: "click", target: "a.first" }, () => {
+      first = OBSERVE!.attribution.currentOrigin();
+    });
+    OBSERVE!.attribution.withInteraction({ type: "click", target: "a.second" }, () => {
+      OBSERVE!.attribution.withOrigin(
+        { kind: "navigation", name: "/b", to: "/b", interaction: first },
+        () => setLocation("/b")
+      );
+    });
+    flush();
+    const nav = attribution.history("navigation").at(-1)!;
+    expect(nav.interaction).toMatchObject({ target: "a.first" });
+  });
+
+  it("a request that ran under no interaction declares none, even when the write lands inside one", () => {
+    arm();
+    const [location, setLocation] = createSignal("/a", { name: "location" });
+    createRoot(() => createEffect(location, () => {}, { name: "reader" }));
+    flush();
+    // Captured outside any interaction (a timer's navigate()): `undefined`,
+    // and the key's presence is the declaration.
+    const outside = OBSERVE!.attribution.currentOrigin();
+    expect(outside).toBeUndefined();
+    OBSERVE!.attribution.withInteraction(CLICK, () => {
+      OBSERVE!.attribution.withOrigin(
+        { kind: "navigation", name: "/b", to: "/b", interaction: outside },
+        () => setLocation("/b")
+      );
+    });
+    flush();
+    expect(attribution.history("navigation").at(-1)!.interaction).toBeUndefined();
+  });
+});
+
+describe("initial — the route the document arrived on", () => {
+  it("settles a no-write declaration as committed at frame close, from the time origin", () => {
+    arm();
+    const seen: NavigationEvent[] = [];
+    on("navigation", e => seen.push(e));
+    const before = performance.now();
+    // What a router does while building its context: match, no write.
+    const built = OBSERVE!.attribution.withOrigin(
+      {
+        kind: "navigation",
+        initial: true,
+        name: "/users/:id",
+        to: "/users/42",
+        params: { id: "42" }
+      },
+      () => "context"
+    );
+    expect(built).toBe("context");
+    expect(seen).toHaveLength(1);
+    const [nav] = seen;
+    expect(nav.initial).toBe(true);
+    expect(nav.at).toBe(0);
+    expect(nav.origin.at).toBe(0);
+    expect(nav.from).toBeUndefined();
+    expect(nav.interaction).toBeUndefined();
+    expect(nav.writes).toBe(0);
+    expect(nav.outcome).toBe("committed");
+    expect(nav.name).toBe("/users/:id");
+    expect(nav.to).toBe("/users/42");
+    expect(nav.params).toEqual({ id: "42" });
+    // Document start → declaration, on the engine's clock.
+    expect(nav.settledMs).toBeGreaterThanOrEqual(before);
+    expect(formatOrigin(nav.origin)).toBe("initial navigation to /users/:id (/users/42)");
+  });
+
+  it("takes the router's own start when it passes one, and ignores from", () => {
+    arm();
+    const at = performance.now();
+    OBSERVE!.attribution.withOrigin(
+      { kind: "navigation", initial: true, name: "/", to: "/", from: "/elsewhere", at },
+      () => {}
+    );
+    const [nav] = attribution.history("navigation");
+    expect(nav.at).toBe(at);
+    expect(nav.from).toBeUndefined();
+  });
+
+  it("re-reads the ref at settle, so a lazy match resolved while building lands on the record", () => {
+    arm();
+    const ref: NavigationRef = {
+      kind: "navigation",
+      initial: true,
+      name: "/admin/*",
+      to: "/admin/users"
+    };
+    OBSERVE!.attribution.withOrigin(ref, () => {
+      ref.name = "/admin/users";
+    });
+    expect(attribution.history("navigation")[0].name).toBe("/admin/users");
+  });
+
+  it("is a regular navigation for the records and history, but not for the feedback tables", () => {
+    arm();
+    OBSERVE!.attribution.withOrigin(
+      { kind: "navigation", initial: true, name: "/users/:id", to: "/users/42" },
+      () => {}
+    );
+    // A real navigation to the same route afterwards.
+    const [location, setLocation] = createSignal("/users/42", { name: "location" });
+    createRoot(() => createEffect(location, () => {}, { name: "reader" }));
+    flush();
+    OBSERVE!.attribution.withOrigin(NAV, () => setLocation("/users/43"));
+    flush();
+    expect(attribution.history("navigation")).toHaveLength(2);
+    const rows = feedback().navigations;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ name: "/users/:id", navigations: 1 });
+  });
+
+  it("is a plain call when no engine is installed", () => {
+    expect(
+      OBSERVE!.attribution.withOrigin({ kind: "navigation", initial: true, name: "/" }, () => 7)
+    ).toBe(7);
   });
 });

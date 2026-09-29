@@ -26,7 +26,7 @@ export function View(props: {
 	var _el$2 = _el$.firstChild;
 	var _el$3 = _el$2.nextSibling;
 	_$addEvent(_el$2, "click", eventBlock, true);
-	_el$3.$$click = () => setCount(0);
+	_el$3._$$click = () => setCount(0);
 	_$insert(_el$, () => {
 		return $(function() {
 			var _el$4 = _tmpl$2();

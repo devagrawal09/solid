@@ -323,28 +323,31 @@ export function App() {
 };
 
 const JSX_BLOCK_ORACLE_SSR = [
-  'markup = <main _hk=0><!--$--><p _hk=1 class="count">n=<!--$-->1<!--/--></p><!--/--><!--$--><b _hk=3 class="label">x</b><!--/--><span class="after">after</span><!--$--><b _hk=4 class="label">y</b><!--/--></main>',
-  'hydration-keys = ["0","1","3","4"]'
+  'markup = <main _hk=0><!--$--><p _hk=1 class="count">n=<!--$-->1<!--/--></p><!--/--><!--$--><b _hk=3 class="label">x</b><!--/--><span class="after">after</span><!--$--><b _hk=5 class="label">y</b><!--/--></main>',
+  'hydration-keys = ["0","1","3","5"]'
 ];
 
+// The runtime mode's unscoped deferred block is exactly the permutation
+// upstream's dev check reports (UNSCOPED_HOLE_ALLOCATED_IDS, #3620).
 const JSX_BLOCK_RUNTIME_SSR = [
-  'markup = <main _hk=0><!--$--><p _hk=3 class="count">n=<!--$-->1<!--/--></p><!--/--><!--$--><b _hk=1 class="label">x</b><!--/--><span class="after">after</span><!--$--><b _hk=2 class="label">y</b><!--/--></main>',
-  'hydration-keys = ["0","3","1","2"]'
+  "console.warn = [UNSCOPED_HOLE_ALLOCATED_IDS] A JSX hole received `block` instead of a value, and calling it built hydratable content. The hole is unscoped, so that content took ids from the enclosing scope's counter: the server evaluated it at 5 (→ 6), after the scoped holes that follow it had reserved theirs, but it was registered at 1, where the client builds it in place. The hydration keys of this hole's content and of the holes after it permute between server and client. Pass the built value — call it at the hole (`{block()}`) or assign the result first — rather than the function; a function is not a JSX.Element, so this shape is reached only from JavaScript or through a cast.",
+  'markup = <main _hk=0><!--$--><p _hk=5 class="count">n=<!--$-->1<!--/--></p><!--/--><!--$--><b _hk=1 class="label">x</b><!--/--><span class="after">after</span><!--$--><b _hk=3 class="label">y</b><!--/--></main>',
+  'hydration-keys = ["0","5","1","3"]'
 ];
 
 const JSX_BLOCK_SCOPED_SSR = [
-  'markup = <main _hk=0><!--$--><p _hk=10 class="count">n=<!--$-->1<!--/--></p><!--/--><!--$--><b _hk=2 class="label">x</b><!--/--><span class="after">after</span><!--$--><b _hk=3 class="label">y</b><!--/--></main>',
-  'hydration-keys = ["0","10","2","3"]'
+  'markup = <main _hk=0><!--$--><p _hk=10 class="count">n=<!--$-->1<!--/--></p><!--/--><!--$--><b _hk=2 class="label">x</b><!--/--><span class="after">after</span><!--$--><b _hk=4 class="label">y</b><!--/--></main>',
+  'hydration-keys = ["0","10","2","4"]'
 ];
 
 const JSX_BLOCK_ORACLE_HYDRATE = [
-  'html = <main _hk="0"><!--$--><p _hk="1" class="count">n=<!--$-->1<!--/--></p><!--/--><!--$--><b _hk="3" class="label">x</b><!--/--><span class="after">after</span><!--$--><b _hk="4" class="label">y</b><!--/--></main>',
-  'html = <main _hk="0"><!--$--><p _hk="1" class="count">n=<!--$-->2<!--/--></p><!--/--><!--$--><b _hk="3" class="label">x</b><!--/--><span class="after">after</span><!--$--><b _hk="4" class="label">y</b><!--/--></main>'
+  'html = <main _hk="0"><!--$--><p _hk="1" class="count">n=<!--$-->1<!--/--></p><!--/--><!--$--><b _hk="3" class="label">x</b><!--/--><span class="after">after</span><!--$--><b _hk="5" class="label">y</b><!--/--></main>',
+  'html = <main _hk="0"><!--$--><p _hk="1" class="count">n=<!--$-->2<!--/--></p><!--/--><!--$--><b _hk="3" class="label">x</b><!--/--><span class="after">after</span><!--$--><b _hk="5" class="label">y</b><!--/--></main>'
 ];
 
 const JSX_BLOCK_SCOPED_HYDRATE = [
-  'html = <main _hk="0"><!--$--><p _hk="10" class="count">n=<!--$-->1<!--/--></p><!--/--><!--$--><b _hk="2" class="label">x</b><!--/--><span class="after">after</span><!--$--><b _hk="3" class="label">y</b><!--/--></main>',
-  'html = <main _hk="0"><!--$--><p _hk="10" class="count">n=<!--$-->2<!--/--></p><!--/--><!--$--><b _hk="2" class="label">x</b><!--/--><span class="after">after</span><!--$--><b _hk="3" class="label">y</b><!--/--></main>'
+  'html = <main _hk="0"><!--$--><p _hk="10" class="count">n=<!--$-->1<!--/--></p><!--/--><!--$--><b _hk="2" class="label">x</b><!--/--><span class="after">after</span><!--$--><b _hk="4" class="label">y</b><!--/--></main>',
+  'html = <main _hk="0"><!--$--><p _hk="10" class="count">n=<!--$-->2<!--/--></p><!--/--><!--$--><b _hk="2" class="label">x</b><!--/--><span class="after">after</span><!--$--><b _hk="4" class="label">y</b><!--/--></main>'
 ];
 
 export const jsxBlock: Scenario = {

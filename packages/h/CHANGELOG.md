@@ -1,5 +1,110 @@
 # @solidjs/h
 
+## 2.0.0-rc.11
+
+### Patch Changes
+
+- @solidjs/web@2.0.0-rc.11
+
+## 2.0.0-rc.10
+
+### Patch Changes
+
+- ce17c29: Type the anchor's scroll opt-out as `noscroll`, not `noScroll` (solidjs/solid-router#605). The client-navigation contract on plain `<a>` elements is spelled lowercase — `link`, `state`, `replace`, `preload` — like every other HTML attribute in these types (`novalidate`, `autofocus`, `crossorigin`), and the router documents and reads the lowercase form (`a.hasAttribute("noscroll")`); `noScroll` was the one camelCase outlier, so the spelling the router README shows was a type error. Runtime is unchanged: `setAttribute` and the HTML parser already lowercase the name, so existing `<a noScroll>` markup keeps working and only needs the spelling updated to type-check.
+- Updated dependencies [ce17c29]
+- Updated dependencies [fd36d37]
+- Updated dependencies [fd36d37]
+- Updated dependencies [fd36d37]
+- Updated dependencies [5e46732]
+- Updated dependencies [56918c6]
+- Updated dependencies [fd36d37]
+- Updated dependencies [fd36d37]
+- Updated dependencies [7599885]
+- Updated dependencies [6717d35]
+- Updated dependencies [663031d]
+- Updated dependencies [1d3ec5d]
+- Updated dependencies [1d3ec5d]
+- Updated dependencies [a360ad0]
+- Updated dependencies [bfc320c]
+- Updated dependencies [3af4696]
+- Updated dependencies [cf22713]
+- Updated dependencies [78523bf]
+- Updated dependencies [495db9c]
+- Updated dependencies [f41c6a4]
+- Updated dependencies [fd8b3df]
+- Updated dependencies [1d3ec5d]
+- Updated dependencies [1d3ec5d]
+- Updated dependencies [1d3ec5d]
+- Updated dependencies [1d3ec5d]
+- Updated dependencies [7742b28]
+- Updated dependencies [7742b28]
+- Updated dependencies [7742b28]
+- Updated dependencies [7742b28]
+- Updated dependencies [7742b28]
+- Updated dependencies [235173e]
+- Updated dependencies [b8ac688]
+- Updated dependencies [384a631]
+- Updated dependencies [fd36d37]
+- Updated dependencies [fd36d37]
+- Updated dependencies [fd36d37]
+- Updated dependencies [ed13427]
+- Updated dependencies [fd36d37]
+- Updated dependencies [fd36d37]
+- Updated dependencies [757d1eb]
+- Updated dependencies [dd53561]
+- Updated dependencies [777916a]
+- Updated dependencies [fb35efb]
+- Updated dependencies [1d3ec5d]
+- Updated dependencies [e10a4ba]
+- Updated dependencies [7742b28]
+- Updated dependencies [b7701b5]
+  - @solidjs/web@2.0.0-rc.10
+
+## 2.0.0-rc.9
+
+### Patch Changes
+
+- c452850: `dynamic()` / `Dynamic` with a tag-name source honor an `xmlns` prop when creating the element (#3386)
+
+  The compiler resolves a tag's namespace from its parent at build time; the `dynamic()` runtime path creates the element before it has a parent, so a tag that exists in both HTML and SVG (`a`, `script`, `style`, `title`) was always created as an HTML element — `<svg><Link href=…/></svg>` with `Link = dynamic(() => "a")` produced an HTML anchor inside the SVG tree. The instance can now say which one it means with the same attribute compiled JSX uses for the same purpose: `<Link xmlns="http://www.w3.org/2000/svg" href=…/>`. Like `is`, `xmlns` is read once, untracked, at creation (the DOM can't re-namespace a node) and then applied as an ordinary attribute, so a client-rendered element carries the same attribute the server serializes. Without `xmlns` the namespace is still inferred from the tag name. Hydration is unaffected: it claims the parser-namespaced node.
+
+  Types: `xmlns` is now accepted on the four tags that exist in both HTML and SVG (`a`, `script`, `style`, `title`) in addition to the SVG/MathML attribute sets that already had it — those are the only tags where the attribute changes what gets created, and the compiler has honored `<a xmlns=…>` on them all along. Unambiguous HTML tags (`div`, `span`, …) still reject it. `dynamic()`'s tag-name components inherit it through their intrinsic attribute types. Also syncs `@solidjs/h`'s generated JSX types.
+
+- Updated dependencies [d826cd3]
+- Updated dependencies [6d2bdeb]
+- Updated dependencies [17b0bda]
+- Updated dependencies [1af28a1]
+- Updated dependencies [d2a36f5]
+- Updated dependencies [c452850]
+- Updated dependencies [53280e7]
+- Updated dependencies [5b31076]
+- Updated dependencies [084e621]
+- Updated dependencies [a429b44]
+- Updated dependencies [549f482]
+- Updated dependencies [3154ed6]
+- Updated dependencies [b298154]
+- Updated dependencies [899c2c4]
+- Updated dependencies [3ae9e92]
+- Updated dependencies [328580f]
+- Updated dependencies [da6ed76]
+- Updated dependencies [5f688a6]
+- Updated dependencies [c66130d]
+- Updated dependencies [36db287]
+- Updated dependencies [61a114c]
+- Updated dependencies [0d8347a]
+- Updated dependencies [7623ce1]
+- Updated dependencies [56858e7]
+- Updated dependencies [537faea]
+- Updated dependencies [af94f67]
+- Updated dependencies [042b540]
+- Updated dependencies [7f6332a]
+- Updated dependencies [a732d2b]
+- Updated dependencies [40977c9]
+- Updated dependencies [34287d8]
+- Updated dependencies [48f007e]
+- Updated dependencies [7f5f902]
+  - @solidjs/web@2.0.0-rc.9
+
 ## 2.0.0-rc.8
 
 ### Patch Changes

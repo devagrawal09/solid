@@ -35,6 +35,8 @@ import {
   isFunctionShapedHole
 } from "../shared/utils";
 import { transformNode } from "../shared/transform";
+import { decodedAttrValue } from "../universal/element";
+import { namesBindings } from "../config";
 import { InlineElements, BlockElements } from "./constants";
 import type {
   BabelPath,
@@ -495,6 +497,7 @@ function transformAttributes(
     hasChildren = path.node.children.length > 0,
     hasSpread = attributes.some(attribute => t.isJSXSpreadAttribute(attribute.node)),
     config = getConfig(path);
+  const refs: babelTypes.Statement[] = [];
 
   // preprocess spreads
   if (hasSpread) {
@@ -974,7 +977,7 @@ function transformAttributes(
               (binding.kind === "const" || binding.kind === "module");
           if (!isConstant && t.isLVal(value.expression)) {
             const refIdentifier = path.scope.generateUidIdentifier("_ref$");
-            results.exprs.unshift(
+            refs.push(
               t.variableDeclaration("var", [t.variableDeclarator(refIdentifier, value.expression)]),
               t.expressionStatement(
                 t.conditionalExpression(
@@ -1003,7 +1006,7 @@ function transformAttributes(
             t.isFunction(value.expression) ||
             t.isArrayExpression(value.expression)
           ) {
-            results.exprs.unshift(
+            refs.push(
               t.expressionStatement(
                 t.callExpression(
                   registerImportMethod(path, "ref", getRendererConfig(path, "dom").moduleName),
@@ -1013,7 +1016,7 @@ function transformAttributes(
             );
           } else {
             const refIdentifier = path.scope.generateUidIdentifier("_ref$");
-            results.exprs.unshift(
+            refs.push(
               t.variableDeclaration("var", [t.variableDeclarator(refIdentifier, value.expression)]),
               t.expressionStatement(
                 t.logicalExpression(
@@ -1059,7 +1062,7 @@ function transformAttributes(
                   t.expressionStatement(
                     t.assignmentExpression(
                       "=",
-                      t.memberExpression(elem, t.identifier(`$$${ev}Data`)),
+                      t.memberExpression(elem, t.identifier(`_$$${ev}Data`)),
                       handler.elements[1] as babelTypes.Expression
                     )
                   )
@@ -1070,7 +1073,7 @@ function transformAttributes(
                 t.expressionStatement(
                   t.assignmentExpression(
                     "=",
-                    t.memberExpression(elem, t.identifier(`$$${ev}`)),
+                    t.memberExpression(elem, t.identifier(`_$$${ev}`)),
                     handler
                   )
                 )
@@ -1080,7 +1083,7 @@ function transformAttributes(
                 t.expressionStatement(
                   t.assignmentExpression(
                     "=",
-                    t.memberExpression(elem, t.identifier(`$$${ev}`)),
+                    t.memberExpression(elem, t.identifier(`_$$${ev}`)),
                     handler
                   )
                 )
@@ -1243,6 +1246,9 @@ function transformAttributes(
     path.node.children.push(children);
   }
   if (spreadExpr) results.exprs.push(...(Array.isArray(spreadExpr) ? spreadExpr : [spreadExpr]));
+  // Refs run after the element's attributes and spread are applied, so a ref's
+  // own writes survive client creation the way they survive hydration.
+  results.exprs.push(...refs);
 
   results.hasHydratableEvent = results.hasHydratableEvent || hasHydratableEvent;
 }
@@ -1314,16 +1320,18 @@ function transformChildren(
             `Fragments can only be used top level in JSX. Not used under a <${tagName}>.`
           );
         }
+        // Classify the source expression: transformNode rewrites `a && b` into a
+        // memo ternary in place, and the ssr generate classifies the original.
+        const allocatesIds = config.hydratable && canChildSlotAllocateIds(child);
+        const functionHole = isFunctionShapedHole(child);
         const transformed = transformNode(child, {
           toBeClosed: results.toBeClosed,
           lastElement: index === lastElement,
           skipId: !results.id || !detectExpressions(filteredChildren, index, config)
         });
         if (!transformed) return memo;
-        (transformed as TransformResult & { allocatesIds?: boolean }).allocatesIds =
-          config.hydratable && canChildSlotAllocateIds(child);
-        (transformed as TransformResult & { functionHole?: boolean }).functionHole =
-          isFunctionShapedHole(child);
+        (transformed as TransformResult & { allocatesIds?: boolean }).allocatesIds = allocatesIds;
+        (transformed as TransformResult & { functionHole?: boolean }).functionHole = functionHole;
         const i = memo.length;
         if (transformed.text && i && memo[i - 1].text) {
           memo[i - 1].template =
@@ -1398,6 +1406,25 @@ function transformChildren(
       i++;
     } else if (child.exprs.length) {
       let insert = registerImportMethod(path, "insert", getRendererConfig(path, "dom").moduleName);
+      // `sourceNames.bindings`: the hole's render effect is named for the
+      // parent it fills (`div.children`), through insert's trailing options
+      // argument; the marker and initial slots are filled with `undefined`
+      // when the call would otherwise omit them. Only holes that compile to
+      // an accessor get one — a static child (a component call, a literal)
+      // is inserted directly and creates no effect to name.
+      const accessorHole =
+        child.dynamic || (child as TransformResult & { functionHole?: boolean }).functionHole;
+      const emitInsert = (args: babelTypes.Expression[]) => {
+        if (accessorHole && namesBindings(getConfig(path))) {
+          while (args.length < 4) args.push(t.identifier("undefined"));
+          args.push(
+            t.objectExpression([
+              t.objectProperty(t.identifier("name"), t.stringLiteral(`${tagName}.children`))
+            ])
+          );
+        }
+        results.exprs.push(t.expressionStatement(t.callExpression(insert, args)));
+      };
       const multi = checkLength(filteredChildren),
         markers = config.hydratable && multi,
         // CSR counterpart of the hydratable per-slot markers: when this parent
@@ -1453,23 +1480,15 @@ function transformChildren(
               child.exprs[0] as babelTypes.Expression,
               exprId
             ] as babelTypes.Expression[]);
-        results.exprs.push(t.expressionStatement(t.callExpression(insert, args)));
+        emitInsert(args);
       } else if (multi) {
-        results.exprs.push(
-          t.expressionStatement(
-            t.callExpression(insert, [
-              results.id!,
-              child.exprs[0] as babelTypes.Expression,
-              nextChild(childNodes, index) || t.nullLiteral()
-            ])
-          )
-        );
+        emitInsert([
+          results.id!,
+          child.exprs[0] as babelTypes.Expression,
+          nextChild(childNodes, index) || t.nullLiteral()
+        ]);
       } else {
-        results.exprs.push(
-          t.expressionStatement(
-            t.callExpression(insert, [results.id!, child.exprs[0] as babelTypes.Expression])
-          )
-        );
+        emitInsert([results.id!, child.exprs[0] as babelTypes.Expression]);
       }
     }
   });
@@ -1668,7 +1687,7 @@ function processSpreads(
             id,
             [],
             t.blockStatement([t.returnStatement(expression as babelTypes.Expression)]),
-            !t.isValidIdentifier(normalized)
+            false // never computed; see shared/component.ts (#3511)
           )
         );
       } else {
@@ -1677,7 +1696,7 @@ function processSpreads(
             t.stringLiteral(normalized),
             (isContainer
               ? expression
-              : node.value || t.booleanLiteral(true)) as babelTypes.Expression
+              : decodedAttrValue(value) || t.booleanLiteral(true)) as babelTypes.Expression
           )
         );
       }
@@ -1691,18 +1710,25 @@ function processSpreads(
   // A lone spread — reactive included — passes straight through: spread()
   // resolves a function source inside its own tracking scopes, and merging
   // one source would mint a memo that consumes a hydration id the SSR fast
-  // path never allocates (#3105).
-  const props =
-    spreadArgs.length === 1
-      ? spreadArgs[0]
-      : t.callExpression(registerImportMethod(path, "mergeProps"), spreadArgs);
+  // path never allocates (#3105). Several sources go as an ARRAY, not a
+  // mergeProps() call: spread() reads the sources directly (later wins per
+  // key, only the winner read) with no merge proxy to build and walk, and a
+  // reactive source is called inside the tracking scope with no memo — so
+  // no hydration id here either, matching the ssrElement array form.
+  const props = spreadArgs.length === 1 ? spreadArgs[0] : t.arrayExpression(spreadArgs);
+
+  const args = [elem, props, t.booleanLiteral(hasChildren)];
+  // `sourceNames.bindings`: the tag as written rides as spread's trailing
+  // argument (past the runtime-only `skip` slot); the runtime labels its
+  // attribute effect `<tag>.spread` and its children insert `<tag>.children`.
+  if (namesBindings(config)) args.push(t.identifier("undefined"), t.stringLiteral(tagName));
 
   return [
     filteredAttributes,
     t.expressionStatement(
       t.callExpression(
         registerImportMethod(path, "spread", getRendererConfig(path, "dom").moduleName),
-        [elem, props, t.booleanLiteral(hasChildren)]
+        args
       )
     )
   ];

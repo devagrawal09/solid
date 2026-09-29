@@ -290,20 +290,40 @@ export function toEventName(name: string): string {
 // generates must agree exactly on which holes qualify, so the predicates
 // live here.
 
+// A hole is scoped unless its value is provably a primitive: any other shape
+// (a call, a property read behind a getter, an array) can build JSX at read
+// time, and only `props.children` used to count (#3567).
 function canReturnHydratableChild(node: t.Node): boolean {
-  if (t.isTSNonNullExpression(node) || t.isTSAsExpression(node) || t.isTSSatisfiesExpression(node))
+  if (
+    t.isTSNonNullExpression(node) ||
+    t.isTSAsExpression(node) ||
+    t.isTSSatisfiesExpression(node) ||
+    t.isParenthesizedExpression(node)
+  )
     return canReturnHydratableChild(node.expression);
-  if (t.isJSXElement(node) || t.isJSXFragment(node) || t.isCallExpression(node)) return true;
-  // A function child is a deferred hole: whatever it returns renders inside
-  // the hole, so it can always mint hydratable content.
-  if (t.isFunction(node)) return true;
-  if (t.isMemberExpression(node) || t.isOptionalMemberExpression(node)) {
-    return !node.computed && t.isIdentifier(node.property, { name: "children" });
-  }
   if (t.isConditionalExpression(node)) {
     return canReturnHydratableChild(node.consequent) || canReturnHydratableChild(node.alternate);
   }
-  return t.isLogicalExpression(node) && canReturnHydratableChild(node.right);
+  if (t.isLogicalExpression(node)) {
+    return canReturnHydratableChild(node.left) || canReturnHydratableChild(node.right);
+  }
+  if (t.isSequenceExpression(node)) {
+    return canReturnHydratableChild(node.expressions[node.expressions.length - 1]);
+  }
+  if (t.isAssignmentExpression(node)) return canReturnHydratableChild(node.right);
+  if (t.isArrayExpression(node)) {
+    return node.elements.some(
+      element =>
+        element !== null &&
+        canReturnHydratableChild(t.isSpreadElement(element) ? element.argument : element)
+    );
+  }
+  return !(
+    t.isLiteral(node) ||
+    t.isUnaryExpression(node) ||
+    t.isBinaryExpression(node) ||
+    t.isUpdateExpression(node)
+  );
 }
 
 export function canChildSlotAllocateIds(node: NodePath): boolean {
@@ -787,6 +807,7 @@ export function transformSpecialCaseAttributes(
 ): void {
   tagName = tagName.toUpperCase();
   const transforms: { propName: string; attr: NodePath<t.JSXAttribute> }[] = [];
+  const hasSpread = path.node.openingElement.attributes.some(a => t.isJSXSpreadAttribute(a));
 
   let hasOrHadAttribute: Record<string, boolean> = {};
 
@@ -829,6 +850,8 @@ export function transformSpecialCaseAttributes(
       tagName === "TEXTAREA" &&
       defaultAttrName === "value" &&
       !t.isNullLiteral(value) &&
+      // A spread element keeps `value` a prop: the runtime spread orders sources.
+      !hasSpread &&
       // Only fold into children when SSR (HTML output needs the text content)
       // or when the value is a static literal (template-inlined HTML attribute
       // on parse). For dynamic DOM, prop:* survives the textarea "dirty" flag
@@ -837,11 +860,19 @@ export function transformSpecialCaseAttributes(
     ) {
       let child;
       if (t.isStringLiteral(value)) {
-        child = t.jsxText(value.value);
+        const text = escapeHTML(value.value) as string;
+        child = t.jsxText(text);
         // filterChildren reads child.extra.raw for JSXText nodes
-        child.extra = { raw: value.value, rawValue: value.value };
+        child.extra = { raw: text, rawValue: text };
       } else {
         child = t.jsxExpressionContainer(value);
+        // The folded value is the textarea's text content on the server, but
+        // the client writes it as a plain `value` property effect that never
+        // allocates a hydration id. Flag it like the innerHTML/textContent
+        // redirects (#3015) so the SSR child pipeline skips the `_$scope` id
+        // reservation — otherwise the reservation shifts every keyed sibling
+        // after the textarea by one id (#3691).
+        (child as t.JSXExpressionContainer & { _childProperty?: boolean })._childProperty = true;
       }
       path.node.children = [child];
       attr.remove();

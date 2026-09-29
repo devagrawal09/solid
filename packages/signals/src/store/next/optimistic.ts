@@ -39,6 +39,7 @@ import {
   getOwner,
   isEqual,
   setSignal,
+  untrack,
   type Computed,
   type Refreshable,
   type Signal
@@ -70,13 +71,17 @@ import { runProjectionComputedNext } from "./projection.js";
 import {
   bumpDeep,
   authoritativeRead,
+  authoritativeServe,
   getHasNode,
   getKeySetNode,
   getNode,
   hasActiveOverride,
   heldMaskView,
+  readerOverride,
+  visibleOverride,
   runAuthoritative,
   stagedTruthPB,
+  nameStore,
   storeSetterNext,
   targetsEqual,
   unwrapValue,
@@ -114,7 +119,10 @@ function installNextBlockedHalf(): void {
     applyTentative,
     retainsOptimism: transitionHoldsOptimism
   });
-  setNextOptimisticViewResolver((t: StoreNextTarget, raw: any) => optimisticView(t, raw));
+  // The affects() declaration walk is a WRITER channel (A28 (5)): tagging a
+  // parent covers the record as the writer sees it, this tick's optimistic
+  // writes included — the draft view, not the reader view.
+  setNextOptimisticViewResolver((t: StoreNextTarget, raw: any) => optimisticView(t, raw, true));
   // Scheduler flush tails call _clearOptimisticStores whenever tracked
   // stores exist; next has no layer to clear — reverts are engine-native —
   // so the hook only empties the batch set.
@@ -138,6 +146,41 @@ function installNextBlockedHalf(): void {
       stores.clear();
     };
   }
+  // Revert-side link refresh (#3672, §7b/O6): a chained node's `_value` is
+  // never served — the base's live value is — so the engine cannot read
+  // committed truth from it. The engine consults it at exactly two moments:
+  // optimisticWrite's no-op check (the setter hands it the visible value,
+  // see `emit` in notifyOptimisticWrites) and resolveOptimisticNodes'
+  // notify compare (here). Left at the write-time value, a base commit
+  // during the override — confirm 7, user writes back to the pre-write 5 —
+  // made the revert compare 5 === 5 and notify nobody while the base read 7:
+  // a memo over the view stayed at the guess forever (render effects were
+  // rescued by readsHeldCommitted's replay). Refresh every armed node of
+  // each chained host in the reverting batch to the base's live value right
+  // before the compare, so it is exact: notify iff truth differs from the
+  // guess. Untracked: a flush from inside a computation must not link it.
+  const resolvePrev = GlobalQueue._resolveOptimistic!;
+  GlobalQueue._resolveOptimistic = nodes => {
+    let seen: Set<StoreNextTarget> | null = null;
+    for (const node of nodes) {
+      const t: StoreNextTarget | undefined = (node as any)._host;
+      if (t?.ch !== true || seen?.has(t)) continue;
+      (seen ??= new Set()).add(t);
+      untrack(() => {
+        const base: any = t.v;
+        for (const k of Reflect.ownKeys(t.n!)) {
+          const n = t.n![k as any];
+          if (hasActiveOverride(n)) n._value = unwrapValue(base[k]);
+        }
+        if (t.h !== null)
+          for (const k of Reflect.ownKeys(t.h)) {
+            const h = t.h[k as any];
+            if (hasActiveOverride(h)) h._value = k in base;
+          }
+      });
+    }
+    resolvePrev(nodes);
+  };
   const chained = GlobalQueue._transitionBlocked!;
   GlobalQueue._transitionBlocked = transition => {
     for (const store of transition._optimisticStores) {
@@ -153,8 +196,8 @@ function installNextBlockedHalf(): void {
       // Ownership is declared (#3146): only the flight's OWN transaction
       // parks on the flight (the #2951 anchor routed the bare write there).
       // A transaction that merely brushed the store never waits for truth
-      // it does not carry.
-      const ft = fam!.ft != null ? liveTransition(fam!.ft) : null;
+      // it does not carry. An undeclared flight is owned by the firewall's stamp.
+      const ft = liveTransition(fam!.ft ?? fw._transition);
       if (ft !== null && ft !== currentTransition(transition)) continue;
       if (familyHasLiveOverrides(fam!)) return true;
     }
@@ -224,6 +267,7 @@ export function createOptimisticStoreNext<T extends object = {}>(
   };
   const store = wrapNext(initialValue as any, null, null, fam) as Store<T>;
   fam.px = store;
+  if (__OBSERVE__) nameStore(store, options?.name);
   // Same key resolution the projection channels use ("id" default) — replay's
   // satisfaction rule reads it off the family.
   const keyOption = options?.key === undefined ? "id" : options.key;
@@ -364,7 +408,8 @@ export function createOptimisticStoreNext<T extends object = {}>(
 
 /** Resolve a retained transition through its merge chain (`_done` holds the
  * merge target while merged, `true` once settled). Null = dead. */
-function liveTransition(txn: Transition): Transition | null {
+function liveTransition(txn: Transition | null): Transition | null {
+  if (txn === null) return null;
   while (typeof txn._done === "object") txn = txn._done as Transition;
   return txn._done === true ? null : txn;
 }
@@ -591,6 +636,14 @@ export function notifyOptimisticWrites(t: StoreNextTarget, pb: Record<PropertyKe
       ? !!unwrapOverride(node._x?._overrideValue)
       : key in old;
   };
+  // Chained nodes are links (§7b, O6): their `_value` is never served and
+  // never learns the base's commits, yet optimisticWrite's no-op check reads
+  // it (#3672). Hand it the visible committed value at the write; the revert
+  // compare gets the same treatment in installNextBlockedHalf.
+  const emit = (node: Signal<any>, ov: any, nv: any): void => {
+    if (t.ch && !hasActiveOverride(node)) node._value = ov;
+    setSignal(node, () => nv);
+  };
   let structural = false;
   const isArr = Array.isArray(pb);
   for (const key of Reflect.ownKeys(pb)) {
@@ -598,13 +651,14 @@ export function notifyOptimisticWrites(t: StoreNextTarget, pb: Record<PropertyKe
     const nv = unwrapValue(pb[key as any]);
     if (!visiblePresent(key)) {
       // Optimistic add: value node + presence node + membership bump.
-      setSignal(getNode(t, key, old[key as any]), () => nv);
-      setSignal(getHasNode(t, key, key in old), true as any);
+      const ov = unwrapValue(old[key as any]);
+      emit(getNode(t, key, ov), ov, nv);
+      emit(getHasNode(t, key, key in old), key in old, true);
       structural = true;
     } else {
       const ov = visible(key, old[key as any]);
       if (!isEqual(ov, nv) && !targetsEqual(ov, nv)) {
-        setSignal(getNode(t, key, ov), () => nv);
+        emit(getNode(t, key, ov), ov, nv);
         if (isArr) structural = true;
       }
     }
@@ -613,14 +667,15 @@ export function notifyOptimisticWrites(t: StoreNextTarget, pb: Record<PropertyKe
     if ((isArr && key === "length") || key === $OWNER) continue;
     if (key in pb || !visiblePresent(key)) continue;
     // Optimistic delete: node reads undefined, presence flips, membership bumps.
-    setSignal(getNode(t, key, old[key as any]), () => undefined);
-    setSignal(getHasNode(t, key, true), false as any);
+    const ov = unwrapValue(old[key as any]);
+    emit(getNode(t, key, ov), ov, undefined);
+    emit(getHasNode(t, key, true), true, false);
     structural = true;
   }
   if (isArr) {
     const oldLen = visible("length", (old as any[]).length);
     if (oldLen !== (pb as any[]).length) {
-      setSignal(getNode(t, "length", oldLen), () => (pb as any[]).length);
+      emit(getNode(t, "length", oldLen), oldLen, (pb as any[]).length);
       structural = true;
     }
   }
@@ -646,29 +701,47 @@ export function notifyOptimisticWrites(t: StoreNextTarget, pb: Record<PropertyKe
  * overlay. (Write-side emission callers never run under such a compute.) */
 export function optimisticView(
   t: StoreNextTarget,
-  src: Record<PropertyKey, any>
+  src: Record<PropertyKey, any>,
+  draft = false
 ): Record<PropertyKey, any> {
   if (t.fam?.opt !== true || authoritativeRead()) return src;
   let out: Record<PropertyKey, any> | null = null;
   const ensure = () => (out ??= Array.isArray(src) ? [...(src as any[])] : { ...src });
+  // Reader composition (snapshot/deep, the length view with no armed length
+  // node) takes a superseded override as the traps serve it (readerOverride,
+  // #3331): the writer's draft and the write-side callers (applyTentative,
+  // applyAdopt's key-matching view) keep the override itself.
+  const reader = !draft && !authoritativeServe();
   const nodes = t.n;
   if (nodes !== null) {
     for (const key of Reflect.ownKeys(nodes)) {
       const node = nodes[key as any];
-      if (!hasActiveOverride(node)) continue;
-      const ov = unwrapOverride(node._x?._overrideValue);
+      // A28 (5): readers see an optimistic write once a flush carried it;
+      // the draft (writer channel) composes on it now.
+      if (!(draft ? hasActiveOverride(node) : visibleOverride(node))) continue;
       if (key === "length" && Array.isArray(src)) {
-        if ((src as any[]).length !== ov) (ensure() as any[]).length = ov;
-      } else if (!isEqual(src[key as any], ov)) ensure()[key as any] = ov;
+        const len = (src as any[]).length;
+        const ov = reader ? readerOverride(node, len) : unwrapOverride(node._x?._overrideValue);
+        if (len !== ov) (ensure() as any[]).length = ov;
+      } else {
+        const cv = src[key as any];
+        const ov = reader ? readerOverride(node, cv) : unwrapOverride(node._x?._overrideValue);
+        if (!isEqual(cv, ov)) ensure()[key as any] = ov;
+      }
     }
   }
   const has = t.h;
   if (has !== null) {
     for (const key of Reflect.ownKeys(has)) {
       const node = has[key as any];
-      if (!hasActiveOverride(node)) continue;
-      const present = !!unwrapOverride(node._x?._overrideValue);
-      if (!present && key in (out ?? src)) delete ensure()[key as any];
+      // A28 (5): readers see an optimistic write once a flush carried it;
+      // the draft (writer channel) composes on it now.
+      if (!(draft ? hasActiveOverride(node) : visibleOverride(node))) continue;
+      const committed = key in (out ?? src);
+      const present = !!(reader
+        ? readerOverride(node, committed)
+        : unwrapOverride(node._x?._overrideValue));
+      if (!present && committed) delete ensure()[key as any];
     }
   }
   return out ?? src;

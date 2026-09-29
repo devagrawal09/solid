@@ -91,7 +91,7 @@ const template2 = _$createComponent(Child, {
 	},
 	stale: /*@static*/ state.data,
 	handleClick: clickHandler,
-	get ["hyphen-ated"]() {
+	get "hyphen-ated"() {
 		return state.data;
 	},
 	ref: (el) => e = el
@@ -231,7 +231,7 @@ const Template18 = _$createComponent(Pre, { get children() {
 const Template19 = _$createComponent(Component, _$mergeProps(() => {
 	return s.dynamic();
 }));
-const Template20 = _$createComponent(Component, { get ["class"]() {
+const Template20 = _$createComponent(Component, { get "class"() {
 	return prop.red ? "red" : "green";
 } });
 const template21 = _$createComponent(Component, _$mergeProps(() => {
@@ -354,11 +354,11 @@ function MyComponent(props) {
 	let el;
 	const others = omit(props, "children");
 	var _el$48 = _tmpl$2();
+	_$spread(_el$48, others, true);
 	var _ref$9 = el;
 	typeof _ref$9 === "function" || Array.isArray(_ref$9) ? _$ref(() => {
 		return _ref$9;
 	}, _el$48) : el = _el$48;
-	_$spread(_el$48, others, true);
 	_$insert(_el$48, () => {
 		return props.children;
 	});

@@ -10,7 +10,7 @@ import { ssrStyle as _$ssrStyle } from "r-server";
 import { ssrStyleProperty as _$ssrStyleProperty } from "r-server";
 import { ssrGroup as _$ssrGroup } from "r-server";
 import { ssrElement as _$ssrElement } from "r-server";
-import { mergeProps as _$mergeProps } from "r-server";
+import { ssrElementAttribute as _$ssrElementAttribute } from "r-server";
 var _ref$, _v$, _v$2, _v$46, _v$47, _v$48, _v$49, _v$50, _v$51;
 var _tmpl$ = ["<a href=\"/\" class=\"", "\">Welcome</a>"];
 var _tmpl$2 = ["<div>", "</div>"];
@@ -171,6 +171,22 @@ var _tmpl$52 = [
 	"</div><input type=\"checkbox\"",
 	"></div>"
 ];
+var _tmpl$53 = [
+	"<div",
+	"><textarea>",
+	"</textarea><textarea>",
+	"</textarea><!--$-->",
+	"<!--/--></div>"
+];
+var _sk$ = (k) => k === "foo" || k === "disabled" || k === "title" || k === "style" || k === "class";
+var _sk$2 = (k) => k === "class" || k === "style";
+var _sk$3 = (k) => k === "something";
+var _sk$4 = (k) => k === "data-dynamic" || k === "data-static";
+var _sk$5 = (k) => k === "stroke-width" || k === "fill";
+var _sk$6 = (k) => k === "class" || k === "data-kind";
+var _sk$7 = (k) => k === "class" || k === "data-id";
+var _sk$8 = (k) => k === "id";
+var _sk$9 = (k) => k === "disabled" || k === "type" || k === "tabindex" || k === "style";
 _$ssrSelectValues();
 import * as styles from "./styles.module.css";
 import { binding } from "somewhere";
@@ -179,36 +195,17 @@ const refConst = null;
 const selected = true;
 let id = "my-h1";
 let link;
-const template = _$ssrElement("div", () => {
-	return _$mergeProps({ id: "main" }, results, {
-		class: { selected: unknown },
-		style: { color }
-	});
-}, () => {
-	return _$ssrElement("h1", () => {
-		return _$mergeProps({ id }, results, {
-			foo: true,
-			disabled: true,
-			get title() {
-				return welcoming();
-			},
-			get style() {
-				return {
-					"background-color": color(),
-					"margin-right": "40px"
-				};
-			},
-			get ["class"]() {
-				return ["base", {
-					dynamic: dynamic(),
-					selected
-				}];
-			}
-		});
-	}, () => {
+const template = _$ssrElement("div", [{ id: "main" }, results], () => {
+	return _$ssrElement("h1", [{ id }, results], () => {
 		return _ref$ = link, _$ssr(_tmpl$, "ccc ddd");
-	}, false);
-}, true);
+	}, false, _sk$, () => " foo disabled" + _$ssrElementAttribute("title", welcoming()) + _$ssrElementAttribute("style", {
+		"background-color": color(),
+		"margin-right": "40px"
+	}) + _$ssrElementAttribute("class", ["base", {
+		dynamic: dynamic(),
+		selected
+	}]));
+}, true, _sk$2, () => _$ssrElementAttribute("class", { selected: unknown }) + _$ssrElementAttribute("style", { color }));
 const template2 = _$ssrElement("div", getProps("test"), () => {
 	return [
 		(_v$ = _$escape(rowId || " "), _$ssr(_tmpl$2, _v$)),
@@ -296,26 +293,23 @@ var _v$34 = _$ssrHydrationKey(), _v$35 = () => {
 	return "t" in test && "true";
 };
 const template23 = _$ssr(_tmpl$20, _v$34, _v$35, _v$36);
-const template24 = _$ssrElement("a", () => {
-	return _$mergeProps(props, { something: true });
-}, undefined, true);
+const template24 = _$ssrElement("a", props, undefined, true, _sk$3, " something");
 var _v$37 = _$ssrHydrationKey(), _v$38 = _$scope(() => {
 	return _$escape(props.children);
-}), _v$39 = _$ssrElement("a", () => {
-	return _$mergeProps(props, { something: true });
-}, undefined, false);
+}), _v$39 = _$ssrElement("a", props, undefined, false, _sk$3, " something");
 const template25 = _$ssr(_tmpl$21, _v$37, _v$38, _v$39);
-const template26 = _$ssrElement("div", () => {
-	return _$mergeProps({
-		start: "Hi",
-		middle
-	}, spread);
-}, () => {
+const template26 = _$ssrElement("div", [{
+	start: "Hi",
+	middle
+}, spread], () => {
 	return "Hi";
 }, true);
-const template27 = _$ssrElement("div", () => {
-	return _$mergeProps({ start: "Hi" }, first, { middle }, second);
-}, () => {
+const template27 = _$ssrElement("div", [
+	{ start: "Hi" },
+	first,
+	{ middle },
+	second
+], () => {
 	return "Hi";
 }, true);
 const template28 = _$ssrElement("label", api(), () => {
@@ -480,30 +474,25 @@ const propsSpread = {
 };
 const template80 = _$ssrElement("div", propsSpread, undefined, true);
 const template81 = _$ssrElement("div", propsSpread, undefined, true);
-const template82 = _$ssrElement("div", () => {
-	return _$mergeProps(propsSpread, {
-		get ["data-dynamic"]() {
-			return color();
-		},
-		"data-static": /* @static */ color()
-	});
-}, undefined, true);
-const template83 = _$ssrElement("div", () => {
-	return _$mergeProps(propsSpread, {
-		get ["data-dynamic"]() {
-			return color();
-		},
-		"data-static": /* @static */ color()
-	});
-}, undefined, true);
-const template84 = _$ssrElement("div", () => {
-	return _$mergeProps(propsSpread1, propsSpread2, propsSpread3, {
-		get ["data-dynamic"]() {
-			return color();
-		},
-		"data-static": /* @static */ color()
-	});
-}, undefined, true);
+const template82 = _$ssrElement("div", propsSpread, undefined, true, _sk$4, () => _$ssrElementAttribute("data-dynamic", color()) + _$ssrElementAttribute(
+	"data-static",
+	/* @static */
+	color()
+));
+const template83 = _$ssrElement("div", propsSpread, undefined, true, _sk$4, () => _$ssrElementAttribute("data-dynamic", color()) + _$ssrElementAttribute(
+	"data-static",
+	/* @static */
+	color()
+));
+const template84 = _$ssrElement("div", [
+	propsSpread1,
+	propsSpread2,
+	propsSpread3
+], undefined, true, _sk$4, () => _$ssrElementAttribute("data-dynamic", color()) + _$ssrElementAttribute(
+	"data-static",
+	/* @static */
+	color()
+));
 // STATIC PROPERTY OF OBJECT ACCESS
 // https://github.com/ryansolid/dom-expressions/issues/252#issuecomment-1572220563
 const styleProp = { style: {
@@ -557,16 +546,7 @@ function MyVideo() {
 }
 // #2959: conditional attribute merged into a spread stays a bare expression
 // (parity with the dom generate — neither side allocates a hydration id).
-const template97 = _$ssrElement("svg", () => {
-	return _$mergeProps(spread, {
-		get ["stroke-width"]() {
-			return cond() ? width() : 2;
-		},
-		get fill() {
-			return cond() && color();
-		}
-	});
-}, undefined, true);
+const template97 = _$ssrElement("svg", spread, undefined, true, _sk$5, () => _$ssrElementAttribute("stroke-width", cond() ? width() : 2) + _$ssrElementAttribute("fill", cond() && color()));
 var _v$120 = _$ssrHydrationKey(), _v$121 = () => {
 	return createIcon(props.radius);
 }, _v$122 = () => {
@@ -579,3 +559,34 @@ var _v$120 = _$ssrHydrationKey(), _v$121 = () => {
 // applies these as plain prop effects that never allocate hydration ids), or
 // every hydratable sibling after it shifts by one id.
 const template98 = _$ssr(_tmpl$52, _v$120, _v$121, _v$122, _v$123);
+var _v$124 = _$ssrHydrationKey(), _v$125 = () => {
+	return _$escape(text());
+}, _v$126 = () => {
+	return _$escape(initial());
+}, _v$127 = _$escape(Counter({}));
+// solidjs/solid#3691: a textarea's dynamic value/defaultValue folds into its
+// text content on the server, but the client writes it as a plain `value`
+// property effect that never allocates a hydration id — the fold must not take
+// the _$scope reservation either, or the component after it hydrates one id off.
+const template99 = _$ssr(_tmpl$53, _v$124, _v$125, _v$126, _v$127);
+// Static attributes after the last spread bake into ssrElement's attribute
+// string with their keys skipped on the spread; statics before a spread, and
+// anything between two spreads, stay a source the spread can override.
+const template110 = _$ssrElement("li", spread, undefined, true, _sk$6, " class=\"row\" data-kind=\"item\"");
+const template111 = _$ssrElement("li", [{
+	class: "row",
+	"data-kind": "item"
+}, spread], undefined, true);
+const template112 = _$ssrElement("li", spread, () => {
+	return _$scope(() => {
+		return _$escape(dynamicContent());
+	});
+}, true, _sk$7, () => " class=\"row\"" + _$ssrElementAttribute("data-id", dynamicAttribute()));
+const template113 = _$ssrElement("div", [
+	first,
+	{ class: "x" },
+	second
+], undefined, true, _sk$8, " id=\"y\"");
+const template114 = _$ssrElement("input", spread, undefined, true, _sk$9, " type=\"text\" tabindex=\"0\" style=\" color:red;top:0 \"");
+const template115 = _$ssrElement("textarea", [spread, { innerHTML: "<b>x</b>" }], undefined, true);
+const template116 = _$ssrElement("li", spread, undefined, true, _sk$6, " class=\"row\" data-kind=\"item\"");

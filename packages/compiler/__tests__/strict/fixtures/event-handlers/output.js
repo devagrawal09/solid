@@ -32,15 +32,15 @@ export function Form(props: {
 	var _el$3 = _el$2.nextSibling;
 	var _el$4 = _el$3.nextSibling;
 	_el$.addEventListener("submit", save);
-	_el$2.$$input = (e: InputEvent & {
+	_el$2._$$input = (e: InputEvent & {
 		currentTarget: HTMLInputElement;
 	}) => setStore((state) => {
 		state.draft = e.currentTarget.value;
 	});
 	_el$3.addEventListener(":reset", () => setCount(0));
-	_el$3.$$click = increment;
+	_el$3._$$click = increment;
 	_$insert(_el$3, count);
-	_el$4.$$click = increment;
+	_el$4._$$click = increment;
 	_$effect(() => store.draft, (_v$) => {
 		_el$2.value = _v$ ?? "";
 	});

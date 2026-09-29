@@ -1,5 +1,6 @@
 import { markAsyncCapability } from "./core/dev.js";
-import { recompute, ext } from "./core/core.js";
+import { recompute, ext, spectate, currentOptimisticLane, notifyOnLane } from "./core/core.js";
+import type { OptimisticLane } from "./core/lanes.js";
 import { unwrapStatusError } from "./core/error.js";
 import {
   cleanup,
@@ -9,16 +10,19 @@ import {
   createOwner,
   getContext,
   getOwner,
+  NOT_PENDING,
   NotReadyError,
   Queue,
   read,
   REACTIVE_DISPOSED,
+  REACTIVE_ZOMBIE,
   setContext,
   runWithOwner,
   setSignal,
   signal,
   STATUS_ERROR,
   STATUS_PENDING,
+  STATUS_UNINITIALIZED,
   untrack,
   type Computed,
   type Effect,
@@ -27,9 +31,19 @@ import {
 import type { IQueue, Signal } from "./core/index.js";
 import { emitDiagnostic, reportDiagnostic } from "./core/dev.js";
 import { attrHooks } from "./core/attribution-hooks.js";
-import { haltReactivity, schedule } from "./core/scheduler.js";
 import { isBlock, OP } from "./generator.js";
 import { renderBlock } from "./block-hooks.js";
+import { reportClientError } from "./core/error-hooks.js";
+import { enqueueSub } from "./core/heap.js";
+import {
+  activeTransition,
+  haltReactivity,
+  queueRearm,
+  reporterBlocksSource,
+  schedule,
+  transitions,
+  wakeParked
+} from "./core/scheduler.js";
 import { accessor, type Accessor } from "./signals.js";
 
 export interface BoundaryComputed<T> extends Computed<T> {
@@ -37,7 +51,10 @@ export interface BoundaryComputed<T> extends Computed<T> {
 }
 
 function boundaryComputed<T>(fn: () => T, propagationMask: number): BoundaryComputed<T> {
-  const node = computed<T>(fn, { lazy: true }) as BoundaryComputed<T>;
+  const node = computed<T>(
+    fn,
+    __OBSERVE__ ? { name: "boundary", lazy: true } : { lazy: true }
+  ) as BoundaryComputed<T>;
   ext(node)._notifyStatus = (status?: number, error?: any) => {
     // Use passed values if provided, otherwise read from node
     const flags = status !== undefined ? status : node._statusFlags;
@@ -72,6 +89,81 @@ function boundaryComputed<T>(fn: () => T, propagationMask: number): BoundaryComp
   return node;
 }
 
+/**
+ * A boundary's `on` dependencies (#3540): `onFn` runs tracked, as a
+ * computation whose value is discarded — what it READS is the point. Every
+ * run after the first is a notification (a source it read was written, went
+ * pending, or landed; an optimistic write notifies like any other) and
+ * queues the boundary for re-arming once this pass's heap has run
+ * (scheduler.ts `pendingRearms`: the re-arm needs what the notifying write
+ * put in flight, which this pass — at the height of its reads — runs ahead
+ * of). The value is never compared: a thunk that returns a fresh object per
+ * run but reads nothing reactive never re-arms, and one that returns the
+ * same constant re-arms whenever a read source changes. A zero-argument
+ * function is an accessor, tracked like any other.
+ *
+ * The pass's posture is the notification's. A plain pass derives from the
+ * frame the write belongs to, and the re-arm follows that frame. A pass
+ * under a lane read display-ahead state — `latest()` (its shadow is an
+ * optimistic computed), an optimistic write — and the re-arm shows the
+ * fallback through that lane (`_rearmLane`): now, beside whatever frame a
+ * transaction still holds.
+ *
+ * Created under `owner` while the owner's queue is still the parent's, so
+ * the node belongs to the parent boundary, not to this one — as the
+ * condition of a `<Show>` wrapping the boundary would. Two status rules set
+ * it apart from a plain memo:
+ * - Pending is not the parent's: a source of `on` that is not ready is a
+ *   notification for this boundary (it re-arms: the fallback shows here, not
+ *   in an outer boundary). Propagation marks the node without a pass, so the
+ *   channel scrubs the mark and re-derives it; the pass reads the source
+ *   (linking to its landing) and catches. The node never registers as a
+ *   reporter: `on` reading a pending source holds no frame.
+ * - An error IS the parent's, as a wrapping `<Show>` condition's would be:
+ *   forwarded up the queue chain like a render effect's; uncaught, it halts
+ *   (#2884).
+ */
+function onNode(owner: Owner, queue: CollectionQueue, onFn: () => any): Computed<unknown> {
+  let mounted = false;
+  const node = runWithOwner(owner, () =>
+    computed<unknown>(
+      () => {
+        try {
+          onFn();
+        } catch (e) {
+          if (!(e instanceof NotReadyError)) throw e;
+        }
+        if (mounted) {
+          if (currentOptimisticLane !== null) queue._rearmLane = currentOptimisticLane;
+          queueRearm(queue);
+        } else mounted = true;
+      },
+      { lazy: true }
+    )
+  );
+  ext(node)._notifyStatus = (status?: number, error?: any) => {
+    const flags = status !== undefined ? status : node._statusFlags;
+    if (flags & STATUS_PENDING) {
+      node._statusFlags &= ~STATUS_PENDING;
+      if (node._x?._error instanceof NotReadyError) node._x._error = undefined;
+      enqueueSub(node);
+      schedule();
+    }
+    if (flags & STATUS_ERROR) {
+      const actualError = error !== undefined ? error : node._x?._error;
+      node._statusFlags &= ~STATUS_ERROR;
+      if (node._x?._error === actualError && node._x !== null) node._x._error = undefined;
+      if (!node._queue.notify(node, STATUS_ERROR, flags, actualError)) {
+        haltReactivity(unwrapStatusError(actualError));
+        throw actualError;
+      }
+    }
+  };
+  node._config &= ~CONFIG_AUTO_DISPOSE;
+  recompute(node, true);
+  return node;
+}
+
 function createBoundChildren<T>(
   owner: Owner,
   fn: () => T,
@@ -81,13 +173,18 @@ function createBoundChildren<T>(
   const parentQueue = owner._queue;
   parentQueue.addChild((owner._queue = queue));
   cleanup(() => parentQueue.removeChild(owner._queue!));
+  // Named for the observe tier's owner paths: user content under a boundary
+  // is owned by `children`, and the boundary's own two nodes read as
+  // structure rather than as anonymous `computed`s between `<Loading>` and
+  // the content (`<App> › <Loading> › children › <Feed>`).
   return runWithOwner(owner, () => {
-    const c = computed(fn);
+    // The call, not the argument, is gated: `computed(fn, void 0)` would keep
+    // a trailing argument in the prod artifact.
+    const c = __OBSERVE__ ? computed(fn, { name: "children" }) : computed(fn);
     return boundaryComputed(() => flatten(read(c)), mask);
   });
 }
 
-const ON_INIT: unique symbol = Symbol();
 const RevealControllerContext = /* @__PURE__ */ createContext<RevealController | null>(null);
 let _revealUsed = false;
 
@@ -279,14 +376,19 @@ export class CollectionQueue extends Queue {
   _collectionType: number;
   _sources: Set<Computed<any>> = new Set();
   _tree?: BoundaryComputed<any>;
+  /** The output pass — fallback or content (createCollectionBoundary). */
+  _output?: Computed<any>;
   _pending = true;
   _disabled: Signal<boolean> = signal(false, { ownedWrite: true, _noSnapshot: true });
   _error?: Signal<unknown>;
   _collapsed: Signal<boolean> = signal(false, { ownedWrite: true, _noSnapshot: true });
   _revealController?: RevealController;
   _initialized: boolean = false;
-  _onFn: (() => any) | undefined;
-  _prevOn: any = ON_INIT;
+  /** The boundary's owner — where a `caught` report locates itself, set before the children are built (a creation-time throw arrives before `_tree`). */
+  _owner?: Owner;
+  /** The lane the `on` pass that queued this re-arm ran under (onNode), if
+   * any: the fallback swap is display-ahead — shown through the lane. */
+  _rearmLane: OptimisticLane | null = null;
   constructor(type: number) {
     super();
     this._collectionType = type;
@@ -295,23 +397,112 @@ export class CollectionQueue extends Queue {
     if (!type || (read(this._disabled) && (!_revealUsed || read(this._collapsed)))) return;
     return super.run(type);
   }
+  /** An `on` dependency notified (onNode → scheduler `pendingRearms`);
+   * drained after the heap, before the verdict, under the notifying write's
+   * transaction (#3540). A boundary showing content is fresh again: it
+   * releases its hold now and, if anything under it is still pending, swaps
+   * to its fallback. The swap is staged, so it lands with the write's frame
+   * — at once when nothing else holds it, with the rest of the new page
+   * when something outside the boundary does; if the pending lands first,
+   * `_checkSources` clears it and no fallback is shown. An `on` that read a
+   * lane (`latest()`, an optimistic write) asked for the change now:
+   * `_rearmLane` shows the swap through the lane, beside the held frame.
+   * Children stay alive behind the fallback. */
+  _rearm(): void {
+    const lane = this._rearmLane;
+    this._rearmLane = null;
+    if (this._tree === undefined || this._tree._flags & REACTIVE_DISPOSED) return;
+    if (!this._initialized) return;
+    // Readers forwarded while this boundary showed content are what it
+    // would wait on now. They never re-notify (status propagation dedupes on
+    // the reader's `_pendingSources`), so the re-arm collects it from their
+    // registrations — the one place a forwarded reader is recorded (INV-3)
+    // — or a sibling reader's flight that lands first reveals them stale
+    // (A33, #3459). Before the verdict, a registration may have stopped
+    // counting without being pruned yet (its flight landed this pass):
+    // `reporterBlocksSource` is the verdict's own test.
+    const sources = new Set<Computed<any>>();
+    let outside: Computed<any> | undefined;
+    for (const t of transitions)
+      for (const [source, reporters] of t._asyncReporters) {
+        let held = false;
+        for (const reporter of reporters)
+          if (this._holds(reporter) && reporterBlocksSource(reporter, source)) {
+            held = true;
+            sources.add(source);
+            reporter._x?._pendingSources?.forEach(s => sources.add(s));
+          }
+        // DEV: the same source is also awaited by a live reporter OUTSIDE
+        // this boundary — one whose hold the frame keeps, so the frame (and
+        // the swap with it) waits for the very source the boundary is
+        // waiting on: the fallback can never be seen. Deterministic and
+        // structural — the one shape LOADING_ON_OUTSIDE_HOLD reports (below).
+        // A frame held by OTHER pending data, or by the write's action, past
+        // the content's landing is a race the fallback may lose, and a
+        // legitimate outcome: not reported. Not for a display-ahead re-arm
+        // either: that fallback shows now by the user's choice.
+        if (__DEV__ && held && lane === null && outside === undefined)
+          for (const reporter of reporters)
+            if (!this._holds(reporter) && reporterBlocksSource(reporter, source)) {
+              outside = source;
+              break;
+            }
+      }
+    if (!sources.size) return;
+    if (__DEV__ && outside !== undefined) {
+      const name = (outside as any)._name as string | undefined;
+      reportUnseen(
+        this,
+        `${
+          name ? `\`${name}\`` : "a source it is waiting on"
+        } is also read outside it and holds the frame: the fallback can never be seen — the frame waits on the very source the boundary is waiting on. ` +
+          "Move the outside read under the boundary so one hold owns the data. (Reading `latest()` in `on` shows the fallback now, beside the held frame.)",
+        name
+      );
+    }
+    this._initialized = false;
+    this._sources = sources;
+    this._pending = true;
+    this._swap(lane);
+    // Those readers are behind the fallback now: they stop blocking
+    // (`reporterBlocksSource`), and the transactions they were holding must
+    // be re-judged for it (A33, #3375) — the active one by the verdict that
+    // follows this drain, parked ones by the wake. A live action keeps its
+    // transaction parked regardless (transitionComplete): its batch commits
+    // when it settles, intact.
+    wakeParked();
+  }
+  /** Show the fallback: the swap the output pass selects on. Staged, it is
+   * the frame's and lands with its commit. Re-armed from a lane pass
+   * (`lane`), it is the current frame's — committed outright, as the lane's
+   * view already is on screen — and shown through the lane: the output pass
+   * publishes a derived override and its readers run from the lane's queue,
+   * at the park, ahead of the transaction (a lane pass reads staged plain
+   * writes committed, so a staged swap would be invisible to it). */
+  _swap(lane: OptimisticLane | null): void {
+    if (lane === null) setSignal(this._disabled, true);
+    else {
+      this._disabled._value = true;
+      notifyOnLane(this._disabled, lane);
+    }
+    // Observe: the staged swap is displayed when the transaction carrying
+    // this pass commits; the lane's readers run in this drain.
+    if (__OBSERVE__ && attrHooks !== null)
+      attrHooks.boundaryFallback(this, this._tree!, true, lane === null ? activeTransition : null);
+  }
+  /** Retry the collected failures of an error boundary: recompute each
+   * source that threw, so the boundary can recover. */
+  _retry(): void {
+    for (const source of this._sources) {
+      // Non-computed sources (patch-channel registrations under plain
+      // owners) are not recomputable — their reset is the record's next
+      // transition re-applying the patch (re-audit 2, P1-4).
+      if ((source as any)._fn !== undefined) recompute(source);
+    }
+    schedule();
+  }
   notify(node: Effect<any>, type: number, flags: number, error?: any) {
     if (!(type & this._collectionType)) return super.notify(node, type, flags, error);
-
-    if (this._initialized && this._onFn) {
-      const currentOn = untrack(() => {
-        try {
-          return this._onFn!();
-        } catch {
-          return ON_INIT;
-        }
-      });
-      if (currentOn !== this._prevOn) {
-        this._prevOn = currentOn;
-        this._initialized = false;
-        this._sources.clear();
-      }
-    }
 
     // Routing is dimension-independent: each boundary consumes only its own
     // status dimension from the mask (`type &= ~collectionType` below) and
@@ -332,33 +523,86 @@ export class CollectionQueue extends Queue {
       if (source) {
         const wasEmpty = this._sources.size === 0;
         this._sources.add(source);
+        // A collecting boundary waits on everything the effect is pending on,
+        // not only the source this notification carries. Status propagation
+        // dedupes on the effect's `_pendingSources`: a source it already
+        // carries (a flight that started before an `on` reset cleared the
+        // set) is never re-reported, and that source's later re-flight
+        // stays invisible — the boundary revealed when its one collected
+        // source settled while the effect was still pending (#3375).
+        if (this._collectionType & STATUS_PENDING)
+          node._x?._pendingSources?.forEach(s => this._sources.add(s));
         if (wasEmpty) {
           setSignal(this._disabled, true);
           if (__OBSERVE__ && attrHooks !== null && this._collectionType & STATUS_PENDING)
-            attrHooks.boundaryFallback(this, this._tree, true);
+            attrHooks.boundaryFallback(this, this._tree, true, activeTransition);
         }
         if (this._collectionType & STATUS_ERROR) {
-          setSignal(this._error!, unwrapStatusError(source._x?._error));
+          const caught = unwrapStatusError(source._x?._error);
+          setSignal(this._error!, caught);
+          // The client error hook: this boundary renders its fallback for
+          // it — the one road a rendered failure took that no global handler
+          // ever saw. `source` is the computation that threw (the status
+          // wrapper's, made at the first landing and kept downstream), so the
+          // hook hears where it broke as well as where it was met. Once per
+          // error object; a `reset()` re-collecting the same failure says
+          // nothing new.
+          reportClientError(caught, this._owner, source);
         }
       }
     }
     type &= ~this._collectionType;
     return type ? super.notify(node, type, flags, error) : true;
   }
-  _checkSources() {
-    for (const source of this._sources) {
-      // A source with a live affects() mark holds display state for the
-      // mark's lifetime (the visual channel): the marked node carries no
-      // status of its own, so the count is the liveness test. The release
-      // sweep (finalizePureQueue after mark release) re-runs this check.
-      if (
-        source._flags & REACTIVE_DISPOSED ||
-        (!source._x?._affectsCount &&
-          !(source._statusFlags & this._collectionType) &&
-          !(this._collectionType & STATUS_ERROR && source._statusFlags & STATUS_PENDING))
-      )
-        this._sources.delete(source);
+  /** Is `reporter` live and routed to this boundary — under it, with no
+   * collecting pending-type boundary in between (`reporterBlocksSource`'s test)? */
+  _holds(reporter: Computed<any>): boolean {
+    if (reporter._flags & (REACTIVE_ZOMBIE | REACTIVE_DISPOSED)) return false;
+    for (let q: IQueue | null = reporter._queue; q; q = q._parent) {
+      if (q === this) return true;
+      if (q._collectionType! & STATUS_PENDING && !q._initialized) return false;
     }
+    return false;
+  }
+  /** Has a collected source stopped counting for this boundary? A source
+   * with a live affects() mark holds display state for the mark's lifetime
+   * (the visual channel): the marked node carries no status of its own, so
+   * the count is the liveness test. The release sweep (finalizePureQueue
+   * after mark release) re-runs this check. A source born held under this
+   * boundary (recompute, #3540) carries no status either: it is collected
+   * while it has a staged value and no committed one, and released by the
+   * commit that initializes it. */
+  _settled(source: Computed<any>): boolean {
+    return !!(
+      source._flags & REACTIVE_DISPOSED ||
+      (!source._x?._affectsCount &&
+        !(source._statusFlags & this._collectionType) &&
+        !(this._collectionType & STATUS_ERROR && source._statusFlags & STATUS_PENDING) &&
+        !(
+          this._collectionType & STATUS_PENDING &&
+          source._statusFlags & STATUS_UNINITIALIZED &&
+          source._pendingValue !== NOT_PENDING
+        ))
+    );
+  }
+  /** The pre-verdict sweep (scheduler run(), #3540): a collecting boundary
+   * whose OUTPUT is pending — its fallback read something not ready — is
+   * judged here, under the transaction. That output is what an initialized
+   * parent holds the frame on, and it derives from `_disabled`, not the
+   * tree: the tree settling never re-runs it, only a sweep does, and the
+   * commit sweep runs after the verdict the output's own read keeps parking
+   * — the content waited for the fallback's flight. Judged ready here, the
+   * boundary stages `_disabled` false with the frame and the output re-runs
+   * in this heap: it reads the tree and drops the fallback's read (recompute
+   * settles a pass's outgoing pending sources), so the verdict sees the
+   * release. A boundary showing a ready fallback parks nothing and keeps the
+   * commit sweep's reveal. */
+  _judgeHeld(): void {
+    if (this._initialized || !(this._output!._statusFlags & STATUS_PENDING)) return;
+    this._checkSources();
+  }
+  _checkSources() {
+    for (const source of this._sources) if (this._settled(source)) this._sources.delete(source);
     if (!this._sources.size) {
       if (
         this._collectionType & STATUS_PENDING &&
@@ -374,19 +618,34 @@ export class CollectionQueue extends Queue {
         setSignal(this._disabled, false);
         if (__OBSERVE__ && attrHooks !== null && this._collectionType & STATUS_PENDING)
           attrHooks.boundaryFallback(this, this._tree, false);
-        if (this._onFn) {
-          try {
-            this._prevOn = untrack(() => this._onFn!());
-          } catch {
-            /* value not yet committed — _prevOn stays stale, next notify will reset */
-          }
-        }
       }
     }
     if (_revealUsed) this._revealController?._evaluate();
   }
 }
 
+/** DEV: LOADING_ON_OUTSIDE_HOLD — a frame-following re-arm whose fallback
+ * can never be seen, with the reason (`detail`) and the fix. One rule, at
+ * the change (`_rearm`): the source the boundary waits on is also read
+ * outside it. A fallback cleared after the fact — the frame held by an
+ * action or by other pending data past the content's landing — is a race
+ * the engine cannot tell from a structural hold, and a legitimate outcome:
+ * never reported. Called only under `__DEV__`, so prod shakes it. */
+function reportUnseen(queue: CollectionQueue, detail: string, name?: string): void {
+  reportDiagnostic(
+    emitDiagnostic(
+      {
+        code: "LOADING_ON_OUTSIDE_HOLD",
+        kind: "async",
+        severity: "warn",
+        message: `[LOADING_ON_OUTSIDE_HOLD] \`on\` re-armed a Loading boundary, but ${detail}`,
+        nodeName: name,
+        data: { source: name }
+      },
+      queue._owner
+    )
+  );
+}
 function createCollectionBoundary<T>(
   type: number,
   fn: () => T,
@@ -409,12 +668,19 @@ function createCollectionBoundary<T>(
   const owner = createOwner();
   if (_revealUsed) setContext(RevealControllerContext, null, owner);
   const queue = new CollectionQueue(type);
+  queue._owner = owner;
   if (type === STATUS_ERROR)
     queue._error = signal<unknown>(undefined, { ownedWrite: true, _noSnapshot: true });
-  if (onFn) queue._onFn = onFn;
+  // The `on` dependencies live OUTSIDE the boundary, as the condition of a
+  // `<Show>` wrapping it would: created before the owner's queue becomes
+  // this boundary's (onNode).
+  onFn && onNode(owner, queue, onFn);
   const tree = (queue._tree = createBoundChildren(owner, fn, queue, type) as BoundaryComputed<any>);
-  // Prime source tracking so reveal registration sees pending sources.
-  untrack(() => {
+  // Prime source tracking so reveal registration sees pending sources. A
+  // bookkeeping read (`spectate`): the mounting pass derives nothing from
+  // the tree — it must not be linked to it, nor enter the transaction a
+  // tree born held (A29 under a boundary, #3540) was staged into.
+  spectate(() => {
     let pending = false;
     try {
       read(tree);
@@ -433,8 +699,11 @@ function createCollectionBoundary<T>(
     cleanup(() => controller._unregister(queue));
   }
   return accessor<T>(
-    computed(
+    (queue._output = computed(
       (): T => {
+        // `_disabled` selects fallback or content: set by a collecting
+        // notification or a re-arm (`_rearm`), cleared by the sweep when the
+        // collected sources settle — each re-runs this pass.
         if (!read(queue._disabled)) {
           const resolved = read(tree);
           if (!untrack(() => read(queue._disabled))) return ((queue._initialized = true), resolved);
@@ -449,8 +718,8 @@ function createCollectionBoundary<T>(
       // legitimately swaps mid-hydration (reveal/resume), so it must never be frozen
       // by snapshot capture. The tree no longer carries foreign status flags, so
       // capture can't rely on PENDING to skip this node the way it used to.
-      { _noSnapshot: true }
-    )
+      __OBSERVE__ ? { name: "value", _noSnapshot: true } : { _noSnapshot: true }
+    ))
   );
 }
 
@@ -463,8 +732,27 @@ function createCollectionBoundary<T>(
  *
  * @param fn the tracked subtree
  * @param fallback the fallback shown while async reads in `fn` are unresolved
- * @param options `on` — accessor whose value scopes the boundary; when set,
- *   transitions caused by writes to other reactive sources are *not* caught
+ * @param options `on` — a dependency list: a tracked function whose reads
+ *   re-arm the boundary. Its return value is irrelevant (never compared);
+ *   what matters is what it reads. Without `on`, a boundary that has shown
+ *   content keeps it through a refetch (the pending holds with the
+ *   transaction). With `on`, a write to anything it reads makes the boundary
+ *   fresh again: it stops waiting on its current content, and if something
+ *   under it is pending it shows `fallback` until the new content is ready;
+ *   if nothing is pending, the notification is a no-op. The fallback lands
+ *   with the same frame as the change that caused it — now, when nothing
+ *   else holds that frame; together with the rest of the new page during a
+ *   held navigation, not before it. If the same data is also read outside
+ *   the boundary, the frame waits on it and the fallback can never be seen
+ *   (DEV warns `LOADING_ON_OUTSIDE_HOLD`); the fix is structural — move the
+ *   outside read under the boundary so one hold owns the data. A frame held
+ *   past the content's landing by something else (the write's action, other
+ *   pending data) also shows no fallback; that is a race the fallback may
+ *   lose, a legitimate outcome, and not reported. A display-ahead read in
+ *   `on` (`latest()`) shows the fallback now, beside the held frame; that
+ *   is a capability, not the recommended shape. Optimistic writes and a
+ *   source going pending notify like any other. The children are not
+ *   re-created — they stay alive behind the fallback.
  *
  * @example
  * ```tsx
@@ -513,17 +801,9 @@ export function createErrorBoundary<T, U>(
   fn: () => T,
   fallback: (error: Accessor<unknown>, reset: () => void) => U
 ): Accessor<T | U> {
-  return createCollectionBoundary<T | U>(STATUS_ERROR, fn, queue => {
-    return fallback(accessor(queue._error), () => {
-      for (const source of queue._sources) {
-        // Non-computed sources (patch-channel registrations under plain
-        // owners) are not recomputable — their reset is the record's next
-        // transition re-applying the patch (re-audit 2, P1-4).
-        if ((source as any)._fn !== undefined) recompute(source);
-      }
-      schedule();
-    });
-  });
+  return createCollectionBoundary<T | U>(STATUS_ERROR, fn, queue =>
+    fallback(accessor(queue._error), () => queue._retry())
+  );
 }
 
 /**
@@ -581,11 +861,14 @@ export function createRevealOrder<T>(
   setContext(RevealControllerContext, controller, owner);
   return runWithOwner(owner, () => {
     const value = fn();
-    computed(() => {
+    const evaluate = computed(() => {
       order();
       collapsed();
       controller._evaluate();
     });
+    // Post-construction rather than an options argument, so the prod call
+    // keeps its shape; the observe node literal already carries the slot.
+    if (__OBSERVE__) (evaluate as any)._name = "reveal order";
     if (parentController) {
       controller._parentController = parentController;
       parentController._register(controller);

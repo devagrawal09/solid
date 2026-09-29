@@ -7,17 +7,16 @@ import {
   createOwner,
   createRoot as root,
   onCleanup,
-  sharedConfig,
   untrack,
   merge as mergeProps,
   $PROXY,
-  mergeSources,
   flatten,
   createMemo,
   flush,
   enableHydration,
   enforceLoadingBoundary,
   resetErrorHalt,
+  ROOT_ERROR_HOOK,
   OBSERVE,
   isBlock,
   renderBlock,
@@ -25,11 +24,27 @@ import {
   blockFlags,
   BLOCK_STATIC
 } from "solid-js";
-import { effect, memo, tagElement } from "./render.js";
+import type { ClientErrorHook } from "solid-js";
+import {
+  sharedConfig,
+  viewOf,
+  OmitView,
+  sourceKeys,
+  sourceHas,
+  sourceGet,
+  hasStaticKeys,
+  resolvedTable,
+  SOURCE_PLAIN,
+  SOURCE_OMIT,
+  SOURCE_PROXY,
+  SOURCE_MEMO
+} from "solid-js/internal";
+import { effect, memo, setSpreadName, spreadName, tagElement } from "./render.js";
 
 import { JSX } from "../jsx/jsx.js";
 
 import type { RequestEventLocals } from "./server.js";
+import type { TraceContext } from "./trace.js";
 
 type MountableElement = Element | Document | ShadowRoot | DocumentFragment | Node;
 
@@ -107,6 +122,34 @@ export interface RequestEvent {
 
 export type { CookieOptions } from "./cookies.js";
 
+// This runtime's records on `OBSERVE.records` (`"invocation"`, `"render"`,
+// `"call"`, `"request"`, `"frame"`), and with them the `HostRecordTypes`
+// augmentation that module declares: the published types resolve to this
+// entry under every condition, so this re-export is what puts the
+// augmentation in a consumer's program.
+export type {
+  CallEvent,
+  CallListener,
+  CallLive,
+  CallRequestEvent,
+  CallRequestListener,
+  FrameAppliedEvent,
+  FrameEvent,
+  FrameListener,
+  FrameLive,
+  FrameProducedEvent,
+  InvocationEvent,
+  InvocationListener,
+  InvocationLive,
+  RenderEvent,
+  RenderListener,
+  RenderLive,
+  RenderRoute
+} from "./observe.js";
+// The trace context's types (`getTraceContext()`, `OBSERVE.server.trace`),
+// with the `ServerObserve.trace` augmentation, for the same reason.
+export type { TraceContext, TraceProvider } from "./trace.js";
+
 export type {
   ServerFunction,
   ServerFunctionMetadata,
@@ -123,8 +166,9 @@ export const waitAsset = (promise: Promise<unknown>): void => {
   if (!gate) {
     runWithOwner(null, () => {
       // NOT sync: the node must be async-aware (the promise is the value
-      // being awaited; sync nodes reject thenable returns).
-      gate = createMemo(() => promise);
+      // being awaited; sync nodes reject thenable returns). Transparent: the
+      // hydrating memo wrapper would otherwise peek an id off the null owner.
+      gate = createMemo(() => promise, { transparent: true });
     });
     assetGates.set(promise, gate);
   }
@@ -146,6 +190,7 @@ import {
   qualifierValue,
   STYLESHEET_FETCH_META
 } from "./head.js";
+import { devCheck, unscopedHoleAllocatedIds } from "./diagnostics.js";
 export {
   DOMWithState,
   ChildProperties,
@@ -158,6 +203,32 @@ export {
   DelegatedEvents
 } from "./constants.js";
 
+// === Delegated-event wire contract ===
+//
+// Everything below is read off the DOM and the event object by whichever
+// Solid runtime happens to be listening, so it is shared state between every
+// Solid copy on a page: two bundles of the same major nested in each other,
+// or a future major nested in this one. It is frozen. Changing any of it
+// means choosing a new EVENT_KEY prefix so the runtimes stop seeing each
+// other's handlers, not a new shape under the old one.
+//
+// - `node[EVENT_KEY + type]` is the delegated handler: a function or an
+//   object with `handleEvent`. `node[EVENT_KEY + type + "Data"]` is the
+//   optional bound data; when defined the handler is called `(data, e)`,
+//   otherwise `(e)`. Skipped while `node.disabled`.
+// - `e[$$EVENT_OWNER]` marks an event a root has already walked: the owner
+//   node, or `true` for an unscoped container. A listener that sees a mark
+//   skips unless the mark is a descendant of its own container, in which
+//   case it resumes from the marked node's parent.
+// - The walk climbs `_$host || parentNode || host`, stops on `cancelBubble`,
+//   and stops at the listener's own boundary or its direct child.
+//
+// v1 (`solid-js@1`) used `$$` + type for the key and delegated from
+// `document`, so its listener saw every element on the page and fired any
+// matching key it found. The prefix here is deliberately not `$$` so a v1
+// copy on the same page (an older widget, a devtools panel) cannot find
+// these handlers, and this runtime cannot find v1's.
+const EVENT_KEY = "_$$";
 const $$EVENT_OWNER = "_$SOLID_EVENT_OWNER";
 const $$EVENT_TUPLE = Symbol();
 const hasOwn = Object.prototype.hasOwnProperty;
@@ -189,6 +260,12 @@ export { effect, memo, untrack, getOwner, createComponent };
  */
 export { mergeProps };
 export const getRequestEvent: () => RequestEvent | undefined = voidFn;
+/**
+ * Client stub — the trace a request belongs to is a server-side reading
+ * (the incoming `traceparent`, the render's origination); the browser SDK
+ * that continues it reads the document's `<meta>`/`Server-Timing` instead.
+ */
+export const getTraceContext: () => TraceContext | undefined = voidFn;
 
 // The cookie codec (the platform-gap primitives — see cookies.js): the
 // REAL implementation, not a stub — a pure value transformer has
@@ -230,7 +307,18 @@ export function render(
   code: () => JSX.Element,
   element: MountableElement,
   init?: JSX.Element,
-  options?: { owner?: unknown; renderId?: string }
+  options?: {
+    owner?: unknown;
+    renderId?: string;
+    /**
+     * This root's client error hook, ahead of `configureClientErrors`':
+     * every failure an error boundary under it renders a fallback for —
+     * the one event no global handler sees (an uncaught error halts the
+     * reactive system and reaches `reportError` / `window.onerror`). Once
+     * per error object; no return — the client has no wire to map for.
+     */
+    onError?: ClientErrorHook;
+  }
 ): () => void;
 
 export function render(code, element, init, options = {}) {
@@ -251,6 +339,10 @@ export function render(code, element, init, options = {}) {
     root(
       dispose => {
         disposer = dispose;
+        // Parked on the root owner under the registered key: the hook
+        // machinery is retained only by a boundary or the app's own
+        // `configureClientErrors` import (see signals' error-hooks).
+        if (options.onError) getOwner()[ROOT_ERROR_HOOK] = options.onError;
         if (element === document) {
           const tree = code();
           effect(
@@ -419,9 +511,26 @@ function describeEventTarget(target) {
   return out;
 }
 
+/**
+ * The interaction's start on the `performance.now()` clock: the event's own
+ * `timeStamp` — when the browser created it, before any queued task ran —
+ * not the moment the handler was reached, so the wait the record measures
+ * begins where the user's does. It is also the join key to the browser's
+ * Event Timing entry for the same interaction (`PerformanceEventTiming
+ * .startTime` equals it), which is how a consumer lines an interaction
+ * record up with INP without a time-window guess. Guarded: an environment
+ * that still stamps events with epoch milliseconds (jsdom, pre-2016
+ * browsers) puts the value far past `performance.now()`, and a value from
+ * the wrong clock is worse than none — the engine then defaults to now.
+ */
+function interactionStart(e) {
+  const at = e.timeStamp;
+  return typeof at === "number" && at >= 0 && at <= performance.now() ? at : undefined;
+}
+
 function dispatchAsInteraction(e, fn) {
   return OBSERVE.attribution.withInteraction(
-    { type: e.type, target: describeEventTarget(e.target) },
+    { type: e.type, target: describeEventTarget(e.target), at: interactionStart(e) },
     fn
   );
 } /** Event-delegation plumbing (Portal/custom-root wiring). Integration plumbing. @internal */
@@ -676,7 +785,7 @@ export function addEvent(node, name, handler, delegate) {
     if (isBlock(handler[0])) handler = [eventBlockListener(handler[0]), handler[1]];
   } else if (isBlock(handler)) handler = eventBlockListener(handler);
   if (delegate) {
-    const key = `$$${name}`;
+    const key = EVENT_KEY + name;
     let data;
     if (Array.isArray(handler)) {
       data = handler[1];
@@ -797,7 +906,7 @@ export function readShallow(value) {
   if (value === null || typeof value !== "object") return value;
   if (Array.isArray(value)) return value.map(readShallow);
   if (value[$PROXY] !== value) return value;
-  const keys = ownKeys(value);
+  const keys = sourceKeys(value, SOURCE_PROXY);
   const out = {};
   for (let i = 0; i < keys.length; i++) {
     const k = keys[i];
@@ -806,16 +915,7 @@ export function readShallow(value) {
   return out;
 }
 
-// The own keys of a spread/style source for a one-layer copy. For a proxy
-// (merge/omit/`{...props}`, store records) ONE `ownKeys` trap: the trap keeps
-// the key set tracked, and the enumerability check `for…in` would run — a
-// `getOwnPropertyDescriptor` trap per key, allocating a descriptor plus a
-// getter closure, then AGAIN for `hasOwn` — never happens. `Object.keys` for a
-// plain object is exactly the own-enumerable set `for…in` + `hasOwn` yielded.
-// Callers skip symbol keys.
-function ownKeys(o: object): (string | symbol)[] {
-  return o[$PROXY] === o ? Reflect.ownKeys(o) : Object.keys(o);
-} /** Compiler-emitted primitive; not for hand-written code. @internal */
+/** Compiler-emitted primitive; not for hand-written code. @internal */
 export function setStyleProperty(node: Element, name: string, value: any): void;
 
 export function setStyleProperty(node, name, value) {
@@ -826,68 +926,235 @@ export function setStyleProperty(node, name, value) {
   if (isHydrating(node)) return;
   value != null ? node.style.setProperty(name, value) : node.style.removeProperty(name);
 } /** Compiler-emitted primitive; not for hand-written code. @internal */
-export function spread<T>(node: Element, accessor: T, skipChildren?: Boolean): void;
+export function spread(
+  node: Element,
+  sources: unknown[],
+  skipChildren?: Boolean,
+  skip?: (key: string) => boolean,
+  name?: string
+): void;
+export function spread<T>(
+  node: Element,
+  accessor: T,
+  skipChildren?: Boolean,
+  skip?: (key: string) => boolean,
+  name?: string
+): void;
 
-// TODO: make this better
-export function spread(node, props, skipChildren) {
+// At most TWO reactive nodes per element (#3388) — one when nothing flows
+// through `children`:
+//
+// - The children `insert` effect stays separate. It OWNS the child subtree:
+//   components, memos and effects created while the children getter runs are
+//   disposed when it reruns, so folding it into the attribute effect would
+//   tear the children down and rebuild them on every attribute change. When
+//   the source is a plain object (no accessor, no proxy) whose `children` is
+//   a data property, the value is inserted directly — `insert` with a
+//   non-function creates no effect at all. Compiled JSX children are getters
+//   and keep the effect path.
+// - `ref` FOLDS into the attribute effect. It is collected with the other
+//   props in the compute half and applied in the commit half only when its
+//   identity differs from the last applied one (`prevProps.ref`, recorded by
+//   assign()). `ref()` runs the callback untracked with NO owner — refs
+//   deliberately own nothing — so anything a ref callback creates survives
+//   the effect rerunning; that is what makes the fold safe.
+//
+// Sources. A single source is an object, a merge() result or a bare
+// accessor. A lone reactive spread compiles to its accessor directly: merging
+// one source is pure overhead, and the mergeProps memo would consume a
+// hydration id the server-side fast path never allocates (#3105). The
+// accessor resolves inside each tracking scope instead. A nullish source
+// (`{...props()}` where the optional props are absent, or no source at all)
+// is an empty spread: attributes applied by the previous value are removed,
+// nothing throws (#3297).
+//
+// An ARRAY of sources is the union of their own string keys, later sources
+// winning per key (Object.assign / merge()'s contract); only the winning
+// source's value is read, so a shadowed getter never runs. A function source
+// is called inline in the compute half, tracked, once per run — NO memo and
+// so NO hydration id, matching the server's `ssrElement` array form. Nullish
+// sources are skipped. `skip(key)` → the key is never read nor applied.
+//
+// `name` is the element's tag as written, emitted by the compiler under
+// `sourceNames.bindings`; the attribute effect is labelled `<tag>.spread`
+// and the children insert `<tag>.children`, like a compiled hole's. Dev and
+// observe runtimes carry the labels — through `spreadName` (render.ts),
+// which `effect` and `insert` read while this body runs, so no call site
+// below changes shape and production is byte-identical without them.
+export function spread(node, props, skipChildren, skip, name) {
+  if ("_SOLID_OBSERVE_" && name !== undefined) {
+    const outer = spreadName;
+    setSpreadName(name);
+    try {
+      return spread(node, props, skipChildren, skip);
+    } finally {
+      setSpreadName(outer);
+    }
+  }
   const prevProps = {};
-  // A lone reactive spread compiles to its accessor directly: merging one
-  // source is pure overhead, and the mergeProps memo would consume a
-  // hydration id the server-side fast path never allocates (#3105). The
-  // accessor resolves inside each tracking scope instead. A nullish source
-  // (`{...props()}` where the optional props are absent, or no source at all)
-  // is an empty spread: attributes applied by the previous value are removed,
-  // nothing throws (#3297).
-  const get = () => (typeof props === "function" ? props() : props) ?? {};
-  if (!skipChildren)
-    insert(node, () => {
-      const source = get();
-      return hasOwn.call(source, "children") ? source.children : undefined;
-    });
-  effect(
-    () => {
-      const source = get();
-      const r = hasOwn.call(source, "ref") && source.ref;
-      (typeof r === "function" || Array.isArray(r)) && ref(() => r, node);
-    },
-    () => {}
-  );
-  effect(
-    () => {
-      const source = get();
-      const newProps = {};
-      // A merge() proxy is read through its SOURCES, not through the proxy: a
-      // spread mixed with other attributes compiles to
-      // `spread(el, merge(statics, () => rest))`, and going through the proxy
-      // costs merge's `keys()` (a Set plus an own-enumerable scan of every
-      // source) and then, per key, a right-to-left `in` walk of the sources.
-      // The union of own string keys with later sources overriding earlier
-      // — Object.assign order, merge's own contract — is all a spread needs.
-      // omit() is not a merge: it stays a proxy and is enumerated through its
-      // own filtering trap.
-      const sources = mergeSources(source);
-      if (sources !== undefined) {
-        for (let i = 0; i < sources.length; i++) {
-          let s = sources[i];
-          if (typeof s === "function") s = s();
-          if (s != null) collectProps(newProps, s);
+  const apply = newProps => {
+    const r = newProps.ref;
+    if (r !== prevProps.ref && (typeof r === "function" || Array.isArray(r))) ref(() => r, node);
+    assign(node, newProps, true, prevProps, true);
+  };
+  // The children inserts below are transparent by design (see
+  // `unscopedByDesign`); the mark spans their synchronous first compute.
+  if ("_SOLID_DEV_") unscopedByDesign = node;
+  if (Array.isArray(props)) {
+    if (!skipChildren && !(skip !== undefined && skip("children")))
+      insert(node, () => {
+        for (let i = props.length - 1; i >= 0; i--) {
+          const s = resolveSource(props[i]);
+          if (s != null && entryHas(s, "children")) return entryGet(s, "children");
         }
-      } else collectProps(newProps, source);
-      return newProps;
-    },
-    props => assign(node, props, true, prevProps, true)
-  );
+      });
+    if ("_SOLID_DEV_") unscopedByDesign = null;
+    effect(() => collectSources({}, props, undefined, skip), apply);
+    return prevProps;
+  }
+  if (!skipChildren && !(skip !== undefined && skip("children"))) {
+    if (typeof props !== "function" && props != null && hasStaticKeys(props)) {
+      // A plain object's key set can't change reactively — nor can a
+      // merge/omit view's over plain objects, and its descriptor trap tells
+      // the truth about the owning leaf: no `children` key means nothing to
+      // insert, a data property inserts its value with no effect, only a
+      // getter needs the tracking scope. So `<Tag {...omit(props, "as")}>`
+      // with static children costs no children effect either.
+      const desc = Object.getOwnPropertyDescriptor(props, "children");
+      if (desc !== undefined) {
+        if (desc.get === undefined) insert(node, desc.value);
+        else insert(node, () => props.children);
+      }
+    } else
+      insert(node, () => {
+        const source = resolveSource(props);
+        return source != null && entryHas(source, "children")
+          ? entryGet(source, "children")
+          : undefined;
+      });
+  }
+  if ("_SOLID_DEV_") unscopedByDesign = null;
+  effect(() => {
+    const source = resolveSource(props);
+    const newProps = {};
+    // A merge() proxy is read through its SOURCES, not through the proxy: a
+    // spread mixed with other attributes compiles to
+    // `spread(el, merge(statics, () => rest))`, and going through the proxy
+    // costs merge's `keys()` (a Set plus an own-enumerable scan of every
+    // source) and then, per key, a right-to-left `in` walk of the sources.
+    // The union of own string keys with later sources overriding earlier
+    // — Object.assign order, merge's own contract — is all a spread needs.
+    // An omit() proxy likewise is read through its VIEW RECORD — its source
+    // walked directly with the hidden keys filtered — never through its
+    // traps (a descriptor trap per key, allocating, on every rerun).
+    //
+    // A view over plain objects only has a RESOLVED TABLE — key → owning
+    // leaf, shadowing already applied — built once; on every rerun this
+    // effect then does exactly what it did over an eager copy: one read per
+    // key, no re-enumeration and no per-key walk of the later sources.
+    const table = resolvedTable(source);
+    if (table !== undefined) return collectTable(newProps, table, skip);
+    if (source != null) {
+      const view = viewOf(source);
+      if (view instanceof OmitView) collectProps(newProps, view, SOURCE_OMIT, skip);
+      else if (view !== undefined) collectSources(newProps, view.sources, view.kinds, skip);
+      else collectProps(newProps, source, $PROXY in source ? SOURCE_PROXY : SOURCE_PLAIN, skip);
+    }
+    return newProps;
+  }, apply);
   return prevProps;
 }
 
-// One layer of a spread source into `out`: own string keys, children/ref
-// excluded, object-valued style/class read HERE, tracked (see readShallow()).
-function collectProps(out, s) {
-  const keys = ownKeys(s);
-  for (let i = 0; i < keys.length; i++) {
+// A resolved view table (see `resolvedTable`) into `out`: the owning leaf's
+// value per key, children excluded, `skip` honored.
+function collectTable(out, table, skip) {
+  for (const [prop, leaf] of table) {
+    if (typeof prop !== "string" || prop === "children") continue;
+    if (skip !== undefined && skip(prop)) continue;
+    const v = leaf[prop];
+    out[prop] = prop === "style" || prop === "class" ? readShallow(v) : v;
+  }
+  return out;
+}
+
+function resolveSource(s) {
+  return typeof s === "function" ? s() : s;
+}
+
+// `key in s` / `s[key]` for one resolved, non-null spread source: an omit()
+// proxy answers from its view record (the filter, then its source), anything
+// else — a plain object, a store, a merge() proxy — as itself.
+function entryHas(s, key) {
+  const view = viewOf(s);
+  return view instanceof OmitView ? sourceHas(view, SOURCE_OMIT, key) : key in s;
+}
+function entryGet(s, key) {
+  const view = viewOf(s);
+  return view instanceof OmitView ? sourceGet(view, SOURCE_OMIT, key) : s[key];
+}
+
+// Layered sources into `out`. Every function source is resolved once, up
+// front, and a merge() proxy among them contributes its flattened sources in
+// place — each entry with its KIND (see `SourceKind`), so the per-key walk
+// below asks nothing of a proxy but the read itself; keys are then collected
+// left-to-right (Object.assign order — the order assign() applies them in,
+// which `type`/`value`/`min`/`max` style pairs care about), and a key any
+// LATER source has is skipped unread. `sourceHas` is merge()'s own
+// resolution test, so a proxy source (store) answers through its `has` trap
+// rather than a per-key descriptor trap, and an omit view answers from its
+// filter.
+function collectSources(out, sources, kinds, skip) {
+  const resolved = [];
+  const resolvedKinds = [];
+  for (let i = 0; i < sources.length; i++)
+    pushEntry(resolved, resolvedKinds, sources[i], kinds !== undefined ? kinds[i] : SOURCE_MEMO);
+  for (let i = 0; i < resolved.length; i++)
+    collectProps(out, resolved[i], resolvedKinds[i], skip, resolved, resolvedKinds, i + 1);
+  return out;
+}
+
+// One source into the resolved entry lists. A known plain / omit-record /
+// proxy entry (a merge's leaf) joins as is. Anything else — a function (the
+// compiler's `() => rest`, merge's memo) resolved once — is classified: a
+// merge() proxy contributes its leaves, an omit() proxy its record, a proxy
+// is walked through its traps, and nothing nullish contributes at all.
+function pushEntry(resolved, kinds, s, kind) {
+  if (kind !== SOURCE_MEMO) {
+    resolved.push(s);
+    kinds.push(kind);
+    return;
+  }
+  s = resolveSource(s);
+  if (s == null) return;
+  const view = viewOf(s);
+  if (view instanceof OmitView) {
+    resolved.push(view);
+    kinds.push(SOURCE_OMIT);
+  } else if (view !== undefined) {
+    const f = view.sources,
+      k = view.kinds;
+    for (let j = 0; j < f.length; j++) pushEntry(resolved, kinds, f[j], k[j]);
+  } else {
+    resolved.push(s);
+    kinds.push($PROXY in s ? SOURCE_PROXY : SOURCE_PLAIN);
+  }
+}
+
+// One layer of a spread source into `out`: own string keys, `children`
+// excluded (it has its own insert), `ref` carried through for the commit
+// half, object-valued style/class read HERE, tracked (see readShallow()).
+// With `later` (the sources after this one, from index `from`), a key one of
+// them defines is shadowed and never read here.
+function collectProps(out, s, kind, skip, later?, laterKinds?, from?) {
+  const keys = sourceKeys(s, kind);
+  outer: for (let i = 0; i < keys.length; i++) {
     const prop = keys[i];
-    if (typeof prop !== "string" || prop === "children" || prop === "ref") continue;
-    const v = s[prop];
+    if (typeof prop !== "string" || prop === "children") continue;
+    if (skip !== undefined && skip(prop)) continue;
+    if (later !== undefined)
+      for (let j = from; j < later.length; j++)
+        if (sourceHas(later[j], laterKinds[j], prop)) continue outer;
+    const v = sourceGet(s, kind, prop);
     out[prop] = prop === "style" || prop === "class" ? readShallow(v) : v;
   }
 } /** Compiler-emitted primitive; not for hand-written code. @internal */
@@ -934,6 +1201,47 @@ export function scope(fn) {
 
 const SCOPE_OPTIONS = { scope: true };
 
+// Dev CHECK: an unscoped hole built content on the enclosing id counter
+// while hydrating, and that content missed its server-rendered keys —
+// `UNSCOPED_HOLE_ALLOCATED_IDS` (diagnostics.ts; the server's `ssr()` hole
+// loop runs its half). `insert`'s outer effect is transparent unless the
+// compiler tagged the accessor (`$s`), so a bare function it was handed
+// (`{renderHead}`) builds its content on the enclosing counter at statement
+// time, where the server builds it in walk order — after the scoped holes
+// that follow it reserved theirs. Allocation alone is not the finding (a
+// function hole with nothing scoped after it lands on the same ids both
+// sides); the client cannot see the server's template, so it reports the
+// permutation it can observe: a key miss (`getNextElement`) inside the
+// bracket. The snapshot is taken only while hydrating, for an untagged
+// accessor, and outside a runtime children insert: `spread`'s is
+// transparent BY DESIGN — the server's `ssrElement` evaluates the same
+// children inline in the same position — and marks its element in
+// `unscopedByDesign` for the duration of the (synchronous) first compute.
+// Once per site: the owner labels, the element, the function name.
+let unscopedByDesign = null;
+let reportedHoleSites = null;
+let hydrationKeyMisses = 0;
+function unscopedHoleSnapshot(accessor, parent) {
+  if (
+    accessor.$s ||
+    !sharedConfig.hydrating ||
+    parent === unscopedByDesign ||
+    sharedConfig.devPeekNextContextId === undefined
+  )
+    return undefined;
+  return { next: sharedConfig.devPeekNextContextId(), misses: hydrationKeyMisses };
+}
+function checkUnscopedHole(snapshot, accessor, parent) {
+  if (snapshot === undefined || hydrationKeyMisses === snapshot.misses) return;
+  const after = sharedConfig.devPeekNextContextId();
+  if (after === snapshot.next) return;
+  let site = parent.nodeName + "|" + accessor.name;
+  for (let o = getOwner(); o !== null; o = o._parent) if (o._name) site = o._name + "|" + site;
+  if ((reportedHoleSites || (reportedHoleSites = new Set())).has(site)) return;
+  reportedHoleSites.add(site);
+  unscopedHoleAllocatedIds(snapshot.next, after, accessor.name ? { name: accessor.name } : {});
+}
+
 // Hydration-time behaviors reached from the hot insert/event paths, installed
 // by hydrate() so client-only bundles shake the implementations. Call sites
 // guard on the null slot; only hydrate() can assign it (#2883). Rollup folds
@@ -946,8 +1254,8 @@ export function installHydrationRuntime() {
     // hydration, dropping server text-hole separators.
     claimInitial(parent, multi, initial) {
       if (isHydrating(parent)) {
-        if (!multi && initial === undefined && parent) initial = [...parent.childNodes];
-        if (Array.isArray(initial)) stripTextSeparators(initial);
+        if (!multi && initial === undefined && parent) initial = claimChildNodes(parent);
+        else if (Array.isArray(initial)) stripTextSeparators(initial);
       }
       return initial;
     },
@@ -979,7 +1287,7 @@ export function installHydrationRuntime() {
           nodes.unshift(node);
           node = node.previousSibling;
         }
-      } else nodes = [...parent.childNodes];
+      } else return claimChildNodes(parent);
       return stripTextSeparators(nodes);
     },
     // eventHandler(): replayed server events are deduped against the live
@@ -1008,18 +1316,47 @@ function stripTextSeparators(nodes) {
   for (let i = 0; i < nodes.length; i++) {
     const node = nodes[i],
       t = node.nodeType;
-    if (t === 8) {
-      const v = node.nodeValue;
-      if (v === "!$") {
-        node.remove();
-        continue;
-      }
-      if (v.startsWith("pl-")) continue;
-    } else if (t === 1 && node.localName === "template" && node.id.startsWith("pl-")) continue;
+    if (t === 8 && node.nodeValue === "!$") {
+      node.remove();
+      continue;
+    }
+    if (isPlaceholderScaffolding(node, t)) continue;
     nodes[j++] = node;
   }
   nodes.length = j;
   return nodes;
+}
+
+// The claim array for a parent's children: one indexed pass over the live
+// childNodes with the separators dropped as it copies. This runs for every
+// insert() during hydration, so it avoids `[...parent.childNodes]` (the
+// iterator protocol over a live NodeList) followed by a second compacting
+// pass. Removing a `<!--!$-->` shifts the live list, so the index holds.
+function claimChildNodes(parent) {
+  const live = parent.childNodes;
+  const out = [];
+  for (let i = 0, n = live.length; i < n; i++) {
+    const node = live[i],
+      t = node.nodeType;
+    if (t === 8 && node.nodeValue === "!$") {
+      node.remove();
+      i--;
+      n--;
+      continue;
+    }
+    if (isPlaceholderScaffolding(node, t)) continue;
+    out.push(node);
+  }
+  return out;
+}
+
+// A pending boundary's placeholder scaffolding — `<template id="pl-X">` and
+// its `<!--pl-X-->` end marker — is excluded from claim arrays but kept in
+// the DOM (see stripTextSeparators).
+function isPlaceholderScaffolding(node, t) {
+  return t === 8
+    ? node.nodeValue.startsWith("pl-")
+    : t === 1 && node.localName === "template" && node.id.startsWith("pl-");
 }
 
 /**
@@ -1040,10 +1377,25 @@ export function insert<T>(
     host?: () => Node | null;
     /** Defer the insert effect to the queue instead of running it inline. */
     schedule?: boolean;
+    /**
+     * Label for the hole's render effects (the outer and, for a nested
+     * accessor, the inner unwrapping effect) — the compiler emits the parent
+     * tag as written under `sourceNames.bindings` (`div.children`). Dev and
+     * observe runtimes carry it on the node; production ignores it.
+     */
+    name?: string;
   }
 ): JSX.Element;
 
 export function insert(parent, accessor, marker, initial, options) {
+  // Inside a labelled `spread` (see there): the children insert is
+  // `<tag>.children`, taken before `effect` would label it `<tag>.spread`.
+  if (
+    "_SOLID_OBSERVE_" &&
+    spreadName !== undefined &&
+    (options === undefined || options.name === undefined)
+  )
+    options = { ...options, name: spreadName + ".children" };
   const multi = marker !== undefined;
   const host = options && options.host;
   if (multi && !initial) initial = [];
@@ -1083,6 +1435,13 @@ export function insert(parent, accessor, marker, initial, options) {
   effect(
     prev => {
       if (hydrationRt !== null) current = hydrationRt.reclaimRegion(current, parent, marker);
+      // Dev: bracket an unscoped accessor's evaluation while hydrating — a
+      // scoped one owns its ids; this effect is transparent, so anything an
+      // unscoped one builds takes ids from the enclosing counter, and a key
+      // miss inside the bracket is the permutation. Checked again after the
+      // inner effect below, whose synchronous first compute unwraps an
+      // accessor that returned a function (one report per site).
+      const devNext = "_SOLID_DEV_" ? unscopedHoleSnapshot(accessor, parent) : undefined;
       let raw = read();
       // A hole whose value is a `$` block (a component call returning its
       // view, e.g. the hydration root `() => <Page />`) renders the view
@@ -1092,6 +1451,7 @@ export function insert(parent, accessor, marker, initial, options) {
       // deferred boundary — and its fetches — on every settle.
       while (isBlock(raw)) raw = renderBlock(raw);
       const value = normalize(raw, current, multi, true);
+      if ("_SOLID_DEV_") checkUnscopedHole(devNext, accessor, parent);
       if (typeof value !== "function") return value;
       effect(
         () => (
@@ -1106,6 +1466,7 @@ export function insert(parent, accessor, marker, initial, options) {
           ? { ...options, schedule: true }
           : options
       );
+      if ("_SOLID_DEV_") checkUnscopedHole(devNext, accessor, parent);
       return INNER_OWNED;
     },
     value => {
@@ -1663,7 +2024,13 @@ function gateHeadResource(props) {
       // errored) sheet must acquire synchronously — cached sheets add zero
       // wait, adopted server-emitted sheets never stall — and even a
       // settled promise costs a microtask through the async machinery.
-      if (gateable && entry.loadState === "pending" && typeof waitAsset === "function")
+      // Hydrating content is already visible; the server gated its reveal.
+      if (
+        gateable &&
+        !sharedConfig.hydrating &&
+        entry.loadState === "pending" &&
+        typeof waitAsset === "function"
+      )
         waitAsset(entry.loadPromise);
     },
     () => acquireAsset(descriptor)
@@ -1675,7 +2042,10 @@ function gateHeadResource(props) {
  * Resolution is last-committed group per identity (reactive updates keep
  * the registration's original commit position); disposal restores the
  * previous winner. During hydration the server-flushed head state stays
- * authoritative until hydration completes. See docs/head-management-rfc.md.
+ * authoritative until hydration completes. Stylesheet reveal gating is
+ * skipped while `sharedConfig.hydrating` is true: hydration claims DOM the
+ * browser already painted, and the server gated that paint — no FOUC is
+ * introduced. See docs/head-management-rfc.md.
  */
 export function useHead(tag: HeadTag | HeadTag[] | (() => HeadTag | HeadTag[])): void;
 
@@ -1686,7 +2056,9 @@ export function useHead(tag: HeadTag | HeadTag[] | (() => HeadTag | HeadTag[])):
  * after registration). Props values may be getters (reactive); updates keep
  * the registration's original commit position. Disposal removes the
  * registration and re-resolves (previous committed winner is restored).
- * See docs/head-management-rfc.md.
+ * Stylesheet reveal gating is skipped while `sharedConfig.hydrating` is
+ * true: hydration claims DOM the browser already painted, and the server
+ * gated that paint — no FOUC is introduced. See docs/head-management-rfc.md.
  */
 export function useHead(tags) {
   initHeadRegistry();
@@ -1811,7 +2183,7 @@ function loadModuleAssets(mapping) {
 export function hydrate(
   fn: () => JSX.Element,
   node: MountableElement,
-  options?: { renderId?: string; owner?: unknown }
+  options?: { renderId?: string; owner?: unknown; onError?: ClientErrorHook }
 ): () => void;
 
 export function hydrate(code, element, options = {}) {
@@ -2038,6 +2410,7 @@ export function getNextElement(template) {
     // in the document — without a report that reads as a silently frozen
     // page (solidjs/solid#3000).
     if ("_SOLID_DEV_" && hydrating) {
+      hydrationKeyMisses++;
       console.warn(
         `Hydration key miss for "${key}": no server-rendered element carries this key` +
           (template._html ? ` (template: ${template._html.slice(0, 60)})` : "") +
@@ -2207,6 +2580,12 @@ export function runHydrationEvents() {
 // Internal Functions
 function isHydrating(node) {
   if (!sharedConfig.hydrating) return false;
+  // A streamed boundary's resume window claims only the subtree under that
+  // boundary; the rest of the page hydrated in the root pass. A render the
+  // window forces outside it — the resumed content's onSettled writing a
+  // signal above the boundary, revealing a <Show> there (#3504) — is a
+  // client render: fresh nodes, live inserts, no registry lookup.
+  if (sharedConfig.isClaiming && !sharedConfig.isClaiming()) return false;
   if (!node || node.isConnected) return true;
   // Connectivity tells claimed SSR nodes apart from fresh template clones,
   // but a claimed tree isn't always IN the document: a frame adoption whose
@@ -2334,7 +2713,7 @@ function eventHandler(e, container, state) {
   e[$$EVENT_OWNER] = owner || true;
 
   let node = resumeNode || e.target;
-  const key = `$$${e.type}`;
+  const key = EVENT_KEY + e.type;
   const oriTarget = e.target;
   const boundary = owner || container || e.currentTarget;
   const retarget = value =>
@@ -2343,21 +2722,10 @@ function eventHandler(e, container, state) {
       value
     });
   const handleNode = () => {
-    let handler = node[key];
-    // Server-claimed handler (`_bnd` marker, Stage 6 behavior claims):
-    // resolved at dispatch through the frame runtime's registered-symbol
-    // seam — latest-props by construction, importless in both directions.
-    // The read lives entirely inside this walk (no module-level state):
-    // client.js contributes ZERO top-level bytes to tree-shaken subsets,
-    // and the seam stays live for markers adopted before the frame runtime
-    // loads (the document face). Only pays when no compiled handler exists.
-    if (handler === undefined && node.hasAttribute && node.hasAttribute("_bnd")) {
-      const seam = globalThis[Symbol.for("solid.bnd")];
-      if (seam) handler = seam.resolve(node, e.type);
-    }
+    const handler = node[key];
     if (handler && !node.disabled) {
       const data = node[`${key}Data`];
-      // A `$` event block bound by the compiler (`node.$$click = block`)
+      // A `$` event block bound by the compiler (`node._$$click = block`)
       // is interpreted here, at the delegated sink: it runs as an event
       // host under its creation owner.
       if (isBlock(handler)) dispatchBlock(handler, e);
@@ -2474,7 +2842,7 @@ function insertExpression(parent, value, current, marker) {
   } else if (value.nodeType) {
     if (Array.isArray(current)) {
       cleanChildren(parent, current, multi ? marker : null, value);
-    } else if (current && current.nodeType) {
+    } else if (current != null && current.nodeType) {
       // `current` is a node we previously inserted but it may have been
       // moved out by user code (e.g. ref-driven migration, JSX wrapping)
       // since the last render. If it's still here, replace it in place;
@@ -2482,14 +2850,17 @@ function insertExpression(parent, value, current, marker) {
       current.parentNode === parent
         ? parent.replaceChild(value, current)
         : parent.appendChild(value);
-    } else if (current && parent.firstChild) {
+    } else if (current != null && parent.firstChild) {
+      // A sole text child is the raw primitive, and `0` / `NaN` are falsy.
+      // Truthiness would skip this replace and leave that text node beside
+      // the new element (#3571).
       parent.replaceChild(value, parent.firstChild);
     } else {
       parent.appendChild(value);
     }
     if (marker) value[$$SLOT] = marker;
   } else if (Array.isArray(value)) {
-    const currentArray = current && Array.isArray(current);
+    const currentArray = Array.isArray(current);
     // Commit-time text materialization (normalize left primitives raw): a
     // primitive slot adopts the positional text node with a `.data` write
     // when one is there, and allocates only otherwise. The adopted node's
@@ -2514,10 +2885,20 @@ function insertExpression(parent, value, current, marker) {
         appendNodes(parent, value, marker);
       } else reconcileArrays(parent, current, value, marker);
     } else {
-      current && cleanChildren(parent, current);
+      // Same sole-primitive case: `0` / `NaN` still own a text node (#3571).
+      if (current != null) cleanChildren(parent, current);
       appendNodes(parent, value);
     }
-  } else if ("_SOLID_DEV_") console.warn(`Unrecognized value. Skipped inserting`, value);
+  } else if ("_SOLID_DEV_")
+    // The server renderer's code for the same rule (`UNRECOGNIZED_INSERT_VALUE`
+    // in server.ts); the finding locates to the owner whose binding inserted.
+    devCheck({
+      code: "UNRECOGNIZED_INSERT_VALUE",
+      kind: "render",
+      severity: "warn",
+      message: `[UNRECOGNIZED_INSERT_VALUE] Unrecognized value. Skipped inserting (${typeof value}).`,
+      data: { type: typeof value, value }
+    });
   return value;
 }
 
@@ -2653,6 +3034,20 @@ function hasServerMarkup(element, root) {
 
 function gatherHydratable(element, root) {
   const templates = element.querySelectorAll(`*[_hk]`);
+  // The ambient sweep claims only what this hydration root itself walks.
+  // Frame regions ("data-fid" — the frame runtime's element brand, an
+  // importless duplicate like FRAME_ID_ATTR in frame-client/frame-sink)
+  // are another layer's property: their fills claim through scoped
+  // registries on their own schedule (a lazy route module may adopt long
+  // after this root completes), so collecting them here only sets up the
+  // completion sweep to report legitimately-late claims as unclaimed.
+  // Whether the root has frames is one question about the page, not one per
+  // keyed node: find them once and test containment against the list, rather
+  // than `closest("[data-fid]")` from every node — an ancestor walk to the
+  // document root for each element, paid in full on pages with no frames.
+  const frames = root ? null : element.querySelectorAll("[data-fid]");
+  const frameCount = frames ? frames.length : 0;
+  const registry = sharedConfig.registry;
   for (let i = 0; i < templates.length; i++) {
     const node = templates[i];
     const key = node.getAttribute("_hk");
@@ -2662,18 +3057,19 @@ function gatherHydratable(element, root) {
       // Keys are namespaced by their producer chain, so a nested frame's
       // content can never match a foreign prefix.
       if (!key.startsWith(root)) continue;
-    } else {
-      // The ambient sweep claims only what this hydration root itself walks.
-      // Frame regions ("data-fid" — the frame runtime's element brand, an
-      // importless duplicate like FRAME_ID_ATTR in frame-client/frame-sink)
-      // are another layer's property: their fills claim through scoped
-      // registries on their own schedule (a lazy route module may adopt long
-      // after this root completes), so collecting them here only sets up the
-      // completion sweep to report legitimately-late claims as unclaimed.
-      const frame = node.closest("[data-fid]");
-      if (frame && frame !== element && element.contains(frame)) continue;
+    } else if (frameCount !== 0) {
+      // `contains` is inclusive: a node that is itself a frame is skipped too,
+      // as `closest` (which starts at the node) did before.
+      let inFrame = false;
+      for (let j = 0; j < frameCount; j++) {
+        if (frames[j].contains(node)) {
+          inFrame = true;
+          break;
+        }
+      }
+      if (inFrame) continue;
     }
-    if (!sharedConfig.registry.has(key)) sharedConfig.registry.set(key, node);
+    if (!registry.has(key)) registry.set(key, node);
   }
 } /** Hydration-walk primitive; not for hand-written code. @internal */
 export function getHydrationKey(): string | undefined;

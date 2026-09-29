@@ -1,6 +1,13 @@
-import { CONFIG_HAS_LANE, NOT_PENDING } from "./constants.js";
-import { ext } from "./core.js";
+import {
+  CONFIG_DERIVED_OVERRIDE,
+  CONFIG_HAS_LANE,
+  NOT_PENDING,
+  REACTIVE_DISPOSED
+} from "./constants.js";
+import { currentOptimisticLane, ext, hasActiveOverride, ownsHold } from "./core.js";
 import { markFeature } from "./dev.js";
+export { hasActiveOverride };
+import { enqueueSub } from "./heap.js";
 import {
   activeTransition,
   currentTransition,
@@ -114,6 +121,49 @@ export function laneHeld(lane: OptimisticLane): boolean {
 }
 
 /**
+ * Lanes mirror transitions (#3460): a render effect OFF a HELD lane that reads
+ * a value the lane is revealing — an override, a `latest()` shadow — sees the
+ * committed value, exactly as a stale reader of a held transaction does
+ * (A15 reveal corollary): it publishes now, with the frame that is on screen
+ * (the lane defers its own readers' runs, so the committed value is what is
+ * visible), entangles nothing — a sync write is never held by a lane — and
+ * re-derives at the release. The release re-run rides the lane's own render
+ * queue, which runs when the lane reveals (runLaneEffects) or its transaction
+ * commits (cleanupCompletedLanes). A reader ON the lane computes the lane's
+ * reveal and takes the value as before.
+ *
+ * OFF the lane is provenance, not membership — the transaction mirror
+ * exactly: a stale reader of a transaction is a pass that runs outside it. A
+ * pass under the lane's own transaction is the lane's work — its write (lane
+ * posture), or the landing of its async, which re-enters the transaction
+ * (#3334) and runs a member with no ambient lane. Read as an outsider, that
+ * pass published the committed view and queued a replay that revealed the
+ * override beside its unready derivation at the release (`1:0` for an
+ * optimistic frame that never became ready; #3479 review). Membership is the
+ * wrong test the other way: a member re-run by a sibling's sync write is a
+ * mainline pass and shows the committed view.
+ */
+export function readsHeldCommitted(owner: Computed<any>, c: Computed<any>): boolean {
+  const lane = resolveLane(owner);
+  if (!lane || !laneHeld(lane)) return false;
+  if (ownsLane(lane, owner)) return false;
+  lane._effectQueues[0].push(() => c._flags & REACTIVE_DISPOSED || enqueueSub(c));
+  return true;
+}
+
+/** The ownership relation for a lane hold (core `ownsHold`, §6 ruling 2): the
+ * running pass owns `lane`'s hold if it runs under the transition that owns
+ * the lane (the node's, resolved through override ownership and merges) or
+ * inside the lane itself. */
+export function ownsLane(lane: OptimisticLane, owner: Computed<any>): boolean {
+  if (activeTransition !== null) {
+    const t = resolveTransition(owner);
+    if (t && ownsHold(t)) return true;
+  }
+  return currentOptimisticLane !== null && findLane(currentOptimisticLane) === lane;
+}
+
+/**
  * Merge two lanes when their dependency graphs overlap.
  */
 export function mergeLanes(lane1: OptimisticLane, lane2: OptimisticLane): OptimisticLane {
@@ -162,14 +212,6 @@ export function resolveTransition(el: Signal<any> | Computed<any>): Transition |
 }
 
 /**
- * Check if a node has an active optimistic override.
- */
-export function hasActiveOverride(el: Signal<any> | Computed<any>): boolean {
-  const x = el._x;
-  return x !== null && x._overrideValue !== undefined && x._overrideValue !== NOT_PENDING;
-}
-
-/**
  * Assign or merge a lane onto a node. At convergence points (node already has
  * a different active lane), merge unless the node has an active override.
  */
@@ -180,17 +222,21 @@ export function assignOrMergeLane(
   const sourceRoot = findLane(sourceLane);
   const existing = el._x?._optimisticLane;
   if (existing) {
-    // If the subscriber's lane was merged into another lane, it's stale —
-    // replace it with the new source lane instead of following the merge chain
-    // (which would incorrectly merge the new lane into the old group)
-    if (existing._mergedInto) {
-      ext(el)._optimisticLane = sourceLane;
-      (el as any)._config |= CONFIG_HAS_LANE;
-      return;
-    }
+    // A merged lane is followed to its root like any other: the root is where
+    // the subscriber's affinity lives now. Replacing it with the source lane
+    // outright (as this once did) skipped the parent/child check below — an
+    // isPending reader of two async siblings had their two companion lanes
+    // merge, and the next parent-lane notification then moved it onto the
+    // held parent, where its verdict waited on the async it reports (#3409).
     const existingRoot = findLane(existing);
     if (activeLanes.has(existingRoot)) {
-      if (existingRoot !== sourceRoot && !hasActiveOverride(el)) {
+      // A WRITTEN override is its own lane's source and merges nothing
+      // through it; a derived one (lanes stage, #3479) is a plain member —
+      // the shared reader that merges two writers' lanes carries one.
+      if (
+        existingRoot !== sourceRoot &&
+        (!hasActiveOverride(el) || (el as any)._config & CONFIG_DERIVED_OVERRIDE)
+      ) {
         // Parent-child lanes stay independent so isPending resolves without
         // waiting for the parent's async. The child keeps ownership.
         if (sourceRoot._parentLane && findLane(sourceRoot._parentLane) === existingRoot) {

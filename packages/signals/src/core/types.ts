@@ -38,6 +38,10 @@ export interface NodeOptions<T> {
    * CONFIG_DIRECT_COMMIT / CONFIG_AUTHORITATIVE_READ, keeping the per-flag
    * option arms out of the core creation path. */
   _extraConfig?: number;
+  /** Observe tiers: framework plumbing — no name, no owner-path segment, no
+   * attribution records of its own; its children stay observed (internal —
+   * not part of public API; see CONFIG_PLUMBING). */
+  _plumbing?: boolean;
   unobserved?: () => void;
   lazy?: boolean;
   sync?: boolean;
@@ -86,6 +90,9 @@ export interface NodeExtension {
    * tick derives from inputs that predate the override and does not
    * supersede it (A18 supersession ordering, #3331). */
   _overrideTime: number;
+  /** A28: the staged value the last flush left on a HELD node that has since
+   * been rewritten (latest() keeps answering with it); NOT_PENDING otherwise. */
+  _flushedStaged: unknown;
   /** Provenance of the active override's write: the scheduler's `origin` (the
    * asking action's invocation sequence; 0 = mainline). An arriving answer
    * whose flight an older action issued asked a question the override has
@@ -179,6 +186,9 @@ export type Signal<T> = RawSignal<T> | FirewallSignal<T>;
 export interface Owner {
   id?: string;
   _config: number;
+  /** Heuristic-oracle bits (CONFIG_ORACLE_*): `__ORACLE__` builds only, set
+   * from the `oracle` node option; never present otherwise. */
+  _oracle?: number;
   _snapshotScope?: boolean;
   /** Effect-returned cleanup; managed across reruns, invoked at true disposal */
   _cleanup?: () => void;

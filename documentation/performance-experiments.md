@@ -7079,9 +7079,9 @@ null)` leaves a `...false` spread in prod (rollup folds the conditional
   pass with a module counter bumped per first-touch link, and CodSpeed
   priced that). `HUGE_FAN_OUT` / `HUGE_FAN_IN` therefore
   fire on the change / the recompute rather than the link, deduped through a
-  `WeakMap` (once per node, again after +500). `WIDE_WRITE` counts the
-  subscriber list itself on the write (engine-only walk) and hands over to
-  `HUGE_FAN_OUT` at 2000.
+  `WeakMap` (once per node, again after +500). The attribution engine's
+  lower-threshold `HUGE_FAN_OUT` check counts the subscriber list itself on
+  the write (engine-only walk) and hands over to the core's at 2000.
 - **Prod byte-identical** modulo comments and the removed `...false ? {…} :
 options` spread (`diff -w` of `dist/prod` before/after, comment lines
   stripped: only that hunk).
@@ -7169,3 +7169,629 @@ walk of `el._deps` after `trimStaleDeps` at the end of the pass: with the
 stale tail cut, that list _is_ the pass's distinct sources, so the count is
 exact, costs a fraction of the reads that built it, keeps no module state
 and needs no save/restore around nested pulls.
+
+## Store / List Delivery Lane (2026-08-16 → 2026-09-18): the Octane board
+
+The campaign that followed the store rewrite. The goal was set on
+2026-08-17 and never changed: **geomean parity with Octane on Octane's own
+benchmark board**, measured on its operations, with the five scenarios that
+matter weighted as "signals over stores" — two dbmon shapes (shallow store,
+deep store) and three js-framework shapes (per-row signals, shallow store,
+deep store). "No perf regressions" was the only merge gate for every
+mechanism tried; correctness and performance were judged separately.
+
+This section is the hand-off. Everything below is sourced from a PR, a
+branch, a committed results directory, or a fixture in the Octane fork.
+Numbers with no source are marked as such.
+
+### Instruments
+
+- **The Octane board.** Fork `ryansolid/octane`, branch
+  `solid-rc8-fixtures-rebase` (upstream `octanejs/octane` `main` at
+  0.2.13 + the Solid fixture commits). Local checkout
+  `~/Development/octane-fork`. `benchmarks/bench.mjs` builds every fixture,
+  boots the preview servers, runs each suite's harness with its correctness
+  gates, and writes one JSON per suite to `--results-dir`.
+  `benchmarks/board-compare.mjs <dirA> <dirB>` prints the two-sided
+  geomean board (per-suite geomean of Solid/Octane and Solid/Vapor **timed**
+  ops, then the geomean across suites). Workflow, gotchas and the `next`
+  link recipe: [`benchmarking-strategy.md` → Octane board
+  workflow](./benchmarking-strategy.md#octane-board-workflow).
+- **Local dbmon A/B harness.** `~/Development/octane-dbmon-local` — dbmon
+  fixture variants (`solid`, `solid-shallow`, `solid-region`, `dbmon-coarse`,
+  `dbmon-unified`, `dbmon-static`, `vue-vapor`, …), `ab-dbmon.mjs`,
+  `interleave.mjs`, `battery.mjs`, per-phase profilers (`profile-mount`,
+  `profile-tick`, `profile-reorder`, `profile-unmount`), and
+  `baselines/2026-08-17-shipped-rebaseline.txt`. **Not under version
+  control** — the methodology for every dbmon number in this lane lives
+  only there. Should be committed somewhere before it is lost.
+- **Results directories** (in `~/Development/octane/benchmarks` and
+  `~/Development/octane-fork/benchmarks`): `results-next-sep9`,
+  `results-next-sep9-fixtures` (the 2026-09-09 board, `next` linked, before
+  and after the first fixture pass), `results-regions*`, `results-stack*`,
+  `results-3227*`, `results-classic-ctl*` (the patch/region/small-move era),
+  `results-next-sep17` (the 2026-09-17 board, `next` at `dd908fc12`, after
+  the second fixture pass). Also untracked.
+- **Solid's own UIbench entry.** `~/Development/solid-uibench` — the Solid 1
+  idiom ported to 2.0 (`createStore({})` + `setState(reconcile(v, 'id'))`).
+  See "uibench: reconcile vs signal" below for why that idiom is now the
+  wrong default for this workload.
+
+### Experiments, in order
+
+Each entry: hypothesis → where the code is → what was measured → verdict.
+
+**1. Stage 2 — store patch channel + patch-mode list driver** (#3079
+merged dormant; hardening rounds 6–10.14 in #3091, closed; removed in
+#3229). Hypothesis: stores can publish fine-grained _patches_ (per-key
+change records with static read manifests) so a list driver applies row
+updates without re-running row effects — "nodes as storage, transactions
+ride the core". Reached default-on behind the compiler's `patchDriver`
+option with `deliveryEffect` (an owner-less delivery node), transaction-
+scoped dedup, structural resync, held-window semantics, `UNDEF_ROW` /
+SameValueZero keys. Ten hardening rounds fixed a P1 or two each
+(INV-6 optimistic override surviving quiescence, mixed primitive/object
+key collisions, sparse holes, the patch channel tearing through an
+`until()` hold). Verdict (2026-09-02, RC.5 week): a second reviewer's
+structural critique — the channel's _visibility decisions_ were being made
+by hand at the driver, outside the graph, and every round moved them —
+was accepted; the maintainer pulled it from RC.5 rather than ship behind
+opt-in ("putting it behind opt-in doesn't matter"). Removed wholesale in
+#3229. Lesson recorded then: a parallel delivery mechanism has to inherit
+the graph's visibility rules, not re-derive them.
+
+**2. Regions — graph-native coarse delivery** (branch `region-delivery`,
+never a PR; fixtures `solid-region`, `solid-region-c` in the local dbmon
+harness). Hypothesis: replace the patch channel with ordinary graph nodes
+— one coarse effect per record ("region") that reads the record's deep
+witness (`dk`) and applies a diff at apply time; transactions and holds
+come for free because it _is_ the graph. Went through: a custom version
+node (`vn`) → replaced by the existing `dk` after a ~40% uibench classic-
+path regression; a generation owner for bulk teardown; fusing the selection
+binding into the region node (one node per row, two subscriptions) after
+`runlots` regressed from the extra node. Result: **matched the patch
+driver's numbers, not the "ceiling" prototype's** (which was later shown
+to be buggy). Verdict: the maintainer preferred it to the driver ("much
+happier with something like this if we aren't going to beat Octane
+anyway") but it was set aside for the unified-For question and never
+landed. Still the cleanest of the delivery experiments; the branch is
+intact.
+
+**3. Unified For — slot** (#3281, closed) **→ engine** (#3308, closed).
+Hypothesis: a keyed `<For>` that owns both row bookkeeping and DOM
+placement, bypassing `mapArray` + `reconcileArrays`, with a lazy "flat
+mode" for the common create/clear shapes. The slot form (opportunistic,
+falling back to classic) accumulated seam bugs — P0s: wiping preceding
+siblings, first-fill demote leaking rows; P1s: nested claims on mid-fill
+demote, hydration hole residue — and was rebuilt as an _engine_ in
+`@solidjs/signals` (`list.ts`) with a renderer-agnostic node layer,
+`mapArray` as the differential oracle, and universal-renderer support.
+The engine audit (#3308) still found nine P1s (marker-blind ownership,
+`g = -1` marks left by a throwing key fn, unstable array identity,
+detached rows on hydration mismatch, cached-key divergence, universal
+primitive nodes, extra hydration id). Perf: creation regressions on
+`jfb-shallow` fixed by widening flat mode; `clear` fixed with an N→0 batch
+path; `shuffle` regressed on CodSpeed and was left because browser
+numbers held. Verdict (maintainer, 2026-09): "we don't need to ship half
+measures"; and after the small-move episode, "complexity caught us every
+time" — every parallel list system paid its win back in coordination
+bugs. Unified For was always a jfb target, not a dbmon one; keep the
+branch, do not pursue another engine.
+
+**4. `mapArray` small-move fast path** (#3227, merged 2026-09-10, on
+`next`). Hypothesis: rotations, swaps and small displacements can skip the
+full keyed window rebuild. Split into `scanSmallMove` / `commitSmallMove`
+so the cold `replace` path only compiles the scan. Result: won the
+targeted reorders; the maintainer's later read was that it "made other
+ops slower" (Octane's own reorder cases are the ones that matter, and
+they are not ours to choose). Status: on `next`, not independently
+re-validated since the board moved to timed-op geomeans. Candidate for an
+A/B if list work resumes.
+
+**5. Coarse reads — `witness()` / deep-witness bubbling / under-witness
+identity** (#3275, open). Hypothesis: a row effect subscribes to a
+record's deep witness as one node instead of materializing per-leaf
+nodes; `bumpDeep` notifies witnessed ancestors; R18 pruning keeps proxy
+identity under a witness. Fixture `dbmon-coarse`. Result: cut the dbmon
+node count per row; not merged — the create floor mattered more and the
+mixed shape (coarse row + selection effect) re-added a node per row.
+Open; the deep-witness bubbling piece is the part most likely to be
+worth landing on its own.
+
+**6. Create-floor diets** (#3270 merged: slot-signal literals + first-read
+dedupe; #3367/#3368 merged: narrow store writes clone by spread, `$OWNER`
+stamping instead of weak-collection registration). Hypothesis: creation
+is where every board loses, and the store's per-leaf node was the biggest
+allocation. `slotSignal` became one pre-shaped literal (no options object,
+no equals/unobserved closures, no `NodeExtension`, no post-construction
+expandos); the `get` trap's first read stopped double-scanning accessors
+and populates the wrap cache once. Verdict: landed; the uibench "render"
+cases moved from behind to ahead of every other target in the 2026-09-17
+board — see below.
+
+**7. Props / spread / view perf** — the compiler and runtime work the
+profiles pointed at once creation was measured: `spread()` reads a
+`merge()` proxy through its sources (#3325), `readShallow()` for
+object-valued `style`/`class` (#3326, also a correctness fix — they were
+identity-reactive only), `merge`/`omit` as lazy views (#3454), view key
+tables on enumeration (#3475), `spread()` with fewer nodes (#3419),
+`omit` over a merge holding the record (#3497), `dynamic(source,
+{ static })` (#3471), hydration claim-path trims (#3513), and the merge
+regressions of #3401/#3403 (the shared-trap variant #3403 was retracted:
+IC pollution across source shapes). All merged except #3403. The next
+item in that line is #3511 (props literals with getters are
+dictionary-mode objects; own-accessor class emission), owned by a
+separate effort.
+
+### Fixture corrections — the rules
+
+Octane's Solid fixtures were written against 2.0-beta by Octane's
+authors. Two passes made them idiomatic Solid 2.0. **The first pass
+(2026-08-21, `e5f16b83d` in the fork) covered only js-framework, todomvc,
+chat-stream and dbmon**; the general "textContent pass" requested on
+2026-08-16 was not propagated to the other twelve fixtures until the
+second pass (2026-09-17, `e9828457e`). The rules, as applied everywhere:
+
+- A text-only element binds `textContent={…}`, not an insert expression.
+- Construction-time constants are read **once** into locals and passed as
+  locals (`const depth = props.depth; … <Node depth={depth - 1} />`).
+  Passed as `props.depth - 1` they compile to getters chaining through
+  every ancestor — O(depth) per leaf read. The compiler emits a local
+  constant expression as a _data_ prop (`depth: Ce`), which also keeps the
+  props object out of dictionary mode (#3511). spa-navigation went from
+  1.16× to 0.31× of Octane on this alone.
+- A condition that never changes is a ternary, not `<Show>`. A per-row
+  `<Show>` is a component call, a dictionary-mode props object and three
+  memos; a ternary is one memo. (Measured on todomvc: −520 B/row, time
+  within noise; the rule stands on allocation and on Vapor parity of
+  shape.)
+- Mount idiom is `onSettled`, not `createEffect(() => {}, fn)`.
+  `dynamic()` not the deprecated `<Dynamic>`; `<Loading fallback>` not the
+  raw `createLoadingBoundary`.
+- dbmon: `createStore(…, { shallow: true })`, rows keyed by id, accessor
+  rows, `textContent` cells. Deep `reconcile` on fresh row objects is the
+  documented worst case and not the idiom. todomvc: `visible` /
+  `remaining` are memos, per-todo field signals for mutation.
+- Not changed, flagged: portal-swarm and svg-dashboard hand-roll the
+  portal around a beta.14 `<Portal>` crash (likely fixed; Portal's marker
+  text nodes need a gate run); svg-dashboard's hand-rolled SVG `<a>` is a
+  real compile-time namespace limitation.
+
+### uibench: reconcile vs signal (2026-09-17)
+
+Octane added a uibench suite (96 desktop cases). Two findings.
+
+**Harness fairness.** Its Solid fixture `structuredClone`d the `before`
+and `after` endpoints _separately_ — destroying the object sharing
+UIbench builds in (unchanged subtrees are the same object) that every
+other framework receives intact — so Solid deep-diffed every leaf for a
+one-node move. Cloning the pair in one call keeps the sharing:
+**7.73× → 2.48×** of Octane (fork `31772fcc0`).
+
+**Authoring.** The Solid 1 idiom — reconcile each snapshot into a store,
+`<For>` by reference — pays a walk over every row per commit to produce
+per-leaf notifications this workload never uses. The Vapor/Octane shape
+in Solid — `createSignal(snapshot)`, `<For each={rows} keyed={r => r.id}>`,
+accessor rows, no store — is faster on **96/96 cases**:
+
+| shape                               | vs Octane |  vs Vapor |
+| ----------------------------------- | --------: | --------: |
+| store + `reconcile` (Solid 1 idiom) |     2.59× |     2.52× |
+| signal + keyed `<For>`              | **1.20×** | **1.16×** |
+| signal / reconcile                  | **0.46×** |           |
+
+Ruled 2026-09-17: the signal shape is the idiomatic uibench authoring and
+is the fork's `solid` target; the reconcile shape stays as
+`solid-reconcile` for the record. `reconcile` is the tool for state
+edited in place through a setter (the writes _are_ the diff), not for
+ingesting immutable snapshots (the snapshot _is_ the diff). The same
+question should be asked of `solid-uibench` (Solid's own entry) and the
+`reconcile-tree` Tier-1 bench. Where the signal shape still trails
+Octane, by op group (ms, geomean): one-item tree ops 0.021 vs 0.011
+(2.0×, at parity with Vapor); `table/removeAll` 0.082 vs 0.029 (2.9×);
+`tree/removeAll` 0.331 vs 0.179 (1.85×); table filter/sort ≈1.1–1.2×.
+Renders are the fastest of any target (tree render 0.56× Octane, 0.47×
+Vapor); `activate` (sparse in-row change) wins against both.
+
+### todomvc `add100`: a 4× that was noise (2026-09-18)
+
+The 2026-09-17 board showed Solid 4.3 ms vs Vapor 1.1 ms. On a quiet
+machine the real harness, 16 iterations, three runs: Solid 2.3–2.4 vs
+Vapor 1.5–2.5; interleaved A/B (40 samples) 1.80 vs 1.50; steady state
+with no idle between samples 1.4 vs 1.2. **The honest gap is ~1.2×.** The
+op is bimodal under the harness's `gc()` + 40 ms idle protocol — a 16-
+iteration run reproduced a 4.40 median with a 1.40 min. Cause: Solid
+allocates 246 KB per add100 vs Vapor's 142 KB (per-row `<Show>` 520 B,
+`createSignal` accessor/setter `bind` pairs 240 B, effect nodes, links),
+GC ≈10% of the run, and eight samples on a loaded machine. **Rule for
+reading the board: on sub-5 ms ops, read `min` beside the median, and
+treat any single-op ratio over 2× as "rerun in isolation" until it
+reproduces.**
+
+### The board
+
+`board-compare` (timed ops only), Solid/Octane and Solid/Vapor per-suite
+geomeans; lower = Solid faster. Sep 9 = `next` of that date with the
+first-pass fixtures; Sep 17 = `next` at `dd908fc12` (#3519) with the
+second-pass fixtures, Octane upstream at 0.2.13.
+
+| suite                  | vs Octane Sep 9 |     Sep 17 | vs Vapor Sep 9 |     Sep 17 |
+| ---------------------- | --------------: | ---------: | -------------: | ---------: |
+| js-framework           |           1.27× |      0.91× |          1.21× |      1.09× |
+| js-framework-reorder   |           1.71× |      0.81× |          0.75× |      0.49× |
+| dbmon                  |           2.43× |      1.04× |          2.32× |      1.21× |
+| todomvc                |           1.50× |      0.78× |          2.03× |      1.30× |
+| chat-stream            |           0.80× |      1.07× |          0.96× |      0.97× |
+| svg-dashboard          |           1.38× |      0.85× |              — |          — |
+| signal-favoring        |           0.74× |      0.63× |          1.06× |      2.47× |
+| effectful-list         |           0.66× |      0.47× |          0.86× |      0.67× |
+| memo-wall              |           1.12× |      0.20× |          1.07× |      0.99× |
+| store-selector-fanout  |           0.55× |      0.59× |          0.93× |      0.95× |
+| scaling-curves         |           0.96× |      0.83× |          0.95× |      1.11× |
+| spa-navigation         |           1.16× |      0.31× |          0.93× |      0.51× |
+| recursive-context      |           0.62× |      0.82× |          0.45× |      0.92× |
+| external-store-fanout  |           0.75× |      0.75× |          1.01× |      1.00× |
+| event-delegation       |           0.88× |      0.87× |          1.13× |      0.91× |
+| suspense-recovery      |           1.03× |      0.98× |          1.02× |      1.00× |
+| lifecycle-memory       |           0.61× |      0.61× |          1.00× |      1.00× |
+| streaming-ssr          |           1.62× |      1.29× |              — |          — |
+| uibench (signal shape) |               — |      1.20× |              — |      1.16× |
+| **overall geomean**    |      **1.011×** | **0.739×** |     **1.020×** | **0.981×** |
+
+(Overall rows are the 18/20 suites present in both runs; uibench is new.)
+
+Caveats that go with those numbers:
+
+- **Octane regressed in that run, or the environment did.** Its absolute
+  times got worse across most suites (memo-wall 4.2×, spa-navigation
+  1.75×, todomvc 1.58×, js-framework 1.36×, bundle 1.83× larger) and its
+  own harness gates failed on signal-favoring, spa-navigation and
+  hydration-interactivity with render-block counts at exactly 2× their
+  ceilings. Until that is explained, 0.739× flatters Solid; the Vapor
+  column is the safer read.
+- Solid's own absolute drift Sep 9 → Sep 17 was mostly neutral or better
+  (dbmon 0.42×, jfb-reorder 0.64×, memo-wall 0.78×, spa-nav 0.84×,
+  svg 0.87×); chat-stream and js-framework slowed by the same factor as
+  Vapor and Octane (harness/machine).
+- signal-favoring is known to swing between runs (a one-text-node update,
+  microseconds); ignore single-run ratios there.
+- Bundle: Solid 74 KB raw / 23.9 KB brotli vs Octane 151 / 43 KB on
+  js-framework. The app/framework split is meaningless under local links.
+
+### Standing rulings and lessons
+
+- Signals over stores; the five scenarios; geomean vs Octane on _its_
+  ops; "no perf regressions" as the gate; correctness and performance
+  judged separately.
+- Every parallel list/delivery mechanism (patch driver, regions, unified
+  For slot, unified For engine) paid back its win in coordination bugs.
+  Do not start another without a reason that was not true for those four.
+- Reconcile is for in-place edits, not snapshot ingestion.
+- Read the fixture before the runtime: three of the largest "gaps" this
+  campaign found (spa-navigation getter chains, uibench endpoint cloning,
+  uibench reconcile) were authoring, and one (todomvc 4×) was measurement.
+- Announce before benching; a full board is ~45–60 min on an idle
+  machine; start it as a tool-managed background task, never `nohup … &`
+  from a tool shell (the first Sep 17 attempt died silently a minute in).
+
+### Open targets, in order
+
+1. **Disposal.** Untouched all campaign; shows in uibench `removeAll`
+   (2.9× / 1.85×), jfb `clear` (24 vs 22), effectful-list `clear`
+   (1.4 vs 1.1). Owner teardown, `disposeChildren`, node unlink, the
+   companion/`_gatedSubs` cleanup the consolidation work added. Start with
+   an interleaved A/B of uibench `table/removeAll` and jfb `clear` on a
+   quiet machine, then CPU + allocation profile (scripts: the
+   `todo-*.mjs` pattern — CDP `Profiler` + `HeapProfiler.startSampling`
+   against unminified `vite build --minify false` fixtures).
+2. **uibench one-item keyed ops** — 2× Octane, parity with Vapor: the
+   keyed `<For>` insert/move path plus component creation for the
+   inserted node.
+3. **Create floor via #3511's client emission** (separate effort). Every
+   `<For>`/`<Show>`/`<Loading>` call site is a dictionary-mode props
+   object today; measure on uibench tree render, memo-wall,
+   recursive-context, todomvc add100 with `next` linked.
+4. **streaming-ssr `shell_staggered`** 1.1 ms vs 0.42 (2.6×) with equal
+   totals — first-flush latency under staggered async boundaries. The
+   whole 1.29× suite ratio is this op.
+5. **`Show` builds two memos where one suffices** when `children` is not a
+   narrowing function — `conditionValue` exists only for the narrowed
+   accessor. Zero-semantic-change, one memo + one subscription per
+   instance.
+6. chat-stream `streamFine`/`streamCoarse` ~2× Octane (Vapor ≈ us):
+   check the fixture first — every segment's text reads `doneOf(m)`, so a
+   tick fans out to all segments.
+
+### Related program: one implementation per rule
+
+Running in parallel and now merged: the semantic consolidation of the
+async/store visibility rules (`packages/signals/docs/DESIGN-CONSOLIDATION.md`;
+move 3a in #3496 and follow-ups, move 3b in #3515 + #3523 + #3525). Not a
+perf program, but it found five store/signal parity bugs by handing store
+code the shared predicates (S4, S5, S7 fixed; S6 ruled and deferred in
+#3526 at +402 B) and it added the `memoUntracked`/`effectUntracked`
+reader kinds to the 851-cell posture matrix. Relevant here because
+disposal and companion cleanup are the paths it touched most recently.
+
+## Props Composition Lane (2026-09-12 → 2026-09-28): the yak tracker
+
+Tracker: solidjs/solid#3389, closed 2026-09-28. The trigger was
+DigitecGalaxus/next-yak#644, a rewrite of the `@yak/solid` `styled()`
+runtime that made it 12× faster on SSR and ~2× on hydrate/mount by
+re-implementing, by hand, the primitives it should have been calling:
+`ssrElement`, `merge`/`omit`, `dynamic()`, a theme merge, a server memo.
+The goal, set on day one and never changed: **a library calling the Solid
+primitive lands within noise of the hand-rolled version in yak's own
+harness.** Reached on rc.10; the remaining question — how far the same
+shapes sit from React — is answered below with an attribution, and the
+answer is the reactive core, not props plumbing.
+
+This section is the hand-off. Every number is from a committed results
+file in the harness, a PR, or a comment on the tracker.
+
+### Instruments
+
+- **yak-bench** — `ryansolid/yak-bench`, local `~/Development/yak-bench`.
+  The 14 `css-in-js-bench` workloads plus `polymorphic-chain` (a pure-Solid
+  Kobalte-shaped chain, no CSS-in-JS: three component layers of
+  `merge`/`omit`/spread over `dynamic()`), each lane an esbuild of a
+  `@yak/solid` revision or overlay (`scripts/config.mjs`: `VARIANTS`,
+  `ALL_LANES`; the `mprim` overlay is "every hand-rolled piece → Solid
+  primitives" behind `__PRIM_{SSR,MEMO,PROPS,THEME}__` defines) with
+  `next-yak`/React as the reference lane. `node scripts/build-lanes.mjs`
+  (`LANES=…`), `node scripts/verify.mjs` (SSR output byte-identity modulo
+  separators — the correctness gate), `node scripts/bench-ssr.mjs`,
+  `PLAYWRIGHT_BROWSERS_PATH=$HOME/Library/Caches/ms-playwright node
+scripts/bench-browser.mjs --measure=hydrate,mount --case=…` (Chromium,
+  `CPU_THROTTLE` 4 by default, fresh page per sample, `SAMPLES_HYDRATE` /
+  `SAMPLES_MOUNT`, lanes round-robin per sample). `TAG=<name>` keeps
+  builds and reports apart (`dist/<TAG>`, `result/*-latest-<TAG>.md`);
+  `SOLID_DIR=<checkout>` bundles that checkout's `packages/*/dist` and
+  compiles with its Babel plugin, so a Solid A/B is two `TAG`s built from
+  two trees. `TAG` leaks into later shell commands — unset it. Results:
+  `result/ssr-latest-rc10-{1,2}.md`, `result/ssr-latest-rc10-flags.md`,
+  `result/browser-latest-rc10-client*.md`, `result/browser-latest-sw*.md`
+  (the 2026-09-28 A/Bs below; uncommitted at hand-off).
+- **Browser CPU attribution.** Build a lane unminified (`TAG=prof
+MINIFY=0`), capture with Playwright CDP `Profiler` at 50 µs sampling,
+  map frames through the bundle's sourcemap (`@jridgewell/trace-mapping`),
+  and count only samples whose stack passes through the lane's
+  `browser-entry.tsx` hydrate/mount call (React's through
+  `performWorkUntilDeadline` / `commitRoot`); `(program)` and GC samples
+  count when both neighbouring JS samples are in-window. Scripts
+  `hydrate-prof.mjs`, `attr-browser.mjs` (ms/page by category),
+  `callers.mjs` (inclusive time of a function by caller chain),
+  `self.mjs` (node `--cpu-prof` self time) live in `/tmp/cprof/` — **not
+  under version control**; move them into `yak-bench/scripts/` before
+  they are lost.
+- **In-repo tier-1** (`packages/web/test/*.bench.tsx`, jsdom):
+  `polymorphic-chain.bench.tsx` (compiled floor vs chain, mount+clear 1k
+  and update 10th), `spread-enumerate.bench.tsx`,
+  `spread-array-form.bench.tsx` (added 2026-09-28 on branch
+  `perf/spread-walk`: create / runtime-only against a stub node / update,
+  for the array form, the object form and a plain copy, with floors).
+  Direction only — see the cold-tier ruling below.
+
+### Experiments, in order
+
+Each entry: what → where → measured → verdict. SSR ratios are
+instances/s, browser ratios ms; `>1` is Solid's favour unless stated.
+
+**1. `spread()` → one render effect per element** (#3419; compilers emit
+the array form for element spreads, #3423 / #3424). Three reactive nodes
+per element became one without children, two with; `ref` folded into the
+attribute effect; sources as an array so a function source is read
+inline (no memo, no hydration id). Browser hydrate on the styled-element
+shape 1.47× behind yak's hand path → 1.00×.
+
+**2. `dynamic(source, { static })` + `isStatic(o, key)`** (#3471; #3386
+parts in #3396 / #3436). No factory + instance memo for a tag that cannot
+change; the library decides per instance from the prop's descriptor,
+which is the compiler's own static/dynamic classification (`as="a"` is a
+data property, `as={expr}` a getter), seen through merge/omit layers.
+
+**3. Lazy `merge`/`omit` views** (#3454, protocol behind
+`solid-js/internal` #3470, table-on-enumeration-or-16-reads #3475, omit
+holds the merge _record_ #3497; #3487 closed unmerged — no fold form of
+the hidden-key list beat `slice()`+`push` on instruction count). A view is
+a record + one Proxy, O(1) per layer; consumers (`spread`, `ssrElement`, a
+nested merge) walk the records, never the traps. Kobalte-shaped depth-7
+chain build+consume +62%; yak-bench composition cases 0.8× → 0.95–0.99×
+of yak's hand-rolled runtime; SSR chain 8.2× → 5.8× the compiled floor.
+The `#3448` ruling — always a view, never a copy — is the one item 12
+below re-tests on the client.
+
+**4. `ssrElement(tag, sources[], children, needsId, skip?)`** (#3418,
+#3486 plain-children concat in place, #3562 trailing `attrs` markup + per-
+tag record cache). Single walk, later wins, winner read once; element
+path vs a hand writer 22 → 9 ns/element. Fully static shapes stay ~3×
+behind yak because yak string-concats them at definition time — not our
+gap.
+
+**5. Hydration claim trims** (#3513: `gatherHydratable` frame gate,
+one-pass claim copy in `insert()`, `clearSnapshots` assign-not-delete).
+Net ~3% of hydrate on `tabs`, under the 2.1 ms estimate; the rest of
+`gatherHydratable` is the registry itself.
+
+**6. The props literal** (#3511 → #3514 plain keys, #3550 `hoistProps`:
+one hoisted per-site constructor, shared getter descriptors, fast-mode
+instance; the contract that a getter is defined for a read through its
+own object, dev-enforced; `omit()`'s no-Proxy path re-homes). yak-bench
+SSR geomean 1.12×, composition 1.15–1.31×, Octane flat. Client half of
+the same spike: **time-neutral** (1.00× geomean hydrate and mount, six
+component-heavy cases) — the composition-case client gap was never the
+literal.
+
+**7. Theme merge** — `merge({ theme }, props)` measured at parity with
+yak's shared-handler view (`__PRIM_THEME__` 1.03× geomean); yak-side
+deletion is theirs.
+
+**8. rc.10 re-run, published packages, stock native compiler**
+(2026-09-26/27, `result/ssr-latest-rc10-{1,2}.md`). yak+#658 vs `mprim`
+geomean 1.06× / 1.01× over two rounds — parity; `tabs` 0.67–0.68× and
+`multifile-composition` 0.68–0.73× (ours by 1.4–1.5×); the four
+computed-class micro-cases yak's by 1.17–1.38×. One primitive at a time
+(`ssr-latest-rc10-flags.md`): the props view is the only swap that wins
+for yak (0.97× geomean, +49% on their composition cases); `ssrElement`
+(1.07×), the theme merge (1.06×) and the server memo (1.04×) are Solid's
+remaining 4–7% each. Filed downstream as DigitecGalaxus/next-yak#658
+(descriptor re-home) and #659 (props views + `spread()` array form on
+tag targets; `tabs` 1.48–1.51× over #658).
+
+**9. rc.10 client profile — the hydration item closed as not a hydration
+problem** (2026-09-28, tracker comment). Harness at 4×: hydrate `tabs`
+0.50× React, `multifile-composition` 0.48×, `polymorphic-chain` 0.58×;
+mount 0.70× / 0.65× / 0.69×; Solid's hydrate slower than its own mount
+(57 vs 42 ms on `tabs`), React's equal. Unthrottled ms/page on `tabs`
+(Solid hydrate 18.1 / mount 15.2, React 6.6 / 9.0):
+
+|                                               | Solid hydrate | Solid mount | React hydrate |
+| --------------------------------------------- | ------------: | ----------: | ------------: |
+| `merge`/`omit` views + `spread()` source walk |           3.5 |         3.2 |           0.5 |
+| graph construction + effects + scheduler      |           2.6 |         2.5 |   fiber ≈ 4.0 |
+| hydration claim machinery                     |           3.4 |         0.1 |         ≈ 0.3 |
+| GC                                            |           1.6 |         1.4 |           1.2 |
+| attributes + DOM writes                       |           1.1 |         2.6 |             — |
+| yak runtime + case code + component layer     |           3.4 |         3.2 |           0.9 |
+
+The claim machinery (registry 0.69, `getNextElement` 0.57, `isHydrating`
+0.42, `claimChildNodes` 0.34, per-node probes ≈ 1.0) is exactly the
+hydrate-over-mount excess; removing all of it leaves 14.7 ms against
+React's 6.6. Local trims ≤ 1 ms/page. No registry redesign filed.
+
+**10. `btn-variant` client parity** — yak's hand path 16–22% ahead of
+`mprim`; not the baked-class template but `omit()` + the array-form
+`spread()` per element (+1.4 µs: view construction/reads 0.66 ms/1000,
+walk 0.5, GC 0.25, vs a 4-descriptor copy at 0.35). #659 carried the same
++12–15% on its dynamic-prop tag cases; amended (85a43b6) to copy on the
+fixed-key client tag path. Back to 1.00×.
+
+**11. `spread()` array-form walk, classify once** (2026-09-28, branch
+`perf/spread-walk`, worktree `~/Development/solid-spread-walk`, staged,
+not merged). Non-function sources classified at spread creation; a list
+with no function source skips the per-run resolve pass; universal
+parity; +40 lines. Tier-1: array-form rerun −7%, create unchanged;
+runtime-only floors 0.36 µs/element empty, 0.54 with three static keys,
+0.67 object omit, 0.95 array `[omit, extras]`. **Browser lanes: within
+±1% on every cell** (`browser-latest-sw{base,fixA}*.md`, alternated ×2).
+A first-run one-pass walk (`sourceOwners`, no Map) for object-form views
+gave −2 to −4% hydrate on the view-heavy lane and was not kept: it made
+the first run enumerable-only and reruns all-own-keys (see open target
+4). Verdict: **the walk is not the lever.**
+
+**12. Client materialization of plain-only views** (2026-09-28, patch
+`/tmp/sw-materialize-prototype.patch`, not merged). `merge`/`omit` with
+every source a plain object → a flat object on the client: data
+properties by value (static by the `isStatic` contract), accessors
+re-homed with `bind`, merged key order, server untouched. Sound — the
+whole web client, hydrate, universal and solid suites pass with it on;
+a props object is a read-only derivation, so a view and a copy answer
+every legitimate question identically. Browser lanes vs the item-11
+build, alternated ×2:
+
+| case                | lane  | hydrate            | mount              |
+| ------------------- | ----- | ------------------ | ------------------ |
+| `polymorphic-chain` | mprim | 45.6 → 52.3 (+14%) | 37.7 → 42.1 (+12%) |
+| `polymorphic-chain` | #659  | 45.5 → 52.0 (+14%) | 37.6 → 42.3 (+12%) |
+| `tabs`              | mprim | 55.0 → 56.6 (+3%)  | 43.9 → 47.0 (+7%)  |
+| `tabs`              | #659  | 53.0 → 55.3 (+4%)  | 42.4 → 44.1 (+4%)  |
+| `btn-variant`       | mprim | 31.6 → 30.0 (−5%)  | 25.7 → 24.0 (−7%)  |
+| `btn-variant`       | #659  | 27.4 → 27.3        | 21.5 → 21.3        |
+
+Omit-only variant (`merge` stays a view): neutral to +2% everywhere, and
+the single-layer win vanishes — it exists only when the whole path to
+the spread is plain. A copy is O(keys) per layer (a descriptor read per
+key, a bound getter and a `defineProperty` per accessor) against a view's
+O(1); the chain is ~6 layers × ~13 keys per row. Verdict: **the
+representation is not the lever either; `#3448` holds on the client.**
+
+**13. Where the `polymorphic-chain` client mount goes** (mprim, rc.10,
+11.6 ms in-window of 26.6 profiled, 400 rows, unthrottled): views 2.14
+ms (18.5%; of which the bottom spread's resolved-table build is 0.83 —
+`collectTable` through three omit filters over ~24 leaf keys), graph
+construction 1.65 (`recompute` 0.45, `setupComputedNode` 0.39, `read`
+0.23, `createMemo` 0.18), GC 1.29, spread/attributes 1.24, web other
+1.19, case components 0.89, core other 0.69, DOM natives 0.69,
+effects/scheduler 0.57. No function above 4%. Per row: ~7 µs of graph
+work for ~7–8 computation nodes (spread effect, `dynamic()` memo, `Show`
+memo + render effect, children insert, text insert, icon insert). React
+pays no nodes; its per-row cost is fibers and object spreads.
+
+### Standing rulings and lessons
+
+- **Server: always views.** One walk into `ssrElement`, no copies, no
+  table on first read. **Client: a small fixed-key plain set consumed by
+  one `spread` is cheaper copied** (+1.4 µs/element the other way); views
+  pay off once props are proxied or chained, and materializing plain-only
+  views at construction loses 12–14% on a chain. The platform cannot pick
+  per layer because a layer cannot know its depth at construction.
+- **The props-plumbing walk and representation are not the client lever**
+  (items 11–13). The residue vs React is per-row node count and per-node
+  cost in the reactive core, spread thin: no function above 4%.
+- **Cold tier.** A page load runs the runtime in the interpreter and
+  baseline tiers; the same code measures ~4× cheaper per call in an
+  optimized tier-1 bench. Tier-1 gives direction; the browser lanes are
+  the acceptance, alternated (A B A B), with medians and the React lane
+  in the same run.
+- **Perf vs size.** Fast paths (a specialized walk, a cached shape, a
+  shortcut for a static case) are the class that balloons; each earned its
+  number here and together they are the growth. Fewer nodes per row via
+  the compiler (a proven-static child needs no effect) and removals are
+  size-neutral or negative. A perf change carries its gzip delta and is
+  in only if the lane gain clears the maintainer's bar.
+- **Read the fixture, again.** The `btn-variant` client gap was `omit()` +
+  array-form spread in yak's runtime, not the template; #659's "tag cases
+  noise" was SSR-only. The harness measures the fixture first.
+- **`merge()`'s function-source memo takes a hydration id.** A client path
+  for an element the server writes by hand must use `spread()`'s array
+  form (inline function source, no owner) — documented, and an easy trap
+  for anyone porting a hand-written SSR path.
+- **CodSpeed.** A regression counts when the flagged frames are ours and
+  scale with the input; harness-frame self time constant across sizes is
+  attribution (#3497, #3562).
+- Working with the yak repo: pnpm `minimumReleaseAge` blocks `pnpm run` —
+  call `node_modules/.bin/*` directly or set it to 0 temporarily and
+  restore before committing; push via a fork remote.
+
+### Open targets, in order
+
+1. **Client per-row node count on composition shapes.** The residue (item
+   13). Measure first: nodes per row by kind on `polymorphic-chain` and
+   `tabs`, and cold-tier cost per node kind (creation, first run, first
+   flush). Candidates, all size-neutral or negative: a child expression
+   the compiler can prove static emits a direct insert, no effect; a
+   spread and its children insert sharing one node; `Show` building two
+   memos where one suffices (Octane board open target 5 — same item);
+   what `createEffectNode` / `setupComputedNode` allocate and link on
+   creation. This is a core arc, not a yak-parity one.
+2. **Hydrate trims, bundled, ≤ 1 ms/page (~5%)**: `isHydrating`'s
+   `isConnected` per attribute → once per element in `assign`;
+   `getNextElement`'s key string + Map get/delete + WeakSet add; the
+   per-node probes (`hydratedCreateMemo` → `readSerializedOrCompute`,
+   `sharedConfig.has` against an empty `_$HY.r`). Only if item 1 leaves
+   hydrate still ≥ 5% over mount.
+3. **Server floors, kept deliberately** (SSR vs React on
+   `polymorphic-chain` ~0.47×; `tabs` / `multifile-composition` at
+   parity): the owner protocol per server memo (~22 ns/instance; it is
+   what gives the compute `getOwner()` / `onCleanup` and retry-stable
+   ids), the generic-proxy floor of a one-key `merge` (~12 ns),
+   `ssrElement` vs a definition-time writer on the tiny `dyn-*` cases
+   (1.46×). Reopen only as their own items.
+4. **Key-coverage inconsistency through a view.** `spread` over a
+   merge/omit view walks the resolved table, built with `Reflect.ownKeys`
+   (all own keys), while `assign` over a plain object, `spread` over a
+   plain source and the server's `sourceOwners` use enumerable string
+   keys — a non-enumerable own property on a leaf reaches the element
+   only through a view, and only on the client. Tiny, but it blocked the
+   item-11 one-pass and it is a server/client divergence. Fix: filter by
+   enumerability in the web/universal table walk, or build the table from
+   `leafKeys`.
+5. **Docs**: the server-views / client-copy guidance for libraries in the
+   `merge` / `omit` JSDoc and the hydration-id note on `merge()`'s
+   function source.
+6. **`perf/spread-walk` (item 11)**: ±0 in the browser, −7% on one tier-1
+   rerun micro, +40 lines. Drop under the size rule unless wanted; keep
+   the bench file either way.
+7. Yak side: watch DigitecGalaxus/next-yak#658 / #659; the component-
+   target `merge()` view on the client is ~5% behind a copy on their
+   composition cases for a 1.5× SSR win — their trade.

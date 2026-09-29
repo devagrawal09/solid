@@ -25,6 +25,8 @@ import {
   $,
   createSignal,
   createMemo,
+  createEffect,
+  onSettled,
   createProjection,
   createStore,
   Show,
@@ -35,7 +37,18 @@ import {
   Errored,
   Repeat
 } from "solid-js";
-import { Portal, httpStatus, httpHeader, clientOnly, isServer } from "@solidjs/web";
+import {
+  Portal,
+  dynamic,
+  httpStatus,
+  httpHeader,
+  clientOnly,
+  isServer,
+  ssrElement,
+  useHead,
+  type JSX
+} from "@solidjs/web";
+import { makeRows, TriggerList, forms, type Row } from "./polymorphic.jsx";
 import { blockScenarios } from "./block-scenarios.jsx";
 import { blockV2Scenarios } from "./block-v2-scenarios.jsx";
 
@@ -76,6 +89,15 @@ export type Scenario = {
    * then late chunks — live streaming with $df swaps).
    */
   async?: boolean;
+  /**
+   * Every node in the container after hydration must be a server node — no
+   * client-created text or elements. Stronger than textContent, which reads
+   * the same whether a text item adopted the server node or created its own
+   * beside it (#3383).
+   */
+  adoptAll?: boolean;
+  /** the server-rendered HTML must contain no `<!--!$-->` text separators */
+  noSeparators?: boolean;
   /** known-broken on main; hydrate spec wraps in test.fails */
   knownFailure?: string;
   /** known-broken only in the streamed replay mode */
@@ -1322,12 +1344,11 @@ function LoadingSeedClientStore() {
 }
 
 // ssrSource "hybrid" + seedLoadingValue: shell locks at the seed, the landed
-// state serializes as the hybrid handoff value; the hydrating client serves
-// the seed through the claim (the settled ref must stay a thenable), and the
-// hybrid takeover re-run — which supersedes the deferred adoption — lands the
-// same data itself. RETURN-style derive: hybrid's promise-shaped takeover
-// hands values back by returning them (draft mutations on the takeover run go
-// to the discarded shadow draft — a pre-existing hybrid constraint).
+// state serializes as the hybrid value; the hydrating client serves the seed
+// through the claim (the settled ref must stay a thenable), and the deferred
+// adoption lands the serialized data itself. Promise-shaped: no handoff run —
+// for a non-stream source "hybrid" is identical to "server", so the derive
+// does not run on the client until `update` changes its dependency.
 let refreshLoadingSeedHybrid!: () => void;
 function LoadingSeedHybridStore() {
   const [version, setVersion] = createSignal(0);
@@ -1458,6 +1479,102 @@ function PreflushRejection() {
 }
 
 // ---------------------------------------------------------------------------
+// #3414: a sync throw the SERVER catches, with a zero-arg fallback thunk
+// (`fallback={() => <Fallback />}`), inside an enclosing boundary. Errored
+// used to return the thunk unresolved for the enclosing boundary to unwrap —
+// the client inside the boundary's flatten computed, the server (pre-fix)
+// inline under the boundary owner, so the fallback's element keys disagreed
+// and the hydrated fallback went dead (its button never claimed the server
+// node). The server then resolved in a scope mirroring that computed; since
+// #3620's follow-up, Errored calls a function-valued fallback inside its own
+// output scope whatever its arity, so nothing is handed back at all. These
+// scenarios keep pinning the consumers' alignment.
+let setErroredFallbackCount!: (v: number) => void;
+function ThunkFallback() {
+  const [count, set] = createSignal(0);
+  setErroredFallbackCount = set;
+  return (
+    <main>
+      <b>fell</b>
+      <button onClick={() => set(count() + 1)}>Count: {count()}</button>
+    </main>
+  );
+}
+function ThrowsSync(): never {
+  throw new Error("sync render failure");
+}
+function InnerErroredThunk() {
+  return (
+    <Errored fallback={() => <ThunkFallback />}>
+      <ThrowsSync />
+    </Errored>
+  );
+}
+// The enclosing boundary is the direct consumer of the thunk (no element
+// hole in between — the plugin's DefaultErrorBoundary > App shape).
+function ErroredThunkFallbackUnderErrored() {
+  return (
+    <Errored fallback={<p>outer</p>}>
+      <InnerErroredThunk />
+    </Errored>
+  );
+}
+function ErroredThunkFallbackUnderLoading() {
+  return (
+    <Loading fallback={<p>wait</p>}>
+      <InnerErroredThunk />
+    </Loading>
+  );
+}
+// The same consumer with `on`: the client's dependency node shifts the
+// flatten computed's id by one as well.
+function ErroredThunkFallbackUnderLoadingOn() {
+  const [room] = createSignal("lobby");
+  return (
+    <Loading on={room()} fallback={<p>wait</p>}>
+      <InnerErroredThunk />
+    </Loading>
+  );
+}
+// Fragment child: the boundary consumes an array with the thunk in it.
+function ErroredThunkFallbackInFragment() {
+  return (
+    <Errored fallback={<p>outer</p>}>
+      <InnerErroredThunk />
+      <span>tail</span>
+    </Errored>
+  );
+}
+// An element hole as the consumer (compiled insert / scope) — the aligned
+// control case.
+function ErroredThunkFallbackInElement() {
+  return (
+    <Errored fallback={<p>outer</p>}>
+      <section>
+        <InnerErroredThunk />
+        <span>tail</span>
+      </section>
+    </Errored>
+  );
+}
+// Same consumer shape with a different producer: Show hands back its
+// fallback thunk unresolved too. (`fallback` is typed as an element; the
+// thunk is a runtime-accepted shape, hence the cast.)
+let setShowThunkOn!: (v: boolean) => void;
+function ShowThunkFallbackUnderErrored() {
+  const [on, set] = createSignal(false);
+  setShowThunkOn = set;
+  const fallback = (() => <ThunkFallback />) as unknown as JSX.Element;
+  return (
+    <Errored fallback={<p>outer</p>}>
+      <Show when={on()} fallback={fallback}>
+        <i>shown</i>
+      </Show>
+    </Errored>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // #3013: SSR resolves <select value> into `selected` on the matching option
 // and strips the invalid attribute at flush. Hydration must claim the select
 // cleanly (the stripped attribute and injected `selected` are invisible to
@@ -1499,6 +1616,32 @@ function InnerHTMLCallSiblings() {
       <InnerHTMLIcon radius={2} />
       <label>{on() ? "on" : "off"}</label>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// solidjs/solid#3691: a textarea's dynamic `value` folds into its text content
+// on the server, but the client writes it as a plain `value` property effect
+// with no owner. Pre-fix the server's `_$scope` reservation on the fold
+// consumed a hydration id the client never allocated, so the component after
+// the textarea hydrated one id off — its button went unclaimed and the click
+// updated detached DOM.
+let textareaCounterButton!: HTMLButtonElement;
+function TextareaSiblingCounter() {
+  const [count, setCount] = createSignal(0);
+  return (
+    <button ref={textareaCounterButton} onClick={() => setCount(c => c + 1)}>
+      {count()}
+    </button>
+  );
+}
+function TextareaValueSiblings() {
+  const [text] = createSignal("test");
+  return (
+    <main>
+      <textarea value={text()} />
+      <TextareaSiblingCounter />
+    </main>
   );
 }
 
@@ -1612,6 +1755,478 @@ function StrictStorePaths() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Text separators (#3383). The server decides `<!--!$-->` on what each array
+// item RESOLVES to; the client claims a flattened value positionally. These
+// pin both directions: no separators (and no client-created nodes) for lists
+// of element-yielding memos/components, and separators wherever two items
+// land as adjacent text — including across a dropped nullish item or a
+// nested array boundary, which the old static-type rule got wrong.
+// Updates change text INSIDE the elements (a shared suffix signal) so the
+// `<li>`s themselves must survive: the lists are `.map`, not `For`.
+let setSepSuffix!: (v: string) => void;
+function SepRow(props: { i: number; suffix: () => string }) {
+  // A memo is a valid child at runtime (resolved as a function child); the
+  // Component type only admits JSX.Element, hence the cast.
+  return createMemo(() => (
+    <li>
+      {props.i}
+      {props.suffix()}
+    </li>
+  )) as unknown as JSX.Element;
+}
+function MemoElementList() {
+  // Non-empty initially: an empty text hole hydrates to a client-created
+  // placeholder node, which is unrelated to what this scenario pins.
+  const [suffix, set] = createSignal(".");
+  setSepSuffix = set;
+  return (
+    <ul>
+      {[1, 2, 3, 4, 5].map(i => (
+        <SepRow i={i} suffix={suffix} />
+      ))}
+    </ul>
+  );
+}
+
+let setSepDynSuffix!: (v: string) => void;
+const SepLi = dynamic(() => "li");
+function DynamicElementList() {
+  const [suffix, set] = createSignal("");
+  setSepDynSuffix = set;
+  return (
+    <ul>
+      {[1, 2, 3].map(i => (
+        <SepLi>{`${i}${suffix()}`}</SepLi>
+      ))}
+    </ul>
+  );
+}
+
+let setSepCount!: (v: number) => void;
+function TextAfterNull() {
+  const [count, set] = createSignal(7);
+  setSepCount = set;
+  const label = () => "x";
+  return <div>{[count(), null, label()]}</div>;
+}
+
+let setSepLabel!: (v: string) => void;
+function NestedArrayText() {
+  const [label, set] = createSignal("c");
+  setSepLabel = set;
+  // Hoisted so the update re-evaluates the array without re-creating it.
+  const el = <i>i</i>;
+  return <div>{["a", ["b", el], label(), ["d"]]}</div>;
+}
+
+let setSepMixed!: (v: string) => void;
+function MixedMemoResults() {
+  const [t, set] = createSignal("c");
+  setSepMixed = set;
+  const items = [() => "a", () => <b>1</b>, () => t(), () => "d", () => <i>2</i>, () => 5];
+  return <div>{items.map(f => createMemo(f))}</div>;
+}
+
+// ---------------------------------------------------------------------------
+// ssrElement's multi-source form: the server serializes `<span>` straight from
+// two prop sources (no merged intermediate object) while the client compiles
+// the equivalent double spread. The array form must allocate exactly the ids
+// the compiled spread does — the span's own key and nothing for the sources —
+// so the span AND the sibling after it hydrate against the server nodes.
+let setSourcesLabel!: (v: string) => void;
+function SpreadSources() {
+  const [label, set] = createSignal("tail");
+  setSourcesLabel = set;
+  const a = { class: "src", title: "old", "data-a": "1" };
+  const b = { title: "new", id: "srcs" };
+  const el = isServer ? (
+    (ssrElement("span", [a, b], "srcs", true) as unknown as JSX.Element)
+  ) : (
+    <span {...a} {...b}>
+      srcs
+    </span>
+  );
+  return (
+    <div>
+      {el}
+      <b>{label()}</b>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// dynamic() tag with an explicit xmlns inside an SVG tree (#3386 part 2).
+// Server serializes the attribute; the parser namespaces the <a>; hydration
+// claims it. The update pass proves the claimed node (not a client-created
+// HTML <a>) is the one bound.
+let setNsLabel!: (v: string) => void;
+const NsLink = dynamic(() => "a");
+function DynamicNamespaceLink() {
+  const [label, set] = createSignal("go");
+  setNsLabel = set;
+  return (
+    <svg>
+      <NsLink xmlns="http://www.w3.org/2000/svg" href="/x">
+        <text>{label()}</text>
+      </NsLink>
+    </svg>
+  );
+}
+
+// dynamic(source, { static }) (#3387): the source resolves once and the
+// instance creates no owner, so its hydration ids differ from the memo path's
+// and must agree between server and client. Three forms in one tree — a tag,
+// a component, and a falsy source (which renders nothing yet still has to
+// leave the id sequence in the same state on both sides) — followed by a
+// reactive tail whose binding only survives if every claim above it landed.
+let setStaticLabel!: (v: string) => void;
+const StaticTag = dynamic(() => "a", { static: true });
+const StaticComp = dynamic(() => (props: { label: string }) => <i>{props.label}</i>, {
+  static: true
+});
+const StaticNothing = dynamic(() => null, { static: true });
+function DynamicStaticForms() {
+  const [label, set] = createSignal("one");
+  setStaticLabel = set;
+  return (
+    <div>
+      <StaticTag href="/x" class={label()}>
+        {label()}
+      </StaticTag>
+      <StaticComp label={label()} />
+      <StaticNothing />
+      <b>{label()}</b>
+    </div>
+  );
+}
+
+// Kobalte-shaped component chain (test/harness/polymorphic.tsx): every
+// element reached through merge → omit → merge layers and a per-instance
+// `dynamic(() => props.as)`. Hydration must claim the `<a>` through all of
+// that with ids aligned on both sides, and a label update must flow through
+// the chain's getters into aria-label/title/text without recreating the
+// element. `compiled` is the floor twin, hydrated the same way so a chain
+// failure can't hide behind a fixture problem.
+let chainRows: Row[] = [];
+function polymorphicChainApp(form: keyof typeof forms) {
+  return function PolymorphicChain() {
+    chainRows = makeRows(0, 3);
+    return <TriggerList rows={() => chainRows} render={forms[form]} />;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// #3504: a user-tier effect (onSettled / createEffect) fires during
+// hydration's synchronous pass and writes a signal that reveals a <Show>
+// branch the server never rendered. The write lands after the claim pass, so
+// the branch is created as fresh client DOM — not claimed against the
+// registry (a key miss: a detached subtree plus a dev warning). The toast
+// function reaches the page through a module slot; the issue used a context,
+// which changes nothing about the write's timing.
+let addToast: (t: string) => void = () => {};
+function ToasterProvider(props: { children: any }) {
+  const [toasts, setToasts] = createSignal<string[]>([]);
+  addToast = t => setToasts(prev => [t, ...prev]);
+  return (
+    <>
+      <Show when={toasts().length}>
+        <div class="toast">{toasts()[0]}</div>
+      </Show>
+      {props.children}
+    </>
+  );
+}
+function SettledToastPage() {
+  onSettled(() => {
+    addToast("toast!");
+  });
+  return <main>Hello</main>;
+}
+function EffectToastPage() {
+  createEffect(
+    () => 1,
+    () => {
+      addToast("toast!");
+    }
+  );
+  return <main>Hello</main>;
+}
+function OnSettledWriteShow() {
+  return (
+    <ToasterProvider>
+      <SettledToastPage />
+    </ToasterProvider>
+  );
+}
+function OnSettledWriteShowLoading() {
+  return (
+    <ToasterProvider>
+      <Loading fallback={<main>Loading…</main>}>
+        <SettledToastPage />
+      </Loading>
+    </ToasterProvider>
+  );
+}
+// Streamed shape: the page suspends on the server, so the shell carries the
+// boundary fallback and the route content arrives as a late fragment. The
+// route's onSettled then fires inside the boundary's resume window, after
+// the root pass released its snapshot scope.
+function StreamedToastPage() {
+  const data = createMemo(async () => {
+    await sleep(10);
+    return "Hello";
+  });
+  onSettled(() => {
+    addToast("toast!");
+  });
+  return <main>{data()}</main>;
+}
+function OnSettledWriteShowStreamed() {
+  return (
+    <ToasterProvider>
+      <Loading fallback={<main>Loading…</main>}>
+        <StreamedToastPage />
+      </Loading>
+    </ToasterProvider>
+  );
+}
+function EffectWriteShow() {
+  return (
+    <ToasterProvider>
+      <EffectToastPage />
+    </ToasterProvider>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// useHead stylesheet whose sheet is still loading when hydrate() reaches it
+// (jsdom never loads sheets, so the reveal gate is always pending here). The
+// gate memo is created detached from the owner tree; it must stay out of the
+// hydration id sequence instead of peeking the next child id of a null owner.
+// The async memo after the call checks that no id was consumed.
+const headCssHref = "/parity-head.css";
+let bumpHeadCss!: () => void;
+function UseHeadStylesheetPending() {
+  useHead({ tag: "link", props: { rel: "stylesheet", href: headCssHref } });
+  const [n, setN] = createSignal(0);
+  bumpHeadCss = () => setN(v => v + 1);
+  const label = createMemo(async () => {
+    await sleep(5);
+    return "styled";
+  });
+  return (
+    <div>
+      <span>{label()}</span> n={n()}
+    </div>
+  );
+}
+
+// Same gate reached on a late streamed boundary resume.
+const headCssLateHref = "/parity-head-late.css";
+function HeadCssBoundaryContent() {
+  useHead({ tag: "link", props: { rel: "stylesheet", href: headCssLateHref } });
+  const data = createMemo(async () => {
+    await sleep(10);
+    return "late styled";
+  });
+  return <section>{data()}</section>;
+}
+let bumpHeadCssStreamed!: () => void;
+function UseHeadStylesheetStreamed() {
+  const [n, setN] = createSignal(0);
+  bumpHeadCssStreamed = () => setN(v => v + 1);
+  return (
+    <div>
+      <span>lead </span>
+      <Loading fallback={<p>waiting</p>}>
+        <HeadCssBoundaryContent />
+      </Loading>
+      <span> tail {n()}</span>
+    </div>
+  );
+}
+const loadHeadSheets = () => {
+  for (const link of document.querySelectorAll('link[href^="/parity-head"]'))
+    link.dispatchEvent(new Event("load"));
+};
+
+// ---------------------------------------------------------------------------
+// JSX passed through a non-`children` prop (#3567): the slot getter builds its
+// elements lazily, so the hole needs a scope like `{props.children}` has.
+let setSlotCount!: (v: number) => void;
+const SlotLayout = (props: { header: JSX.Element; children: JSX.Element }) => (
+  <div>
+    <header>{props.header}</header>
+    <main>{props.children}</main>
+  </div>
+);
+function SlotPropBeforeChildren() {
+  const [n, set] = createSignal(0);
+  setSlotCount = set;
+  return (
+    <SlotLayout header={<button>clicks {n()}</button>}>
+      <p>body {n()}</p>
+    </SlotLayout>
+  );
+}
+
+// Same slot, followed by a plain signal-read hole instead of children.
+let setIconCount!: (v: number) => void;
+const IconCard = (p: { icon: JSX.Element; count: () => number }) => (
+  <section>
+    {p.icon}
+    <span>{p.count()}</span>
+  </section>
+);
+function SlotPropBeforeSignalHole() {
+  const [n, set] = createSignal(0);
+  setIconCount = set;
+  return <IconCard icon={<button>icon {n()}</button>} count={n} />;
+}
+
+// Object-of-slots and computed access reach lazy JSX the same way.
+let setSlotsCount!: (v: number) => void;
+const SlotsLayout = (p: {
+  slots: Record<string, JSX.Element>;
+  name: string;
+  count: () => number;
+}) => (
+  <div>
+    {p.slots.header}
+    {p.slots[p.name]}
+    <span>{p.count()}</span>
+  </div>
+);
+function NestedSlotsBeforeSibling() {
+  const [n, set] = createSignal(0);
+  setSlotsCount = set;
+  const slots = {
+    get header() {
+      return <b>head {n()}</b>;
+    },
+    get footer() {
+      return <i>foot {n()}</i>;
+    }
+  };
+  return <SlotsLayout slots={slots} name="footer" count={n} />;
+}
+
+// Call-shaped holes the predicate must also see: optional call, logical left.
+let setCallTail!: (v: number) => void;
+const CallHoles = (p: {
+  renderItem?: (x: string) => JSX.Element;
+  rows: () => string[];
+  tail: () => number;
+}) => (
+  <ul>
+    {p.renderItem?.("first")}
+    {p.rows().map(x => <li>{x}</li>) || "no rows"}
+    <li>tail {p.tail()}</li>
+  </ul>
+);
+// Array-literal branch holding a component: the items' ids nest under the
+// hole scope on both sides, so the call hole after it stays aligned.
+let setArrayTail!: (v: number) => void;
+const ArrayBadge = (p: { label: string }) => <b>{p.label}</b>;
+const ArrayBranch = (p: { on: () => boolean; tail: () => number }) => (
+  <div>
+    {p.on() ? [<ArrayBadge label="one" />, " and ", <ArrayBadge label="two" />] : null}
+    <span>{p.tail()}</span>
+  </div>
+);
+function ArrayBranchBeforeSibling() {
+  const [tail, set] = createSignal(0);
+  setArrayTail = set;
+  return <ArrayBranch on={() => true} tail={tail} />;
+}
+
+// A logical hole whose operands are both primitives takes no scope; the dom
+// generate must classify the source expression, not its memo-ternary rewrite.
+let setLogicalCount!: (v: number) => void;
+const LogicalTail = (p: { count: number }) => <span>{p.count}</span>;
+function LogicalPrimitiveBeforeSibling() {
+  const [n, set] = createSignal(1);
+  setLogicalCount = set;
+  return (
+    <div>
+      {n() > 0 && n() + 1}
+      <LogicalTail count={n()} />
+    </div>
+  );
+}
+
+function OptionalCallAndLogicalLeft() {
+  const [tail, set] = createSignal(0);
+  setCallTail = set;
+  return <CallHoles renderItem={x => <li>{x}</li>} rows={() => ["a", "b"]} tail={tail} />;
+}
+
+// Spread-element siblings reading a prop (test/server/spread-hydration.spec.tsx):
+// the `{props.count}` hole reserves its scope slot on both sides.
+let setSpreadCount!: (v: number) => void;
+const SpreadLink = (props: { linkProps: any; count: number }) => (
+  <a {...props.linkProps}>link {props.count}</a>
+);
+function SpreadSiblingsMemberHole() {
+  const [n, set] = createSignal(0);
+  setSpreadCount = set;
+  const linkProps = { class: "nav" };
+  return (
+    <div>
+      <SpreadLink linkProps={linkProps} count={n()} />
+      <SpreadLink linkProps={linkProps} count={n()} />
+      <span>tail</span>
+    </div>
+  );
+}
+
+// The shell's onSettled writes a signal the shell reads (an identity minted
+// on the client — the server rendered with `null`) while a boundary lower on
+// the page is still pending. The write is held for the root pass and must
+// replay when the root scope releases, without waiting for the boundary.
+// Streamed mode is the case: the boundary's fragment arrives after hydrate().
+function ShellWriteBesidePendingBoundary() {
+  const [me, setMe] = createSignal<string | null>(null);
+  onSettled(() => {
+    setMe("otter");
+  });
+  const data = createMemo(async () => {
+    await sleep(10);
+    return "late";
+  });
+  return (
+    <div>
+      <button disabled={me() === null}>send</button>
+      <p>{me() ?? "nobody"}</p>
+      <Loading fallback={<em>wait</em>}>
+        <span>{data()}</span>
+      </Loading>
+    </div>
+  );
+}
+
+// A boundary with `on`: the client creates the dependency node under the
+// boundary owner before the content, shifting the content's hydration ids by
+// one child. The server must account for it or every element under the
+// boundary misses its key (detached duplicates, nothing interactive).
+function LoadingOnBoundary() {
+  const [room] = createSignal("lobby");
+  const data = createMemo(async () => {
+    await sleep(10);
+    return "late";
+  });
+  return (
+    <div>
+      <p>shell</p>
+      <Loading on={room()} fallback={<em>wait</em>}>
+        <span>{data()}</span>
+        <b>#{room()}</b>
+      </Loading>
+    </div>
+  );
+}
+
 export const scenarios: Scenario[] = [
   {
     name: "strict-store-paths",
@@ -1624,6 +2239,40 @@ export const scenarios: Scenario[] = [
       }),
     expectedTextAfterUpdate: "Ada in Paris2:two",
     stableSelector: "div, span, b"
+  },
+  {
+    name: "polymorphic-chain",
+    App: polymorphicChainApp("chain"),
+    expectedText: "row-0row-1row-2",
+    adoptAll: true,
+    noSeparators: true,
+    update: () => chainRows[1].setLabel("ROW-1"),
+    expectedTextAfterUpdate: "row-0ROW-1row-2",
+    stableSelector: "ul, li, a.btn"
+  },
+  // The same chain over `dynamic()`'s static path (#3387): `as="a"` is a data
+  // property through every layer, so no instance memo exists on either side.
+  // Hydration keys are therefore DIFFERENT from `polymorphic-chain` (one
+  // owner fewer per element) and must still agree between server and client.
+  {
+    name: "polymorphic-chain-static",
+    App: polymorphicChainApp("chain-static"),
+    expectedText: "row-0row-1row-2",
+    adoptAll: true,
+    noSeparators: true,
+    update: () => chainRows[1].setLabel("ROW-1"),
+    expectedTextAfterUpdate: "row-0ROW-1row-2",
+    stableSelector: "ul, li, a.btn"
+  },
+  {
+    name: "polymorphic-chain-compiled-floor",
+    App: polymorphicChainApp("compiled"),
+    expectedText: "row-0row-1row-2",
+    adoptAll: true,
+    noSeparators: true,
+    update: () => chainRows[1].setLabel("ROW-1"),
+    expectedTextAfterUpdate: "row-0ROW-1row-2",
+    stableSelector: "ul, li, a.btn"
   },
   {
     name: "text-hole",
@@ -2105,6 +2754,53 @@ export const scenarios: Scenario[] = [
     serverText: "tail"
   },
   {
+    name: "errored-thunk-fallback-under-errored",
+    App: ErroredThunkFallbackUnderErrored,
+    expectedText: "fellCount: 0",
+    update: () => setErroredFallbackCount(1),
+    expectedTextAfterUpdate: "fellCount: 1",
+    stableSelector: "main, b, button"
+  },
+  {
+    name: "errored-thunk-fallback-under-loading",
+    App: ErroredThunkFallbackUnderLoading,
+    expectedText: "fellCount: 0",
+    update: () => setErroredFallbackCount(1),
+    expectedTextAfterUpdate: "fellCount: 1",
+    stableSelector: "main, b, button"
+  },
+  {
+    name: "errored-thunk-fallback-under-loading-on",
+    App: ErroredThunkFallbackUnderLoadingOn,
+    expectedText: "fellCount: 0",
+    update: () => setErroredFallbackCount(1),
+    expectedTextAfterUpdate: "fellCount: 1",
+    stableSelector: "main, b, button"
+  },
+  {
+    name: "errored-thunk-fallback-in-fragment",
+    App: ErroredThunkFallbackInFragment,
+    expectedText: "fellCount: 0tail",
+    update: () => setErroredFallbackCount(1),
+    expectedTextAfterUpdate: "fellCount: 1tail",
+    stableSelector: "main, b, button, span"
+  },
+  {
+    name: "errored-thunk-fallback-in-element",
+    App: ErroredThunkFallbackInElement,
+    expectedText: "fellCount: 0tail",
+    update: () => setErroredFallbackCount(1),
+    expectedTextAfterUpdate: "fellCount: 1tail",
+    stableSelector: "section, main, b, button, span"
+  },
+  {
+    name: "show-thunk-fallback-under-errored",
+    App: ShowThunkFallbackUnderErrored,
+    expectedText: "fellCount: 0",
+    update: () => setShowThunkOn(true),
+    expectedTextAfterUpdate: "shown"
+  },
+  {
     name: "client-only-before-suspending-fragment",
     App: ClientOnlyBeforeSuspending,
     async: true,
@@ -2141,6 +2837,14 @@ export const scenarios: Scenario[] = [
     stableSelector: "div, label"
   },
   {
+    name: "textarea-value-id-parity",
+    App: TextareaValueSiblings,
+    expectedText: "test0",
+    update: () => textareaCounterButton.click(),
+    expectedTextAfterUpdate: "test1",
+    stableSelector: "main, textarea, button"
+  },
+  {
     name: "reactive-lone-spread-id-parity",
     App: ReactiveLoneSpread,
     expectedText: "spreadbefore",
@@ -2165,6 +2869,214 @@ export const scenarios: Scenario[] = [
     update: () => setTeamId(undefined),
     expectedTextAfterUpdate: "Some Team",
     stableSelector: "main, div, h1"
+  },
+  {
+    name: "separator-memo-element-list",
+    App: MemoElementList,
+    expectedText: "1.2.3.4.5.",
+    adoptAll: true,
+    noSeparators: true,
+    update: () => setSepSuffix("!"),
+    expectedTextAfterUpdate: "1!2!3!4!5!",
+    stableSelector: "ul, li"
+  },
+  {
+    name: "separator-dynamic-element-list",
+    App: DynamicElementList,
+    expectedText: "123",
+    adoptAll: true,
+    noSeparators: true,
+    update: () => setSepDynSuffix("!"),
+    expectedTextAfterUpdate: "1!2!3!",
+    stableSelector: "ul, li"
+  },
+  {
+    name: "separator-text-after-null",
+    App: TextAfterNull,
+    expectedText: "7x",
+    adoptAll: true,
+    update: () => setSepCount(8),
+    expectedTextAfterUpdate: "8x",
+    stableSelector: "div"
+  },
+  {
+    name: "separator-nested-array-text",
+    App: NestedArrayText,
+    expectedText: "abicd",
+    adoptAll: true,
+    update: () => setSepLabel("C"),
+    expectedTextAfterUpdate: "abiCd",
+    stableSelector: "div, i"
+  },
+  {
+    name: "separator-mixed-memo-results",
+    App: MixedMemoResults,
+    expectedText: "a1cd25",
+    adoptAll: true,
+    update: () => setSepMixed("C"),
+    expectedTextAfterUpdate: "a1Cd25",
+    stableSelector: "div, b, i"
+  },
+  {
+    name: "ssr-element-sources",
+    App: SpreadSources,
+    expectedText: "srcstail",
+    adoptAll: true,
+    update: () => setSourcesLabel("TAIL"),
+    expectedTextAfterUpdate: "srcsTAIL",
+    stableSelector: "div, span, b"
+  },
+  {
+    name: "dynamic-xmlns-svg-link",
+    App: DynamicNamespaceLink,
+    expectedText: "go",
+    adoptAll: true,
+    update: () => setNsLabel("went"),
+    expectedTextAfterUpdate: "went",
+    stableSelector: "svg, a, text"
+  },
+  {
+    name: "dynamic-static-forms",
+    App: DynamicStaticForms,
+    expectedText: "oneoneone",
+    adoptAll: true,
+    noSeparators: true,
+    update: () => setStaticLabel("two"),
+    expectedTextAfterUpdate: "twotwotwo",
+    stableSelector: "div, a, i, b"
+  },
+  {
+    name: "onsettled-write-show",
+    App: OnSettledWriteShow,
+    expectedText: "toast!Hello",
+    serverText: "Hello",
+    stableSelector: "main"
+  },
+  {
+    name: "onsettled-write-show-loading",
+    App: OnSettledWriteShowLoading,
+    expectedText: "toast!Hello",
+    serverText: "Hello",
+    stableSelector: "main"
+  },
+  {
+    name: "effect-write-show",
+    App: EffectWriteShow,
+    expectedText: "toast!Hello",
+    serverText: "Hello",
+    stableSelector: "main"
+  },
+  {
+    name: "onsettled-write-show-streamed",
+    App: OnSettledWriteShowStreamed,
+    async: true,
+    expectedText: "toast!Hello",
+    serverText: "Hello",
+    stableSelector: "main"
+  },
+  {
+    name: "use-head-stylesheet-pending",
+    App: UseHeadStylesheetPending,
+    async: true,
+    expectedText: "styled n=0",
+    update: () => {
+      loadHeadSheets();
+      bumpHeadCss();
+    },
+    expectedTextAfterUpdate: "styled n=1",
+    stableSelector: "div, span"
+  },
+  {
+    name: "use-head-stylesheet-streamed-boundary",
+    App: UseHeadStylesheetStreamed,
+    async: true,
+    expectedText: "lead late styled tail 0",
+    serverText: "lead waiting tail 0",
+    update: () => {
+      loadHeadSheets();
+      bumpHeadCssStreamed();
+    },
+    expectedTextAfterUpdate: "lead late styled tail 1",
+    stableSelector: "div, span, section"
+  },
+  {
+    name: "slot-prop-before-children",
+    App: SlotPropBeforeChildren,
+    expectedText: "clicks 0body 0",
+    update: () => setSlotCount(1),
+    expectedTextAfterUpdate: "clicks 1body 1",
+    stableSelector: "button, p",
+    adoptAll: true
+  },
+  {
+    name: "slot-prop-before-signal-hole",
+    App: SlotPropBeforeSignalHole,
+    expectedText: "icon 00",
+    update: () => setIconCount(1),
+    expectedTextAfterUpdate: "icon 11",
+    stableSelector: "button, span",
+    adoptAll: true
+  },
+  {
+    name: "nested-slots-before-sibling",
+    App: NestedSlotsBeforeSibling,
+    expectedText: "head 0foot 00",
+    update: () => setSlotsCount(1),
+    expectedTextAfterUpdate: "head 1foot 11",
+    stableSelector: "b, i, span",
+    adoptAll: true
+  },
+  {
+    name: "spread-siblings-member-hole",
+    App: SpreadSiblingsMemberHole,
+    expectedText: "link 0link 0tail",
+    update: () => setSpreadCount(1),
+    expectedTextAfterUpdate: "link 1link 1tail",
+    stableSelector: "a, span",
+    adoptAll: true
+  },
+  {
+    name: "array-branch-before-sibling",
+    App: ArrayBranchBeforeSibling,
+    expectedText: "one and two0",
+    update: () => setArrayTail(1),
+    expectedTextAfterUpdate: "one and two1",
+    stableSelector: "b, span",
+    adoptAll: true
+  },
+  {
+    name: "logical-primitive-before-sibling",
+    App: LogicalPrimitiveBeforeSibling,
+    expectedText: "21",
+    update: () => setLogicalCount(2),
+    expectedTextAfterUpdate: "32",
+    stableSelector: "span",
+    adoptAll: true
+  },
+  {
+    name: "optional-call-and-logical-left",
+    App: OptionalCallAndLogicalLeft,
+    expectedText: "firstabtail 0",
+    update: () => setCallTail(1),
+    expectedTextAfterUpdate: "firstabtail 1",
+    stableSelector: "ul, li",
+    adoptAll: true
+  },
+  {
+    name: "onsettled-write-shell-beside-pending-boundary",
+    App: ShellWriteBesidePendingBoundary,
+    async: true,
+    expectedText: "sendotterlate",
+    serverText: "send nobody late",
+    stableSelector: "button, p"
+  },
+  {
+    name: "loading-on-boundary",
+    App: LoadingOnBoundary,
+    async: true,
+    expectedText: "shelllate#lobby",
+    serverText: "shell wait late #lobby",
+    stableSelector: "span, b"
   },
   // `$` typed blocks rendered as JSX — see ./block-scenarios.tsx.
   ...blockScenarios,

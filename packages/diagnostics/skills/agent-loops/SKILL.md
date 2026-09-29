@@ -6,7 +6,7 @@ timing and waste accounting). This package captures both into one
 serializable artifact. Use it to verify claims about reactive code instead
 of inferring them from reading it.
 
-There are four loops. Each takes the same fixture:
+There are five loops. Each takes the same fixture:
 
 ```ts
 import { captureArtifact } from "@solidjs/diagnostics";
@@ -129,7 +129,7 @@ measured from the event and keyed by it. A router that wraps its location
 write in `OBSERVE.attribution.withOrigin({ kind: "navigation", name, to, from, params }, () => …)`
 names holds by route as well — `SILENT_HOLD` then reads "click on a.nav
 (navigation to /users/:id) wrote …", and `feedback.navigations` /
-`attribution.navigations()` give the per-route view. A redirect declared
+`attribution.history("navigation")` give the per-route view. A redirect declared
 with `redirect: n` folds onto the pending navigation (one record, timed from
 the click, the abandoned destination in `redirects`) rather than superseding it.
 
@@ -155,6 +155,48 @@ write, the first frame inconsistent; make it a memo), `IMMUTABLE_UPDATE_IN_STORE
 `UNSTABLE_LIST_IDENTITY` (a list rebuilt for equivalent records — key by a
 stable field or `reconcile`). Each names its repair in the message.
 
+## Loop 5 — Server renders (waits and calls)
+
+The same fixture over `renderToStream(() => <App />)` (or `renderToString`)
+captures the server side: the server findings in `artifact.diagnostics`
+(`SSR_RENDER_ERROR_CONTAINED`, `SERVER_WRITE`, `HEAD_TAG_INVALID`, …, each
+with `ownerPath`), and the records tables in `artifact.records`, keyed by
+record type:
+
+- `boundary[]` — every `<Loading>` boundary that waited: `durationMs`
+  (how long it held its content up), `heldMs` (how long finished content
+  then sat behind `<Reveal>` siblings), `passes` (render passes: `2` is one
+  round of async, `3+` is a sequential chain — a read that depended on the
+  previous answer), `outcome` (`settled`, `fallback`, `client`, `error`),
+  `streamed`, `ownerPath`.
+- `invocation[]` — every server-function execution: `id`, `durationMs`,
+  `outcome`, and for a direct call made during a boundary's pass the
+  boundary's `id` in `boundary`.
+- `frame[]` — every frame stream produced (`side: "server"`; a server
+  component rendered to the frame transport): `shellMs` (time to first
+  content), `durationMs` (to `complete`), `outcome`, and the census —
+  `fragments`, `slots`, `regions`, `errors`. A server-function response
+  that is a frame stream has an invocation row (the call) and a frame row
+  (the response) with the same `id`; a large `durationMs - shellMs` with
+  `fragments > 0` is the server waiting on data behind the shell — look at
+  the boundary rows.
+- `call[]` — empty on the server. In a browser capture (jsdom, or the
+  bridge) it is every server-function call the page made — `id`, `method`,
+  `durationMs` (the caller's whole wait), `status`, `outcome` — and
+  `frame[]` rows with `side: "client"` are the streams it applied. A `call`
+  next to the server's `invocation` of the same `id` is the wire.
+
+Read them together: a boundary's `durationMs` is the sum of its passes'
+waits, and the invocations with its `id` are what those waits were spent on.
+A boundary with `passes: 3` and two invocations under it in sequence is a
+waterfall; the runtime already says so (`SSR_BOUNDARY_WATERFALL`, `warn`
+from three waits), and `SSR_CLIENT_CONTENT_MASKED`
+when a client-only read surfaced only after a wait — so Loop 1's rule holds
+on the server: capture, read the codes, repair, re-capture. Use
+`attribution: false` here; the engine has nothing to see in a server render.
+The tables are always present; a table is empty when nothing of its kind
+happened (or no runtime that emits it was loaded).
+
 ## Practical rules
 
 1. **Name your scopes.** Pass `{ name }` to `createSignal`/`createMemo`/
@@ -165,7 +207,8 @@ stable field or `reconcile`). Each names its repair in the message.
    landing async value).
 3. **Egress for offline analysis.** `artifactToJSONL(artifact)` emits one
    JSON record per line (`meta`, `diagnostic`, `rerun`, `costs`, `hold`,
-   `feedback`) — grep it, diff it between runs, attach it to a report.
+   `feedback`, `boundary`, `invocation`, `frame`) — grep it, diff it between runs,
+   attach it to a report.
 4. **Dev builds only.** `captureArtifact` throws where the `DEV` export is
    stripped. Run under Vitest or a dev server.
 5. **Browser capture uses the same artifact.** For real pages, import

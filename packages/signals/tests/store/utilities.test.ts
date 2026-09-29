@@ -1,4 +1,5 @@
 import {
+  $PROXY,
   createEffect,
   createRoot,
   createSignal,
@@ -6,8 +7,26 @@ import {
   deep,
   flush,
   getOwner,
+  $RECORD,
+  $TARGET,
   merge,
+  mergeSources,
+  hasStaticKeys,
+  isStatic,
   omit,
+  OmitView,
+  MergeView,
+  viewOf,
+  resolvedTable,
+  sourceKeys,
+  sourceHas,
+  sourceGet,
+  SOURCE_PLAIN,
+  SOURCE_OMIT,
+  SOURCE_PROXY,
+  SOURCE_MEMO,
+  SOURCE_MERGE,
+  sourceOwners,
   reconcile,
   snapshot,
   type Store
@@ -83,16 +102,9 @@ describe("merge", () => {
     expect("a" in merge(value, getter)).toBeTruthy();
     expect("a" in merge(getter, value)).toBeTruthy();
   });
-  it("doesn't keep references for non-getters", () => {
-    const a = { value1: 1 };
-    const b = { value2: 2 };
-    const props = merge(a, b);
-    a.value1 = b.value2 = 3;
-    expect(props.value1).toBe(1);
-    expect(props.value2).toBe(2);
-    expect(Object.keys(props).join()).toBe("value1,value2");
-  });
-  it("without getter transfers only value", () => {
+  it("is a live view: data properties read through to the sources", () => {
+    // Never a copy (#3448): a plain data property on a source is read at
+    // access time, the same as a getter, so a source mutated later is seen.
     const a = { value1: 1 };
     const b = {
       get value2() {
@@ -101,10 +113,10 @@ describe("merge", () => {
     };
     const props = merge(a, b);
     a.value1 = 3;
-    expect(props.value1).toBe(1);
+    expect(props.value1).toBe(3);
     expect(Object.keys(props).join()).toBe("value1,value2");
   });
-  it("overrides enumerables", () => {
+  it("mirrors the source's enumerability", () => {
     const a = Object.defineProperties(
       {},
       {
@@ -114,10 +126,11 @@ describe("merge", () => {
         }
       }
     );
-    const props = merge(a, {});
+    const props = merge(a, { value2: 1 });
     expect((props as any).value1).toBe(2);
-    expect(Object.getOwnPropertyDescriptor(props, "value1")?.enumerable).toBeTruthy();
-    expect(Object.keys(props).join()).toBe("value1");
+    expect("value1" in props).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(props, "value1")?.enumerable).toBe(false);
+    expect(Object.keys(props).join()).toBe("value2");
   });
   it("does not write the target", () => {
     const props = { value1: 1 };
@@ -139,15 +152,20 @@ describe("merge", () => {
     const newProps = merge(props, null, undefined);
     expect(props === newProps).toBeTruthy();
   });
-  it("returns same reference when all keys are covered", () => {
+  it("returns same reference when only one source is non-falsy", () => {
+    const props = { a: 1, b: 2 };
+    expect(merge(null, props, undefined) === props).toBeTruthy();
+    const view = omit({ a: 1, b: 2 }, "a");
+    expect(merge(false, view) === view).toBeTruthy();
+  });
+  it("returns a view when there are several sources, even if the last covers every key", () => {
+    // No key enumeration at construction: a view is O(1) to make, and the
+    // shortcut would have cost a key walk on every merge to save nothing.
     const props = { a: 1, b: 2 };
     const newProps = merge({ a: 2 }, { b: 2 }, props);
-    expect(props === newProps).toBeTruthy();
-  });
-  it("returns new reference when all keys are not covered", () => {
-    const props = { a: 1 };
-    const newProps = merge({ a: 2 }, { b: 2 }, props);
     expect(props === newProps).toBeFalsy();
+    expect(newProps.a).toBe(1);
+    expect(mergeSources(newProps)).toEqual([{ a: 2 }, { b: 2 }, props]);
   });
   it("uses the source instances", () => {
     const source1 = {
@@ -165,17 +183,93 @@ describe("merge", () => {
     expect(props.b === source2).toBeTruthy();
   });
   it("flattens nested merge sources in order", () => {
+    const a = { a: 1 };
+    const b = { b: 2 };
     const target = { a: 3, b: 4 };
-    const props = merge(merge({ a: 1 }, { b: 2 }), target);
-    expect(props === target).toBeTruthy();
+    const props = merge(merge(a, b), target);
+    expect(mergeSources(props)).toEqual([a, b, target]);
+    expect(props.a).toBe(3);
     expect(merge(merge({ value: 1 }, { value: 2 }), { value: 3 }).value).toBe(3);
     expect(merge({ value: 1 }, merge({ value: 2 }, { value: 3 })).value).toBe(3);
+    const inner = merge({ value: 2 }, { value: 3 });
+    expect(mergeSources(merge({ value: 1 }, inner))).toEqual([
+      { value: 1 },
+      { value: 2 },
+      { value: 3 }
+    ]);
   });
   it("does not clone nested objects", () => {
     const b = { value: 1 };
     const props = merge({ a: 1 }, { b });
     b.value = 2;
     expect(props.b.value).toBe(2);
+  });
+  // #3384: the plain-object result is a real object callers may copy or
+  // mutate. A later merge must read what is on the object, not tunnel back
+  // to the sources it was built from.
+  it("re-merging a descriptor copy of a merged object reads the copy (#3384)", () => {
+    const props = merge({ href: "/x", title: "t" }, { $active: true, children: "hi" });
+    const out: Record<PropertyKey, unknown> = {};
+    for (const key of Reflect.ownKeys(props)) {
+      if (key === "$active") continue;
+      Object.defineProperty(out, key, Reflect.getOwnPropertyDescriptor(props, key)!);
+    }
+    Object.defineProperty(out, "class", {
+      get: () => "yak-abc",
+      enumerable: true,
+      configurable: true
+    });
+    const final = merge(out, { rel: "noopener" }) as Record<string, unknown>;
+    expect(final.class).toBe("yak-abc");
+    expect(final.$active).toBeUndefined();
+    expect(final.href).toBe("/x");
+    expect(final.children).toBe("hi");
+    expect(Object.keys(final).sort()).toEqual(["children", "class", "href", "rel", "title"]);
+  });
+  it("re-merging a spread copy of a merged object reads the copy (#3384)", () => {
+    const props = merge({ a: 1, b: 2 }, { c: 3 });
+    const copy = { ...props, b: 20, d: 4 } as Record<string, unknown>;
+    delete copy.a;
+    const final = merge(copy, { e: 5 }) as Record<string, unknown>;
+    expect(final.a).toBeUndefined();
+    expect(final.b).toBe(20);
+    expect(final.d).toBe(4);
+    expect(Object.getOwnPropertySymbols(final)).toEqual([]);
+  });
+  it("writes to a merged object are no-ops; a copy is a plain object (#3384)", () => {
+    // The result is a view over its sources, never a copy: assigning onto it
+    // changes nothing (a consumer that needs its own object copies it first,
+    // and the copy carries no $SOURCES). @solidjs/html builds its own objects
+    // and merges once for exactly this reason.
+    const props = merge({ type: "button", label: "a" }, { disabled: false }) as Record<
+      string,
+      unknown
+    >;
+    props.label = "b";
+    props.extra = 1;
+    Object.defineProperty(props, "children", { get: () => "kids", configurable: true });
+    expect(props.label).toBe("a");
+    expect("extra" in props).toBe(false);
+    expect(props.children).toBeUndefined();
+    const copy = { ...props, label: "b" };
+    expect(Object.getOwnPropertySymbols(copy)).toEqual([]);
+    expect(mergeSources(copy)).toBeUndefined();
+    const final = merge({ type: "submit", size: "m" }, copy) as Record<string, unknown>;
+    expect(final.type).toBe("button");
+    expect(final.label).toBe("b");
+    expect(final.size).toBe("m");
+  });
+  it("flattens merge proxies (writes are no-ops, so the sources are the truth)", () => {
+    const [store] = createStore({ a: 1 });
+    const b = { b: 2 };
+    const c = { c: 3 };
+    const inner = merge(b, store);
+    const outer = merge(inner, c);
+    expect(mergeSources(outer)).toEqual([b, store, c]);
+    expect(outer.a).toBe(1);
+    expect(outer.b).toBe(2);
+    expect(outer.c).toBe(3);
+    expect(Object.keys(outer).sort()).toEqual(["a", "b", "c"]);
   });
   it("handles undefined values", () => {
     const props = merge({ a: 1 }, { a: undefined });
@@ -218,7 +312,8 @@ describe("merge", () => {
   });
   it("works with a array source", () => {
     const props = merge({ value: 1 }, [2]);
-    expect(Object.keys(props).join()).toBe("0,value,length");
+    // `length` is not enumerable on the array and the view mirrors that
+    expect(Object.keys(props).join()).toBe("value,0");
     expect(props.value).toBe(1);
     expect(props.length).toBe(1);
     expect(props[0]).toBe(2);
@@ -408,12 +503,140 @@ describe("omit Props", () => {
       expect((spread as any).placeholder).toBe("you@example.com");
     });
   });
-  test("omit result is immutable", () => {
-    const props = { first: 1, second: 2 };
+  test("omit result is a live view, not a copy", () => {
+    // Nothing is read or materialized at omit() time: the result reads its
+    // source when a key is used, the same for a plain object as for a store
+    // or merge proxy, so a later change to the source shows through.
+    let reads = 0;
+    const props = {
+      first: 1,
+      second: 2,
+      get third() {
+        reads++;
+        return 3;
+      }
+    };
     const otherProps = omit(props, "first");
+    expect(reads).toBe(0);
     props.first = props.second = 3;
-    expect(props.first).toBe(3);
+    expect(otherProps.second).toBe(3);
+    expect(otherProps.third).toBe(3);
+    expect(reads).toBe(1);
+  });
+  test("omit result rejects writes", () => {
+    const props = { first: 1, second: 2 };
+    const otherProps = omit(props, "first") as any;
+    otherProps.second = 9;
+    delete otherProps.second;
     expect(otherProps.second).toBe(2);
+    expect(props.second).toBe(2);
+  });
+  test("omit with a predicate hides keys by rule", () => {
+    const props = {
+      $props: 1,
+      $theme: 2,
+      id: "x",
+      get label() {
+        return "L";
+      }
+    };
+    const rest = omit(props, k => typeof k === "string" && k[0] === "$");
+    expect(Object.keys(rest)).toEqual(["id", "label"]);
+    expect("$props" in rest).toBe(false);
+    expect((rest as any).$props).toBeUndefined();
+    expect(rest.label).toBe("L");
+    expect({ ...rest }).toEqual({ id: "x", label: "L" });
+  });
+  test("omit of an omit flattens to one view over the original source", () => {
+    let reads = 0;
+    const props = {
+      a: 1,
+      b: 2,
+      get c() {
+        reads++;
+        return 3;
+      },
+      d: 4
+    };
+    const inner = omit(props, "a");
+    const outer = omit(inner, "b");
+    expect(Object.keys(outer)).toEqual(["c", "d"]);
+    expect("a" in outer).toBe(false);
+    expect("b" in outer).toBe(false);
+    expect(outer.c).toBe(3);
+    expect(reads).toBe(1);
+    // and with a predicate on either layer
+    const outer2 = omit(inner, k => k === "d");
+    expect(Object.keys(outer2)).toEqual(["b", "c"]);
+  });
+  test("merge over an omit of a plain object stays lazy and filtered", () => {
+    let reads = 0;
+    const props = {
+      hidden: "h",
+      get shown() {
+        reads++;
+        return "s";
+      },
+      both: "from-props"
+    };
+    const merged = merge(omit(props, "hidden"), { both: "from-later", extra: 1 });
+    expect(reads).toBe(0);
+    expect(Object.keys(merged).sort()).toEqual(["both", "extra", "shown"]);
+    expect("hidden" in merged).toBe(false);
+    expect((merged as any).hidden).toBeUndefined();
+    expect(merged.both).toBe("from-later");
+    expect(merged.shown).toBe("s");
+    expect(reads).toBe(1);
+  });
+  test("a defaults + omit + spread chain flattens to leaf objects with filters", () => {
+    // A component chain: each layer merges defaults, hides its own keys and
+    // spreads the rest into the next. The outermost merge must resolve to
+    // the leaf objects — no merge or omit PROXY left among its sources — and
+    // every hidden key of every layer must stay hidden.
+    let reads = 0;
+    const props = {
+      a: "a",
+      b: "b",
+      get c() {
+        reads++;
+        return "c";
+      },
+      d: "d",
+      e: "e"
+    };
+    const layer1 = merge({ a: "def-a", x: 1 }, props); // defaults
+    const rest1 = omit(layer1, "a"); // hides a
+    const layer2 = merge({ y: 2 }, rest1, () => ({ b: "fn-b" })); // defaults, function source
+    const rest2 = omit(layer2, "b", "y"); // hides b, y
+    const out = merge(rest2, { z: 3 });
+
+    const leaves = mergeSources(out)!;
+    for (const leaf of leaves) {
+      expect(typeof leaf === "function" || leaf instanceof OmitView || !($PROXY in leaf)).toBe(
+        true
+      );
+    }
+    expect(Object.keys(out).sort()).toEqual(["c", "d", "e", "x", "z"]);
+    expect("a" in out).toBe(false);
+    expect("b" in out).toBe(false);
+    expect("y" in out).toBe(false);
+    expect((out as any).a).toBeUndefined();
+    expect((out as any).b).toBeUndefined();
+    expect(out.x).toBe(1);
+    expect(out.z).toBe(3);
+    expect(reads).toBe(0);
+    expect(out.c).toBe("c");
+    expect(reads).toBe(1);
+    // the intermediate views themselves still answer correctly
+    expect(Object.keys(rest2).sort()).toEqual(["c", "d", "e", "x"]);
+    expect((rest1 as any).a).toBeUndefined();
+    expect(rest1.b).toBe("b");
+  });
+  test("omit keeps symbol-keyed props unless hidden", () => {
+    const sym = Symbol("s");
+    const props = { a: 1, [sym]: 2 };
+    expect(Reflect.ownKeys(omit(props, "a"))).toEqual([sym]);
+    expect(Reflect.ownKeys(omit(props, sym as any))).toEqual(["a"]);
   });
   test("omit clones the descriptor", () => {
     let signalValue = 1;
@@ -525,6 +748,650 @@ describe("omit Props", () => {
     expect(mergedProps.color).toBe("green");
     value = "red";
     expect(mergedProps.color).toBe("red");
+  });
+});
+
+// The view proxies must tell consumers the truth about what is behind a key,
+// through any depth of layers: `getOwnPropertyDescriptor` reports a DATA
+// descriptor only when the key is a data property of a plain-object leaf
+// (the compiler's encoding of a static prop), and `hasStaticKeys` says
+// whether the key set itself is fixed. That is what lets spread() skip a
+// reactive node for static children at the bottom of a component chain.
+describe("view descriptors", () => {
+  test("merge reports the owning leaf's kind: data stays data, getter stays getter", () => {
+    const [sig] = createSignal("x");
+    const props = merge(
+      { a: 1, shadowed: "lower" },
+      {
+        get b() {
+          return sig();
+        },
+        shadowed: "upper"
+      }
+    );
+    const a = Object.getOwnPropertyDescriptor(props, "a")!;
+    expect(a.get).toBeUndefined();
+    expect(a.value).toBe(1);
+    expect(a.configurable).toBe(true);
+    const b = Object.getOwnPropertyDescriptor(props, "b")!;
+    expect(typeof b.get).toBe("function");
+    expect(b.get!()).toBe("x");
+    expect(Object.getOwnPropertyDescriptor(props, "shadowed")!.value).toBe("upper");
+    expect(Object.getOwnPropertyDescriptor(props, "missing")).toBeUndefined();
+  });
+  test("a store leaf or a memo source is always an accessor, whatever the store reports", () => {
+    createRoot(() => {
+      const [store] = createStore({ a: 1 });
+      const overStore = merge({ b: 2 }, store);
+      expect(typeof Object.getOwnPropertyDescriptor(overStore, "a")!.get).toBe("function");
+      expect(Object.getOwnPropertyDescriptor(overStore, "b")!.value).toBe(2);
+      const overMemo = merge({ b: 2 }, () => ({ a: 1 }));
+      expect(typeof Object.getOwnPropertyDescriptor(overMemo, "a")!.get).toBe("function");
+      const omitOverStore = omit(store, "z");
+      expect(typeof Object.getOwnPropertyDescriptor(omitOverStore, "a")!.get).toBe("function");
+    });
+  });
+  test("omit forwards its source's kind and hides its keys", () => {
+    const view = omit(
+      {
+        a: 1,
+        get b() {
+          return 2;
+        },
+        c: 3
+      },
+      "c"
+    );
+    expect(Object.getOwnPropertyDescriptor(view, "a")!.value).toBe(1);
+    expect(typeof Object.getOwnPropertyDescriptor(view, "b")!.get).toBe("function");
+    expect(Object.getOwnPropertyDescriptor(view, "c")).toBeUndefined();
+  });
+  test("kind survives omit → merge → omit → merge: one record per layer, nested", () => {
+    const user = {
+      class: "btn",
+      get label() {
+        return "l";
+      },
+      as: "a",
+      type: "reset"
+    };
+    const l1 = merge({ type: "button" }, user);
+    const l2 = omit(l1, "type");
+    const l3 = merge({ as: "button", role: "button" }, l2);
+    const l4 = omit(l3, "as");
+    const l5 = merge(l4, { extra: 1 });
+    // An omit over a merge is ONE record holding the merge's record, and a
+    // merge over it carries that record as one entry: the layers nest, and
+    // nothing is copied per leaf per layer.
+    const top = mergeSources(l5)!;
+    expect(top.length).toBe(2);
+    const o4 = top[0] as OmitView;
+    expect(o4).toBeInstanceOf(OmitView);
+    expect(o4.kind).toBe(SOURCE_MERGE);
+    expect(o4.hidden).toEqual(["as"]);
+    const m3 = o4.source as MergeView;
+    expect(m3).toBeInstanceOf(MergeView);
+    expect(m3).toBe(viewOf(l3));
+    expect(m3.kinds).toEqual([SOURCE_PLAIN, SOURCE_OMIT]);
+    const o2 = m3.sources[1] as OmitView;
+    expect(o2.kind).toBe(SOURCE_MERGE);
+    expect(o2.hidden).toEqual(["type"]);
+    expect(o2.source).toBe(viewOf(l1));
+    expect((o2.source as MergeView).sources[1]).toBe(user);
+    // An omit's own $SOURCES never answers the merge's unfiltered sources.
+    expect(mergeSources(l4)).toBeUndefined();
+    // and the truth reaches the top
+    expect(Object.getOwnPropertyDescriptor(l5, "class")!.value).toBe("btn");
+    expect(typeof Object.getOwnPropertyDescriptor(l5, "label")!.get).toBe("function");
+    expect(Object.getOwnPropertyDescriptor(l5, "type")).toBeUndefined();
+    expect(Object.getOwnPropertyDescriptor(l5, "as")).toBeUndefined();
+    expect(Object.getOwnPropertyDescriptor(l5, "role")!.value).toBe("button");
+    expect(Object.keys(l5).sort()).toEqual(["class", "extra", "label", "role"]);
+    // The consumers' helpers see through the nesting as one filtered entry,
+    // in merged order (a key at the position of its LAST leaf).
+    expect(sourceKeys(o4, SOURCE_OMIT)).toEqual(["role", "class", "label"]);
+    expect(sourceHas(o4, SOURCE_OMIT, "as")).toBe(false);
+    expect(sourceHas(o4, SOURCE_OMIT, "type")).toBe(false);
+    expect(sourceHas(o4, SOURCE_OMIT, "label")).toBe(true);
+    expect(sourceGet(o4, SOURCE_OMIT, "as")).toBeUndefined();
+    expect(sourceGet(o4, SOURCE_OMIT, "role")).toBe("button");
+    expect(sourceGet(o4, SOURCE_OMIT, "class")).toBe("btn");
+    // A filter applies to its own layer's contribution: `as` hidden by l4
+    // does not hide l5's own sources, and l3's statics are not filtered by l2.
+    const l6: any = merge(l4, { as: "span" });
+    expect(l6.as).toBe("span");
+    expect(Object.keys(l6)).toEqual(["role", "class", "label", "as"]);
+    const l7: any = omit(merge({ type: "x" }, l2), "class");
+    expect(l7.type).toBe("x");
+    expect(l7.class).toBeUndefined();
+    // One pass gives every key with the leaf that owns it.
+    const keys: PropertyKey[] = [],
+      owners: any[] = [];
+    sourceOwners(l5, keys, owners);
+    expect(keys).toEqual(["role", "class", "label", "extra"]);
+    expect(owners[0]).toBe(m3.sources[0]);
+    expect(owners[1]).toBe(user);
+    expect(owners[2]).toBe(user);
+    expect(owners[3]).toBe(top[1]);
+  });
+  // A store-shaped proxy that logs every trap it is asked. `$PROXY in`,
+  // `$TARGET`, `$PROXY` and `$RECORD` (answered undefined: a store is no
+  // view) are a store's fast paths; anything else — an unknown symbol taking
+  // its generic read path, `getPrototypeOf` from an `instanceof`, a
+  // descriptor per key — is a cost per read that the views must not add over
+  // a direct read of the store.
+  function storeShaped(data: Record<string, unknown>) {
+    const log: string[] = [];
+    const target = {};
+    const proxy: any = new Proxy(target, {
+      get(_, key, receiver) {
+        if (key === $PROXY) return receiver;
+        if (key === $TARGET) return target;
+        if (key === $RECORD) return undefined;
+        log.push(`get ${String(key)}`);
+        return data[key as string];
+      },
+      has(_, key) {
+        if (key === $PROXY || key === $TARGET) return true;
+        if (key === $RECORD) return false;
+        log.push(`has ${String(key)}`);
+        return key in data;
+      },
+      ownKeys() {
+        log.push("ownKeys");
+        return Reflect.ownKeys(data);
+      },
+      getOwnPropertyDescriptor(_, key) {
+        log.push(`descriptor ${String(key)}`);
+        const desc = Reflect.getOwnPropertyDescriptor(data, key);
+        return desc && { ...desc, configurable: true };
+      },
+      getPrototypeOf() {
+        log.push("getPrototypeOf");
+        return Object.prototype;
+      }
+    });
+    return { proxy, log };
+  }
+  test("classifying a $PROXY-marked source is one `$RECORD` read: a view flattens, a store or a proxy that does not know the key is a leaf", () => {
+    // Our views answer `$RECORD` with their record; a store answers it
+    // `undefined` on its fast path (silent above). A proxy that carries the
+    // brand but predates the key (solid-js's server memo source, a frames
+    // slot) forwards it to a target without it: still a leaf, one read.
+    const log: string[] = [];
+    const data = { a: 1 };
+    const legacy: any = new Proxy(
+      {},
+      {
+        get(_, key, receiver) {
+          if (key === $PROXY) return receiver;
+          log.push(`get ${String(key)}`);
+          return (data as any)[key];
+        },
+        has(_, key) {
+          if (key === $PROXY) return true;
+          return key in data;
+        },
+        ownKeys() {
+          return Reflect.ownKeys(data);
+        },
+        getOwnPropertyDescriptor(_, key) {
+          const desc = Reflect.getOwnPropertyDescriptor(data, key);
+          return desc && { ...desc, configurable: true };
+        }
+      }
+    );
+    const merged: any = merge(legacy, { b: 2 });
+    expect(log).toEqual([`get ${String($RECORD)}`]);
+    expect(mergeSources(merged)).toEqual([legacy, { b: 2 }]);
+    expect(merged.a).toBe(1);
+
+    // A view over a view: the record travels, not the proxy — the inner
+    // merge's sources are the outer's, an omit joins as one record.
+    const inner = merge({ a: 0 }, { c: 3 });
+    expect(mergeSources(merge(inner, { d: 4 }))).toEqual([{ a: 0 }, { c: 3 }, { d: 4 }]);
+    const rest = omit(inner, "c");
+    const outer: any = merge(rest, { d: 4 });
+    const sources = mergeSources(outer)!;
+    expect(sources[0]).toBeInstanceOf(OmitView);
+    expect(Object.keys(outer)).toEqual(["a", "d"]);
+    // The record is not a key of the view, and never copies out of it.
+    expect(Reflect.ownKeys(outer)).toEqual(["a", "d"]);
+    expect($RECORD in outer).toBe(false);
+    expect(Object.getOwnPropertyDescriptor(outer, $RECORD)).toBeUndefined();
+    expect(mergeSources({ ...outer })).toBeUndefined();
+  });
+  test("a read through a merge or omit asks a store exactly what a direct read would", () => {
+    const { proxy: store, log } = storeShaped({ a: 1, b: 2 });
+    const merged: any = merge({ a: 0, z: 9 }, store);
+    expect(log).toEqual([]);
+    expect(merged.a).toBe(1);
+    expect(log).toEqual(["has a", "get a"]);
+    log.length = 0;
+    expect(merged.z).toBe(9);
+    expect(log).toEqual(["has z"]);
+    log.length = 0;
+    expect("b" in merged).toBe(true);
+    expect(log).toEqual(["has b"]);
+    log.length = 0;
+
+    const rest: any = omit(store, "a");
+    expect(log).toEqual([]);
+    expect(rest.b).toBe(2);
+    expect(rest.a).toBeUndefined();
+    expect(log).toEqual(["get b"]);
+    log.length = 0;
+
+    // Enumeration: one ownKeys, then per key one existence check for the
+    // descriptor — never the store's own descriptor trap.
+    expect(Object.keys(rest)).toEqual(["b"]);
+    expect(log).toEqual(["ownKeys", "has b"]);
+    log.length = 0;
+    // A merge with a store leaf has no resolved table: the user-facing key
+    // set is the enumerable keys of each source (a descriptor per store key,
+    // #2769), then each key is a shadowing walk (`has` on the store) that
+    // the descriptor reuses.
+    expect(Object.keys(merged)).toEqual(["z", "a", "b"]);
+    expect(log).toEqual(["ownKeys", "descriptor a", "descriptor b", "has z", "has a", "has b"]);
+    log.length = 0;
+
+    // The consumers' entry helpers over the store's kind: no probe at all.
+    expect(sourceKeys(store, SOURCE_PROXY)).toEqual(["a", "b"]);
+    expect(sourceHas(store, SOURCE_PROXY, "a")).toBe(true);
+    expect(sourceGet(store, SOURCE_PROXY, "a")).toBe(1);
+    expect(log).toEqual(["ownKeys", "has a", "get a"]);
+    log.length = 0;
+    expect(hasStaticKeys(store)).toBe(false);
+    expect(viewOf(store)).toBeUndefined();
+    expect(resolvedTable(store)).toBeUndefined();
+    expect(log).toEqual([]);
+  });
+  test("merge and omit record what each source is, once", () => {
+    const store = createStore({ s: 1 })[0];
+    const plain = { p: 1 };
+    const rest = omit({ o: 1, hide: 1 }, "hide");
+    const memo = () => ({ m: 1 });
+    const merged = merge(plain, store, rest, memo);
+    const view = viewOf(merged) as MergeView;
+    expect(view).toBeInstanceOf(MergeView);
+    expect(view.kinds).toEqual([SOURCE_PLAIN, SOURCE_PROXY, SOURCE_OMIT, SOURCE_MEMO]);
+    expect(view.sources[0]).toBe(plain);
+    expect(view.sources[1]).toBe(store);
+    expect(view.sources[2]).toBeInstanceOf(OmitView);
+    expect(typeof view.sources[3]).toBe("function");
+    // A merge among the sources flattens with its kinds.
+    const outer = viewOf(merge({ x: 1 }, merged)) as MergeView;
+    expect(outer.kinds).toEqual([
+      SOURCE_PLAIN,
+      SOURCE_PLAIN,
+      SOURCE_PROXY,
+      SOURCE_OMIT,
+      SOURCE_MEMO
+    ]);
+    // An omit records its source's kind; over a merge, the merge's record.
+    expect((viewOf(omit(store, "s")) as OmitView).kind).toBe(SOURCE_PROXY);
+    expect((viewOf(omit(plain, "p")) as OmitView).kind).toBe(SOURCE_PLAIN);
+    const overProxy: any = omit(merged, "p");
+    const over = viewOf(overProxy) as OmitView;
+    expect(over.kind).toBe(SOURCE_MERGE);
+    expect(over.source).toBe(view);
+    // A merge over it carries the one record; an omit over it folds.
+    expect((viewOf(merge({ x: 1 }, overProxy)) as MergeView).kinds).toEqual([
+      SOURCE_PLAIN,
+      SOURCE_OMIT
+    ]);
+    const folded = viewOf(omit(overProxy, "o")) as OmitView;
+    expect(folded.kind).toBe(SOURCE_MERGE);
+    expect(folded.source).toBe(view);
+    expect(folded.hidden).toEqual(["p", "o"]);
+    expect(overProxy.p).toBeUndefined();
+    expect(overProxy.s).toBe(1);
+    expect(overProxy.o).toBe(1);
+    expect(overProxy.hide).toBeUndefined();
+    expect(overProxy.m).toBe(1);
+  });
+  test("the resolved table is built by an enumeration or paid for by reads, not on first read", () => {
+    // A component chain: defaults → omit → call-site statics → omit, plain
+    // leaves only, so a table is possible. Reads and existence checks and
+    // descriptor lookups answer by a source walk while the view is young.
+    const user = {
+      as: "a",
+      class: "btn",
+      get title() {
+        return "t";
+      }
+    };
+    const merged: any = merge({ type: "button", as: "button" }, omit(user, "class"));
+    const rest: any = omit(merged, "type");
+    const mergedView = viewOf(merged) as MergeView;
+    const restView = viewOf(rest) as OmitView;
+    const expectSame = () => {
+      expect(merged.as).toBe("a");
+      expect(merged.type).toBe("button");
+      expect(merged.class).toBeUndefined();
+      expect(merged.title).toBe("t");
+      expect("class" in merged).toBe(false);
+      expect(Reflect.getOwnPropertyDescriptor(merged, "as")!.value).toBe("a");
+      expect(rest.type).toBeUndefined();
+      expect(rest.as).toBe("a");
+      expect("type" in rest).toBe(false);
+      expect(Reflect.getOwnPropertyDescriptor(rest, "title")!.get).toBeTypeOf("function");
+    };
+    // 6 trap reads on the merge, 4 on the omit. A read through `rest` is the
+    // omit's: it reaches the merge's record by function call, not through
+    // the merge's traps, and only the view that was asked counts.
+    expectSame();
+    expect(mergedView.table).toBe(6); // the slot counts the reads until it is decided
+    expect(restView.table).toBe(4);
+    expectSame();
+    expect(mergedView.table).toBe(12);
+    expect(restView.table).toBe(8);
+    // …and once the reads have paid for a table (16), it is built and every
+    // trap answers from it with the same results.
+    expectSame();
+    expect(mergedView.table).toBeInstanceOf(Map);
+    expect(restView.table).toBe(12);
+    expectSame();
+    expect(restView.table).toBeInstanceOf(Map);
+    expectSame();
+    // Enumeration builds it outright, even on a fresh view.
+    const fresh: any = merge({ a: 1 }, { b: 2 });
+    expect((viewOf(fresh) as MergeView).table).toBe(0);
+    expect(Object.keys(fresh)).toEqual(["a", "b"]);
+    expect((viewOf(fresh) as MergeView).table).toBeInstanceOf(Map);
+    // …for the view that asked only: an omit over a merge collects its table
+    // in one pass over the merge's leaves, and the merge builds none.
+    const inner: any = merge({ a: 1 }, { b: 2 }, omit({ c: 3, d: 4 }, "d"));
+    const outer: any = omit(inner, "a");
+    expect(Object.keys(outer)).toEqual(["b", "c"]);
+    expect((viewOf(outer) as OmitView).table).toBeInstanceOf(Map);
+    expect((viewOf(inner) as MergeView).table).toBe(0);
+    expect(outer.c).toBe(3);
+    expect(outer.d).toBeUndefined();
+    // An omit over one object never builds one: its read is direct.
+    const plainRest: any = omit(user, "class");
+    for (let i = 0; i < 40; i++) expect(plainRest.as).toBe("a");
+    expect((viewOf(plainRest) as OmitView).table).toBe(0);
+    // A view with a store leaf can't have one; reads keep walking after the
+    // count runs out, and the answer is the same.
+    const [store] = createStore({ s: 1 });
+    const overStore: any = merge({ d: 0 }, store);
+    for (let i = 0; i < 40; i++) expect(overStore.s).toBe(1);
+    expect((viewOf(overStore) as MergeView).table).toBeNull();
+  });
+  test("hasStaticKeys: plain objects and views over them; not stores, memos, or views over them", () => {
+    createRoot(() => {
+      const [store] = createStore({ a: 1 });
+      const plain = { a: 1 };
+      expect(hasStaticKeys(plain)).toBe(true);
+      expect(hasStaticKeys(merge(plain, { b: 2 }))).toBe(true);
+      expect(hasStaticKeys(omit(plain, "a"))).toBe(true);
+      expect(hasStaticKeys(omit(merge(plain, { b: 2 }), "a"))).toBe(true);
+      expect(hasStaticKeys(merge(omit(merge(plain, { b: 2 }), "a"), { c: 3 }))).toBe(true);
+      expect(hasStaticKeys(store)).toBe(false);
+      expect(hasStaticKeys(merge(plain, store))).toBe(false);
+      expect(hasStaticKeys(omit(store, "a"))).toBe(false);
+      expect(hasStaticKeys(omit(merge(plain, store), "a"))).toBe(false);
+      expect(hasStaticKeys(merge(plain, () => ({ b: 2 })))).toBe(false);
+    });
+  });
+  // #3387: the per-key classification a polymorphic component reads to decide
+  // whether `dynamic(() => props.as)` needs a computation at all. A data
+  // property is what the compiler emits for a literal at the call site; a
+  // getter is what it emits for an expression.
+  describe("isStatic", () => {
+    test("plain objects: data properties and absent keys are static, accessors are not", () => {
+      const [sig] = createSignal("a");
+      const props = {
+        as: "button",
+        get dyn() {
+          return sig();
+        }
+      };
+      expect(isStatic(props, "as")).toBe(true);
+      expect(isStatic(props, "dyn")).toBe(false);
+      // Absent from a plain object: it can never appear (no trap can add it).
+      expect(isStatic(props, "missing")).toBe(true);
+      // A setter-only accessor is not a fixed value either.
+      const setterOnly = Object.defineProperty({}, "x", { set() {}, configurable: true });
+      expect(isStatic(setterOnly, "x")).toBe(false);
+    });
+    test("through merge() and omit() views, the leaf that owns the key decides", () => {
+      const [sig, setSig] = createSignal("a");
+      const literal = { as: "button", label: "x" };
+      const expr = {
+        get as() {
+          return sig();
+        }
+      };
+      // The compiler's call-site shape: defaults merged under the caller's props.
+      expect(isStatic(merge({ as: "div" }, literal), "as")).toBe(true);
+      expect(isStatic(merge({ as: "div" }, expr), "as")).toBe(false);
+      // Later sources shadow: a static override over a getter is static, and
+      // vice versa — the descriptor is the WINNING leaf's.
+      expect(isStatic(merge(expr, literal), "as")).toBe(true);
+      expect(isStatic(merge(literal, expr), "as")).toBe(false);
+      // omit() over either keeps the classification of what remains …
+      expect(isStatic(omit(literal, "label"), "as")).toBe(true);
+      expect(isStatic(omit(expr, "label"), "as")).toBe(false);
+      // … and an omitted key is absent from a fixed key set: static.
+      expect(isStatic(omit(literal, "as"), "as")).toBe(true);
+      // Deep Kobalte-shaped chain: omit(merge(omit(merge(...)))).
+      const chain = omit(
+        merge({ as: "div" }, omit(merge(literal, { extra: 1 }), "extra")),
+        "label"
+      );
+      expect(isStatic(chain, "as")).toBe(true);
+      const chainDyn = omit(
+        merge({ as: "div" }, omit(merge(expr, { extra: 1 }), "extra")),
+        "label"
+      );
+      expect(isStatic(chainDyn, "as")).toBe(false);
+      // The check reads no value: nothing was tracked, and the answer for a
+      // getter does not depend on what it currently returns.
+      setSig("b");
+      flush();
+      expect(isStatic(chainDyn, "as")).toBe(false);
+    });
+    test("memo sources, stores, and anything reaching them are not static", () => {
+      const [store] = createStore({ as: "button" });
+      const plain = { label: "x" };
+      // A store answers `as` with a value, but the key can change and even
+      // appear/disappear: never static, whether direct or through a view.
+      expect(isStatic(store, "as")).toBe(false);
+      expect(isStatic(store, "missing")).toBe(false);
+      expect(isStatic(merge(plain, store), "as")).toBe(false);
+      expect(isStatic(omit(store, "label"), "as")).toBe(false);
+      // A key the store does NOT own, but the view's key set is not fixed:
+      // the store could grow it later.
+      expect(isStatic(merge(plain, store), "missing")).toBe(false);
+      // A plain literal shadowing the store IS static: the store can't win.
+      expect(isStatic(merge(store, { as: "a" }), "as")).toBe(true);
+      // A memo-backed source resolves per read.
+      expect(
+        isStatic(
+          merge(plain, () => ({ as: "a" })),
+          "as"
+        )
+      ).toBe(false);
+      expect(
+        isStatic(
+          merge(plain, () => ({ as: "a" })),
+          "label"
+        )
+      ).toBe(true);
+      expect(
+        isStatic(
+          merge(plain, () => ({ as: "a" })),
+          "missing"
+        )
+      ).toBe(false);
+    });
+    test("a foreign proxy is opaque", () => {
+      const foreign = new Proxy({ as: "a" }, {});
+      expect($PROXY in foreign).toBe(false);
+      // Not $PROXY-marked: treated as a plain object, its own descriptor rules.
+      expect(isStatic(foreign, "as")).toBe(true);
+      // $PROXY-marked but neither a store nor one of our views: unknown, so not static.
+      const marked = new Proxy(
+        { as: "a" },
+        {
+          has: (t, k) => k === $PROXY || k in t,
+          get: (t, k) => (k === $PROXY ? marked : (t as any)[k])
+        }
+      );
+      expect(isStatic(marked, "as")).toBe(false);
+    });
+  });
+  test("a spread copy of a view is a plain snapshot with the right kinds", () => {
+    let n = 0;
+    const view = merge(
+      { a: 1 },
+      omit(
+        {
+          get b() {
+            return ++n;
+          },
+          c: 3
+        },
+        "c"
+      )
+    );
+    const copy = { ...view };
+    expect(copy).toEqual({ a: 1, b: 1 });
+    expect(Object.getOwnPropertyDescriptor(copy, "b")!.get).toBeUndefined();
+    // a descriptor copy keeps the getter live
+    const desc: Record<string, any> = {};
+    for (const key of Reflect.ownKeys(view))
+      Object.defineProperty(desc, key, Object.getOwnPropertyDescriptor(view, key)!);
+    expect(desc.b).toBe(2);
+    expect(desc.b).toBe(3);
+  });
+});
+
+// The shape headless-UI libraries (Kobalte) compose per element: a compiled
+// props object → merge(defaults) → omit(consumed) → merge(call-site statics)
+// … → omit("as") at the polymorphic renderer. These pin what the chain must
+// mean regardless of whether the layers are eager copies or lazy views.
+describe("props chain (component-library shape)", () => {
+  function compiledProps(label: () => string, open: () => boolean) {
+    return {
+      as: "a",
+      class: "btn",
+      href: "#row",
+      get "aria-label"() {
+        return label();
+      },
+      get disabled() {
+        return open();
+      }
+    };
+  }
+
+  function buttonRoot(props: Record<string, any>) {
+    // Button.Root: defaults in, consume type/disabled, add derived attrs at the call site.
+    const merged = merge({ type: "button" }, props);
+    const others = omit(merged, "type", "disabled");
+    const isButton = () => (merged.as ?? "button") === "button";
+    return merge(
+      {
+        as: "button",
+        get role() {
+          return isButton() ? undefined : "button";
+        },
+        get "data-disabled"() {
+          return merged.disabled ? "" : undefined;
+        }
+      },
+      others
+    );
+  }
+
+  function polymorphic(props: Record<string, any>) {
+    return omit(props, "as");
+  }
+
+  test("later layers shadow earlier ones and omitted keys stay hidden through re-merges", () => {
+    const [label] = createSignal("Open");
+    const [open] = createSignal(false);
+    const props = compiledProps(label, open);
+    const atPolymorphic = buttonRoot(props);
+    // The user's as="a" (rightmost via `others`) beats Button.Root's as="button" default.
+    expect(atPolymorphic.as).toBe("a");
+    expect(atPolymorphic.role).toBe("button");
+    // Consumed keys don't reappear once merged with new statics.
+    expect("type" in atPolymorphic).toBe(false);
+    expect("disabled" in atPolymorphic).toBe(false);
+    expect((atPolymorphic as any).type).toBeUndefined();
+
+    const element = polymorphic(atPolymorphic);
+    expect("as" in element).toBe(false);
+    expect(Object.keys(element).sort()).toEqual(
+      ["aria-label", "class", "data-disabled", "href", "role"].sort()
+    );
+  });
+
+  test("nested omits accumulate their hidden keys", () => {
+    const rest = omit(omit(omit({ a: 1, b: 2, c: 3, d: 4 }, "a"), "b"), "c");
+    expect(Object.keys(rest)).toEqual(["d"]);
+    expect("a" in rest).toBe(false);
+    expect("b" in rest).toBe(false);
+    expect((rest as any).c).toBeUndefined();
+    // …and a merge on top can't resurrect them.
+    const remerged = merge({ e: 5 }, rest);
+    expect(Object.keys(remerged).sort()).toEqual(["d", "e"]);
+    expect("a" in remerged).toBe(false);
+  });
+
+  test("reactive reads stay live through every layer", () => {
+    const [label, setLabel] = createSignal("Open");
+    const [open, setOpen] = createSignal(false);
+    const seen: string[] = [];
+    createRoot(() => {
+      const element = polymorphic(buttonRoot(compiledProps(label, open)));
+      createEffect(
+        () => `${element["aria-label"]}|${element["data-disabled"]}`,
+        v => {
+          seen.push(v);
+        }
+      );
+    });
+    flush();
+    expect(seen).toEqual(["Open|undefined"]);
+    setLabel("Close");
+    setOpen(true);
+    flush();
+    expect(seen).toEqual(["Open|undefined", "Close|"]);
+  });
+
+  test("a spread copy of the chain result is a plain snapshot with the surviving keys", () => {
+    const [label] = createSignal("Open");
+    const [open] = createSignal(false);
+    const element = polymorphic(buttonRoot(compiledProps(label, open)));
+    const copy = { ...element };
+    expect(copy).toEqual({
+      class: "btn",
+      href: "#row",
+      "aria-label": "Open",
+      role: "button",
+      "data-disabled": undefined
+    });
+  });
+
+  test("descriptor kind survives the chain: static stays data, reactive stays a getter", () => {
+    const [label] = createSignal("Open");
+    const [open] = createSignal(false);
+    const element = polymorphic(buttonRoot(compiledProps(label, open)));
+    // A consumer (spread's children fast path, isStatic) must be able to
+    // tell a compiled static attribute from a reactive one at the bottom of
+    // the chain — that distinction is the compiler's verdict and must not be
+    // erased by the layers in between.
+    const staticDesc = Object.getOwnPropertyDescriptor(element, "class")!;
+    expect(staticDesc.get).toBeUndefined();
+    expect(staticDesc.value).toBe("btn");
+    const reactiveDesc = Object.getOwnPropertyDescriptor(element, "aria-label")!;
+    expect(typeof reactiveDesc.get).toBe("function");
+    expect(Object.getOwnPropertyDescriptor(element, "as")).toBeUndefined();
   });
 });
 

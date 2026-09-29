@@ -1,6 +1,7 @@
 import {
   getNextElement,
   insert,
+  runHydrationEvents,
   spread,
   SVGElements,
   MathMLElements,
@@ -20,14 +21,13 @@ import {
   runWithOwner,
   untrack,
   omit,
-  sharedConfig,
-  $DEVCOMP,
   Component,
   createEffect,
   createRenderEffect,
   type Owner,
   type Setter
 } from "solid-js";
+import { sharedConfig, $DEVCOMP } from "solid-js/internal";
 import type { JSX } from "../jsx/jsx.js";
 
 export * from "./client.js";
@@ -97,6 +97,7 @@ export type ComponentProps<T extends ValidComponent> =
       ? JSX.IntrinsicElements[T]
       : Record<string, unknown>;
 
+/** @deprecated Props of the deprecated `<Dynamic>`; see `dynamic()`. */
 export type DynamicProps<T extends ValidComponent, P = ComponentProps<T>> = {
   [K in keyof P]: P[K];
 } & {
@@ -242,6 +243,24 @@ function portalImpl(props: { mount?: Element; children: JSX.Element }): JSX.Elem
  * `{ deferStream: true }` to hold the document's first flush until it settles
  * (the same option `createMemo` takes); the client ignores it.
  *
+ * For a tag-name source the element's namespace is inferred from the tag. A
+ * tag that exists in both HTML and SVG (`a`, `script`, `style`, `title`) is
+ * created as HTML unless the instance passes `xmlns` — the same attribute
+ * compiled JSX uses for the same purpose. `is` (customized built-ins) and
+ * `xmlns` are read once at creation and then applied as ordinary attributes.
+ *
+ * `{ static: true }` says the source cannot change: it is called once,
+ * untracked, when `dynamic()` is called, and each instance renders the result
+ * with no computation of its own — a tag name goes straight to the compiled
+ * element path (create or claim, spread), a component is called directly. No
+ * owner is created on either side, so hydration keys stay aligned with the
+ * compiled output. Use it for a constant (`dynamic(() => "li", { static: true })`
+ * in a runtime `styled()`), or per instance from the shape of a prop:
+ * `isStatic(props, "as")` is true when the caller wrote `as="button"`
+ * (a data property) and false when they wrote `as={cond() ? …}` (a getter),
+ * so a polymorphic component keeps a reactive public `as` and still pays
+ * nothing for the literal case. A static source may not return a promise.
+ *
  * @example
  * ```tsx
  * // `source` can return either a custom Component or a native tag
@@ -249,6 +268,16 @@ function portalImpl(props: { mount?: Element; children: JSX.Element }): JSX.Elem
  * // stable Component you can use anywhere a normal one would go.
  * const Field = dynamic(() => multiline() ? RichTextEditor : "input");
  * return <Field value={value()} onInput={onInput} />;
+ *
+ * // An ambiguous tag inside an SVG tree: say which namespace you mean.
+ * const Link = dynamic(() => "a");
+ * <svg><Link xmlns="http://www.w3.org/2000/svg" href="/x">…</Link></svg>
+ *
+ * // A polymorphic component: no memo when `as` arrived as a literal.
+ * function Polymorphic(props) {
+ *   const Tag = dynamic(() => props.as, { static: isStatic(props, "as") });
+ *   return <Tag {...omit(props, "as")} />;
+ * }
  * ```
  *
  * @description https://docs.solidjs.com/reference/components/dynamic
@@ -260,6 +289,10 @@ function portalImpl(props: { mount?: Element; children: JSX.Element }): JSX.Elem
 // store. Same component across resolutions means "same instance, new
 // binding". See frames/src/frame-transport.ts (COMPONENT_BINDING).
 const COMPONENT_BINDING = Symbol.for("solid.component-binding");
+// The box a `dynamic()` factory memo holds a thenable source answer in, so the
+// factory stays sync-valued and the per-instance memo is the one that goes
+// async (and, under hydration, adopts the server's record). Module-local.
+const FLIGHT = Symbol("solid.dynamic-flight");
 function bindingOf(value: any): { component: Function; address: string } | undefined {
   return (
     (value !== null &&
@@ -277,12 +310,34 @@ export interface DynamicOptions {
    * `deferStream`. Ignored on the client.
    */
   deferStream?: boolean;
+  /**
+   * The source cannot change: call it once, untracked, now, and render the
+   * result with no computation per instance (see `dynamic`). The source must
+   * resolve synchronously.
+   */
+  static?: boolean;
 }
 
+/**
+ * A component from a reactive source. The source may answer with the
+ * component itself, a promise of it, or an async iterable of it — a `live`
+ * server component reference's answer is the last: the memo underneath pumps
+ * the iterable as it pumps any async source, and its value is the component
+ * the server answered with (a reconnect re-yields the same binding and is
+ * equality-quiet; nothing here re-mounts).
+ *
+ * Under SSR an async answer is an ordinary async memo's: its landing is
+ * serialized per instance and adopted here at hydration, so the source may
+ * stay async only when what it resolves to can cross — a server component
+ * (as a reference) or a serializable value (a tag name). A promise of a
+ * client component function is a dev error on the server
+ * (`DYNAMIC_ASYNC_COMPONENT`): resolve the async upstream, or use `lazy()`.
+ */
 export function dynamic<T extends ValidComponent>(
-  source: () => T | Promise<T> | null | undefined | false,
-  _options?: DynamicOptions
+  source: () => T | Promise<T> | AsyncIterable<T> | null | undefined | false,
+  options?: DynamicOptions
 ): Component<ComponentProps<T>> {
+  if (options?.static) return staticDynamic(untrack(source));
   // `prev` threads into the resolution so a source switching server-component
   // calls of the same function DELIVERS instead of swapping: the memo keeps
   // its previous value (the mount below never re-renders) and the new call's
@@ -291,16 +346,9 @@ export function dynamic<T extends ValidComponent>(
   // store re-materializes instantly; an in-flight stream morphs in; keyed
   // slot state survives). Everything else resolves to `next` and swaps.
   // Async resolutions run the delivery in the promise chain — an ownerless
-  // microtask, exactly where frame writes already happen — rather than in the
-  // equals gate, whose argument order differs between sync and async commits.
-  // The token pins the delivery to the LATEST computation: a superseded
-  // source's late resolution must not re-bind the mount to stale content (the
-  // async machinery discards its value; the side effect has to be discarded
-  // here), and a transition's forked re-compute of the same source delivers
-  // once, not per fork. The thenable is transparent — it transforms the value
-  // inside the SAME microtask as the source promise's own handlers (a `.then`
-  // chain would add a hop, observably deferring every async resolution).
-  let latest = 0;
+  // microtask, exactly where frame writes already happen — and not in the
+  // equals gate: a kept resolution hands the memo `prev`, so the gate never
+  // sees the new address at all.
   // Live delivery channels, one per mounted site: this component may be
   // mounted more than once (each mount is its own instance with its own
   // address accessor), and a kept resolution must reach every one.
@@ -325,25 +373,102 @@ export function dynamic<T extends ValidComponent>(
     }
     return next;
   };
-  const cached = createMemo<Function | string | undefined>(
+  // The same rule at the memo's gate, for values the compute never sees: an
+  // async iterable's yields land straight from the pump (a `live` server
+  // component's loop re-yields its binding per connection, and the first
+  // connection after hydration resolves the per-address binding where the
+  // document adopted the per-function placeholder — two objects, one
+  // component, one address). Same component is the same instance: equal,
+  // with the incoming address delivered when it is not the one showing.
+  // The comparator is `(prev, next)` on every commit path: `prev` is what
+  // the memo HOLDS — the first resolution, kept ever since, whose address
+  // the deliveries have long moved past — so only `next` says anything
+  // about where the instance should be. (Reading "the address that is not
+  // the delivered one" as incoming swung a reconnect's re-yield back to
+  // the document's call after the source had switched arguments.) With
+  // nothing delivered (no site mounted) a differing address is a plain
+  // change — nothing is kept, so nothing is lost by swapping.
+  const sameInstance = (prev: any, next: any) => {
+    if (prev === next) return true;
+    const held = bindingOf(prev);
+    const incoming = bindingOf(next);
+    if (!held || !incoming || held.component !== incoming.component) return false;
+    if (held.address === incoming.address) return true;
+    if (deliveredAddress === undefined) return false;
+    if (incoming.address !== deliveredAddress) {
+      deliveredAddress = incoming.address;
+      for (const deliver of sites) deliver(incoming.address);
+    }
+    return true;
+  };
+  // Three memos, the same owner shape as the server's `dynamic` so hydration
+  // ids agree (index.server.ts has the full account):
+  //
+  // 1. The FACTORY memo runs the source once for every mount and is sync-
+  //    valued by construction: a thenable the source returns is boxed
+  //    (`FLIGHT`), so the factory never goes pending on it. It stays the
+  //    consumer of an async ITERABLE answer (a `live` server component's
+  //    loop): the yields land at its gate, `sameInstance` keeps a reconnect's
+  //    re-yield quiet, and under hydration the frames intercept's local
+  //    answer (LIVE_LOCAL) and the takeover arming both belong to this node,
+  //    exactly as before — the record below never sits on it.
+  // 2. The per-instance VALUE memo unboxes, and for a thenable becomes the
+  //    ORDINARY async memo the boundary waits on. Under hydration it is the
+  //    node the server's record is keyed to (the server's value memo at the
+  //    same id serialized the landing): it ADOPTS the record — a server
+  //    component's flight reference resolves to its binding, a tag to its
+  //    string — and never waits on the client's own re-run of the source, so
+  //    a hydrating <Loading> sees no pending beat (#3666). The trace run
+  //    still reads the factory, which is how the instance follows a later
+  //    source change; the token pins a delivery to this instance's LATEST
+  //    computation (a superseded source's late resolution must not re-bind
+  //    the mount to stale content). The thenable is transparent — it
+  //    transforms the value inside the SAME microtask as the source
+  //    promise's own handlers.
+  // 3. The per-instance RENDER memo applies props.
+  const cached = createMemo<any>(
     (prev: any) => {
       const next = source() as any;
       if (!next || typeof next.then !== "function") return resolveBinding(next, prev);
-      const token = ++latest;
-      return {
-        then: (onFulfilled: any, onRejected: any) =>
-          next.then(
-            (resolved: any) =>
-              onFulfilled(token === latest ? resolveBinding(resolved, prev) : resolved),
-            onRejected
-          )
-      };
+      return { [FLIGHT]: next };
     },
-    { lazy: true }
+    { lazy: true, equals: sameInstance }
   );
   return props => {
+    // Hydration adopts the value memo's record, and its trace run — the one
+    // read that subscribes it to the factory — happens under the tracer's
+    // mocked globals (fetch, Promise), where the factory's FIRST compute must
+    // not run: the source's answer is consumed for real later (the factory is
+    // lazy, and a `Promise.resolve()` minted under the mock never settles).
+    // Warm the factory here, in the owner's own tick, so the trace finds it
+    // computed. A NotReady (an iterable still pending its first yield, a
+    // dependency) is the value memo's to see on its own read.
+    if (sharedConfig.hydrating) {
+      try {
+        untrack(cached);
+      } catch {}
+    }
+    let latest = 0;
+    const value = createMemo<Function | string | undefined>(
+      (prev: any) => {
+        const c: any = cached();
+        if (!c || !c[FLIGHT]) return resolveBinding(c, prev);
+        const next: PromiseLike<any> = c[FLIGHT];
+        const token = ++latest;
+        // `onFulfilled` may be absent: the hydration tracer observes a
+        // compute's thenable with `.then(undefined, noop)`.
+        return {
+          then: (onFulfilled: any, onRejected: any) =>
+            next.then((resolved: any) => {
+              const landed = token === latest ? resolveBinding(resolved, prev) : resolved;
+              return onFulfilled ? onFulfilled(landed) : landed;
+            }, onRejected)
+        };
+      },
+      { equals: sameInstance }
+    );
     return createMemo(() => {
-      const component = cached();
+      const component = value();
       switch (typeof component) {
         case "function": {
           if (isDev) Object.assign(component, { [$DEVCOMP]: true });
@@ -355,7 +480,17 @@ export function dynamic<T extends ValidComponent>(
             // at this seam. Initialize from the LATEST resolved address: the
             // kept binding's own `.address` is the first resolution's and
             // goes stale the moment a later call is kept-delivered.
-            const [address, setAddress] = createSignal(deliveredAddress ?? binding.address);
+            // `ownedWrite`: a delivery is a write from wherever the
+            // resolution lands — a promise microtask for an async source,
+            // but INSIDE the factory's compute when the source is a memo that
+            // already settled the call (the multi-flight `refresh(todos)`
+            // shape, and the hydrated document's first refetch), and inside
+            // the equals gate for a pump's yield. None of those read the
+            // address back, so the owned-scope write guard has nothing to
+            // protect here.
+            const [address, setAddress] = createSignal((deliveredAddress ??= binding.address), {
+              ownedWrite: true
+            });
             sites.add(setAddress);
             onCleanup(() => sites.delete(setAddress));
             return untrack(() => (binding.component as any)(props, address));
@@ -364,14 +499,7 @@ export function dynamic<T extends ValidComponent>(
         }
 
         case "string":
-          const el = sharedConfig.hydrating
-            ? getNextElement()
-            : createElement(
-                component as string,
-                untrack(() => (props as any).is)
-              );
-          spread(el, props);
-          return el;
+          return staticElement(component, props);
 
         default:
           break;
@@ -380,33 +508,97 @@ export function dynamic<T extends ValidComponent>(
   };
 }
 
+// `dynamic(source, { static: true })`: the resolved value once, no factory
+// memo, no per-instance memo — the instance IS the element or the component
+// call, owner-free like compiled JSX, so the server's static path (the same
+// rule) produces the same hydration keys.
+function staticDynamic(component: any): Component<any> {
+  if (isDev && component && typeof component.then === "function")
+    throw new Error("dynamic(): a static source must resolve synchronously, not to a promise");
+  if (typeof component === "function") {
+    if (isDev) Object.assign(component, { [$DEVCOMP]: true });
+    const binding = bindingOf(component);
+    if (binding) {
+      // A server-function component: its address is fixed too (the source is
+      // never re-resolved), so the live accessor is a constant.
+      const address = () => binding.address;
+      return props => untrack(() => (binding.component as any)(props, address));
+    }
+    return props => untrack(() => component(props));
+  }
+  if (typeof component === "string") return props => staticElement(component, props);
+  return () => undefined as unknown as JSX.Element;
+}
+
+// One element for a tag: what the compiler emits for `<tag {...props}>` —
+// claim or create, spread, replay hydration events — and nothing else. Both
+// dynamic() paths end here; the memo path just reaches it from inside a
+// computation.
+function staticElement(tag: string, props: any): JSX.Element {
+  const hydrating = sharedConfig.hydrating;
+  // `is` and `xmlns` are attributes of the element that also decide how it is
+  // CREATED (customized built-in / namespace), so they are read once here,
+  // untracked — the DOM can't change either after creation — and then flow
+  // through spread() like any attribute. Hydration claims the
+  // parser-namespaced node, so neither applies.
+  const el = hydrating
+    ? getNextElement()
+    : createElement(
+        tag,
+        untrack(() => props.is),
+        untrack(() => props.xmlns)
+      );
+  spread(el, props);
+  // Compiled JSX emits runHydrationEvents() after an element that carries
+  // event handlers. Handlers bound through spread() here need the same call,
+  // or events the hydration script queued for this element are only replayed
+  // if some other compiled element happens to hydrate after it.
+  if (hydrating) runHydrationEvents();
+  return el as unknown as JSX.Element;
+}
+
 /**
- * Renders an arbitrary custom or native component and forwards the other
- * props. JSX form of `dynamic()` — same primitive, picked at the JSX site.
+ * @deprecated Use `dynamic()`. `<Dynamic>` is the same primitive, but its
+ * shape puts the tag in the same bag as the element's props: every instance
+ * merges `component` in at the call site, `omit()`s it back out here, and
+ * builds a fresh `dynamic()` factory (with its memo) because there is nowhere
+ * to hoist one. `dynamic()` has none of that and is one line longer:
  *
- * @example
  * ```tsx
- * <Dynamic
- *   component={multiline() ? RichTextEditor : "input"}
- *   value={value()}
- *   onInput={onInput}
- * />
+ * // before
+ * <Dynamic component={multiline() ? RichTextEditor : "input"} value={value()} />
+ *
+ * // after — hoist per component instance (or per module for a constant)
+ * const Field = dynamic(() => multiline() ? RichTextEditor : "input");
+ * <Field value={value()} />
  * ```
  *
- * @description https://docs.solidjs.com/reference/components/dynamic
+ * Remains available in 2.0 (deprecated, no runtime warning); prefer `dynamic()`
+ * in new code.
  */
 export function Dynamic<T extends ValidComponent>(props: DynamicProps<T>): JSX.Element {
   const Comp = dynamic<T>(() => props.component as T | null | undefined | false);
   return createComponent(Comp, omit(props, "component") as ComponentProps<T>);
 }
 
-function createElement(tagName: string, is = undefined): HTMLElement | SVGElement | MathMLElement {
+// Namespace comes from an explicit `xmlns` first, then from the tag name. The
+// compiler resolves a tag's namespace from its PARENT at build time; this
+// runtime path has no parent yet, so a tag that exists in both HTML and SVG
+// (`a`, `script`, `style`, `title`) is HTML unless `xmlns` says otherwise —
+// the same attribute compiled JSX uses for the same purpose (`<a xmlns=…>`).
+function createElement(
+  tagName: string,
+  is: string | undefined = undefined,
+  xmlns: string | undefined = undefined
+): HTMLElement | SVGElement | MathMLElement {
   return (
-    SVGElements.has(tagName)
-      ? document.createElementNS(Namespaces.svg, tagName)
-      : MathMLElements.has(tagName)
-        ? document.createElementNS(Namespaces.mathml, tagName)
-        : document.createElement(tagName, { is })
+    xmlns
+      ? document.createElementNS(xmlns, tagName, { is })
+      : SVGElements.has(tagName)
+        ? document.createElementNS(Namespaces.svg, tagName)
+        : MathMLElements.has(tagName)
+          ? document.createElementNS(Namespaces.mathml, tagName)
+          : document.createElement(tagName, { is })
   ) as HTMLElement | SVGElement | MathMLElement;
 }
 
@@ -539,8 +731,8 @@ export function clientOnly<T extends Component<any>>(
  * then recovered retracts its write instead of stomping a status a
  * surviving part of the tree legitimately set. Once the response head is
  * `committed` (head derived/sent — the shell flush of a piped
- * `renderToStream`, the completion of an awaited one, `createSSRResponse`
- * for a `renderToString` result), writes and retractions are no-ops.
+ * `renderToStream`, the completion of an awaited one or of
+ * `renderToString`), writes and retractions are no-ops.
  */
 export function httpStatus(_code: number, _text?: string): void {}
 
@@ -560,8 +752,7 @@ export function httpStatus(_code: number, _text?: string): void {}
  * write time and restored when the owning scope is disposed (deleted if
  * there was none) — a boundary that errors or recovers retracts its writes.
  * Once the response head is `committed` (head derived/sent — the shell
- * flush of a piped `renderToStream`, the completion of an awaited one,
- * `createSSRResponse` for a `renderToString` result), writes and
- * retractions are no-ops.
+ * flush of a piped `renderToStream`, the completion of an awaited one or
+ * of `renderToString`), writes and retractions are no-ops.
  */
 export function httpHeader(_name: string, _value: string, _options?: { append?: boolean }): void {}

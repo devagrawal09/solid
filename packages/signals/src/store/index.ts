@@ -14,8 +14,28 @@ export type {
 } from "./store.js";
 export type { Merge, Omit } from "./utils.js";
 
-export { isWrappable, $TRACK, $PROXY, $TARGET } from "./store.js";
-export { mergeSources } from "./utils.js";
+export { isWrappable, $TRACK, $PROXY, $TARGET, $RECORD } from "./store.js";
+export {
+  mergeSources,
+  mergeView,
+  viewOf,
+  omitView,
+  sourceKeys,
+  sourceHas,
+  sourceGet,
+  hasStaticKeys,
+  isStatic,
+  resolvedTable,
+  OmitView,
+  MergeView,
+  SOURCE_PLAIN,
+  SOURCE_OMIT,
+  SOURCE_PROXY,
+  SOURCE_MEMO,
+  SOURCE_MERGE,
+  sourceOwners
+} from "./utils.js";
+export type { SourceKind } from "./utils.js";
 
 import type {
   BlockStoreReturn,
@@ -31,6 +51,7 @@ import type { ReactiveHostBlock } from "../generator.js";
 import {
   createStoreNext,
   deepNext,
+  nameStore,
   snapshotNext,
   type SetStoreNextFunction
 } from "./next/store.js";
@@ -61,6 +82,11 @@ export function createStore<T extends object = {}>(
 ): [get: Refreshable<Store<T>>, set: StoreSetter<T>];
 export function createStore(first: any, second?: any, third?: any): any {
   if (typeof first === "function") return createStoreDerivedNext(first, second, third);
+  if (__OBSERVE__) {
+    const store = createStoreNext(first, !!second?.shallow);
+    if (second?.name) nameStore(store[0], second.name);
+    return store;
+  }
   return createStoreNext(first, !!second?.shallow);
 }
 

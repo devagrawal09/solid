@@ -2,16 +2,20 @@ import {
   CONFIG_AUTO_DISPOSE,
   CONFIG_ORACLE_LOCAL,
   CONFIG_ORACLE_OWNERLESS,
+  CONFIG_CHILD_COMPANIONS,
   CONFIG_CHILDREN_FORBIDDEN,
   CONFIG_TRANSPARENT,
   defaultContext,
   REACTIVE_DISPOSED,
   REACTIVE_IN_HEAP,
   REACTIVE_IN_HEAP_HEIGHT,
-  REACTIVE_ZOMBIE
+  REACTIVE_ZOMBIE,
+  STATUS_PENDING
 } from "./constants.js";
 import {
   context,
+  enterDisposal,
+  exitDisposal,
   latestReadActive,
   pendingCheckActive,
   PRIMITIVE_IN_FORBIDDEN_SCOPE_MESSAGE,
@@ -19,10 +23,24 @@ import {
   tracking,
   ext
 } from "./core.js";
-import { clearSignals, DEV, emitDiagnostic } from "./dev.js";
+import {
+  assertInvariant,
+  clearSignals,
+  DEV,
+  emitDiagnostic,
+  registerRoot,
+  unregisterRoot
+} from "./dev.js";
 import { clearDeps, unobserved } from "./graph.js";
 import { deleteFromHeap, insertIntoHeap, insertIntoHeapHeight, queueFor } from "./heap.js";
-import { dirtyQueue, GlobalQueue, globalQueue, zombieQueue } from "./scheduler.js";
+import {
+  dirtyQueue,
+  GlobalQueue,
+  globalQueue,
+  schedule,
+  wokenTransitions,
+  zombieQueue
+} from "./scheduler.js";
 import type { Computed, Disposable, Link, Owner, Root } from "./types.js";
 
 const PENDING_OWNER = {} as Owner; // Dummy owner to trigger store's read() path
@@ -64,8 +82,21 @@ export function dispose(node: Computed<unknown>): void {
 export function disposeChildren(node: Owner, self: boolean = false, zombie?: boolean): void {
   const flags = (node as any)._flags;
   if (flags & REACTIVE_DISPOSED) return;
+  // A previous frame parked as zombies (#3404) dies with its owner (#3024):
+  // the commit that would retire it returns on the DISPOSED flag set below,
+  // so it drains here or its cleanups never run and the zombies stay
+  // subscribed, to rerun in a torn-down tree (#3561). Death only (`self`):
+  // a rerun's `disposeChildren(el)` leaves the frame rendering until commit.
+  if (
+    self &&
+    !zombie &&
+    node._x !== null &&
+    (node._x._pendingFirstChild !== null || node._x._pendingDisposal !== null)
+  )
+    disposeChildren(node, false, true);
   if (self) {
     (node as any)._flags = flags | REACTIVE_DISPOSED;
+    if (__OBSERVE__ && node._parent === null && (node as Root)._root) unregisterRoot(node);
     // Companions are created detached and outlive their owner, but a verdict
     // must not: a disposed source can never settle, so an isPending companion
     // latched `true` here would hold a spinner forever (INV-9, the PR #2845
@@ -73,13 +104,26 @@ export function disposeChildren(node: Owner, self: boolean = false, zombie?: boo
     // false, and notifies subscribers still watching the companion.
     const n = node as Computed<unknown>;
     if (n._x?._pendingSignal || n._x?._latestValueComputed) GlobalQueue._snapCompanions!(n);
+    // A firewall's leaves have no lifecycle of their own, so a companion on
+    // one of them outlives its source the same way (INV-9's rationale). The
+    // firewall knows which leaves carry companions (CONFIG_CHILD_COMPANIONS,
+    // #3038): snap them with it — the snap retires a shadow whose firewall is
+    // disposed (spec O5).
+    if (n._config & CONFIG_CHILD_COMPANIONS)
+      n._x!._companionChildren!.forEach(GlobalQueue._snapCompanions! as (leaf: unknown) => void);
+    // A pending reader parked in a transaction may be the only thing holding
+    // it (#3372): its death is a completion event the transaction must be
+    // re-judged for, and nothing else re-enters a parked transaction.
+    const t = n._transition;
+    if (__ASYNC__ && t && n._statusFlags & STATUS_PENDING && !wokenTransitions.includes(t))
+      (wokenTransitions.push(t), schedule());
   }
   if (self && __DEV__) clearSignals(node);
   if (self && (node as any)._fn && (node as Computed<unknown>)._x !== null)
     (node as Computed<unknown>)._x!._inFlight = null;
   let child = zombie ? ((node._x?._pendingFirstChild ?? null) as Owner | null) : node._firstChild;
+  if (!zombie) node._firstChild = null;
   while (child) {
-    const nextChild = child._nextSibling;
     const n = child as Computed<unknown>;
     // Owner teardown is death regardless of the child's own lifecycle
     // (#3024): strip AUTO_DISPOSE so a post-disposal read freezes at the
@@ -97,19 +141,25 @@ export function disposeChildren(node: Owner, self: boolean = false, zombie?: boo
     // deleteFromHeap self-guards on the in-heap flags (and tolerates plain
     // Owners, whose _flags is undefined), so no gate here.
     deleteFromHeap(n, queueFor(n));
-    if (__ORACLE__ && n._config & CONFIG_ORACLE_LOCAL) {
+    if (__ORACLE__ && n._oracle! & CONFIG_ORACLE_LOCAL) {
       // Oracle H3: a node whose sources all die with it leaves its links for
       // the garbage collector (see CONFIG_ORACLE_LOCAL).
     } else clearDeps(n);
+    // The chain is detached above so a node a cleanup links mid-drain lands
+    // on the fresh head and survives. Pointing each drained child's prev at
+    // itself routes its later splice onto the detached chain, never the head,
+    // and keeps the dev owner-chain-head invariant honest for those children.
+    child._prevSibling = child;
     disposeChildren(child, true);
-    child = nextChild;
+    // Read after, not before: a sibling this disposal made dormant spliced
+    // itself out of the detached chain, and a cleanup may then have linked
+    // it at the fresh head, which rewrote the `_nextSibling` a pre-read
+    // would still be holding.
+    child = child._nextSibling;
   }
   if (zombie) {
     if (node._x !== null) node._x._pendingFirstChild = null;
-  } else {
-    node._firstChild = null;
-    node._childCount = 0;
-  }
+  } else node._childCount = 0;
   // O(1) splice out of parent's chain on individual dispose. Skipped during
   // batch dispose (parent already disposed) and zombie disposal (node sits on
   // parent's _pendingFirstChild). We leave node._nextSibling intact so outer
@@ -123,6 +173,16 @@ export function disposeChildren(node: Owner, self: boolean = false, zombie?: boo
   ) {
     const prev = node._prevSibling;
     const next = node._nextSibling;
+    // A node with no predecessor must be the chain's head. The only way it
+    // is not: it was flagged live but sits elsewhere (#3543 — a zombie that
+    // lost REACTIVE_ZOMBIE), and the write below would clobber the head with
+    // a stale `_nextSibling`, orphaning every live child ahead of it.
+    if (__DEV__)
+      assertInvariant(
+        prev !== null || node._parent._firstChild === node,
+        "owner-chain-head",
+        "head node is not parent._firstChild — a node was spliced while flagged live but not in the chain (see #3543)"
+      );
     if (prev !== null) prev._nextSibling = next;
     else node._parent._firstChild = next;
     if (next !== null) next._prevSibling = prev;
@@ -134,25 +194,49 @@ export function disposeChildren(node: Owner, self: boolean = false, zombie?: boo
   if (self && node._cleanup) {
     const effectCleanup = node._cleanup;
     node._cleanup = undefined;
+    if (__DEV__) enterDisposal();
     effectCleanup();
+    if (__DEV__) exitDisposal();
   }
 }
 
-function runDisposal(node: Owner, zombie?: boolean): void {
-  let disposal = zombie ? node._x?._pendingDisposal : node._disposal;
-  if (!disposal) return;
+export function linkChild(parent: Owner, node: Owner): void {
+  const head = parent._firstChild;
+  node._prevSibling = null;
+  node._nextSibling = head;
+  if (head !== null) head._prevSibling = node;
+  parent._firstChild = node;
+}
 
+function runDisposal(node: Owner, zombie?: boolean): void {
+  // Detach the list BEFORE running it (#3601), as `_cleanup` is (#2813). A
+  // cleanup that disposes an ancestor re-enters this node through the death
+  // walk while the loop is still running; with the list still attached, that
+  // walk ran every entry a second time. Detached, the re-entrant drain finds
+  // nothing. The same shape latched a throwing cleanup: the list survived the
+  // throw and every later drain re-ran and re-threw it.
+  const disposal = zombie ? node._x?._pendingDisposal : node._disposal;
+  if (!disposal) return;
+  if (zombie) node._x!._pendingDisposal = null;
+  else node._disposal = null;
+
+  // No try/finally: it would survive into prod (rollup keeps the frame). A
+  // throw leaves the depth raised; dev.ts clears the stale count on the next
+  // microtask, since teardown never spans one (core.ts).
+  if (__DEV__) enterDisposal();
   if (Array.isArray(disposal)) {
-    for (let i = 0; i < disposal.length; i++) {
+    // Unwind order (#3572, restores 1.x #1562): later registrations run
+    // before earlier ones. Children have already been disposed by the caller,
+    // so with LIFO a body that registers cleanup before creating its children
+    // tears down after them — the same order a per-component owner gives.
+    for (let i = disposal.length - 1; i >= 0; i--) {
       const callable = disposal[i];
       callable.call(callable);
     }
   } else {
-    (disposal as Disposable).call(disposal);
+    disposal.call(disposal);
   }
-  if (zombie) {
-    if (node._x !== null) node._x._pendingDisposal = null;
-  } else node._disposal = null;
+  if (__DEV__) exitDisposal();
 }
 
 function childId(owner: Owner, consume: boolean): string {
@@ -435,24 +519,22 @@ export function createOwner(options?: { id?: string; transparent?: boolean }) {
     });
     throw new Error(PRIMITIVE_IN_FORBIDDEN_SCOPE_MESSAGE);
   }
-  if (parent) {
-    const lastChild = parent._firstChild;
-    if (lastChild === null) {
-      parent._firstChild = owner;
-    } else {
-      owner._nextSibling = lastChild;
-      lastChild._prevSibling = owner;
-      parent._firstChild = owner;
-    }
-  }
+  if (parent) linkChild(parent, owner);
+  else if (__OBSERVE__) registerRoot(owner);
   if (__DEV__) DEV.hooks.onOwner?.(owner);
   return owner;
 }
 
 /**
- * Creates a detached reactive root. The callback receives a `dispose()`
- * function which, when called, tears down every signal, memo, effect, and
- * `onCleanup` registered inside the root.
+ * Creates a reactive root — an owner scope with its own `dispose()`. A root
+ * created inside an existing owner is owned by it and is disposed when the
+ * parent is disposed; call `dispose()` to tear it down earlier. To create a
+ * root that outlives its creator, detach explicitly:
+ * `runWithOwner(null, () => createRoot(...))`. Pass `id` to seed hydration
+ * ids for the tree it owns.
+ *
+ * `dispose()` tears down every signal, memo, effect, and `onCleanup`
+ * registered inside the root.
  *
  * Use this to host long-lived reactive scopes outside of a component (custom
  * controllers, app bootstrapping, tests). Inside a component, prefer
@@ -460,6 +542,7 @@ export function createOwner(options?: { id?: string; transparent?: boolean }) {
  *
  * @example
  * ```ts
+ * // At module level there is no owner, so this root lives until disposed.
  * const dispose = createRoot(dispose => {
  *   const [n, setN] = createSignal(0);
  *   createEffect(() => n(), value => console.log(value));
@@ -469,6 +552,10 @@ export function createOwner(options?: { id?: string; transparent?: boolean }) {
  *
  * // Later, to tear everything down:
  * dispose();
+ *
+ * // Inside an owner (component, effect, another root), detach explicitly
+ * // if the root must outlive its creator:
+ * const detached = runWithOwner(null, () => createRoot(d => d));
  * ```
  *
  * @description https://docs.solidjs.com/reference/reactive-utilities/create-root

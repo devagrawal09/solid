@@ -353,7 +353,7 @@ export function Switch(props: { fallback?: SolidElement; children: SolidElement 
       }
       return func;
     },
-    { sync: true }
+    IS_OBSERVE ? { name: "conditions", sync: true } : { sync: true }
   );
   return createMemo(
     () => {
@@ -496,8 +496,18 @@ export function Errored(props: {
     () => props.children,
     (err: ErrorAccessor, reset) => {
       const f = props.fallback;
+      // A fallback that cannot see the error — a value, or a zero-arity
+      // thunk — would swallow it silently; dev logs it.
       if (IS_DEV && (typeof f !== "function" || f.length == 0)) console.error(err());
-      return typeof f === "function" && f.length ? f(err, reset) : f;
+      // A function-valued fallback is called HERE, whatever its arity, the
+      // way <Show> resolves a function child inside its own memo: this runs
+      // under the boundary's output computed, so the content's ids nest
+      // under the boundary on both sides. Handing a zero-arity thunk back
+      // unresolved left the CONSUMING hole to build it on the enclosing
+      // counter — the client at the statement, the server inside the ssr()
+      // walk after every scoped sibling had reserved its slot — and the keys
+      // permuted whenever a scoped hole followed the boundary (#3620).
+      return typeof f === "function" ? f(err, reset) : f;
     }
   ) as unknown as SolidElement;
 }
@@ -510,9 +520,30 @@ export function Errored(props: {
  * nearest enclosing `<Loading>`. The boundary swaps to its `fallback` until
  * every pending read has resolved, then renders the children.
  *
- * The optional `on` prop scopes the boundary so it ignores transitions
- * caused by writes to other reactive sources — those transitions stay on the
- * previous content (with `isPending()` flipping during the transition).
+ * Once content has rendered, a refetch keeps it visible: the boundary reads
+ * the pending value like any other reader and holds the write that made it
+ * pending until the data lands (`isPending()` flips meanwhile).
+ *
+ * The optional `on` prop is a dependency list. The expression is tracked and
+ * its value is irrelevant — what matters is what it reads. Whenever anything
+ * it reads changes (a plain write, an optimistic write, a source going
+ * pending or landing), the boundary stops waiting on its current content and
+ * shows `fallback` again if something under it is still pending, until the
+ * new content is ready; if nothing is pending, nothing happens. The fallback
+ * lands with the same frame as the change that caused it: immediately when
+ * nothing else holds that frame; together with the rest of the new page
+ * during a held navigation (a write inside an `action`, or one whose data
+ * other readers are still waiting on) — never a spinner beside a page the
+ * change has not reached yet. If the same data is also read outside the
+ * boundary, the frame waits on it and the fallback can never be seen; DEV
+ * warns `LOADING_ON_OUTSIDE_HOLD`, and the fix is structural — move the
+ * outside read under the boundary so one hold owns the data. A frame held
+ * past the content's landing by something else (the write's action, other
+ * pending data) shows no fallback either; that is a race, a legitimate
+ * outcome, and not reported — show the wait with `isPending()` instead.
+ * A display-ahead read in `on` (`latest()`) shows the fallback now, beside
+ * the held frame; that is a capability, not the recommended shape. The
+ * children are not re-created; they stay alive behind the fallback.
  *
  * Scope `<Loading>` around the data-dependent slot, not the surrounding
  * shell. Wrapping layout chrome (header, nav, footer) in the same boundary
@@ -531,9 +562,15 @@ export function Errored(props: {
  *
  * @example
  * ```tsx
- * // Only show the fallback for transitions caused by writes to `route`.
- * <Loading fallback={<Skeleton />} on={route}>
+ * // Depend on the route: a navigation shows the skeleton with the new route
+ * // while the page loads; a refetch of the same route keeps the page visible.
+ * <Loading fallback={<Skeleton />} on={route()}>
  *   <Page />
+ * </Loading>
+ *
+ * // Several dependencies: a change to any of them shows the fallback.
+ * <Loading fallback={<Skeleton />} on={[query(), page()]}>
+ *   <Results />
  * </Loading>
  * ```
  *

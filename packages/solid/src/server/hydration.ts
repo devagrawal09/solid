@@ -9,9 +9,15 @@ import {
   getContext,
   setContext,
   runWithBoundaryErrorContext,
-  RevealGroupContext
+  RevealGroupContext,
+  reportServerError,
+  throwerOf,
+  ownerId
 } from "./signals.js";
+import { OBSERVE } from "@solidjs/signals";
 import { sharedConfig, NoHydrateContext } from "./shared.js";
+import { IS_DEV, IS_OBSERVE, devCheck, emitFinding, errorText } from "./diagnostics.js";
+import type { BoundaryEvent, BoundaryLive } from "./observe.js";
 import type { SSRTemplateObject, HydrationContext } from "./shared.js";
 import type { Accessor } from "./signals.js";
 import type { Element as SolidElement } from "../types.js";
@@ -54,18 +60,24 @@ export function createLoadingBoundary<T, U>(
 ): Accessor<T | U> {
   const currentCtx = sharedConfig.context;
   if (!currentCtx) {
-    return coreLoadingBoundary(fn, fallback);
+    return coreLoadingBoundary(fn, fallback, options);
   }
   // Under an SSR context the accessor yields resolved template fragments, not
   // T/U — the declared signature is the isomorphic contract the renderer and
   // client share; the SSR plumbing below is cast to it.
-  return ssrLoadingBoundary(currentCtx, fn, fallback) as unknown as Accessor<T | U>;
+  return ssrLoadingBoundary(
+    currentCtx,
+    fn,
+    fallback,
+    options?.on !== undefined
+  ) as unknown as Accessor<T | U>;
 }
 
 function ssrLoadingBoundary(
   currentCtx: HydrationContext,
   fn: () => any,
-  fallback: () => any
+  fallback: () => any,
+  hasOn: boolean
 ): () => unknown {
   const ctx = currentCtx;
   const parent = getOwner();
@@ -82,12 +94,174 @@ function ssrLoadingBoundary(
   // setContext clones the context map, so only pay it when there IS a group
   // in scope to sever — without one, children read null regardless.
   if (revealGroup) setContext(RevealGroupContext, null, o);
-  const id = o.id!;
-  (o as any).id = id + "00"; // fake depth to match client's createLoadingBoundary nesting
+  // The boundary's own, just-created owner — never a swapped hole scope.
+  const id = ownerId(o)!;
+  // Fake depth to match the client's createLoadingBoundary nesting: the
+  // hydrating memo (id) → the boundary owner (id0) → the content computed
+  // (id00), followed by its flatten sibling (id01, see resolveIn). With `on`,
+  // the client creates the dependency node under the owner FIRST
+  // (boundaries.ts onNode), so both shift by one child: id01 and id02. A
+  // render never re-arms, so the server creates no node for `on` and only
+  // accounts for its id.
+  const contentId = id + (hasOn ? "01" : "00");
+  const flattenId = id + (hasOn ? "02" : "01");
+  (o as any).id = contentId;
 
   let done: ((value?: string, error?: any) => boolean) | undefined;
   let handledRenderError: any;
   let retryPromise: Promise<any> | undefined;
+
+  // Render passes over the content: discovery, plus one per wait. Doubles as
+  // the convergence budget's counter below.
+  let passes = 0;
+
+  // Observe tier: the boundary RECORD (`OBSERVE.records`, type `"boundary"`
+  // — see `BoundaryEvent`), for a boundary that waited. One gate for the
+  // record and the response's `solid-boundary` metric projected from it:
+  // dev builds always (the checks below read the same facts), observe
+  // builds with a listener. Cost: one `performance.now()` at discovery,
+  // one at settle, the record object when either reader wants it.
+  // Delivered at settle; when a `<Reveal>` group coordinates the fragment
+  // swap the record waits for the group's `onReveal` so it can carry
+  // `heldMs` — the time finished content sat behind its siblings. (A group
+  // that never reveals — the stream abandoned — loses the record;
+  // `SSR_STREAM_ABANDONED` is that request's account.)
+  const observed = IS_OBSERVE ? OBSERVE!.records.observed("boundary") : false;
+  const timed = IS_DEV || observed;
+  const discoveredAt = timed ? performance.now() : 0;
+  let recorded = false;
+  let streamedOnError = false;
+  let pendingRecord: (() => void) | undefined;
+  const record = (outcome: BoundaryEvent["outcome"], streamed: boolean, error?: unknown) => {
+    if (recorded) return;
+    recorded = true;
+    const settledAt = timed ? performance.now() : 0;
+    if (IS_DEV) checkWaited(outcome, settledAt - discoveredAt);
+    if (!timed) return;
+    // The document's `Server-Timing` (the web runtime's seam on the render
+    // context — see `_recordBoundary`) takes the record of a boundary the
+    // shell WAITED on — a pass past discovery, settled before the flush.
+    // One that streams settled after the head left and cannot ride the
+    // header; one decided on its first pass (a renderToString fallback, a
+    // client hole) held nothing up.
+    const toHeader = !streamed && passes > 1 ? ctx._recordBoundary : undefined;
+    if (!observed && toHeader === undefined) return;
+    // The core's walk (`_parent` + `_name`), the same one its diagnostics
+    // make over these owners, so the record, the finding it may pair with
+    // and the metric locate to the same `<App> › <Page>`.
+    const path = OBSERVE!.ownerPath(o);
+    const event: BoundaryEvent = {
+      id,
+      at: discoveredAt,
+      durationMs: settledAt - discoveredAt,
+      heldMs: 0,
+      passes,
+      outcome,
+      streamed
+    };
+    if (revealGroup) event.revealGroup = revealGroup.id;
+    if (path) event.ownerPath = path;
+    if (toHeader !== undefined) toHeader(event);
+    if (!observed) return;
+    const live: BoundaryLive = {};
+    if (outcome === "error") live.error = error;
+    // Only a fragment swap can be held: `done` exists once the fragment is
+    // registered with the stream. The renderToString outcomes and a
+    // final-at-discovery client hole ship with the shell — nothing to hold.
+    if (revealGroup && done !== undefined) {
+      pendingRecord = () => {
+        event.heldMs = performance.now() - settledAt;
+        OBSERVE!.records.emit("boundary", event, live);
+      };
+      return;
+    }
+    OBSERVE!.records.emit("boundary", event, live);
+  };
+  const onReveal = () => {
+    const deliver = pendingRecord;
+    if (deliver === undefined) return;
+    pendingRecord = undefined;
+    deliver();
+  };
+  // The dev CHECKS read off the same facts as the record, for a boundary
+  // that waited — the verdicts an agent would otherwise derive from the
+  // artifact, coded so the console and `expectNoDiagnostics` see them.
+  const checkWaited = (outcome: BoundaryEvent["outcome"], durationMs: number) => {
+    // Sequential render passes: each pass past the first is a wait that
+    // could only start once the previous answered. Same thresholds as the
+    // client's graph-proved ASYNC_WATERFALL — depth 2 advisory (a dependent
+    // fetch is sometimes intrinsic), depth 3+ earns the console — but its
+    // own code: the proof here is the boundary's pass structure, not a
+    // flight chain, and the repair is read off the boundary record.
+    const flights = passes - 1;
+    if (flights >= 2) {
+      const severity = flights > 2 ? "warn" : "info";
+      devCheck(
+        {
+          code: "SSR_BOUNDARY_WATERFALL",
+          kind: "ssr",
+          severity,
+          message:
+            `[SSR_BOUNDARY_WATERFALL] A <Loading> boundary took ${passes} render passes — ` +
+            `${flights} sequential async waits, ${durationMs.toFixed(0)}ms end to end: each ` +
+            `read could start only after the previous one answered. If a later read doesn't ` +
+            `need the earlier answer, derive both from the same inputs so they start together; ` +
+            `if the dependency is intrinsic, preload the dependent data or join the requests.`,
+          data: { boundary: id, passes, sequentialMs: durationMs }
+        },
+        o
+      );
+    }
+    // Client-only content that surfaced only after a server wait: the
+    // boundary streamed its fallback, did the server work, then handed the
+    // whole subtree to the client anyway — the work is discarded and the
+    // user sees the fallback twice as long. A client hole found on the
+    // first pass ships with the shell and costs nothing extra.
+    if (outcome === "client" && passes > 1) {
+      devCheck(
+        {
+          code: "SSR_CLIENT_CONTENT_MASKED",
+          kind: "ssr",
+          severity: "warn",
+          message:
+            `[SSR_CLIENT_CONTENT_MASKED] Client-only content (ssrSource: "client") in a ` +
+            `<Loading> boundary surfaced only after ${passes - 1} server ` +
+            `${passes > 2 ? "waits" : "wait"} (${durationMs.toFixed(0)}ms): the boundary ` +
+            `streamed its fallback and then handed the subtree to the client, discarding the ` +
+            `server's work. Give the client-only content its own <Loading>, or read it before ` +
+            `the async data, so the handoff ships with the shell.`,
+          data: { boundary: id, passes, durationMs }
+        },
+        o
+      );
+    }
+  };
+  // The finding (observe/dev) for a render error this boundary routed rather
+  // than an <Errored> catching it: `client` — the fragment rejected and the
+  // client re-renders the subtree fresh (the response completes, the user
+  // pays a client render); `failed` — nothing could contain it, the request
+  // failed through the renderer's `failRender`/`onError` and the process
+  // survived. The Errored fallback case reports itself (createErrorBoundary).
+  const reportRouted = (err: any, handling: "client" | "failed") => {
+    if (!IS_OBSERVE) return;
+    emitFinding(
+      {
+        code: "SSR_RENDER_ERROR_CONTAINED",
+        kind: "ssr",
+        severity: "error",
+        message:
+          `[SSR_RENDER_ERROR_CONTAINED] Render error in a <Loading> boundary ` +
+          (handling === "client"
+            ? `— the fragment rejected and the client re-renders it: `
+            : `— no boundary could contain it, the request failed: `) +
+          errorText(err),
+        data: { handling, boundary: id, boundaryPath: OBSERVE!.ownerPath(o), error: err }
+      },
+      // Located where it was THROWN (the owner it escaped), the boundary that
+      // met it in `data` — the same two facts the server error hook carries.
+      throwerOf(err) ?? o
+    );
+  };
   let serializeBuffer: [string, any, boolean?][] = [];
   // Once this boundary has flushed, it never buffers again (resets only happen
   // during retry discovery, before the first flush). A chained async source can
@@ -145,7 +319,17 @@ function ssrLoadingBoundary(
           // Errored id, which makes the hydrating client render the error
           // fallback expecting server DOM that was never emitted, derailing
           // hydration before the fragment channel can engage.
-          done(undefined, err);
+          reportRouted(err, "client");
+          // The server error hook hears of it here, before the channel
+          // carries it (the `_fr` rejection, a transport sink's error chunk
+          // read the verdict the hook decides).
+          reportServerError(
+            err,
+            { kind: "render", handling: "client", boundary: id },
+            o,
+            ctx.errorPolicy
+          );
+          streamedOnError = done(undefined, err);
           throw err;
         }
         // Synchronous discovery (no fragment yet): the enclosing Errored's
@@ -176,10 +360,39 @@ function ssrLoadingBoundary(
   function finalizeError(err: any) {
     if (handledRenderError === err) {
       handledRenderError = undefined;
+      record("error", streamedOnError, err);
       return;
     }
-    if (done?.(undefined, err)) return;
+    if (done) {
+      // Post-flush the fragment rejects to the client: the server error hook
+      // hears of it BEFORE the channel carries it, so the `_fr` rejection and
+      // a transport sink's error chunk read the verdict it decides. Pre-flush
+      // the rejection reaches the client lazily (the funnel reads the verdict
+      // when it delivers) and the failure is met next by the parent handler
+      // — an <Errored> rendering its fallback — or fails the request below.
+      const streamed = ctx.flushed !== undefined && ctx.flushed();
+      if (streamed)
+        reportServerError(
+          err,
+          { kind: "render", handling: "client", boundary: id },
+          o,
+          ctx.errorPolicy
+        );
+      if (done(undefined, err)) {
+        reportRouted(err, "client");
+        record("error", true, err);
+        return;
+      }
+    }
+    record("error", false, err);
     if (!parentHandler) {
+      reportRouted(err, "failed");
+      reportServerError(
+        err,
+        { kind: "render", handling: "failed", boundary: id },
+        o,
+        ctx.errorPolicy
+      );
       ctx.failRender ? ctx.failRender(err) : console.error(err);
       return;
     }
@@ -187,8 +400,39 @@ function ssrLoadingBoundary(
       runWithOwner(parent!, () => parentHandler(err));
     } catch (caught) {
       if (caught !== err) {
+        reportRouted(caught, "failed");
+        reportServerError(
+          caught,
+          { kind: "render", handling: "failed", boundary: id },
+          o,
+          ctx.errorPolicy
+        );
         ctx.failRender ? ctx.failRender(caught) : console.error(caught);
       }
+    }
+  }
+
+  // The client boundary flattens `fn`'s result in a second computed, the
+  // sibling after the one that ran `fn` (`o`'s "00" above mirrors that first
+  // one). A zero-arg function `fn` hands back — a nested boundary's accessor,
+  // a fallback thunk it returns unresolved, a function child — is unwrapped
+  // there, so what it renders takes ids under `<id>01`. Resolve in a virtual
+  // scope with that id (ssrScope's technique: `o` keeps its identity, only
+  // its id counter is rewritten); inline under `o` the content took the
+  // "00" scope's next child id instead and a server-rendered fallback
+  // hydrated dead (#3414). Retry passes resume the surviving holes in the
+  // same scope, the counter continuing where the last pass left it.
+  let resolveCount = 0;
+  function resolveIn<T>(run: () => T): T {
+    const prevCount = (o as any)._childCount;
+    (o as any).id = flattenId;
+    (o as any)._childCount = resolveCount;
+    try {
+      return run();
+    } finally {
+      resolveCount = (o as any)._childCount;
+      (o as any).id = contentId;
+      (o as any)._childCount = prevCount;
     }
   }
 
@@ -196,17 +440,37 @@ function ssrLoadingBoundary(
     disposeOwner(o, false);
     serializeBuffer = [];
     retryPromise = undefined;
+    resolveCount = 0;
+    passes++;
     return runLoadingPhase(() => {
       try {
         // The boundary is an insertion root: its content never passes a
         // compiled `escape` hole, so escape here — same as the fallback path.
-        return ctx.resolve(ctx.escape(fn()));
+        const value = fn();
+        return resolveIn(() => ctx.resolve(ctx.escape(value)));
       } catch (err) {
         if (err instanceof NotReadyError) {
           retryPromise = (err as any).source as Promise<any>;
           return undefined;
         }
-        throw err;
+        // Already routed: a template hole ran `ssrHandleError` on its way
+        // here (the handler rethrows after routing) — propagate as before,
+        // or the enclosing Errored would render its fallback twice.
+        if (handledRenderError === err) throw err;
+        // A bare child — `<Loading>{data()}</Loading>`, or a component whose
+        // return IS the read — throws straight out of `fn()`: no template
+        // hole sits between it and this boundary, so nothing ran
+        // `ssrHandleError` for it the way `ssr()` does for a hole. Route it
+        // the same way: the ErrorContext handler installed by
+        // `runLoadingPhase` owns it once the fragment is registered (`_fr`
+        // rejects, the client re-renders the subtree — `handling: "client"`,
+        // the verdict #2997 pins for a hole in the same position); on the
+        // synchronous first pass it defers to the enclosing Errored's
+        // handler, or rethrows when there is none. Rethrown raw instead, a
+        // rejection here reached `finalizeError` as an uncontained error and
+        // failed the whole request pre-flush (#3569).
+        ssrHandleError(err);
+        return undefined;
       }
     }) as any;
   }
@@ -234,12 +498,15 @@ function ssrLoadingBoundary(
     return skipLive(() => ret);
   }
 
-  const regResult = revealGroup ? revealGroup.register(id) : null;
+  const regResult = revealGroup
+    ? revealGroup.register(id, observed ? { onReveal } : undefined)
+    : null;
   const collapseFallback = regResult?.collapseFallback ?? false;
 
   if (collapseFallback && !ctx.async) {
     commitBoundaryState();
     ctx.serialize(id, "$$f");
+    record("fallback", false);
     return skipLive(() => undefined);
   }
 
@@ -251,17 +518,30 @@ function ssrLoadingBoundary(
   const finalAtDiscovery = ctx.async && hasFinalHole();
 
   const fallbackOwner = createOwner({ id });
+  // The placeholder wrapper around a streaming fallback (see `plainFallback`).
+  const tpl = collapseFallback
+    ? [`<template id="pl-${id}">`, `</template><!--pl-${id}-->`]
+    : [`<template id="pl-${id}"></template>`, `<!--pl-${id}-->`];
   const fallbackResult = runWithOwner(fallbackOwner, () => {
     if (!ctx.async || finalAtDiscovery) return fallback();
-    const tpl = collapseFallback
-      ? [`<template id="pl-${id}">`, `</template><!--pl-${id}-->`]
-      : [`<template id="pl-${id}"></template>`, `<!--pl-${id}-->`];
     return ctx.ssr(tpl, ctx.escape(fallback()));
   });
+  // The streaming fallback without its placeholder wrapper — what the
+  // "$$f" route inlines. The wrapper is ours (`tpl`), so the markup between
+  // its two halves is exactly the fallback. A resolved template is one
+  // segment (`t` a string, or a single-segment array — `h.length + 1`);
+  // more segments mean the fallback itself is still resolving (an async
+  // hole in it) and there is no plain markup to inline: `undefined`.
+  const plainFallback = (): string | undefined => {
+    const raw = (fallbackResult as any)?.t;
+    const t = Array.isArray(raw) ? (raw.length === 1 ? raw[0] : undefined) : raw;
+    return typeof t === "string" ? t.slice(tpl[0].length, t.length - tpl[1].length) : undefined;
+  };
 
   if (finalAtDiscovery) {
     commitBoundaryState();
     ctx.serialize(id, "$$f");
+    record("client", false);
     // Registered above like every pending boundary — release the reveal
     // frontier now or later siblings would wait on this slot forever.
     if (revealGroup) revealGroup.onResolved(id);
@@ -271,15 +551,32 @@ function ssrLoadingBoundary(
   if (ctx.async) {
     const regOpts = revealGroup ? { revealGroup: revealGroup.id } : undefined;
     done = ctx.registerFragment(id, regOpts);
-    // A final hole surfacing only now (an earlier real async read masked it
-    // during the initial discovery) can't take the "$$f" route anymore: the
-    // fragment protocol requires a settle, and "settle but keep the fallback"
-    // is not expressible. Reject instead — the placeholder swaps out and the
-    // client renders this boundary's content fresh after hydration
+    // A final hole surfacing only now: an earlier real async read masked it
+    // during the initial discovery, or the hole was reached through a
+    // derived async computation, whose FINAL classification lands a
+    // microtask after discovery (#3659). Before the shell has flushed the
+    // position is still the shell's to shape: the placeholder inlines away to
+    // the PLAIN fallback and the boundary serializes "$$f" — the at-discovery
+    // route, one pass late — with the fragment settling clean (the client's
+    // "$$f" branch takes precedence over a settled `_fr`). After the flush
+    // "settle but keep the fallback" is not expressible: the fragment
+    // protocol requires a swap. Reject instead — the placeholder swaps out
+    // and the client renders this boundary's content fresh after hydration
     // (resume(false)), the closest streaming analogue of the client-continue.
     const clientHandoff = () => {
       if (!flushed) commitBoundaryState();
-      done!(undefined, new Error(`client-only content (bare ssrSource: "client")`));
+      const plain = ctx.flushed !== undefined && !ctx.flushed() ? plainFallback() : undefined;
+      if (plain !== undefined) {
+        ctx.serialize(id, "$$f");
+        done!(plain);
+        record("client", false);
+        return;
+      }
+      const streamed = done!(
+        undefined,
+        new Error(`client-only content (bare ssrSource: "client")`)
+      );
+      record("client", streamed);
     };
     (async () => {
       try {
@@ -290,11 +587,10 @@ function ssrLoadingBoundary(
         // answer is never adoptable at the re-created slot) would otherwise
         // loop at microtask speed, serializing a new deferred per pass until
         // the process OOMs (#3003). Fail the boundary loudly instead.
-        let passes = 0;
         const checkBudget = () => {
-          if (++passes <= 10000) return;
+          if (passes <= 10000) return;
           throw new Error(
-            `<Loading> boundary discovery did not converge after ${passes - 1} passes — ` +
+            `<Loading> boundary discovery did not converge after ${passes} passes — ` +
               `an async source produces a new pending answer on every retry. Ensure repeated ` +
               `reads settle (e.g. return a stable promise or value for the same question).`
           );
@@ -311,10 +607,12 @@ function ssrLoadingBoundary(
           if (hasFinalHole()) return clientHandoff();
           checkBudget();
           await Promise.all(pending.p).catch(() => {});
-          ret = runLoadingPhase(() => ctx.ssr(pending.t, ...pending.h)) as any;
+          passes++;
+          ret = runLoadingPhase(() => resolveIn(() => ctx.ssr(pending.t, ...pending.h))) as any;
         }
         flushSerializeBuffer();
-        done!(ret && Array.isArray(ret.t) ? ret.t[0] : ((ret && ret.t) as any));
+        const streamed = done!(ret && Array.isArray(ret.t) ? ret.t[0] : ((ret && ret.t) as any));
+        record("settled", streamed);
       } catch (err) {
         finalizeError(err);
       } finally {
@@ -332,6 +630,7 @@ function ssrLoadingBoundary(
 
   commitBoundaryState();
   ctx.serialize(id, "$$f");
+  record("fallback", false);
   return skipLive(() => fallbackResult);
 }
 

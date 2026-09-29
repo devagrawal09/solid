@@ -56,9 +56,9 @@ const view = ({ item }) => {
       _el$5 = _el$3.nextSibling,
       _el$6 = _el$5.firstChild;
     _$insert(_el$2, itemId);
-    _el$4.$$click = e => select(item, e);
+    _el$4._$$click = e => select(item, e);
     _$insert(_el$4, () => item.label);
-    _el$6.$$click = e => del(item, e);
+    _el$6._$$click = e => del(item, e);
     _$effect(
       () => selected(),
       _v$ => _$className(_el$, itemId === _v$ ? "danger" : "")
@@ -127,12 +127,17 @@ Emit hydratable markers.
 
 Development output. With `hydratable`, emits the hydration walk validation helpers.
 
-### componentNames
+### sourceNames
 
-- Type: `boolean`
-- Default: `false`
+- Type: `boolean | { components?: boolean; bindings?: boolean }`
+- Default: follows `dev` — every kind on when `dev: true`, off otherwise
 
-DOM output only. Emit the tag as written in source as a third `createComponent` argument — `<Home />` compiles to `createComponent(Home, props, "Home")`, `<Ui.Button />` to `"Ui.Button"` — so the dev and observe runtimes label each component's owner (`<Home>` in diagnostic `ownerPath`s and attribution chains) even after a minifier renames the function or a `lazy()`/HMR wrapper hides it. The production runtime ignores the argument; SSR and universal output are unaffected. `@solidjs/vite-plugin` turns this on for its dev and `observe` postures.
+Names as written in source, carried into the output so the dev and observe runtimes can label the reactive graph — in diagnostic `ownerPath`s, attribution chains, and the Performance panel tracks — even after a minifier renames everything. Unset, the option follows `dev`; `true`/`false` sets every kind (`sourceNames: false` opts a dev build out); the object form picks, and each kind it leaves unspecified follows `dev`. The production runtimes ignore the names, and production output (`dev: false`) is byte-identical whether the option is set or not. `@solidjs/compiler`'s `transform()` takes the same option with the same shape and defaults.
+
+- `components`: emit the tag as written as a third `createComponent` argument — `<Home />` compiles to `createComponent(Home, props, "Home")`, `<Ui.Button />` to `"Ui.Button"` — so each component's owner reads `<Home>` even when a `lazy()`/HMR wrapper hides the function. Applies to DOM and SSR output; for SSR the compiler keeps the `createComponent` call it otherwise inlines to `Comp(props)`, so the server runtime labels the owner the same way (prod SSR output, without the option, is unchanged). Universal and dynamic output are unaffected.
+- `bindings`: every compiled binding effect is named by what it writes, as a trailing options argument the dev and observe runtimes read and production ignores. An attribute effect gets `<tag>.<attribute>` as written — `<span textContent={label()} />` compiles to `effect(() => label(), v => …, { name: "span.textContent" })`, `class:active` to `div.class:active`, a `style={{ color: c() }}` property to `div.style:color` — and a template's merged effect lists all of its bindings (`"button.class, span.textContent"`). A hole's insert is named for the parent it fills: `<div>{count()}</div>` compiles to `insert(el, count, undefined, undefined, { name: "div.children" })`; a static child (a component call, a literal) creates no effect and gets no name. A spread passes the tag as its trailing argument (`spread(el, props, false, undefined, "div")`), and the runtime labels its attribute effect `div.spread` and its children insert `div.children`. DOM output only.
+
+These are the JSX-level kinds — what a JSX compiler can see. Naming the primitives themselves (`createSignal(0, { name: "count" })`, `createCounter.value` inside a composed primitive) is not a JSX-transform feature and this plugin does not do it: it is `@solidjs/compiler`'s standalone `transformSourceNames` pass, which the build tool runs on every module — `.ts`, `.js`, and JSX files alike — independently of which JSX compiler handles the file. `@solidjs/vite-plugin` (its `solid: { sourceNames }` option, solid-vite-plugin #371) wires both: the JSX-level kinds through this option and primitive names through the standalone pass, for its dev and `observe` postures.
 
 ### delegateEvents
 
@@ -248,7 +253,35 @@ Inline style attributes in templates when the value is a string or `Record<strin
 - Type: `boolean`
 - Default: `false`
 
-SSR-only: emit behavior-claim (`_bnd`) markers for `ref` / `on*` on intrinsic elements.
+SSR-only: keep attribute-slot positions on intrinsic elements bindable — `ref` / `on*` compile to a guarded `ssrClaim` hole instead of dropping, and a dynamic `class` / `style` compiles to a whole-attribute `ssrElementAttribute` hole instead of a value inside template quotes.
+
+### hoistProps
+
+- Type: `boolean`
+- Default: `true`
+
+SSR-only: a component's props literal with getters compiles to a module-level constructor whose getters are shared across instances, instead of an object literal (which V8 builds in dictionary mode, allocating a closure per getter per instance):
+
+```js
+var _m$ = Symbol();
+var _d$ = {
+  get() {
+    const props = this[_m$];
+    return props.label;
+  },
+  enumerable: true,
+  configurable: true
+};
+function _P$(_p, _p2) {
+  this[_m$] = _p;
+  this.as = _p2;
+  Object.defineProperty(this, "label", _d$);
+}
+_P$.prototype = Object.prototype;
+Comp(new _P$(props, "a"));
+```
+
+The instance has the same own keys, order and descriptors as the literal and `Object.prototype` as its prototype; `Object.keys`, spread, `hasOwn` and `isStatic()` answer as before. One contract follows: a props getter is defined only for a read through its own object (`props.x`, spread, `merge()`/`omit()`). Copying its property descriptor onto another object and reading it there throws — define a getter that reads through the source instead. Sites whose getters close over a binding that is reassigned, declared after the site, or `this`/`arguments` keep the literal. `false` keeps the literal everywhere.
 
 ## TSRX (experimental)
 
@@ -276,7 +309,7 @@ Requirements and behavior:
 - Desugared constructs rely on the `builtIns` auto-imports, so those components must exist in `moduleName`.
 - Scoped `<style>` blocks are removed at compile time, matching native and dynamic elements receive a `tsrx-<hash>` class, and the scoped/pruned stylesheet is returned as `result.metadata.css` with `result.metadata.cssHash`. Style expressions produce class-map objects, `<style ref={styles}>` initializes a class map, and `:global(...)` opts selectors out of scoping. The plugin emits no runtime style helper; a bundler integration must emit the CSS metadata.
 - Solid rejects authored TSRX lazy destructuring (`&{ … }` / `&[ … ]`). Keep accessor calls and reactive property reads explicit in Solid source.
-- Destructured bindings in keyed `@for` loops and `@catch` clauses stay deferred against Solid's item and error accessors, including nested patterns, defaults, computed keys, and rest.
+- Control-flow bindings pass through exactly as authored. `@for … index` / `@for … key` hand the callback the item as an accessor (and the index as an accessor under a custom key), and `@catch (err, reset)` receives Solid's `ErrorAccessor` — write `item()`, `i()`, `err()` as in JSX. Destructuring a binding in one of those positions is rejected with a diagnostic; the default keyed `@for` item is a raw value and destructures as usual.
 - The native compiler ([`@solidjs/compiler`](../compiler)) compiles the same sources to byte-identical output.
 
 ## Special Binding

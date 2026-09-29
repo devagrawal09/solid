@@ -104,16 +104,32 @@ export const CONFIG_FRESH_READ = 1 << 16;
  * transaction's settle. Two arming sites, one meaning: the store fold
  * (a landing staged into the retaining transaction) and until()'s
  * flip-entanglement (a foreign carrier's staged write, stolen when it
- * flipped the awaited predicate truthy). Until the reveal, ordinary
- * readers — lane and speculative recomputes included — keep committed:
- * the staging notified subscribers as a plain write, so without the mask
- * a mid-hold recompute composes live optimism with the confirming truth,
- * a frame no timeline contains (GabbeV's union tear). Authoritative
- * readers (until()'s predicate) and latest() tunnel through — the
- * exemption that keeps holds deadlock-free. Override-covered nodes never
+ * flipped the awaited predicate truthy). Override-covered nodes never
  * arm: the override is their display and its revert their notification
- * (A17). Cleared at commit (the commit IS the reveal); subscribers masked
- * during the hold are woken by finalizePureQueue's post-revert pass. */
+ * (A17).
+ *
+ * To a DERIVING reader the truth is a staged value like any other: a memo
+ * or user effect served it enters the transaction and is held with it
+ * (A29), so a pass that composes it with a superseded override's truth
+ * composes ONE staged world — never staged truth beside committed
+ * neighbours (#3568: the mask served the retaining transaction's own pass
+ * the landed `length` through the override while the rows past it stayed
+ * committed, and `<For>` walked into a hole). Stale readers of a foreign
+ * transaction keep committed through the stale-of-foreign clause,
+ * untracked reads keep committed (Rule 1), and latest() and until()'s
+ * predicate tunnel through — the exemption that keeps holds deadlock-free.
+ *
+ * The one reader the mark gates is a LANE pass, owning transaction or not
+ * (ruled 2026-09-22, superseding #3589's owner exemption): a lane applies
+ * its frame display-ahead at the park, so a lane pass served the truth
+ * would paint the confirmation beside the optimism it confirms —
+ * `saving=true` beside the saved row, a frame no timeline contains
+ * (GabbeV's union tear). It keeps committed and is re-run by the reveal's
+ * post-revert wake. A lane under the retaining transaction owns its
+ * overrides and its lane cargo (`ownsLane`), not the transaction's
+ * confirming truth. Cleared at commit (the commit IS the reveal);
+ * subscribers masked during the hold are woken by finalizePureQueue's
+ * post-revert pass. */
 export const CONFIG_HELD_TRUTH = 1 << 17;
 /** SLOT node (store leaf): created through `slotSignal` with `_host`/`_key`
  * backrefs baked into the literal. The unobserved sweep dispatches these to
@@ -134,6 +150,42 @@ export const CONFIG_SLOT_NODE = 1 << 18;
  * write (a new override re-masks) and by the revert. */
 export const CONFIG_OVERRIDE_SUPERSEDED = 1 << 19;
 
+/** HELD children (#3404): this node's `_firstChild` chain (and `_disposal`
+ * list) was built by a recompute whose result has not committed — a staged
+ * value, a pending window, or a run under a held transaction. A later
+ * recompute may tear those children down immediately: nothing observable
+ * was ever built on them. Unset, the children belong to the committed frame
+ * and a recompute defers them as zombies (`_pendingFirstChild`) until this
+ * node commits — regardless of whether the recompute runs under a
+ * transaction. A parked node (status propagation stamps `_transition`
+ * without recomputing) recomputed when its source lands otherwise disposed
+ * its committed children mid-hold, running their cleanups before the
+ * transaction's atomic reveal. Cleared by `commitPendingNode`. Transaction
+ * work only (A15 lane work and transaction work, #3698): zombies are parked
+ * by a pass under a held transaction; a pass over a lane parks a LANE frame
+ * instead (`CONFIG_LANE_FRAME`), whatever the node's kind. */
+export const CONFIG_HELD_CHILDREN = 1 << 20;
+
+/** The frame parked in `_pendingFirstChild` / `_pendingDisposal` is a LANE
+ * frame (#3662, #3698; A15 lane work and transaction work): a lane pass —
+ * on an effect or a memo alike — publishes into the lane's frame (an
+ * effect's run; a memo's derived override, A17), so the frame it replaces
+ * leaves the screen when the lane applies (A30) — not at the action's
+ * commit like #3404's transaction zombies, and not at the pass (a held lane
+ * defers the apply with the frame still displayed). Drained by the lane's
+ * render entry the parking site pushed ahead of the new frame's effects
+ * (cleanups before side effects), by `commitPendingNode` if a hold commits
+ * the node first, or with the owner's death. While set the parked frame is
+ * not a hold (the node is not queued or stamped for it — lane work never
+ * makes its node transaction work), a superseding pass disposes the
+ * never-shown live children on the spot, and a lane-channel dirty on a
+ * member is cancelled (`laneZombie`). Ruled 2026-09-28 (#3698): a pass is
+ * lane work or transaction work by its owner, never by node kind. #3662
+ * flagged effects only, and a memo's lane pass parked a transaction zombie
+ * that queued and stamped the memo as the action's pending node, so its
+ * next mainline recompute re-entered the hold. */
+export const CONFIG_LANE_FRAME = 1 << 26;
+
 /** In-flight async node whose inputs were PUBLISHED while it was pending: a
  * batch or transaction committed with the node still `STATUS_PENDING` (an
  * unobserved flight, #3305), so the inputs are on screen and the node's
@@ -145,6 +197,33 @@ export const CONFIG_OVERRIDE_SUPERSEDED = 1 << 19;
  * lane-revealed. Set by `commitPendingNodes`; cleared when the node next
  * enters pending fresh (a new flight from a settled state). */
 export const CONFIG_INPUTS_PUBLISHED = 1 << 21;
+/** A28 (4): the node was written inside a recompute that ran OUTSIDE a flush
+ * (a creation-time compute — boundary machinery, a mapArray's first run). Such
+ * a write is promoted at that recompute's end: readers in the same block see
+ * it. Cleared when the next flush begins; set only on that rare path. */
+export const CONFIG_PROMOTED = 1 << 22;
+/** A28 for same-tick adoption: the node was staged outside a flush and then
+ * adopted by a transaction (initTransition) before any flush carried the
+ * staging — the stamp says "held", but nothing flushed is staged for it, so
+ * on no channel is the write visible yet: `latest()` answers the committed
+ * value, the verdict sees nothing pending (as the store's leaves already did
+ * through their own selection). Cleared when the carrying flush re-stamps the
+ * transaction's pending nodes (reassignPendingTransition). */
+export const CONFIG_ADOPTED_UNFLUSHED = 1 << 24;
+/** The node's active override is a DERIVED one: a lane pass published its
+ * speculative result into the override slot instead of `_value` (lanes
+ * stage — an optimistic derivation is an override, #3479). Its truth is not
+ * `_value` but a recompute from its inputs' truth, so the body-end
+ * supersession (`endOptimism`) and the authoritative-flight blockage
+ * (`transitionBlocked`) skip it; the revert drops the override and re-derives
+ * it (`resolveOptimisticNodes`). Cleared with the override. */
+export const CONFIG_DERIVED_OVERRIDE = 1 << 23;
+/** Observe tiers only: the node is framework plumbing (the `solid-js/refresh`
+ * HMR memo between a component's root and its body) — it has no name, is no
+ * segment of any owner path, and the attribution engine records nothing about
+ * it (creation, re-runs, checks), while the nodes it owns stay fully observed.
+ * Set from the internal `_plumbing` option at creation; never set in prod. */
+export const CONFIG_PLUMBING = 1 << 25;
 
 /** Non-throwing computation (`noThrow: true`): the compute is proven never to
  * raise a reactive status — no `raise`/`attempt`, no read of a source that can
@@ -156,13 +235,16 @@ export const CONFIG_INPUTS_PUBLISHED = 1 << 21;
  * clears this bit — the node deoptimizes to the full path for good, and dev
  * builds report `[NOTHROW_NODE_THREW]`. Emitted by the compiler for proven
  * `$` blocks; ordinary code may set it deliberately. */
-export const CONFIG_NOTHROW = 1 << 22;
+export const CONFIG_NOTHROW = 1 << 27;
 /** Both proofs: the status-free fast path is eligible. */
 export const CONFIG_STATUS_FREE = CONFIG_SYNC | CONFIG_NOTHROW;
 
 /** Heuristic oracles (`__ORACLE__` builds only; see globals.d.ts and
  * documentation/plans/heuristic-oracles.md). Each bit ASSUMES a fact about
  * the node that nothing verifies; set through the `oracle` node option.
+ * The bits live on the node's own `_oracle` field (set only in oracle
+ * builds), not on `_config`: `_config` has no free bits left for them. Their
+ * values are unchanged, so the heuristics scripts' `oracle:` numbers hold.
  *
  * DIRECT: no untracked reader (event handler, `untrack`, effect phase,
  * top-level read) ever reads this memo between a write and the flush that
@@ -179,7 +261,7 @@ export const CONFIG_ORACLE_LOCAL = 1 << 24;
  * effect keeps its fused memo's cut-off). Its first run always counts as a
  * change; other effects' `_equals` (tracked effects set their own) keep the
  * plain rule. */
-export const CONFIG_EFFECT_EQUALS = 1 << 25;
+export const CONFIG_EFFECT_EQUALS = 1 << 28;
 /** OWNERLESS: the compute creates no primitives, registers no cleanup and
  * reads no context — it never acts as an owner. It then consumes no child id
  * from its parent (the compiler would emit the same on server and client, so

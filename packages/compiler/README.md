@@ -112,11 +112,11 @@ Scoped `<style>` blocks are compile-time only. The compiler removes the style el
 
 Solid rejects authored TSRX lazy destructuring (`&{ … }` / `&[ … ]`). Keep accessor calls and reactive property reads explicit in Solid source.
 
-Destructured bindings in keyed `@for` loops and `@catch` clauses stay deferred against Solid's item and error accessors, including nested patterns, defaults, computed keys, and rest.
+Control-flow bindings pass through exactly as authored. `@for … index` and `@for … key` hand the callback the item as an accessor (and the index as an accessor under a custom key), and `@catch (err, reset)` receives Solid's `ErrorAccessor` — write `item()`, `i()`, `err()` as you would in JSX. Destructuring a binding in one of those positions is rejected with a diagnostic, since there is nothing to destructure; the default keyed `@for` item is a raw value and destructures as usual.
 
 The frontend uses the community [oxc-tsrx](https://github.com/tsrx-org/oxc) parser at a pinned revision. Statement containers can be used as function bodies, statements, expressions (`const x = @{ … }`), and JSX children or expression containers. See `documentation/tsrx/frontend-notes.md` in the repository for the full frontend notes.
 
-`projectTsrxForTypecheck(source, { filename })` is an experimental compiler-owned projection for editor and typecheck integrations. It returns independently typecheckable post-rewrite TSX without running the DOM/SSR/universal transforms, injecting collision-safe imports for generated Solid control-flow and dynamic-element helpers. The tooling-only path recovers common incomplete editor snapshots while normal compilation remains strict. The result also includes an authored `.tsrx` source map, exact equal-text `mappings`, processed `css`/`cssHash`, and parser-authored embedded CSS/raw-script regions. Mapping and embedded offsets use JavaScript UTF-16 string coordinates. The ranges deliberately omit generated-only text; host adapters such as Volar attach feature capabilities to them.
+`projectTsrxForTypecheck(source, { filename })` is an experimental compiler-owned projection for editor and typecheck integrations. It returns independently typecheckable TSX without running the DOM/SSR/universal transforms, injecting collision-safe imports for generated Solid control-flow and dynamic-element helpers. The tooling-only path recovers common incomplete editor snapshots while normal compilation remains strict. The result also includes an authored `.tsrx` source map, exact equal-text `mappings`, processed `css`/`cssHash`, and parser-authored embedded CSS/raw-script regions. Mapping and embedded offsets use JavaScript UTF-16 string coordinates. The ranges deliberately omit generated-only text; host adapters such as Volar attach feature capabilities to them.
 
 ### Source maps
 
@@ -130,7 +130,7 @@ Pass `sourceMap: true` to receive a JSON source map string in `result.map`. For 
 - `generate`: `"dom"`, `"ssr"`, `"universal"`, or `"dynamic"` (default `"dom"`)
 - `hydratable`
 - `dev`
-- `componentNames`: DOM output only — emit the source tag name as `createComponent`'s third argument (`createComponent(Home, props, "Home")`) so dev/observe runtimes label owners after minification; the production runtime ignores it
+- `sourceNames` (`boolean | { components?: boolean; bindings?: boolean }`, default follows `dev`): names as written in source, carried into output so dev/observe runtimes can label the reactive graph after minification. Unset, every kind is on when `dev: true` and off otherwise; `true`/`false` sets every kind (`sourceNames: false` opts a dev build out); the object form picks, and each kind it leaves unspecified follows `dev`. Production output (`dev: false`) is byte-identical with the option set or unset. Same shape and defaults as `@solidjs/babel-plugin`'s option. `components` emits the source tag name as `createComponent`'s third argument (`createComponent(Home, props, "Home")`) — DOM and SSR output (SSR keeps the `createComponent` call it otherwise inlines to `Comp(props)`); not universal or dynamic. `bindings` names every compiled binding effect by what it writes — `effect(…, { name: "span.textContent" })`, a hole `insert(el, v, undefined, undefined, { name: "div.children" })`, a spread `spread(el, props, false, undefined, "div")` (labelled `div.spread` / `div.children` by the runtime) — DOM output only. The production runtimes ignore the names. These are the JSX-level kinds only: naming the primitives themselves is the separate `transformSourceNames` pass below, which the build tool runs on every module independently of the JSX compiler
 - `sourceMap`
 - `contextToCustomElements` (default `true`)
 - `delegateEvents`
@@ -148,6 +148,7 @@ Pass `sourceMap: true` to receive a JSON source map string in `result.map`. For 
 - `builtIns` (default `["For", "Show", "Switch", "Match", "Loading", "Reveal", "Portal", "Repeat", "Dynamic", "Errored"]`)
 - `requireImportSource`
 - `serverComponents`
+- `hoistProps` (default `true`; SSR only)
 - `renderers`
 - `generators` (default `true`): lower `$(function* () { … yield* signal … })` typed blocks (`$` from `solid-js` / `@solidjs/signals`) to call form — `$(function () { … perform(signal) … })`, importing `perform` from the same module — ahead of JSX lowering. Only the sync subset is lowered: `yield*` over identifiers, over direct `raise(...)` / `attempt(...)` / `write(...)` / `call(...)` / `readStore(...)` calls (a lowered `readStore` is one selector invocation), and over member chains — the direct property syntax. A chain of static keys, numeric indices and bare-identifier keys on an identifier root (`yield* store.items[i].name`) lowers to `_$perform(_$readPath(store, ["items", i, "name"]))`, one tracked walk of the real store proxy; when the root is the first parameter of a capitalized function it is a component's props and lowers to `_$readProp(props, [...])` (the getter runs tracked). Optional chains, calls, and other computed keys are not lowered as paths (they become `_$perform(<expression>)`, which the runtime's path tokens still track for member chains). For typechecking the same spelling, see `@solidjs/typecheck` (`solid-tsc`), which drives `projectBlocksForTypecheck`. A block that yields `wait(...)` or any other call is left to the runtime driver. Inside a `$` body, `throw`, a bare `yield`, and `async function*` are compile errors (`[THROW_IN_BLOCK]`, `[PLAIN_YIELD_IN_BLOCK]`, `[ASYNC_GENERATOR_IN_BLOCK]`), as is a `yield*` inside JSX in a block the pass cannot lower (`[JSX_YIELD_IN_UNLOWERED_BLOCK]`). `yield*` inside JSX expression containers is only compilable with this pass on.
 
@@ -176,6 +177,25 @@ A function-level directive only works where the pass can extract the function: a
 A module-level `"use server"` module can only export server functions. Its client build is rebuilt from those exports alone, so anything else would be missing from the browser bundle. Re-exports, `export *`, class and enum exports, destructured exports, and exports declared without an initializer are compile errors naming the export and its position. Type-only and `declare` exports are erased and are fine.
 
 The runtime module defaults to `@solidjs/web/server-functions`. Function IDs are `<name>-<xxhash32(root-relative path)>`, the same in every env. The name is the function's dotted binding path, such as `handlers.save`, built from every named container on the way down (variable bindings, property keys, class names, class members, and named functions), so an id identifies a function by where it is bound rather than by its position in the file. Adding, removing, or reordering functions does not move the ids of the others. There are also experimental `transformLazy` and `transformRefresh` passes.
+
+### Source names for primitives
+
+`transformSourceNames(code, { filename?, sourceMap? })` is the pass behind `@solidjs/vite-plugin`'s `sourceNames.primitives` option: it names reactive primitives after the identifier they are declared as, so the dev and observe runtimes label graph nodes `count` / `doubled` / `todos.title` instead of `signal` / `computed` / `store.title`. It is plain JavaScript in and out (JSX passes through untouched), which is why it is its own pass rather than a `transform()` option — primitives live in `.ts`/`.js` modules as much as in components. This standalone pass is the single owner of primitive naming: the build tool runs it on every module — `.ts`, `.js`, and JSX files alike — independently of which JSX compiler (this one or `@solidjs/babel-plugin`) handles the file's JSX, so there is no Babel counterpart and `transform()`'s `sourceNames` covers only the JSX-level kinds. `@solidjs/vite-plugin` (solid-vite-plugin #371, `solid: { sourceNames }`) runs it ahead of the JSX transform for the dev and `observe` postures.
+
+```js
+const [count, setCount] = createSignal(0);          // createSignal(0, { name: "count" })
+const doubled = createMemo(() => count() * 2);      // createMemo(…, { name: "doubled" })
+const [todos, setTodos] = createStore({ list: [] }); // createStore(…, { name: "todos" })
+export function createCounter() {
+  const [value, setValue] = createSignal(0);        // { name: "createCounter.value" }
+  …
+}
+function Counter() {
+  const [n, setN] = createSignal(0);                // { name: "n" } — no prefix in a component
+}
+```
+
+The name comes from the first element of the array pattern, the variable binding, the object-literal property key, or the class field the call initialises; a call in any other position (a hole in the pattern, an argument, an assignment) is left alone. Inside a non-component function — anything not PascalCase: `createCounter`, `useTheme`, a method — the name is prefixed with that function's, so a composed primitive's nodes fold under it (`createCounter.value`, `createCounter.twice`); components contribute no prefix, and anonymous callbacks inherit the nearest named function. Only calls that resolve to imports from `solid-js` or `@solidjs/signals` are named (aliases and namespace imports included; a shadowing local or another library's `createSignal` is not). The pass never overrides an explicit `name`, leaves a spread or non-literal options argument alone, fills omitted positional arguments with `void 0`, and reaches the call through `as`/`satisfies`/`!` and type arguments. Named: `createSignal`, `createMemo`, `createOptimistic`, `createStore`, `createOptimisticStore`, `createProjection`. A two-argument `createStore(x, y)` is only named when `y` is a non-empty object literal of option keys (`shallow`/`name`) — otherwise it may be a derive passed by reference with its seed.
 
 ## Rust compiler core
 

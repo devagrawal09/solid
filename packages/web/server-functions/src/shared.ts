@@ -36,7 +36,10 @@
 // RPC seam live in registry.js, the flash cookie's isomorphic half beside
 // the cookie codec in ../cookies.js. Re-exported here so every existing
 // import site of the shared wire layer keeps working.
+import { getServerFunctionMetadata, isServerFunction } from "./registry.js";
 export {
+  LIVE_LOCAL,
+  LIVE_RESUME_FROM,
   LIVE_SOURCE,
   SERVER_FUNCTION_INVOKE,
   SERVER_FUNCTION_METADATA,
@@ -53,6 +56,7 @@ export {
   hasFlashCookie,
   matchFlashCookie
 } from "../../src/cookies.js";
+import { REVALIDATE_HEADER } from "../../src/response.js";
 
 import { JSONCodecOptions } from "../../serialization/src/serializer-decode.js";
 
@@ -89,11 +93,14 @@ export interface FlightDataContext {
 /**
  * Consumer receiving single-flight data on the client: `data` is the
  * integration-produced payload (opaque to the protocol), `context` carries
- * the envelope metadata. Async consumers are awaited before the function
- * value is returned to the caller, so caches are seeded first.
+ * the envelope metadata. `data` is `undefined` when the response carried
+ * integration metadata (a redirect, revalidation keys) but the server
+ * folded no slice for this source — the consumer still runs, to apply the
+ * metadata. Async consumers are awaited before the function value is
+ * returned to the caller, so caches are seeded first.
  */
 export type FlightDataConsumer<D = unknown> = (
-  data: D,
+  data: D | undefined,
   context: FlightDataContext
 ) => void | Promise<void>;
 
@@ -106,7 +113,12 @@ export interface ServerFunction<A extends readonly any[] = any[], T = any> {
   (...args: A): Promise<T>;
   /** The build-stable function id (stable across the client and server builds). */
   readonly id: string;
-  /** URL invoking this function directly over HTTP (form `action`s, raw fetches). */
+  /**
+   * The plain-HTTP address of this function — what a `<form action>` posts
+   * to without the runtime (the integration behind `action={fn}` reads it).
+   * Not where the reference's own call goes: that is `serverFunctionUrl(fn,
+   * ...args)`, for a `GET()` reference — the url to preload or fetch.
+   */
   readonly url: string;
 }
 
@@ -278,6 +290,16 @@ export function assertFlightSource(source) {
  * `value` to the caller as if the call were plain. What to do with the
  * data (seed caches, navigate, ...) is entirely the consumer's business.
  *
+ * Integration metadata is delivered whether or not data was folded: a
+ * mutation response carrying the redirect carrier or `X-Revalidate` keys
+ * (`redirect()`, `reload()`, `respond(value, { revalidate })`) reaches
+ * every registered consumer, its `data` `undefined` where the server
+ * folded no slice for that source. Subscribing is therefore the whole
+ * opt-in for an integration that owns navigation or a cache: it applies
+ * redirects and revalidation from the consumer, without wrapping the
+ * call, and a redirect the server collected no data for (a cross-origin
+ * target, no collector registered) still navigates.
+ *
  * The one-argument form registers the unnamed consumer — the integration
  * that owns data production (a router), riding the keyed envelope under
  * the reserved id "true". The two-argument form
@@ -290,8 +312,8 @@ export function assertFlightSource(source) {
  * One active consumer per source — a later registration replaces the
  * current one; returns an unsubscribe function. With no consumers
  * registered, no header is sent and the server does no collection work;
- * responses an integration opted in manually still pass through to the
- * caller whole, exactly like other integration responses.
+ * metadata-bearing responses, and ones an integration opted in manually,
+ * pass through to the caller whole for the integration to decode itself.
  */
 export function subscribeFlightData<D = unknown>(consumer: FlightDataConsumer<D>): () => void;
 export function subscribeFlightData<D = unknown>(
@@ -341,6 +363,58 @@ export function getFlightDataSourceIds(): string[];
 /** The source ids with a registered consumer. */
 export function getFlightDataSourceIds() {
   return [...flightConfig.consumers.keys()];
+}
+
+/**
+ * Whether a mutation response carries integration metadata — the redirect
+ * carrier or `X-Revalidate` keys. Metadata is envelope-level (it describes
+ * what the mutation did to every cache on the page), so a response carrying
+ * it is delivered to every registered flight consumer, folded or not.
+ *
+ * Transport building block; not meant for hand-written code.
+ * @internal
+ */
+export function hasFlightMetadata(response: Response): boolean;
+
+/** Whether a mutation response carries the redirect carrier or revalidation keys. */
+export function hasFlightMetadata(response) {
+  return response.headers.has(REDIRECT_HEADER) || response.headers.has(REVALIDATE_HEADER);
+}
+
+/**
+ * Delivers a decoded single-flight envelope's `data` to the registered
+ * consumers — THE delivery path, shared by every transport that can carry
+ * the envelope (the plain server-function client and the frames client's
+ * flight application), so a mutation reads identically whichever body
+ * shape it arrived in.
+ *
+ * `data` is the keyed envelope, `{ [source]: slice }` (the unnamed
+ * registration's slice under the reserved id "true"); `response` is the
+ * envelope context, whose `SINGLE_FLIGHT_HEADER` names the folded sources.
+ * Each registered consumer receives its own slice, in registration order,
+ * awaited sequentially so caches are seeded before the caller sees the
+ * value. A consumer whose source was not folded is skipped — unless the
+ * response carries integration metadata, in which case it runs with `data`
+ * `undefined` to apply the metadata. Consumers are looked up per delivery:
+ * an awaited consumer may unsubscribe another (a provider tearing down
+ * under a navigation).
+ *
+ * Transport building block; not meant for hand-written code.
+ * @internal
+ */
+export function deliverFlightData(response: Response, data: unknown): Promise<void>;
+
+/** Delivers each consumer its slice of a single-flight envelope's `data`. */
+export async function deliverFlightData(response, data) {
+  // An absent header splits to [""], which names no source (ids are never
+  // empty — see assertFlightSource), so no consumer matches it.
+  const folded = (response.headers.get(SINGLE_FLIGHT_HEADER) || "").split(",");
+  const metadata = hasFlightMetadata(response);
+  for (const source of getFlightDataSourceIds()) {
+    if (!metadata && !folded.includes(source)) continue;
+    const consumer = getFlightDataConsumer(source);
+    if (consumer) await consumer(data ? data[source] : undefined, { response });
+  }
 } /**
  * The intrinsic wire address of a server-component call: the function id,
  * suffixed with a realm-stable hash of the arguments when there are any.
@@ -479,9 +553,32 @@ export function serverFunctionDataAddress(endpoint, id) {
   const mount = endpoint.endsWith("/") ? endpoint.slice(0, -1) : endpoint;
   return `${mount}/data/${encodeURIComponent(id)}`;
 } /**
- * Reads an address built by `serverFunctionAddress` or
- * `serverFunctionDataAddress` back into its id and caller kind (`data` names
- * the shape the caller addressed, and with it the shape of the answer). A
+ * The wire address of a live call: `<endpoint>/live/<id>`.
+ *
+ * The third caller kind. A `live` loop reads the same codec stream a
+ * scripted call would, framed as server-sent events so buffering
+ * middleboxes pass it through unbuffered — a third answer shape, so a third
+ * path, by the rule that gives the data address its own (#3094: caches key
+ * on the url; #3406: a read carries no header of the transport's own that
+ * could select the shape instead). Only the loop calls it, and the answer
+ * is `no-store` — nothing preloads or caches a live address, which is what
+ * lets the loop's position ride as a request header (`Last-Event-ID`)
+ * rather than an argument.
+ *
+ * Transport wire detail; not meant for hand-written code.
+ * @internal
+ */
+export function serverFunctionLiveAddress(endpoint: string, id: string): string;
+
+/** Builds the wire address of a live call: `<endpoint>/live/<id>`. */
+export function serverFunctionLiveAddress(endpoint, id) {
+  const mount = endpoint.endsWith("/") ? endpoint.slice(0, -1) : endpoint;
+  return `${mount}/live/${encodeURIComponent(id)}`;
+} /**
+ * Reads an address built by `serverFunctionAddress`,
+ * `serverFunctionDataAddress` or `serverFunctionLiveAddress` back into its
+ * id and caller kind (`data` and `live` name the shape the caller addressed,
+ * and with it the shape of the answer; a live address is scripted too). A
  * path carrying more segments than the addresses give meaning to — or an id
  * segment whose percent-encoding does not decode — answers `null` rather
  * than matching on its prefix: an address the runtime does not fully
@@ -493,7 +590,7 @@ export function serverFunctionDataAddress(endpoint, id) {
 export function parseServerFunctionAddress(
   pathname: string,
   endpoint: string
-): { id: string; data: boolean } | null;
+): { id: string; data: boolean; live: boolean } | null;
 
 /** Reads an address back into its id and caller kind. */
 export function parseServerFunctionAddress(pathname, endpoint) {
@@ -503,17 +600,122 @@ export function parseServerFunctionAddress(pathname, endpoint) {
   if (!rest.startsWith("/")) return null;
   let segment = rest.slice(1);
   let data = false;
+  let live = false;
   if (segment.startsWith("data/")) {
     segment = segment.slice(5);
     data = true;
+  } else if (segment.startsWith("live/")) {
+    segment = segment.slice(5);
+    live = true;
   }
   if (!segment || segment.includes("/")) return null;
   try {
-    return { id: decodeURIComponent(segment), data };
+    return { id: decodeURIComponent(segment), data, live };
   } catch {
     // an id segment whose percent-encoding does not decode is not an address
     return null;
   }
+}
+
+/**
+ * The longest url a `GET()` call goes out as. Longer, the call dispatches
+ * over POST instead — a cache miss rather than a 414 from whichever proxy in
+ * the chain draws the line first — so no url describes it (`serverFunctionUrl`
+ * refuses to render one).
+ * @internal
+ */
+export const MAX_GET_URL_LENGTH = 2000;
+
+/** The id a url helper was handed: a reference's, or the id itself. */
+function urlTargetId(target, helper) {
+  if (typeof target === "string") return target;
+  if (isServerFunction(target) && typeof target.id === "string") return target.id;
+  throw new Error(`${helper} expects a server function reference (or its id).`);
+}
+
+/**
+ * Body of both entries' `serverFunctionActionUrl`: the plain-HTTP address of
+ * a function, `<endpoint>/<id>[?args=...]`.
+ * @internal
+ */
+export function serverFunctionActionUrlFor(
+  endpoint: string,
+  target: ServerFunction | string,
+  boundArgs: readonly unknown[]
+): string;
+
+export function serverFunctionActionUrlFor(endpoint, target, boundArgs) {
+  const address = serverFunctionAddress(endpoint, urlTargetId(target, "serverFunctionActionUrl"));
+  if (!boundArgs.length) return address;
+  if (!isJSONSafe(boundArgs)) {
+    throw new Error(
+      "Bound arguments in an action url must be JSON-safe: the server reads them the way it " +
+        "reads a form post's, and that convention has no codec. Pass the value through the " +
+        "function's body, or call the reference instead of rendering a url for it."
+    );
+  }
+  return `${address}?args=${encodeURIComponent(JSON.stringify(boundArgs))}`;
+}
+
+/**
+ * Body of both entries' `serverFunctionUrl`: the url a `GET()` reference's
+ * own call requests — `<endpoint>/data/<id>[?args=...]`, or for a live
+ * reference `<endpoint>/live/<id>[?args=...]` — built the way the transport
+ * builds it (JSON arguments in `args`; see `GET`'s client half) so a fetch
+ * of it is the call. For a live reference that call is a standing event
+ * stream: the url is for fetching by hand (`curl -N`), not for a preload
+ * or prefetch, which would open a stream nothing reads. Refuses — rather
+ * than answering with an address nothing would request — when the
+ * reference is not a declared read (the default transport POSTs, and a
+ * POST is not described by its url), when the arguments need the codec
+ * (the transport encodes those asynchronously, and a url rendered as a
+ * value cannot wait), and when the url would be long enough for the call
+ * to fall back to POST.
+ * @internal
+ */
+export function serverFunctionUrlFor(
+  endpoint: string,
+  fn: ServerFunction,
+  args: readonly unknown[]
+): string;
+
+export function serverFunctionUrlFor(endpoint, fn, args) {
+  if (!isServerFunction(fn) || typeof fn.id !== "string") {
+    throw new Error("serverFunctionUrl expects a server function reference.");
+  }
+  const metadata = getServerFunctionMetadata(fn);
+  if (!metadata || metadata.method !== "GET") {
+    throw new Error(
+      `serverFunctionUrl: "${fn.id}" is not a declared read. A call over the default ` +
+        "transport is a POST — its arguments travel in the body, so no url describes it. " +
+        "Declare the function with GET(fn) for a cacheable read that has a url, or start " +
+        'the call itself: invoke(fn, { priority: "low" }, ...args).'
+    );
+  }
+  // A live reference's own call connects at the live address (open
+  // decision (d), Stage 8 B6): that is the url a fetch of which is the
+  // call — a standing stream, so one to fetch by hand rather than preload.
+  const address = metadata.live
+    ? serverFunctionLiveAddress(endpoint, fn.id)
+    : serverFunctionDataAddress(endpoint, fn.id);
+  if (!args.length) return address;
+  if (!isJSONSafe(args)) {
+    throw new Error(
+      "Arguments in a server function url must be JSON-safe: the transport encodes anything " +
+        "else through the codec asynchronously, and a url rendered as a value cannot wait for " +
+        "it. Pass JSON-safe arguments, or call the reference instead of rendering a url for it."
+    );
+  }
+  const url = `${address}?args=${encodeURIComponent(JSON.stringify(args))}`;
+  const length = new URL(url, globalThis.location?.href || "http://localhost").href.length;
+  if (length > MAX_GET_URL_LENGTH) {
+    throw new Error(
+      `serverFunctionUrl: the url for "${fn.id}" with these arguments is ${length} characters; ` +
+        `past ${MAX_GET_URL_LENGTH} the call dispatches over POST (a cache miss rather than a ` +
+        "414), so no url describes it. Shorten the arguments, or call the reference instead."
+    );
+  }
+  return url;
 }
 
 /**
@@ -603,14 +805,38 @@ export function decodeErrorHeaderValue(value) {
   }
 }
 
-/**
- * Header carrying a per-call instance id. Its presence tells the server a
- * scripted client is on the other end (vs. a no-JS form post).
- */
-export const INSTANCE_HEADER = "X-Server-Function-Instance";
-
 /** Header carrying the body format tag (a `BodyFormat` value). */
 export const BODY_FORMAT_HEADER = "X-Server-Function-Format";
+
+/**
+ * The position a `live` loop reconnects from, on the request to a live
+ * address — the header `EventSource` sends for the same purpose, so a cursor
+ * source written against either reader reads one name. Its value is the
+ * `id:` of the last event the loop received: a cursor the source named, or
+ * the runtime's digest of a value-shaped yield (see `positionDigest`), which
+ * lets the server skip re-sending a first emission the client already
+ * holds. Rides only on the live address, which is `no-store` and never
+ * preloaded — a position must never become an argument, where it would
+ * change a read's url identity.
+ * @internal
+ */
+export const LAST_EVENT_ID_HEADER = "Last-Event-ID";
+
+/**
+ * Per-iteration slot the `live` loop threads through its invoke options
+ * (never a public option; process-local symbol): the reader records each
+ * event's `id:` in `position`, the next connect sends it back as
+ * `Last-Event-ID`, and the loop asks the reference for the LIVE address
+ * when this is present. `open` builds the event-stream reader — installed
+ * by `live()` itself, so a client that never imports `live` carries no
+ * event-stream parser (the `provideRPC` pattern). `connection` is the slot
+ * for the connection being made: the decoder sets `connection.ended`, a
+ * promise for the body's end carrying how many deferreds were still open
+ * (the lifetime signal — death or completion), the error the body ended
+ * with, and the sweep the loop may run over the open ones.
+ * @internal
+ */
+export const LIVE_WIRE = Symbol("solid.LiveWire");
 
 /**
  * Header labelling the unknown-id 404: the address was well-formed but its
@@ -905,21 +1131,24 @@ export function getHeadersAndBody(body) {
  */
 export function extractBody(
   source: Request | Response,
-  codecOptions?: JSONCodecOptions
+  codecOptions?: JSONCodecOptions,
+  wire?: unknown
 ): Promise<unknown>;
 
 /**
  * Decodes a Request/Response body according to its format tag (falling back
  * to content-type sniffing for form posts that never saw the client
  * runtime). The inverse of `getHeadersAndBody` + the serialized stream.
+ * `wire` is the live loop's slot (see `LIVE_WIRE`), threaded through so a
+ * Serialized body framed as an event stream reads through its reader.
  */
-export async function extractBody(source, codecOptions) {
+export async function extractBody(source, codecOptions, wire) {
   const contentType = source.headers.get("content-type");
   const format = source.headers.get(BODY_FORMAT_HEADER);
 
   switch (true) {
     case format === BodyFormat.Serialized:
-      return await deserializeStream(source, codecOptions);
+      return await deserializeStream(source, codecOptions, wire);
     case format === BodyFormat.Json:
       return JSON.parse(await source.text());
     case format === BodyFormat.String:
@@ -1062,6 +1291,207 @@ export class ChunkReader {
       interpret(result.value);
     }
   }
+
+  /** End the read: the body is cancelled through the lock this reader
+   *  holds, and a pending `next()` resolves done. */
+  cancel(reason) {
+    return this.reader.cancel(reason);
+  }
+}
+
+/**
+ * Frame one payload as a server-sent event — the framing a live address
+ * answers in. The same codec payloads `createChunk` frames ride one per
+ * event so buffering middleboxes, trained on `text/event-stream`, pass them
+ * through unbuffered; `id` (when given) rides as the event's `id:` field,
+ * which is what a reconnecting loop echoes back as `Last-Event-ID`.
+ *
+ * Payloads are `JSON.stringify` output and so carry no raw CR/LF, but the
+ * split is done regardless: a payload IS one `data:` line per line, and
+ * the reader joins them back with `\n`, so the framing is correct for any
+ * string rather than for the strings it happens to see.
+ *
+ * Transport wire detail; not meant for hand-written code.
+ * @internal
+ */
+export function createEventChunk(data: string, id?: string): Uint8Array;
+
+/** Frames one payload as a server-sent event (see the notes above). */
+export function createEventChunk(data, id) {
+  // An `id` may not carry U+0000 (the reader ignores one that does — the
+  // spec's rule); nothing else needs escaping — a field value runs to the
+  // end of its line, and the payload's lines were split above it.
+  let event = id !== undefined && !id.includes("\0") ? `id: ${id}\n` : "";
+  for (const line of data.split(/\r\n|\r|\n/)) event += `data: ${line}\n`;
+  return new TextEncoder().encode(event + "\n");
+}
+
+/**
+ * The heartbeat a live response writes while idle: an event-stream comment,
+ * invisible to the reader, that keeps proxies with idle timeouts from
+ * closing a connection that is merely waiting.
+ * @internal
+ */
+export const EVENT_STREAM_HEARTBEAT = new TextEncoder().encode(":\n\n");
+
+/**
+ * Whether a Request/Response body is framed as an event stream (by content
+ * type — the framing a live address answers in).
+ * @internal
+ */
+export function isEventStream(source: Request | Response): boolean;
+
+/** Whether a Request/Response body is framed as an event stream. */
+export function isEventStream(source) {
+  const contentType = source.headers.get("content-type");
+  return !!contentType && contentType.startsWith("text/event-stream");
+}
+
+/**
+ * The reader for what `createEventChunk` writes — `ChunkReader`'s
+ * counterpart for the event-stream framing, same `next()`/`drain()` shape
+ * so `deserializeStream` runs unchanged over either. Only `data:` and `id:`
+ * are read; `event:`, `retry:` and unknown fields are ignored (the
+ * transport carries one kind of event and owns its own backoff), comments
+ * are heartbeats. An event dispatches on its blank line; an event the body
+ * ends inside is discarded, as the spec says, and the drain's end-of-body
+ * sweep fails whatever it left open.
+ *
+ * Each dispatched event's `id:` is recorded on `wire.position` — the value
+ * the loop sends as `Last-Event-ID` on its next connect.
+ *
+ * Transport wire detail; not meant for hand-written code.
+ * @internal
+ */
+export class EventStreamReader {
+  constructor(stream, wire) {
+    this.reader = stream.getReader();
+    this.decoder = new TextDecoder();
+    this.wire = wire;
+    this.buffer = "";
+    this.done = false;
+    this.data = null; // lines of the event being assembled
+    this.id = undefined;
+  }
+
+  async read() {
+    const chunk = await this.reader.read();
+    if (chunk.done) {
+      this.done = true;
+      this.buffer += this.decoder.decode();
+    } else {
+      this.buffer += this.decoder.decode(chunk.value, { stream: true });
+    }
+  }
+
+  // The next complete line, or null when the buffer holds none. A line ends
+  // at CRLF, LF or CR; a CR at the very end of the buffer may be half of a
+  // CRLF split across network reads, so it waits for the next read (unless
+  // the body is done, when it is a whole terminator).
+  takeLine() {
+    const buffer = this.buffer;
+    const cr = buffer.indexOf("\r");
+    const lf = buffer.indexOf("\n");
+    const end = cr < 0 ? lf : lf < 0 ? cr : Math.min(cr, lf);
+    if (end < 0) return null;
+    let skip = 1;
+    if (buffer[end] === "\r") {
+      if (end + 1 === buffer.length) {
+        if (!this.done) return null;
+      } else if (buffer[end + 1] === "\n") skip = 2;
+    }
+    this.buffer = buffer.slice(end + skip);
+    return buffer.slice(0, end);
+  }
+
+  async next() {
+    while (true) {
+      const line = this.takeLine();
+      if (line === null) {
+        if (this.done) return { done: true, value: undefined };
+        await this.read();
+        continue;
+      }
+      if (line === "") {
+        // dispatch — an event with no data field is not an event
+        const data = this.data;
+        const id = this.id;
+        this.data = null;
+        this.id = undefined;
+        if (data === null) continue;
+        if (id !== undefined && this.wire) this.wire.position = id;
+        return { done: false, value: data.join("\n") };
+      }
+      if (line[0] === ":") continue; // comment (heartbeat)
+      const colon = line.indexOf(":");
+      const field = colon < 0 ? line : line.slice(0, colon);
+      let value = colon < 0 ? "" : line.slice(colon + 1);
+      if (value[0] === " ") value = value.slice(1);
+      if (field === "data") (this.data ??= []).push(value);
+      else if (field === "id" && !value.includes("\0")) this.id = value;
+    }
+  }
+
+  async drain(interpret) {
+    while (true) {
+      const result = await this.next();
+      if (result.done) {
+        break;
+      }
+      interpret(result.value);
+    }
+  }
+
+  /** End the read (see `ChunkReader.cancel`). */
+  cancel(reason) {
+    return this.reader.cancel(reason);
+  }
+}
+
+/**
+ * The runtime's position for a value-shaped yield: a digest of the value's
+ * JSON form, carried as the event's `id:` and echoed back on reconnect so
+ * the server can skip re-sending a first emission the client already holds
+ * (the data-tier analog of a frame's hole digest). Over `JSON.stringify` of
+ * the VALUE, not over the codec record that carries it — a record's
+ * reference ids depend on what the stream sent before it, so the same value
+ * encodes differently on a fresh connection. `undefined` for a yield that
+ * is not JSON-safe: such a yield carries no id and is never skipped.
+ *
+ * FNV-1a in two 32-bit lanes (a second seed, not a 64-bit arithmetic that
+ * JavaScript lacks) → 16 hex characters. Not a security boundary: an equal
+ * digest only elides a re-send the client would have discarded as equal.
+ * @internal
+ */
+export function positionDigest(value: unknown): string | undefined;
+
+/** Digests a JSON-safe value for use as an event id (see the notes above). */
+export function positionDigest(value) {
+  if (value === undefined || !isJSONSafe(value)) return undefined;
+  const text = JSON.stringify(value);
+  if (typeof text !== "string") return undefined;
+  return textDigest(text);
+}
+
+/**
+ * The digest behind `positionDigest`, over a string as-is: the frame tier's
+ * hole/fragment digest (RFC 11 §9.5, Hole hashes) — minted by the server
+ * over the html it emits, stored by the client per hole, echoed back on a
+ * resume as the have-list. Same lanes, same width, same non-goal (a
+ * collision elides a re-send, nothing more).
+ * @internal
+ */
+export function textDigest(text: string): string;
+
+export function textDigest(text) {
+  let a = 0x811c9dc5;
+  let b = 0x050c5d1f;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    a = Math.imul(a ^ code, 0x01000193);
+    b = Math.imul(b ^ code, 0x01000193);
+  }
+  return (a >>> 0).toString(16).padStart(8, "0") + (b >>> 0).toString(16).padStart(8, "0");
 }
 
 // A codec frame's payload is `JSON.stringify` of a SerovalNode — it always
@@ -1177,19 +1607,24 @@ export async function serializeString(value, codecOptions) {
  */
 export function deserializeStream<T = unknown>(
   source: Request | Response,
-  codecOptions?: JSONCodecOptions
+  codecOptions?: JSONCodecOptions,
+  wire?: unknown
 ): Promise<T>;
 
 /**
  * Decodes a framed stream from a Request/Response body. Resolves with the
  * first chunk's value (the source value); later chunks settle the async
- * values referenced inside it.
+ * values referenced inside it. The framing is the length-prefixed one
+ * unless the caller is a live loop (`wire` present) and the body is an
+ * event stream — then the loop's reader (see `LIVE_WIRE`), which also
+ * records each event's position on the wire.
  */
-export async function deserializeStream(source, codecOptions) {
+export async function deserializeStream(source, codecOptions, wire) {
   if (!source.body) {
     throw new Error("missing body");
   }
-  const reader = new ChunkReader(source.body);
+  const reader =
+    wire && isEventStream(source) ? wire.open(source.body) : new ChunkReader(source.body);
   const result = await reader.next();
   if (!result.done) {
     // An error trailer as the FIRST frame is the whole answer: encoding
@@ -1228,9 +1663,29 @@ export async function deserializeStream(source, codecOptions) {
     // sweep no-ops, while a truncation that lands exactly on a frame
     // boundary — indistinguishable from completion — leaves stranded values
     // that can never settle once the body is done.
+    //
+    // A live loop (`wire`) is told instead of swept: the body's end is the
+    // connection's lifetime signal — a death when deferreds are still open,
+    // a completion when none are — and the loop decides what happens to the
+    // open ones. A death it will reconnect from leaves them pending (the
+    // re-yielded answer supersedes them; throwing into them would surface
+    // the death the loop exists to erase). An iteration ending for good
+    // settles them by how it ended: `sweep` fails them (ended by error),
+    // `close` completes the streams and leaves promises pending (ended by
+    // the consumer or by completion) — see the loop's emitClosed.
+    const connection = wire && wire.connection;
+    let endConnection;
+    if (connection) connection.ended = new Promise(resolve => (endConnection = resolve));
+    const end = error => {
+      const sweep = () => deserializeChunk.abort(error);
+      if (connection) {
+        const close = () => deserializeChunk.close();
+        endConnection({ open: deserializeChunk.open(), error, sweep, close });
+      } else sweep();
+    };
     reader.drain(interpretChunk).then(
-      () => deserializeChunk.abort(new Error("Server function stream ended unexpectedly.")),
-      error => deserializeChunk.abort(error)
+      () => end(new Error("Server function stream ended unexpectedly.")),
+      error => end(error)
     );
 
     return interpretChunk(result.value);

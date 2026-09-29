@@ -1,0 +1,312 @@
+# Chrome Performance Tracks — Solid's records on the Performance panel
+
+_Drafted 2026-09-18 as a Cursor plan; landed in the repo 2026-09-21 with the
+work. Status: SHIPPED through Stage 4 (#3580); Stage 5 (server spans over
+`Server-Timing`) implemented on `feat/performance-tracks-server`, PR pending. Sibling of `responsiveness-findings-plan.md` (the findings and the
+interaction-contract decisions D1/D2; its "↔ Tracks" marks are the meeting
+points) and second consumer, beside `@sentry/solid-2`, of the observe-tier
+contract in `proposals/production-observability-sketch.md` §7. Owner: Ryan._
+
+## Why
+
+The human's role is shifting from writer to verifier, and humans do not
+verify by reading JSONL artifacts; they verify on a timeline they already
+trust. When an agent says "your click's write sat in a silent hold for 400ms
+behind `getUser`" and the developer opens the Performance panel and sees the
+same named span, same duration, same origin on a Solid track between
+Chrome's main-thread and network tracks, the loop closes. Same records, two
+renderings: the artifact for the agent, the track for the human, consistent
+because they are one stream. Everyone else's track shows what rendered;
+Solid's shows why.
+
+Design constraint that follows: every label, tooltip and property on a
+track comes from the shared formatters (`formatOrigin`, `formatRerun`) and
+the same `ownerPath` the diagnostics artifact carries, never from
+adapter-local strings, so the two renderings cannot drift.
+
+## What shipped
+
+`@solidjs/web/performance-tracks` — `enablePerformanceTracks(options?)`,
+dev and observe tiers, a no-op in prod (the module folds to `() => noop`).
+User documentation: `documentation/solid-2.0/08-dev-diagnostics.md`, "Chrome
+Performance panel". Emission mirrors React's: `console.timeStamp(label,
+start, end, track, group, color)` on the cheap path, `performance.measure`
+with `detail.devtools` (+ batched `clearMeasures`) in rich mode (dev
+default); every entry retroactive from the record's own `performance.now()`
+stamps, so no hot path is bracketed. Tracks seeded with zero-length entries
+at t=0.003 in a fixed order.
+
+| Track          | Records                               | Reads as                                                                                                                                                                      |
+| -------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Interactions` | `interaction`                         | input delay → handler → settle (`committed`/`held`); silent hold = `warning`                                                                                                  |
+| `Propagation`  | `flush` + `rerun`/`create`/`effect`   | one wave per drain (`count 0 → 1 — click on button#next · 5 runs, 1 unchanged`), the runs beneath it labelled `node ← cause`                                                  |
+| `Effects`      | `rerun`/`create`/`effect` (effects)   | re-runs by owner path from the nearest component (`<Row> › paint`; full path in `Owner path`), `· create`, `· callback`; colour by self time; `warning` when `changed: false` |
+| `Memos`        | `rerun`/`create` (memos)              | same                                                                                                                                                                          |
+| `Async`        | `flight`, `fallback`                  | kickoff → landing (`abandoned` = `warning`); fallback shown → hidden                                                                                                          |
+| `Holds`        | `hold`                                | the wait, by blockers; `warning` silent, `error` long (the engine's verdicts)                                                                                                 |
+| `Navigations`  | `navigation`                          | request → settle, by route pattern                                                                                                                                            |
+| `Server`       | `call`, `frame` (web runtime records) | server-function calls; frame streams with a shell sub-span                                                                                                                    |
+| Timings        | `OBSERVE.diagnostics`                 | one marker per finding, `performanceIssue` at `warn`+ (Stage 4)                                                                                                               |
+
+Stages, as landed (one commit each on the branch):
+
+- **Stage 0 — shared foundation** (`@solidjs/signals`, `@solidjs/web`):
+  `attribution.enable()` as a hold returning its release (live state
+  survives until the last hold; options combine per key by the most
+  demanding request — a hold adds to what the engine does, never takes away
+  what another asked for — and a released hold withdraws its requests;
+  `disable()` is the full teardown; each
+  `enable()` resets the aggregation windows, which is what a capture wants
+  — the token form landed in review, replacing a counted `disable()`); `AttributionOptions.checks` (default `true`, D2
+  proper still open); `isSilentHold`/`isLongHold` on the public entry (since
+  replaced by the `HoldEvent.silent`/`.long` fields, stamped at settle);
+  `dispatchAsInteraction` passes `at: e.timeStamp` and the record carries
+  `inputDelayMs`; the INP join recipe documented (`entry.startTime ===
+interaction.at`).
+- **Stage 1 — adapter over existing data** (`@solidjs/web`): the subpackage,
+  rollup dev/observe/prod entries, export conditions, `Interactions` /
+  `Effects` / `Memos` / `Holds` / `Navigations` / `Server`, `minMs`, `rich`,
+  `scrub`, `group`; vitest specs; verified in Chrome with a scratch page.
+- **Stage 2 — engine records for parity** (`@solidjs/signals`): `flush`,
+  `create`, `effect`, `flight`, `fallback` (below); `effectRunStart/End`
+  moved from `__DEV__` to `__OBSERVE__`; a 27% regression on the enabled
+  observe path (a `WeakMap.set` per effect callback in `pushFrame`) found
+  and removed by registering effect frames lazily, only when a write uses
+  one as its origin — enabled cost back at the `next` baseline. Re-run after
+  the rebase over #3575 (the boundary run path rewritten): 2,000 effects on
+  one signal, and 200 `<Loading>` boundaries each over a memo read by 10
+  effects, disabled / enabled `checks: false` / enabled `checks: true`,
+  min-of-5 medians of 200 flushes — every cell within ±6% of `next`, signs
+  both ways (parity; the machine's noise band).
+- **Stage 3 — Propagation track** (replaced the planned component record).
+  Solid does not re-render components, so a per-component track answers the
+  wrong question; what a developer wants to see is the graph the write
+  travelled. `ChangeRecord.nodeId` on derived records links a run's causes
+  to the memo runs that produced them; the adapter folds each drain into a
+  wave and labels every run by its cause. Internal flow-control nodes were
+  named (`conditions`, `children`, `boundary`, `value`, `reveal order`) so
+  the adapter can fold them into their tag.
+- **Stage 3.5 — compiler source names** (`@solidjs/compiler`,
+  `@solidjs/babel-plugin`, `@solidjs/web`, `@solidjs/signals`): the option
+  `componentNames` became `sourceNames: boolean | { components, bindings }`;
+  `bindings` names every compiled binding effect by what it writes
+  (`span.textContent`, `div.class:active`, `div.children`, `div.spread`);
+  the new native pass `transformSourceNames` (`sourceNames.primitives`)
+  names `createSignal`/`createMemo`/`createStore`/… after the identifier
+  they are declared as, prefixed with the enclosing non-component function
+  (`createCounter.value`), on `.ts`/`.js` modules too; stores honour
+  `options.name` (`todos.title`, not `store.title`). Without this the
+  Propagation track read `signal → computed → effect`.
+- **Stage 4 — dev enrichments** (`@solidjs/web`, `solid-js`): diagnostics
+  as Timings markers with `performanceIssue` at `warn`+ (`learnMoreUrl` =
+  the repair guide's section for the code — since landed as
+  `DEV.guideUrl(code)` (dev tier; the link is omitted in observe builds), the
+  `diagnosticGuideUrl` export from `solid-js` it began as is gone; `info` stays a plain marker; under the scrub only code, kind
+  and owner travel); `console.createTask(label)` on the dev component
+  record (`_component.task`) and every span/marker emitted inside the
+  nearest component's task so its stack in the panel is the JSX site;
+  `Owner path` (unfolded), `Node`, `Node id` and root `Origin` properties on
+  every node span.
+
+## Engine records (Stage 2), in the responsiveness plan's four fields
+
+- **`flush`** — Known: `flushStart()`/`flushEnd()` in `scheduler.ts`, outside
+  every `try`, `__OBSERVE__`-gated. Shape: `{ at, durationMs, runs, created,
+held, interaction? }`. Idle cost: one null-check per drain; the record is
+  built only while a `flush` listener exists. Proof:
+  `attribution-timeline.test.ts` — one record per drain with its counts; a
+  drain under a transition is `held`.
+- **`create`** — Known: `recomputeStart(el, create: true)`/`recomputeEnd`
+  (the existing hooks; previously `recomputeEnd` skipped the record when
+  `frame.causes === null`). Shape: `RerunEvent` minus causes. Idle cost:
+  none new; built only while listened to; never enters `history("rerun")`/`costs()`.
+  Proof: a memo created inside a render effect's body produces one `create`
+  record counted in the enclosing `flush.created`.
+- **`effect`** — Known: `effectRunStart/End(el)` in `effect.ts`, guard moved
+  from `__DEV__` to `__OBSERVE__`. Shape: `{ at, durationMs, nodeId,
+nodeName, run?, interaction? }`. Idle cost: one null-check per callback;
+  the enabled cost audited (below). Proof: callback timing tests; the
+  micro-benchmark.
+- **`flight`** — Known: the fold facts `flightStart(el, superseded)` /
+  `flightLanded(el, ms)` promoted to a record. Shape: `{ nodeId, nodeName,
+ownerPath?, at, durationMs, outcome: "landed" | "abandoned",
+interaction? }` — the fingerprint fields responsiveness item 4's
+  `ABANDONED_FLIGHTS` needs. Idle cost: none new (the folds already ran).
+  Proof: a superseded flight is `abandoned`; a landed one carries its
+  duration.
+- **`fallback`** — Known: `boundaryFallback(boundary, tree, shown,
+transition)`. Shape: `{ ownerPath?, at, shownMs, interaction? }` (item 4's
+  `FALLBACK_FLASH` reads `shownMs`). The show is the boundary's SWAP, a
+  staged write that lands with its transaction (#3575: `on` follows the
+  frame); the engine holds the open under that transaction and stamps `at`
+  at the `flushEnd` of the drain that committed it — the display instant —
+  and a hide before that drops the open: a swap the content outran, or one
+  the commit's own sweep cleared before any effect ran, was never on
+  screen and is no record (the feedback fold's `shows`/`flashes` agree).
+  Idle cost: none new. Proof: display → hide produces one record with the
+  boundary's owner path; the #3540 product page's "content lands first"
+  shape produces none, and its "shell lands first" shape is timed from the
+  commit, not the re-arm.
+- **`ChangeRecord.nodeId`** (Stage 3) — Known: `stampWrite`/`stampDerived`.
+  Shape: optional `nodeId` on every derived record. Idle cost: one field
+  write on a path already stamping. Proof: `attribution.test.ts`, the chain
+  through a memo carries the memo's id.
+
+## Decisions, and where they landed
+
+- Explicit opt-in; Start enables it in dev by default (Start repo, out of
+  scope here). Package name `performance-tracks` on purpose: Chrome's
+  feature is "custom performance tracks", React's is "React Performance
+  Tracks"; the subpath stays on `@solidjs/web` because the adapter paints
+  web records (`call`, `frame`) and inherits the dev/observe/prod tiering.
+- Imports only `attribution`, `formatRerun`, `formatOrigin`, the hold
+  verdicts (and reads `OBSERVE.ownerPath` / `DEV.guideUrl` off the runtime
+  objects) — never `costs`/`feedback`, which
+  would re-enable the fold tables the engine diet made optional.
+- `minMs` is `0` in dev and `0.05` in observe builds; the vendor adapter keeps
+  its own thresholds (sketch §4.1). The wave span is always painted and
+  carries the counts, so a fan-out too small to paint still reads as
+  `47 runs`.
+- PII: observe builds apply the sketch §6 scrub by default (no value
+  previews; element text only on a `button`/`a`; a finding's sentence
+  dropped); dev shows everything. _As landed (public-API consolidation,
+  PR 3):_ the adapter's `scrub` option and its scrub helpers were removed;
+  the same posture is now the engine's `AttributionOptions.values`
+  (`"full"` | `"labels"` — the old observe scrub | `"none"`; the default is
+  the tier's: `"full"` in dev, `"none"` in observe), applied at the source
+  when the record is built, least permissive level winning across holds.
+  The adapter paints what the record carries — an observe build's tracks
+  inherit `"none"`; pass
+  `enablePerformanceTracks({ attribution: { values: "labels" } })` for the
+  old observe posture. A finding's marker always carries `event.message`
+  (a message from a non-engine emitter is not the engine's to govern).
+- Clock quantization (08-dev-diagnostics): without cross-origin isolation
+  many `Effects`/`Memos` spans are zero-width. Never dropped; the wall-clock
+  tracks carry the meaning.
+- The component record (original Stage 3) was cancelled, not deferred. A
+  mount-only flame was React's shape, not Solid's; creation runs on
+  `Effects`/`Memos` plus the Propagation wave describe a mount storm better
+  (`InteractionEvent.created` counts it).
+- Third-party composed primitives keep the labels their package chose: the
+  primitives pass never runs inside `node_modules`.
+
+## Coordination
+
+- **Sentry (`@sentry/solid-2`, paused).** Unaffected by Stage 4 (adapter-side,
+  dev-only). Benefits from Stages 0–3.5 on rebase: `enable()` as a hold with
+  a release (it and this adapter can now coexist), `at`/`inputDelayMs` for the INP
+  join, the timeline records, and source names in `ownerPath`. One caveat
+  for its brief: its diagnostics fingerprint is `[code, ...ownerPath]`, and
+  the renamed internal nodes (`computed` → `children`, `effect` →
+  `span.textContent`) regroup existing issues once on upgrade.
+- **D1** (interaction stays open across the handler's returned promise) is
+  still the responsiveness plan's to decide; the adapter is D1-agnostic (the
+  settle span is `at → at + settledMs`). Cheaper to settle before Sentry
+  resumes than after.
+- **`@solidjs/vite-plugin`** (`source-names` branch): `componentNames` →
+  `sourceNames`, the primitives pass ahead of the JSX transform and alone on
+  `.ts`/`.js` ids, `solid.sourceNames` per-kind overrides. Lockstep with the
+  compiler release carrying `sourceNames` — the compiler rejects unknown
+  options, so the plugin's `@solidjs/compiler` range must move with it.
+
+## Stage 5: server spans in the browser panel
+
+The client-side `Server` track shows a server-function call as the browser
+saw it: request out, answer decoded. What the server did inside that span —
+how long the function itself ran, and for the document, how long the shell
+render waited on which `<Loading>` boundary before the head could leave —
+is the server's `invocation` and `boundary` records, which never reach the
+browser. Stage 5 carries the durations over and paints them under the
+matching client span. React 19.2's server tracks do the equivalent for
+Flight only, dev-only; this works on any Solid response, in observe too.
+
+**Carrier: `Server-Timing`, the header the trace already rides.** One
+metric per timed thing, standard `dur` and `desc` params, appended at head
+commit by the same path as the trace entries (`appendTraceServerTiming`;
+`commitResponseStub` / `commitEventResponse`). No custom chunk, no `<meta>`:
+the header is what Chrome's Network details already show with no client
+code, what `PerformanceResourceTiming.serverTiming` and
+`PerformanceNavigationTiming.serverTiming` expose to the page, and the one
+place a metric can land for a redirect, an RPC response or a frame stream
+as much as for the document. The consequence is accepted, not worked
+around: a header is frozen when the head leaves, so only what the server
+knew by then rides it. For a server-function response that is everything
+(the function ran before the response was built). For a streamed document
+it is the shell: the render up to the flush, and the boundaries that
+settled inside it. Boundaries that stream after the shell cannot be on the
+header; they stay server-side records (the diagnostics artifact has them,
+`SSR_*` findings judge them). A later stage could carry them in the swap
+chunk the client already applies; that is a new carrier and a new decision.
+
+| Metric             | On                             | `dur`                                                   | `desc`                                                        |
+| ------------------ | ------------------------------ | ------------------------------------------------------- | ------------------------------------------------------------- |
+| `solid-invocation` | the response the call produced | the execution (`InvocationEvent.durationMs`)            | the function `id` (a direct SSR-time call: on the document)   |
+| `solid-shell`      | the document                   | render start → head commit (`renderToString`: complete) | —                                                             |
+| `solid-boundary`   | the document                   | discovery → settle, boundaries settled before the head  | the boundary's nearest component label, else its hydration id |
+
+**Gate — when the header changes.** The trace precedent holds: an app with
+no observer sees zero wire change in the observe build. Metrics ride the
+header exactly when the runtime is already measuring for a listener —
+`OBSERVE.records.observed("invocation")` / `observed("boundary")` on the
+server (a diagnostics capture, an APM adapter) — because the measurement is
+the same one the record carries; the header is a second reader of it, not
+a second clock. Dev builds carry them always: dev is where the panel is
+used, `enablePerformanceTracks()` runs in the browser and has no server
+half to switch on, and the boundary already measures in dev for its own
+checks. (`observeInvocation` gains the same `IS_DEV || observed` timing
+gate `ssrLoadingBoundary` has.) No new server API: an observe deployment
+that wants server spans in the panel installs an observer, the same way it
+gets the trace advertised.
+
+_As landed (public-API consolidation, PR 3):_ each metric is a projection
+of one record object, read at head commit (`appendTraceServerTiming` over
+`TraceRecord.timing` / `TraceRecord.render`), not a second push beside the
+record. `solid-shell` got its own record — `"render"` (`RenderEvent`: `mode`,
+`at`, `shellMs`, `durationMs`, `boundaries`, `outcome`; live `event`,
+`trace`) — and its own gate, `observed("render") || IS_DEV`, instead of
+riding the boundary listener; `shellMs` is stamped where the shell actually
+completes (the stream's `doShell`, the string's assembled document) rather
+than at stub commit. The wire format is unchanged.
+
+**Client — the adapter.** Nothing new on the wire from the browser and no
+change to the `call` record: the adapter reads the metrics off
+`CallLive.response` (the transport's own `Response`; same-origin headers are
+readable, cross-origin ones when `Timing-Allow-Origin` allows) and places
+them with the fetch's `PerformanceResourceTiming` entry — the server span
+ends at the entry's `responseStart` (the head left the server right after
+the function returned) and runs back `dur`. The entry lands in the
+performance timeline after the body is read, so it can arrive after the
+`call` record: the adapter keeps a `PerformanceObserver` on `resource`
+entries while enabled and paints when the entry for the call's URL and time
+window shows up (entries are historical stamps, so painting late is exact;
+the observer sees entries the buffer would have dropped). Without a
+resource entry (no `PerformanceObserver`, a `responseStart` of `0` under a
+missing `Timing-Allow-Origin`) the server span is placed centred in the
+call span and its tooltip says so. Pending calls with no entry are dropped
+after thirty seconds. For the document, at enable, the navigation entry's
+`serverTiming` paints `solid-shell` ending at its `responseStart` and each
+`solid-boundary` inside it, ending where the shell ends (their settle is at
+or before the flush; the exact offset is not carried — the last one to
+settle is what releases the shell, the others are earlier by an unknown
+margin, stated in the tooltip). Server spans are `tertiary` on the `Server`
+track, labelled `<id> · server` / `shell · server` / `<Page> · boundary`,
+beneath the `secondary` client spans, so the wire is the visible gap
+between them.
+
+Server waterfall / N+1 per request stays a consumer-side join over
+`invocation`/`boundary` records (responsiveness item 5b).
+
+## Where Solid beats React
+
+- Runs in production observe builds, not only dev/profiling.
+- Every span answers "why": the cause chain to the root write, deps
+  added/removed, provable waste (`changed: false`) instead of prop-diff
+  heuristics — and the Propagation track shows the graph the write
+  travelled, node by node.
+- Holds are first-class with acknowledgement verdicts (silent vs
+  acknowledged) and INP-aligned interaction settle spans; navigations named
+  by route; async flights and fallbacks as spans plus findings.
+- Interaction → server call → hold → effect chain links by origin identity,
+  not by time.
+- Spans are the actual DOM-updating effects and memos, not whole-component
+  re-renders.

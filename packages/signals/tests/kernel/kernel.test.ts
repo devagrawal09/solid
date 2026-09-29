@@ -142,7 +142,8 @@ describe.each(apis)("%s", (_name, k) => {
     expect(log).toEqual(["x", "y2", "y3"]);
   });
 
-  it("disposes children newest first, then cleanups in order, then the effect cleanup", () => {
+  // Cleanups unwind (the core's #3572): later registrations run first.
+  it("disposes children newest first, then cleanups in unwind order, then the effect cleanup", () => {
     const log: string[] = [];
     const dispose = createRoot(d => {
       createRenderEffect(
@@ -162,8 +163,8 @@ describe.each(apis)("%s", (_name, k) => {
       "memo cleanup",
       "first compute cleanup",
       "first effect cleanup",
-      "root cleanup 1",
-      "root cleanup 2"
+      "root cleanup 2",
+      "root cleanup 1"
     ]);
   });
 

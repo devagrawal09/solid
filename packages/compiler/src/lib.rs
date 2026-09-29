@@ -35,6 +35,8 @@ mod node_adapter;
 #[cfg(feature = "node")]
 mod refresh;
 mod shared;
+#[cfg(feature = "node")]
+mod source_names;
 mod ssr;
 mod strict;
 mod store_handles;
@@ -62,7 +64,9 @@ pub use island_emit::{
     island_exports,
 };
 pub use resumable::compile_resumable;
-pub use compiler::{CompileOptions, CompileOutput, Generate, Renderer, Syntax, Wrapper, compile};
+pub use compiler::{
+    CompileOptions, CompileOutput, Generate, Renderer, SourceNames, Syntax, Wrapper, compile,
+};
 pub use error::{CompileError, CompileErrorKind};
 pub use strict::{
     StrictAnalysis, StrictBlockSummary, StrictCall, StrictCreation, StrictDiagnostic, StrictEscape,

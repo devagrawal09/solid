@@ -40,6 +40,9 @@ export const DIST = {
   solid: join(ROOT, "packages/solid/dist/solid.js"),
   web: join(ROOT, "packages/web/dist/web.js"),
   solidServer: join(ROOT, "packages/solid/dist/server.js"),
+  // `solid-js/internal` (@solidjs/web's seams, upstream #3470): aliased ahead
+  // of `solid-js`, which as a string alias would prefix-match it.
+  solidInternal: join(ROOT, "packages/solid/dist/internal.js"),
   webServer: join(ROOT, "packages/web/dist/server.js")
 };
 
@@ -202,8 +205,8 @@ export async function bundleClient(entry, { hydratable = true, count = false, or
     // `aliases` re-binds a module for one variant: the island tiers bind the
     // same activation code to the tier-1 kernel instead of the core.
     alias: dev
-      ? { "solid-js": DIST.solid.replace("solid.js", "solid.dev.js"), "@solidjs/web": DIST.web.replace("web.js", "web.dev.js"), "@solidjs/signals": DIST.signals.replace("prod/index.js", "dev.js"), ...aliases }
-      : { "solid-js": DIST.solid, "@solidjs/web": DIST.web, "@solidjs/signals": DIST.signals, ...aliases },
+      ? { "solid-js/internal": DIST.solidInternal, "solid-js": DIST.solid.replace("solid.js", "solid.dev.js"), "@solidjs/web": DIST.web.replace("web.js", "web.dev.js"), "@solidjs/signals": DIST.signals.replace("prod/index.js", "dev.js"), ...aliases }
+      : { "solid-js/internal": DIST.solidInternal, "solid-js": DIST.solid, "@solidjs/web": DIST.web, "@solidjs/signals": DIST.signals, ...aliases },
     plugins: [
       ...(islands ? [islandsBuild.esbuildIslands({ root: islands.root, compiler: islands.compiler, mode: islands.mode, prefetch: islands.prefetch })] : []),
       tildePlugin(tildeRoot),
@@ -261,7 +264,7 @@ export async function loadServer(entry, outfile, { rewrites, swaps, tildeRoot, o
     outfile,
     logLevel: "error",
     loader: { ".json": "json" },
-    alias: { "solid-js": DIST.solidServer, "@solidjs/web": DIST.webServer, "@solidjs/signals": DIST.signals },
+    alias: { "solid-js/internal": DIST.solidInternal, "solid-js": DIST.solidServer, "@solidjs/web": DIST.webServer, "@solidjs/signals": DIST.signals },
     plugins: [tildePlugin(tildeRoot), compilerPlugin({ generate: "ssr", hydratable: true, rewrites, options, swaps, islands })]
   });
   return import(pathToFileURL(outfile).href + `?${Date.now()}`);

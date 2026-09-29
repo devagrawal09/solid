@@ -1,20 +1,44 @@
 // @ts-nocheck
 import { COMPOSED_BODY_FRAMING, ChildProperties, isHttpNavigationTarget } from "./constants.js";
 import {
-  sharedConfig,
   createRoot as root,
-  ssrHandleError,
   getOwner,
+  onCleanup,
   runWithOwner,
-  creationStamp,
-  inServerComponentScope,
   createComponent,
   untrack,
   merge as mergeProps,
-  ssrScope as scope,
+  $PROXY,
   isReadOp
 } from "solid-js";
+import {
+  sharedConfig,
+  ssrHandleError,
+  creationStamp,
+  inServerComponentScope,
+  viewOf,
+  sourceOwners,
+  ssrScope as scope,
+  ssrSanitizeError,
+  reportServerError
+} from "solid-js/internal";
+import type { ServerErrorSite } from "solid-js/internal";
 import { effect, memo } from "./render.js";
+import { setRequestErrorHook } from "./request-error-hook.js";
+// Trace context (W3C `traceparent`): derived per request, exposed through
+// `getTraceContext()`, emitted on the response head at commit and in the
+// shell head — see trace.ts for the tiering and the carriers.
+import {
+  traceFor,
+  traceForEvent,
+  appendTraceServerTiming,
+  hasServerTiming,
+  mergeServerTiming,
+  traceMetaMarkup,
+  type TraceContext
+} from "./trace.js";
+import { observeRender, timesServerWork } from "./server-observe.js";
+import { records } from "./observe.js";
 import {
   createHydrationSerializer,
   getLocalHeaderScript
@@ -55,10 +79,21 @@ import {
   resolveHead,
   STYLESHEET_FETCH_META
 } from "./head.js";
+// Findings on `OBSERVE.diagnostics` — wiring (`emitFinding`, `recordFinding`)
+// in every observing tier, dev checks (`devCheck`) in dev only; see
+// diagnostics.ts for the two gates.
+import {
+  devCheck,
+  emitFinding,
+  errorText,
+  recordFinding,
+  unscopedHoleAllocatedIds
+} from "./diagnostics.js";
 
 import { JSX } from "../jsx/jsx.js";
 
 import { SerializerPlugin } from "../serialization/src/serializer-decode.js";
+import { toBorderForm } from "../frames/src/frame-container-plugin.js";
 
 type MountableElement = Element | Document | ShadowRoot | DocumentFragment | Node;
 
@@ -307,6 +342,14 @@ export { createComponent, effect, memo, untrack, mergeProps, scope, getOwner };
 // the claims-gate guard (`sharedConfig.context.claims ? ssrClaim(...) : ""`)
 // needs the shared render context at template-evaluation time.
 export { sharedConfig };
+// Module-local alias for the per-element hot paths (`ssrElement`'s walk):
+// an ESM module runner that keeps imports live exposes each imported
+// binding through a getter, so every `sharedConfig.x` at a call site is a
+// getter call — the SSR bench lane runs the source that way and showed the
+// walk's one context read per element as a ~5–10% regression that the
+// bundled output (a plain binding) never had. Reading through a module
+// constant makes it a property load in both.
+const renderConfig = sharedConfig;
 
 export {
   DOMWithState,
@@ -415,11 +458,12 @@ function resolveAssets(moduleUrl, manifest) {
           // reach `ResolvedAssets.preloads`, whose href is typed as a string.
           const { href: bad, ...rest } = link;
           if ("_SOLID_DEV_" && bad !== undefined)
-            console.warn("Preload href must be a non-empty string; dropping it.", bad);
+            preloadInvalid("href", "Preload href must be a non-empty string; dropping it.", bad);
           preloads.push(rest);
         }
         if ("_SOLID_DEV_" && srcset && hasRelativeCandidate(srcset))
-          console.warn(
+          preloadInvalid(
+            "imagesrcset",
             "imagesrcset candidates are not joined with the manifest base — they resolve " +
               "against the document URL, so a relative candidate points somewhere else " +
               "than the joined href; the integration should emit resolved URLs.",
@@ -583,6 +627,14 @@ function applyAssetTracking(context, tracking, manifest, noScripts) {
   });
   context.registerModule = tracking.registerModule;
   context.getBoundaryModules = tracking.getBoundaryModules;
+  // The per-request resolution cache lazy() reads (`resolveLazyAssets`),
+  // created on the ROOT context: render contexts derive from it by
+  // prototype (a Loading boundary's buffered context, a server-owned
+  // frame's claims context), and a cache the first lazy() on the page
+  // created lazily on a derived context would be that subtree's alone —
+  // the next lazy() outside it would start a second Map and re-ask the
+  // resolver for every module the first already resolved.
+  context._lazyAssets = new Map();
   // A manifest can be the static object produced by a build (sync lookups,
   // entry enumeration) or a resolver — the primitive a dev server implements
   // against its live module graph: `{ resolve, resolveSync? }`, where
@@ -652,13 +704,88 @@ const PRELOAD_LINK_ATTRIBUTES = [
 // the "has a source" check. Doing it the other way round accepted an
 // `imagesrcset` on a non-image destination as the source, then filtered that
 // same attribute off, and emitted a sourceless `<link rel="preload" as="script">`.
+//
+// Dev CHECK: an unusable preload descriptor — `PRELOAD_DESCRIPTOR_INVALID`,
+// `data.field` naming the attribute at fault and `data.value` what it held.
+// Whether the link was dropped or shipped without the attribute is the
+// message's business; the site keeps doing what it did after the check.
+function preloadInvalid(field, message, value) {
+  devCheck({
+    code: "PRELOAD_DESCRIPTOR_INVALID",
+    kind: "head",
+    severity: "warn",
+    message: `[PRELOAD_DESCRIPTOR_INVALID] ${message}`,
+    data: value === undefined ? { field } : { field, value }
+  });
+}
+// Dev CHECK: a value at an insert position the server renderer has no
+// rendering for — `UNRECOGNIZED_INSERT_VALUE`, one code and one `render` kind
+// with the client's skip (client.ts). `data.type` is the one thing safe to
+// record about an arbitrary value; the value itself rides `data.value` for
+// the console consumer.
+function unrecognizedInsert(node) {
+  devCheck({
+    code: "UNRECOGNIZED_INSERT_VALUE",
+    kind: "render",
+    severity: "warn",
+    message: `[UNRECOGNIZED_INSERT_VALUE] Unrecognized value. Skipped inserting (${typeof node}).`,
+    data: { type: typeof node, value: node }
+  });
+}
+// Dev CHECK: an unscoped function hole built content at a counter position
+// the client does not share — `UNSCOPED_HOLE_ALLOCATED_IDS` (diagnostics.ts;
+// the client's `insert` runs its half around its transparent effect). Only
+// an `escape`d function value qualifies (`$esc`; scope wrappers restore the
+// counter, accessors own their ids): `escapeLate` records the counter's
+// next id when the hole was REGISTERED (`$reg`, argument evaluation — where
+// the client builds it in statement order); `before` is the next id when
+// the walk EVALUATED it, after every later argument of the template ran.
+// Equal positions hydrate fine even when the hole allocated (a zero-arity
+// boundary fallback thunk with nothing scoped after it); the finding is an
+// allocation at a shifted position. `undefined` outside an id tree. The
+// `ssr()` loop pays one `$reg` read per function hole and takes the bracket
+// only for a carrier (dev renders are benchmarked too). Once per hole
+// position per template: a row template evaluates its holes once per row
+// and the site is the same every time.
+let reportedHoles;
+function devPeekId() {
+  const peek = sharedConfig.devPeekNextContextId;
+  return peek === undefined ? undefined : peek();
+}
+function checkUnscopedHole(before, template, index, hole) {
+  if (hole.$reg === before) return;
+  const after = devPeekId();
+  if (after === before) return;
+  let seen = (reportedHoles || (reportedHoles = new WeakMap())).get(template);
+  if (seen === undefined) reportedHoles.set(template, (seen = new Set()));
+  if (seen.has(index)) return;
+  seen.add(index);
+  const name = hole.$fn.name;
+  const site = { hole: index, registered: hole.$reg };
+  if (name) site.name = name;
+  unscopedHoleAllocatedIds(before, after, site);
+}
+// Dev CHECK: a `useHead` registration the render could not honor —
+// `HEAD_TAG_INVALID`, `data.reason` the rule it broke (`non-head-tag`,
+// `invalid-attribute`, `props-error`, `group-error`, `after-shell-flush`,
+// `outside-render`) and `data.detail` the descriptor, name or error at fault.
+function headTagInvalid(reason, message, detail) {
+  devCheck({
+    code: "HEAD_TAG_INVALID",
+    kind: "head",
+    severity: "warn",
+    message: `[HEAD_TAG_INVALID] ${message}`,
+    data: detail === undefined ? { reason } : { reason, detail }
+  });
+}
 function registerPreloadLink(tracking, headRegistry, link, nonce) {
   if (!link || typeof link !== "object") {
-    if ("_SOLID_DEV_") console.warn('registerAsset("preload") requires a descriptor object.', link);
+    if ("_SOLID_DEV_")
+      preloadInvalid("descriptor", 'registerAsset("preload") requires a descriptor object.', link);
     return null;
   }
   if (typeof link.as !== "string") {
-    if ("_SOLID_DEV_") console.warn('registerAsset("preload") requires an as destination.');
+    if ("_SOLID_DEV_") preloadInvalid("as", 'registerAsset("preload") requires an as destination.');
     return null;
   }
   const as = asciiLowerCase(link.as);
@@ -679,8 +806,10 @@ function registerPreloadLink(tracking, headRegistry, link, nonce) {
       break;
     default:
       if ("_SOLID_DEV_")
-        console.warn(
-          `registerAsset("preload") received an unsupported as destination "${link.as}".`
+        preloadInvalid(
+          "as",
+          `registerAsset("preload") received an unsupported as destination "${link.as}".`,
+          link.as
         );
       return null;
   }
@@ -693,7 +822,8 @@ function registerPreloadLink(tracking, headRegistry, link, nonce) {
   // no browser can parse, and forge a resource identity out of garbage.
   const responsive = as === "image";
   if ("_SOLID_DEV_" && !responsive && (isSetAttr(link.imagesrcset) || isSetAttr(link.imagesizes)))
-    console.warn(
+    preloadInvalid(
+      isSetAttr(link.imagesrcset) ? "imagesrcset" : "imagesizes",
       'registerAsset("preload") only supports imagesrcset and imagesizes with as="image".'
     );
   let srcset = null;
@@ -703,7 +833,8 @@ function registerPreloadLink(tracking, headRegistry, link, nonce) {
       const value = link[name];
       if (!isSetAttr(value)) continue;
       if (typeof value !== "string") {
-        if ("_SOLID_DEV_") console.warn(`registerAsset("preload") expects a string ${name}.`);
+        if ("_SOLID_DEV_")
+          preloadInvalid(name, `registerAsset("preload") expects a string ${name}.`, value);
         continue;
       }
       if (name === "imagesrcset") srcset = value;
@@ -712,12 +843,15 @@ function registerPreloadLink(tracking, headRegistry, link, nonce) {
   }
   const href = typeof link.href === "string" && link.href ? link.href : null;
   if ("_SOLID_DEV_" && !href && link.href != null && link.href !== false)
-    console.warn("Preload href must be a non-empty string; dropping it.", link.href);
+    preloadInvalid("href", "Preload href must be a non-empty string; dropping it.", link.href);
   // Spec: "One or both of the href or imagesrcset attributes must be present."
   // A source set only counts once it survived the image-only filter above.
   if (!href && !srcset) {
     if ("_SOLID_DEV_")
-      console.warn('registerAsset("preload") requires a non-empty string href or imagesrcset.');
+      preloadInvalid(
+        "href",
+        'registerAsset("preload") requires a non-empty string href or imagesrcset.'
+      );
     return null;
   }
   // Spec: "If the imagesrcset attribute is present and has any image candidate
@@ -726,7 +860,8 @@ function registerPreloadLink(tracking, headRegistry, link, nonce) {
   // for a narrower slot silently fetches the wrong candidate and the <img>
   // downloads a second one.
   if ("_SOLID_DEV_" && srcset && !sizes && hasWidthDescriptor(srcset))
-    console.warn(
+    preloadInvalid(
+      "imagesizes",
       "imagesrcset uses a width descriptor, so imagesizes is required; without it the " +
         "source size defaults to 100vw and the preload may not match the image.",
       srcset
@@ -751,7 +886,8 @@ function registerPreloadLink(tracking, headRegistry, link, nonce) {
   if (headRegistry.resources.has(identity)) return null;
   // A different CORS or credentials mode has a different preload key.
   if ("_SOLID_DEV_" && props.crossorigin == null && (as === "font" || as === "fetch"))
-    console.warn(
+    preloadInvalid(
+      "crossorigin",
       `registerAsset("preload") with as="${as}" has no crossorigin and may not match the eventual request.`
     );
 
@@ -831,7 +967,12 @@ function registerHeadTags(registry, context, tracking, emitResource, nonce, tags
   for (let i = 0; i < tags.length; i++) {
     const desc = tags[i];
     if (!desc || !HEAD_ELIGIBLE_TAGS.has(desc.tag)) {
-      if ("_SOLID_DEV_") console.warn(`useHead: ignoring non-head tag`, desc);
+      if ("_SOLID_DEV_")
+        headTagInvalid(
+          "non-head-tag",
+          `useHead: ignoring non-head tag <${desc && desc.tag}>`,
+          desc
+        );
       continue;
     }
     const cls = classifyHeadTag(desc);
@@ -890,7 +1031,12 @@ function headShellReady(registry, block) {
       evalHeadProps(desc.props || {}, rel !== undefined ? { rel } : undefined);
     } catch (err) {
       if (pends(err)) continue;
-      if ("_SOLID_DEV_") console.warn(`useHead: error evaluating resource tag props`, err);
+      if ("_SOLID_DEV_")
+        headTagInvalid(
+          "props-error",
+          `useHead: error evaluating resource tag props: ${errorText(err)}`,
+          err
+        );
       parked.splice(i, 1);
       continue;
     }
@@ -956,7 +1102,12 @@ function emitHeadResource(registry, context, tracking, emitResource, nonce, desc
       });
       return;
     }
-    if ("_SOLID_DEV_") console.warn(`useHead: error evaluating resource tag props`, err);
+    if ("_SOLID_DEV_")
+      headTagInvalid(
+        "props-error",
+        `useHead: error evaluating resource tag props: ${errorText(err)}`,
+        err
+      );
     return;
   }
   const identity = resourceIdentity(desc.tag, props);
@@ -1035,7 +1186,12 @@ function commitHeadBoundary(registry, boundary, isPendingFragment) {
       try {
         resolved = reg.list();
       } catch (err) {
-        if ("_SOLID_DEV_") console.warn(`useHead: error evaluating head group membership`, err);
+        if ("_SOLID_DEV_")
+          headTagInvalid(
+            "group-error",
+            `useHead: error evaluating head group membership: ${errorText(err)}`,
+            err
+          );
         continue;
       }
       if (!Array.isArray(resolved)) resolved = [resolved];
@@ -1043,7 +1199,12 @@ function commitHeadBoundary(registry, boundary, isPendingFragment) {
       for (let j = 0; j < resolved.length; j++) {
         const desc = resolved[j];
         if (!desc || !HEAD_ELIGIBLE_TAGS.has(desc.tag)) {
-          if ("_SOLID_DEV_") console.warn(`useHead: ignoring non-head tag`, desc);
+          if ("_SOLID_DEV_")
+            headTagInvalid(
+              "non-head-tag",
+              `useHead: ignoring non-head tag <${desc && desc.tag}>`,
+              desc
+            );
           continue;
         }
         const cls = classifyHeadTag(desc);
@@ -1069,7 +1230,12 @@ function commitHeadBoundary(registry, boundary, isPendingFragment) {
         );
         key = evalHeadValue(desc.key);
       } catch (err) {
-        if ("_SOLID_DEV_") console.warn(`useHead: error evaluating tag props`, err);
+        if ("_SOLID_DEV_")
+          headTagInvalid(
+            "props-error",
+            `useHead: error evaluating tag props: ${errorText(err)}`,
+            err
+          );
         continue;
       }
       const identity = replaceableIdentity(desc.tag, props, key, "u:" + registry.uniq++);
@@ -1077,8 +1243,10 @@ function commitHeadBoundary(registry, boundary, isPendingFragment) {
         // Shell-only: a charset that changes mid-stream or a base that
         // changes after relative URLs resolved is incoherent by definition.
         if ("_SOLID_DEV_")
-          console.warn(
-            `useHead: <${desc.tag}> (${identity}) registered after shell flush is ignored`
+          headTagInvalid(
+            "after-shell-flush",
+            `useHead: <${desc.tag}> (${identity}) registered after shell flush is ignored`,
+            identity
           );
         continue;
       }
@@ -1131,7 +1299,14 @@ function headGroupSignature(winner) {
 // retitle script for embedded (`onHead`) hosts whose bytes it cannot see.
 // `noScripts` rides along for the embedded case — there is no script channel,
 // so the title falls back to a literal tag in the delivered string.
-function renderShellHead(registry, nonce, isPendingFragment, noScripts) {
+//
+// `traceMetas` is the request's trace as `<meta>` tags (trace.ts) — shell-
+// only by nature. They join the `</head>` splice with the app's metas (NOT
+// the prelude: that splices right after `<head>`, ahead of a shell's static
+// `<meta charset>`, whose first-1024-bytes constraint is the prelude's whole
+// reason to exist) and ride wherever that content does: the `</head>`
+// splice, the `onHead` string, or nowhere for a headless fragment.
+function renderShellHead(registry, nonce, isPendingFragment, noScripts, traceMetas = "") {
   commitHeadBoundary(registry, "", isPendingFragment);
   registry.shellFlushed = true;
   const winners = resolveHead(registry.committed);
@@ -1159,7 +1334,12 @@ function renderShellHead(registry, nonce, isPendingFragment, noScripts) {
       else others += markup;
     }
   }
-  return { prelude, html: registry.eagerHtml + links + metas + others + scripts, title, noScripts };
+  return {
+    prelude,
+    html: registry.eagerHtml + links + metas + traceMetas + others + scripts,
+    title,
+    noScripts
+  };
 }
 
 // Fragment flush: commit the boundary's registrations, re-resolve, and diff
@@ -1194,7 +1374,12 @@ function flushHeadFragment(registry, boundary, nonce) {
       for (const name in t.props) {
         if (name === "children" || name === "ref" || name.slice(0, 2) === "on") continue;
         if (!HEAD_ATTR_NAME.test(name)) {
-          if ("_SOLID_DEV_") console.warn(`useHead: ignoring invalid attribute name "${name}"`);
+          if ("_SOLID_DEV_")
+            headTagInvalid(
+              "invalid-attribute",
+              `useHead: ignoring invalid attribute name "${name}"`,
+              name
+            );
           continue;
         }
         const v = t.props[name];
@@ -1304,7 +1489,12 @@ function renderHeadAttrHtml(props) {
   for (const name in props) {
     if (name === "children" || name === "ref" || name.slice(0, 2) === "on") continue;
     if (!HEAD_ATTR_NAME.test(name)) {
-      if ("_SOLID_DEV_") console.warn(`useHead: ignoring invalid attribute name "${name}"`);
+      if ("_SOLID_DEV_")
+        headTagInvalid(
+          "invalid-attribute",
+          `useHead: ignoring invalid attribute name "${name}"`,
+          name
+        );
       continue;
     }
     const v = props[name];
@@ -1366,7 +1556,10 @@ export function useHead(tags) {
   const ctx = sharedConfig.context;
   if (!ctx || !ctx.registerHeadTags) {
     if ("_SOLID_DEV_")
-      console.warn("useHead() called outside of a server render; registration ignored.");
+      headTagInvalid(
+        "outside-render",
+        "useHead() called outside of a server render; registration ignored."
+      );
     return;
   }
   ctx.registerHeadTags(tags);
@@ -1375,6 +1568,50 @@ export function useHead(tags) {
 // Based on https://github.com/WebReflection/domtagger/blob/master/esm/sanitizer.js
 const VOID_ELEMENTS =
   /^(?:area|base|br|col|embed|hr|img|input|keygen|link|menuitem|meta|param|source|track|wbr)$/i;
+// What `ssrElement` needs to know about a tag name, fixed per name and asked
+// on every render of a spread element: its opening and closing markup, and
+// whether it is void, a textarea (its value is content), or raw text
+// (`script`/`style`, whose content is not escaped). One lookup per element in
+// place of a regex run, four string compares per key, and — the part that
+// shows — building `<tag` and `</tag>` from the name on every call: three
+// string allocations per element, a third of the walk's cost over a writer
+// that knows its tag. Bounded: a `<Dynamic component={name}>` tag can be any
+// string, so past a few hundred distinct names the record is built without
+// being remembered.
+interface TagInfo {
+  open: string;
+  close: string;
+  isVoid: boolean;
+  textarea: boolean;
+  raw: boolean;
+}
+const tagInfos = /*#__PURE__*/ new Map<string, TagInfo>();
+function tagInfo(tag: string): TagInfo {
+  let info = tagInfos.get(tag);
+  if (info === undefined) {
+    info = {
+      open: "<" + tag,
+      close: "</" + tag + ">",
+      isVoid: VOID_ELEMENTS.test(tag),
+      textarea: tag === "textarea",
+      raw: tag === "script" || tag === "style"
+    };
+    if (tagInfos.size < 512) tagInfos.set(tag, info);
+  }
+  return info;
+}
+// Attribute names a spread has already emitted unchanged. A spread's keys
+// are author-written names from a small vocabulary, repeated on every
+// element; `escape` runs a regex over each one every time, and a name that
+// escaped to itself once escapes to itself always. Names that DO escape are
+// never remembered, so a hit means "emit as is". Bounded like `tagInfos`.
+const safeAttrNames = /*#__PURE__*/ new Set<string>();
+function attrName(prop: string): string {
+  if (safeAttrNames.has(prop)) return prop;
+  const escaped = escape(prop);
+  if (escaped === prop && safeAttrNames.size < 512) safeAttrNames.add(prop);
+  return escaped;
+}
 // Fragment replacement helpers emitted into stream task scripts.
 //
 // Mechanics vs. policy: the inline script owns the parse-time MECHANICS only
@@ -1452,7 +1689,14 @@ export function renderToString<T>(
     noScripts?: boolean;
     plugins?: SerializerPlugin[];
     manifest?: AssetManifest | AssetResolver | AssetResolverFn;
-    onError?: (err: any) => void;
+    /**
+     * This render's server error hook, ahead of `configureServerErrors`'
+     * (see `ServerErrorHook`): every failure the render handles — an
+     * `<Errored>` fallback (`handling: "fallback"`), a hydration value that
+     * would not serialize (`"serialize"`) — once per error, with where it
+     * was met. A one-argument listener still works; it hears them all.
+     */
+    onError?: ServerErrorHook;
     /**
      * Embedded-render contract for hosts that own the document. When the
      * render output contains no `</head>`, everything head-bound (resolved
@@ -1485,21 +1729,25 @@ export function renderToString(code, options = {}) {
       }
       scripts += script + ";";
     },
-    onError: options.onError
+    onError: serializerErrorHook(options.onError)
   });
   const tracking = createAssetTracking();
   const headRegistry = createHeadRegistry();
+  // Render-local, never on the context: the finished context lingers as the
+  // module global, and another request's writes must not read this latch.
+  let closed = false;
   sharedConfig.context = {
     nonce: options.nonce,
     escape: escape,
     resolve: resolveSSRNode,
     ssr: ssr,
+    errorPolicy: options.onError,
     registerHeadTags(tags) {
       // Sync render: everything is pre-shell, resources join the shell head.
       registerHeadTags(headRegistry, sharedConfig.context, tracking, null, nonce, tags);
     },
     serialize(id, p) {
-      if (sharedConfig.context.noHydrate) return;
+      if (closed) return;
       if (
         p != null &&
         typeof p === "object" &&
@@ -1536,27 +1784,74 @@ export function renderToString(code, options = {}) {
   };
   applyAssetTracking(sharedConfig.context, tracking, manifest, noScripts);
   registerEntryAssets(manifest);
-  let html = root(
-    d => {
-      setTimeout(d);
-      return resolveSSRSync(escape(code()));
-    },
-    { id: renderId }
-  );
-  serializeFragmentAssets("", tracking.boundaryModules, sharedConfig.context, renderId);
-  sharedConfig.context.noHydrate = true;
-  serializer.close();
-  const head = renderShellHead(headRegistry, nonce, null, noScripts);
-  return assembleDocument(
-    resolveSSRSelectValues(html),
-    tracking.emittedAssets,
-    tracking.preloadLinks,
-    tracking.inlineStyles,
-    scripts.length ? scripts : "",
-    nonce,
-    head,
-    onHead
-  );
+  // The trace this render belongs to (see `getTraceContext`): the request's
+  // under a request scope, the render's own otherwise — cleared with the
+  // render's dispose so a later read outside any render does not find a
+  // stale one on the lingering context.
+  const context = sharedConfig.context;
+  const requestEvent = peekRequestEvent();
+  if (requestEvent) setRequestErrorHook(requestEvent, options.onError);
+  context.trace = requestEvent ? traceForEvent(requestEvent) : traceFor(context, undefined);
+  const render = timeDocument(context, context.trace, "string", requestEvent);
+  let dispose;
+  let rootOwner;
+  let rendered = false;
+  try {
+    const html = root(
+      d => {
+        dispose = d;
+        rootOwner = claimRenderRoot(context);
+        return resolveSSRSync(escape(code()));
+      },
+      { id: renderId }
+    );
+    serializeFragmentAssets("", tracking.boundaryModules, sharedConfig.context, renderId);
+    closed = true;
+    serializer.close();
+    const head = renderShellHead(
+      headRegistry,
+      nonce,
+      null,
+      noScripts,
+      traceMetaMarkup(context.trace)
+    );
+    const document = assembleDocument(
+      resolveSSRSelectValues(html),
+      tracking.emittedAssets,
+      tracking.preloadLinks,
+      tracking.inlineStyles,
+      scripts.length ? scripts : "",
+      nonce,
+      head,
+      onHead
+    );
+    // Head-freeze point: the request's response head commits right before
+    // the render's final dispose — the same order as an awaited
+    // `renderToStream`'s completion — so the `httpStatus`/`httpHeader`
+    // declarations still live at completion survive into
+    // `createSSRResponse(html, event)`, which passes the committed stub
+    // through. A render that threw leaves the head open: its declarations
+    // retract with the dispose below, and the handler's error path may
+    // still write.
+    //
+    // A string render's shell is the whole document: complete here, so the
+    // commit below reads its `shellMs` for `solid-shell`.
+    if (render) render.shell();
+    if (requestEvent && requestEvent.response) {
+      commitResponseStub(requestEvent.response, { event: requestEvent });
+    }
+    rendered = true;
+    return document;
+  } finally {
+    // The render record settles before the trace is let go: a listener
+    // reading `getTraceContext()` from its callback finds the render's.
+    if (render) settleRender(render, rootOwner, rendered ? "complete" : "error");
+    // Release the graph before returning (#3385): a deferred dispose held
+    // every root — and every memo under it — until the next macrotask, so
+    // nothing was freed across a synchronous loop of renders.
+    context.trace = undefined;
+    if (dispose) dispose();
+  }
 }
 export function renderToStream<T>(
   fn: () => T,
@@ -1568,7 +1863,18 @@ export function renderToStream<T>(
     manifest?: AssetManifest | AssetResolver | AssetResolverFn;
     onCompleteShell?: (info: { write: (v: string) => void }) => void;
     onCompleteAll?: (info: { write: (v: string) => void }) => void;
-    onError?: (err: any) => void;
+    /**
+     * This render's server error hook, ahead of `configureServerErrors`'
+     * (see `ServerErrorHook`): every failure the render handles — an
+     * `<Errored>` fallback (`handling: "fallback"`), a rejected fragment
+     * (`"client"`), a hydration value that would not serialize
+     * (`"serialize"`) — and the one that fails the request (`"failed"`),
+     * once per error, with where it was met. A one-argument listener still
+     * works; it hears them all — filter on `context.handling` for the
+     * request-failing ones alone. Without a hook (here or ambient) a
+     * failure that fails the request goes to `console.error`.
+     */
+    onError?: ServerErrorHook;
     /**
      * Embedded-render contract for hosts that own the document. When the
      * shell contains no `</head>`, everything head-bound at first flush
@@ -1580,6 +1886,19 @@ export function renderToStream<T>(
      * the shell has a `</head>` (splicing is automatic then).
      */
     onHead?: (head: string) => void;
+    /**
+     * The request's lifecycle. Aborting tears the render down exactly as a
+     * client disconnect does (`SSR_STREAM_ABANDONED`, `data.reason:
+     * "signal"`): in-flight reactive work is disposed, every async source
+     * still being pulled is returned, and nothing more reaches the sink. For
+     * the host whose transport cannot report a dead consumer through the
+     * sink or the readable view — a frame stream whose emission never
+     * touches the document writable, a platform whose response body is
+     * consumed by a proxy — this is the one teardown handle; pass
+     * `request.signal`. Idempotent with the sink and consumer paths: whichever
+     * fires first tears down, the rest are no-ops.
+     */
+    signal?: AbortSignal;
   }
 ): {
   /**
@@ -1627,26 +1946,138 @@ export function renderToStream(code, options = {}) {
   // `await provideRequestEvent(event, () => renderToStream(...))` is the
   // storage module's own documented shape.
   const requestEvent = peekRequestEvent();
+  if (requestEvent) setRequestErrorHook(requestEvent, options.onError);
   let dispose;
   let dead = false;
+  // The render's `"render"` record (`timeDocument`, once the context is up):
+  // its shell stamped at `doShell`, settled at `onDone` or by the wind-down.
+  let render;
+  let rootOwner;
+  // The serializer (created below, once the sink is assembled) — hoisted so
+  // the wind-down can close it. `abandon` is only ever reached after the
+  // render starts, by which point it is assigned; the hoist keeps that from
+  // being a temporal-dead-zone assumption.
+  let serializer;
   // Client-disconnect teardown. A sink that throws from `write`/`end` (its
   // transport is gone) or a consumer cancelling the readable view means
   // nobody is listening anymore: stop touching the sink, mark the render
   // completed so pending fragment resolutions stop emitting and
-  // serializing, and dispose in-flight reactive work. Containment matters
-  // because deferred writes (`writeTasks`, late fragment flushes) run from
-  // the microtask queue — an uncontained sink throw there escapes as an
-  // unhandled error and can take the host process down.
-  const abandon = () => {
+  // serializing, dispose in-flight reactive work, and close the serializer
+  // so every async source it is still pulling (a serialized async iterator
+  // whose `next()` may never settle — #3626) is returned now, not on its
+  // next pull. Containment matters because deferred writes (`writeTasks`,
+  // late fragment flushes) run from the microtask queue — an uncontained
+  // sink throw there escapes as an unhandled error and can take the host
+  // process down.
+  //
+  // `disconnect` names the abandonment a finding (`SSR_STREAM_ABANDONED`):
+  // the client left — the sink threw or the consumer cancelled — with work
+  // still in flight. A render failure winds down through here too
+  // (`failRender`), silently: that one is already the render error's
+  // finding.
+  //
+  // The two differ in what is left alive. After a disconnect nobody is
+  // listening: the sink is never touched again (`disconnected`). After a
+  // render FAILURE the consumer is still waiting — the awaited promise, a
+  // `pipe` sink, a `pipeTo` writable — and must be completed by the
+  // wind-down itself, because nothing downstream will: seroval's `onDone`
+  // (the normal road to `onCompleteAll`/`writable.end()`) has nothing to
+  // assemble on a disposed render and returns early. Left incomplete, an
+  // awaited `renderToStream` hung the request forever (#3569). Each
+  // consumer registers its completion through `onFailure` (they chain —
+  // `then` may be called more than once, and beside a pipe); a failure that
+  // lands before the consumer claims the render runs it at registration.
+  let disconnected = false;
+  let failed = false;
+  let onFailed;
+  // What the render still hands the serializer once it is torn down: a
+  // rejection with nobody to hear it is owned here; an iterable is never
+  // started, so there is nothing to return.
+  const defuse = p => {
+    if (p && typeof p.then === "function") p.then(undefined, () => {});
+  };
+  const abandonedSerializer = {
+    write(_, value) {
+      defuse(value);
+    },
+    flush() {},
+    close() {}
+  };
+  const onFailure = complete => {
+    if (failed) return complete(undefined);
+    const prev = onFailed;
+    onFailed = prev
+      ? sink => {
+          prev(sink);
+          complete(sink);
+        }
+      : complete;
+  };
+  const abandon = disconnect => {
     if (dead) return;
+    if ("_SOLID_OBSERVE_" && disconnect)
+      emitFinding(
+        {
+          code: "SSR_STREAM_ABANDONED",
+          kind: "ssr",
+          severity: "warn",
+          message:
+            `[SSR_STREAM_ABANDONED] The response stream was abandoned mid-render (${disconnect}) ` +
+            `with ${registry.size} fragment(s) still pending; the render was torn down.`,
+          data: { reason: disconnect, shellFlushed: firstFlushed, pendingFragments: registry.size }
+        },
+        null
+      );
     dead = true;
     completed = true;
+    if (disconnect) disconnected = true;
+    // The render's record ends here, with how: the client left, or the
+    // render failed (the render error's finding says why).
+    if (render) settleRender(render, rootOwner, disconnect ? "abandoned" : "error");
+    // The live sink wrapper (post-shell) is handed to the failure
+    // completion below; pre-shell there is none yet.
+    const sink = writable;
     buffer = { write() {} };
     writable = { end() {} };
     if (dispose) {
       const d = dispose;
       dispose = () => {};
       d();
+    }
+    // Close the serializer AFTER `dead` is set: seroval's `close()` runs
+    // each pending write's cleanup — a serialized async iterator gets its
+    // `return()` called (on a microtask, errors swallowed by seroval), which
+    // is what reaches a source whose pending `next()` will never settle and
+    // so would never hit the disposed check on its next pull — and then
+    // fires `onDone`, which must see `dead` to skip assembling a shell for
+    // a disposed render. Contained: a custom serializer's `close()` (the
+    // seam's contract is `write`/`flush`, `close` is optional) must not be
+    // able to escape the teardown. A throw here is the serializer's failure,
+    // so it goes where its other failures go (`handling: "serialize"`,
+    // through the render's hook, else the ambient one); with no hook there
+    // is nobody to tell and nothing left to protect — the render is already
+    // torn down — so it is dropped.
+    if (serializer && typeof serializer.close === "function") {
+      try {
+        serializer.close();
+      } catch (err) {
+        reportServerError(err, { kind: "render", handling: "serialize" }, null, options.onError);
+      }
+    }
+    // A closed serializer drops writes without looking at them, but the
+    // render's promises still settle and the paths that hand them over still
+    // run (`registerFragment`'s `<key>_fr`, `context.serialize`) — and a
+    // rejection seroval would have consumed is an unhandled one when nobody
+    // takes it. Own them instead: every later write, and everything batched
+    // for the shell but not yet written, is defused.
+    serializer = abandonedSerializer;
+    if (stubBatch) {
+      for (const p of stubBatch.values()) defuse(p);
+      stubBatch = null;
+    }
+    if (!disconnect) {
+      failed = true;
+      onFailed && onFailed(sink);
     }
   };
   // A retry pass that throws a REAL error (not NotReady) can have nothing on
@@ -1660,10 +2091,33 @@ export function renderToStream(code, options = {}) {
   // Exposed to the reactive library's boundary resume loop as
   // `context.failRender` (see the ssrLoadingBoundary finalizeError path).
   const failRender = err => {
-    try {
-      options.onError ? options.onError(err) : console.error(err);
-    } catch (_) {}
+    // The server error hook is the one channel (`handling: "failed"`); a
+    // boundary that already reported this error with its location leaves
+    // this a no-op (once per error). With no hook anywhere the failure is
+    // never silent.
+    reportServerError(err, { kind: "render", handling: "failed" }, null, options.onError);
+    if (!options.onError && ambientServerErrorHook() === undefined) console.error(err);
     abandon();
+  };
+  // The same containment reached from the renderer's OWN retry passes (root
+  // holes, shell assembly) rather than a boundary's resume loop: no boundary
+  // owns the failure, so this is where its finding is recorded (a boundary
+  // records its own before calling `failRender`, with its owner path).
+  const failRootRender = err => {
+    if ("_SOLID_OBSERVE_")
+      emitFinding(
+        {
+          code: "SSR_RENDER_ERROR_CONTAINED",
+          kind: "ssr",
+          severity: "error",
+          message:
+            `[SSR_RENDER_ERROR_CONTAINED] Render error outside any boundary — the request failed: ` +
+            errorText(err),
+          data: { handling: "failed", error: err }
+        },
+        null
+      );
+    failRender(err);
   };
   // Chunk coalescing (stage-4 §13b): a settled boundary emits its template,
   // activation script, data script, and reveal as SEPARATE writes across one
@@ -1700,22 +2154,24 @@ export function renderToStream(code, options = {}) {
     };
   };
   // Wrap an integrator-supplied `pipe` sink: contain sync throws from
-  // `write`/`end` and treat them as disconnection.
+  // `write`/`end` and treat them as disconnection. Guarded on the CLIENT
+  // being gone, not on the render being dead: a failed render still ends
+  // the (alive) sink through this wrapper.
   const guardSink = w => ({
     write(payload) {
-      if (dead) return;
+      if (disconnected) return;
       try {
         w.write(payload);
       } catch (_) {
-        abandon();
+        abandon("sink");
       }
     },
     end() {
-      if (dead) return;
+      if (disconnected) return;
       try {
         w.end();
       } catch (_) {
-        abandon();
+        abandon("sink");
       }
     }
   });
@@ -1769,6 +2225,12 @@ export function renderToStream(code, options = {}) {
     }
   };
   const onDone = () => {
+    // An abandoned render has no shell to assemble: `dispose` cleared the
+    // trace `doShell` reads (`traceMetaMarkup(context.trace)`), and the
+    // consumer was completed by the wind-down (`abandon`) — a disconnect has
+    // nobody to complete. Serialized promises still settle after the
+    // wind-down, so seroval still reaches here; do nothing (#3569).
+    if (dead) return;
     writeTasks();
     // Every blocker has settled by definition here (the render is complete),
     // so doShell's growth gate has nothing to wait for: align its baseline
@@ -1783,6 +2245,9 @@ export function renderToStream(code, options = {}) {
       });
     writable && writable.end();
     completed = true;
+    // The stream is whole: the render record settles (its shell was stamped
+    // by `doShell` above), before the graph it describes is released.
+    if (render) settleRender(render, rootOwner, "complete");
     if (firstFlushed) dispose();
   };
   // FrameSink seam (design in frame-sink.js): semantic emission routes through
@@ -1887,7 +2352,7 @@ export function renderToStream(code, options = {}) {
   // flows through onData is a contract between the serializer and the sink
   // (hydration scripts for the document sink, keyed codec records for the
   // frame sink); the core never inspects it.
-  const serializer = (options.serializer || createHydrationSerializer)({
+  serializer = (options.serializer || createHydrationSerializer)({
     scopeId: options.renderId,
     // Containers (projections) serialize as traces on BOTH faces — the
     // document's hydration serializer and the frame sink's codec resolve
@@ -1896,7 +2361,7 @@ export function renderToStream(code, options = {}) {
     plugins: options.plugins,
     onData: payload => sink.data(payload),
     onDone,
-    onError: options.onError
+    onError: serializerErrorHook(options.onError)
   });
   let rootAssetsSerialized = false;
   const serializeRootAssets = () => {
@@ -1952,9 +2417,101 @@ export function renderToStream(code, options = {}) {
   // serialization its subtree owns. Hydration ids are a prefix code (each
   // sibling ordinal is self-delimiting), so `startsWith` is exact ancestry.
   const pendingSerialized = new Map();
+  // The wire policy on a channel: a thenable's rejection and an async
+  // iterable's thrown step reach the client sanitized; a seroval stream
+  // (`__SEROVAL_STREAM__`, the container-trace carrier) is the codec's own
+  // and passes as-is; values pass as-is — an Error reached as a value was
+  // never thrown, so it is data and the author's (#3113's ruling). One guard
+  // per channel object, so a source serialized under two ids stays one
+  // channel for seroval's cross-references.
+  //
+  // The verdict is read in the rejection's own microtask — no added tick on
+  // the error path. This handler was attached at serialize time, ahead of
+  // the boundary that will contain the failure, so for a source that
+  // rejects before the boundary meets it this is the error's first sight,
+  // with no site: the DEFAULT policy applies here (generic outside dev),
+  // and a server error hook's mapping — decided by the boundary a few
+  // microtasks later — reaches the boundary's record and fallback, which
+  // are what the hydrating client renders from, but not this channel's
+  // reason. Deferring the verdict past the boundary would put a tick into
+  // shell flush and completion on every rejected source; the mapping on a
+  // road nobody renders from is not worth it (see `ServerErrorHook`).
+  //
+  // The same funnel takes the value's BORDER FORM (`toBorderForm`): every
+  // async iterable in what crosses — the channel itself, or one nested in
+  // a resolved answer (`{ meta, progress: gen }`) — is swapped for a seat
+  // on the runtime's multicast of it, so the serializer pumping the value
+  // and a memo reading the same source see the same whole sequence
+  // instead of splitting a generator's yields. For a thenable the walk
+  // rides the verdict's own `.then` — no added tick. Containers stay raw
+  // on this face (no trace revival exists for a memo's value yet).
+  const guardedChannels = new WeakMap();
+  const verdictNow = error => {
+    throw ssrSanitizeError(error, null);
+  };
+  const borderForm = value => toBorderForm(value, false);
+  const guardIterable = iterable => ({
+    [Symbol.asyncIterator]() {
+      const iterator = iterable[Symbol.asyncIterator]();
+      return {
+        next: value => iterator.next(value).then(undefined, verdictNow),
+        return: value =>
+          iterator.return ? iterator.return(value) : Promise.resolve({ done: true, value }),
+        throw: error => (iterator.throw ? iterator.throw(error) : Promise.reject(error))
+      };
+    }
+  });
+  // A ReadableStream is seroval's own carrier: its web plugin encodes one
+  // as a ReadableStream, and the client reads it with `getReader` — the
+  // document live channel (`sc:live`, the frame sink's hole/attr ops) is
+  // exactly that. Node's streams are also async-iterable, so the iterable
+  // guard below would take one and re-shape the wire into an async
+  // iterator the client never reads (the chat welcome froze at its first
+  // paragraph). The guard keeps the type: a stream over the source's
+  // chunks whose failure crosses sanitized like a rejection.
+  const guardStream = source => {
+    const reader = source.getReader();
+    return new ReadableStream({
+      pull: c =>
+        reader.read().then(
+          r => (r.done ? c.close() : c.enqueue(r.value)),
+          e => {
+            try {
+              verdictNow(e);
+            } catch (sanitized) {
+              c.error(sanitized);
+            }
+          }
+        ),
+      cancel: reason => reader.cancel(reason)
+    });
+  };
+  const guardChannel = p => {
+    if (!p || typeof p !== "object" || "__SEROVAL_STREAM__" in p) return p;
+    let guarded = guardedChannels.get(p);
+    if (guarded !== undefined) return guarded;
+    if (typeof p.then === "function") {
+      guarded = p.then(borderForm, verdictNow);
+    } else if (typeof ReadableStream === "function" && p instanceof ReadableStream) {
+      guarded = guardStream(p);
+    } else {
+      const border = borderForm(p);
+      guarded = typeof border[Symbol.asyncIterator] === "function" ? guardIterable(border) : border;
+      if (guarded === p) return p;
+    }
+    guardedChannels.set(p, guarded);
+    return guarded;
+  };
   const trackSerialized = (id, p) => {
     let settle;
     const raced = Promise.race([p, new Promise(r => (settle = r))]);
+    // Before the shell completes the race is parked in `stubBatch`, and seroval
+    // subscribes to it only when the batch is flushed — a macrotask later when
+    // another fragment is still pending. A source rejecting in between rejects
+    // the race with no handler attached; Node reports it as unhandled and exits.
+    // Observing the race here changes nothing for seroval, which still meets
+    // the rejection when it subscribes.
+    raced.catch(() => {});
     pendingSerialized.set(id, settle);
     // Once the source settles the entry is dead weight; drop it. The
     // rejection arm also keeps an abandoned-then-rejected source from
@@ -1971,19 +2528,43 @@ export function renderToStream(code, options = {}) {
   // rejected) and abandoned data ids resolve undefined: the client re-renders
   // the errored region fresh off the OUTER fragment's rejection, so nothing
   // consumes these — a rejection would only raise unhandled-rejection noise.
-  const abandonSubtree = key => {
+  //
+  // A finding (`SSR_SUBTREE_ABANDONED`) when the discard took work with it —
+  // nested fragments still rendering, serialized values still pending: the
+  // client re-renders that subtree from scratch, and a consumer watching
+  // request cost wants to know how much was thrown away. A leaf fragment's
+  // failure alone is the render error's own finding, not this one.
+  const abandonSubtree = (key, error) => {
+    let fragments = 0;
+    let serialized = 0;
     for (const [k, entry] of registry) {
       if (k.length > key.length && k.startsWith(key)) {
         registry.delete(k);
         entry.resolve();
+        fragments++;
       }
     }
     for (const [id, settle] of pendingSerialized) {
       if (id.startsWith(key)) {
         pendingSerialized.delete(id);
         settle();
+        serialized++;
       }
     }
+    if ("_SOLID_OBSERVE_" && (fragments || serialized))
+      emitFinding(
+        {
+          code: "SSR_SUBTREE_ABANDONED",
+          kind: "ssr",
+          severity: "warn",
+          message:
+            `[SSR_SUBTREE_ABANDONED] Fragment '${key}' failed with ${fragments} nested fragment(s) and ` +
+            `${serialized} serialized value(s) still pending; the subtree was discarded and the client ` +
+            `renders it from scratch.`,
+          data: { fragment: key, fragments, serialized, error }
+        },
+        null
+      );
   };
   const writeTasks = () => {
     if (tasks.length && !completed && firstFlushed) {
@@ -2046,6 +2627,10 @@ export function renderToStream(code, options = {}) {
   sharedConfig.context = context = {
     async: true,
     nonce: options.nonce,
+    // Which face this render is: a document (the default emission) or a
+    // frame stream (`options.sink`). Read by the server runtime's dev check
+    // on undeclared unbounded sources, which only a document render pays for.
+    document: !options.sink,
     // The document face's live-hole carrier (Stage 4). Components render
     // under per-component context CLONES (spread copies), so a mutation on
     // the clone a server component armed under never reaches this root
@@ -2134,7 +2719,14 @@ export function renderToStream(code, options = {}) {
         html.slice(last + placeholder.length + 1);
     },
     serialize(id, p, deferStream) {
-      if (sharedConfig.context.noHydrate) return;
+      // The channels the runtime opens to the client — an async source's
+      // promise, a live source's iterable — reject or throw with the RAW
+      // failure, and seroval encodes that reason as a value for the client
+      // (#3468). Guard the channel here, the one funnel every hydration
+      // write takes, so the reason the client receives is what the wire
+      // policy allows (`ssrSanitizeError`); the boundary that caught the
+      // same failure server-side hands it the same replacement.
+      p = guardChannel(p);
       if (p && typeof p === "object" && typeof p.then === "function") {
         if (!firstFlushed && deferStream) {
           blockingPromises.add(p);
@@ -2148,8 +2740,9 @@ export function renderToStream(code, options = {}) {
         // `shellCompleted` (not `firstFlushed`) gates batching: doShell()
         // flushes the batch into the shell's task snapshot, and writes in the
         // microtask window between the two flags must go direct or they'd
-        // strand in a batch nobody flushes.
-        if (!firstFlushed && canBatchStubs && !shellCompleted) {
+        // strand in a batch nobody flushes — as would a write after the
+        // wind-down (`dead`), which goes direct to be defused.
+        if (!firstFlushed && canBatchStubs && !shellCompleted && !dead) {
           (stubBatch ||= new Map()).set(id, p);
           return;
         }
@@ -2182,17 +2775,32 @@ export function renderToStream(code, options = {}) {
       if (!registry.has(key)) {
         let resolve, reject;
         const p = new Promise((r, rej) => ((resolve = r), (reject = rej)));
+        // Same exposure as `trackSerialized`'s race: before the shell
+        // completes this promise is parked in `stubBatch`, and seroval only
+        // subscribes when the batch is flushed — which waits on the shell's
+        // blockers (a pending root hole) or a no-progress timer. A boundary
+        // whose content throws on a retry pass in that window rejects it via
+        // `item.resolve(err)` below with nothing attached, and Node exits on
+        // the unhandled rejection. Own it here; seroval still meets the
+        // rejection when it subscribes, and the error was already routed
+        // through the server error hook by the boundary that settled it.
+        defuse(p);
         // double queue to ensure that the fragment is last but in same flush
         registry.set(key, {
+          // The rejection the client receives is the wire policy's verdict
+          // on the error, read at delivery: a pre-flush failure is met by
+          // the parent boundary (or fails the request) after the settle,
+          // and the verdict the hook decides there is the one this carries.
           resolve: err =>
             queue(() =>
               queue(() => {
-                err ? reject(err) : resolve(true);
+                err ? reject(ssrSanitizeError(err, null)) : resolve(true);
                 queue(flushEnd);
               })
             )
         });
-        if (canBatchStubs && !shellCompleted) (stubBatch ||= new Map()).set(key + "_fr", p);
+        if (canBatchStubs && !shellCompleted && !dead)
+          (stubBatch ||= new Map()).set(key + "_fr", p);
         else serializer.write(key + "_fr", p);
       }
       return (value, error) => {
@@ -2200,10 +2808,17 @@ export function renderToStream(code, options = {}) {
           const item = registry.get(key);
           registry.delete(key);
           // Terminal error: the subtree is discarded — release everything in
-          // it that would otherwise gate response completion (#3165).
-          if (error) abandonSubtree(key);
+          // it that would otherwise gate response completion (#3165). The
+          // ledger and its finding keep the original; the client — the
+          // `<key>_fr` rejection, a transport sink's error chunk — gets what
+          // the wire policy allows (#3468).
+          if (error) abandonSubtree(key, error);
 
-          if (item.children) {
+          // A settled nested fragment parked its markup here to be spliced
+          // into this fragment's content. On the error path there is no
+          // content (`value` is undefined): the client re-renders the whole
+          // subtree, so the parked children are dropped, not spliced (#3478).
+          if (item.children && !error) {
             for (const k in item.children) {
               value = replacePlaceholder(value, k, item.children[k]);
             }
@@ -2244,10 +2859,12 @@ export function renderToStream(code, options = {}) {
               // The error rides the sink call: the document sink ignores it
               // (its protocol rejects `<key>_fr` via item.resolve below), but
               // transport sinks with no resume protocol need the signal.
+              // Post-flush: the boundary told the hook before settling, so
+              // the verdict the chunk carries is the decided one.
               sink.fragment(key, resolveSSRSelectValues(value !== undefined ? value : " "), {
                 styles,
                 revealGroup,
-                error
+                error: error ? ssrSanitizeError(error, null) : error
               });
               item.resolve(error);
             }
@@ -2275,11 +2892,35 @@ export function renderToStream(code, options = {}) {
   // library and has no other channel to fail the request from an async
   // retry.
   context.failRender = failRender;
+  // The server error hook for this render (see `configureServerErrors`),
+  // and the fact the Loading boundary needs to say how a failure was met:
+  // post-flush a fragment rejects to the client; pre-flush it inlines or
+  // fails the request.
+  context.errorPolicy = options.onError;
+  context.flushed = () => firstFlushed;
+  // The trace this render belongs to (see `getTraceContext`): the request's
+  // under a request scope, the render's own otherwise. Set before the render
+  // pass so the per-component context clones carry it; cleared at completion
+  // (below) so a read outside any render never finds a stale one.
+  context.trace = requestEvent ? traceForEvent(requestEvent) : traceFor(context, undefined);
+  render = timeDocument(context, context.trace, "stream", requestEvent);
   registerEntryAssets(manifest);
 
+  // The request's abort is a disconnect the transport could not report (see
+  // the `signal` option). Armed once the root exists — `abandon` reaches the
+  // registry, the sink and the serializer, all declared above — and disarmed
+  // by the render's final dispose, which every ending runs through.
+  const signal = options.signal;
+  const onAbort = signal ? () => abandon("signal") : undefined;
   let html = root(
     d => {
-      dispose = d;
+      dispose = () => {
+        // The render is over: no later read finds its trace (see above).
+        context.trace = undefined;
+        if (onAbort) signal.removeEventListener("abort", onAbort);
+        d();
+      };
+      rootOwner = claimRenderRoot(context);
       const res = resolveSSRNode(escape(code()));
       if (!res.h.length) return res.t[0];
       rootHoles = [];
@@ -2294,6 +2935,14 @@ export function renderToStream(code, options = {}) {
     },
     { id: renderId }
   );
+  if (onAbort) {
+    // A request already gone when the render starts has nobody to render
+    // for: tear down now, after the root pass so the finding counts what it
+    // registered. `abandon` clears `dispose` before running it, so the
+    // listener is removed either way.
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  }
   // Re-pull pending root holes, splicing sync results into `html` and
   // re-queueing still-async ones (their retry promises join
   // `blockingPromises`). Returns true once no holes remain.
@@ -2360,7 +3009,18 @@ export function renderToStream(code, options = {}) {
     flushStubBatch();
     // Shell head flush: commits every registration not owned by a
     // still-pending fragment (those flush with their fragment later).
-    const head = renderShellHead(headRegistry, nonce, k => registry.has(k), noScripts);
+    const head = renderShellHead(
+      headRegistry,
+      nonce,
+      k => registry.has(k),
+      noScripts,
+      traceMetaMarkup(context.trace)
+    );
+    // The shell is complete — html and head resolved, about to be handed to
+    // the sink: the render record's `shellMs` is final here, BEFORE the
+    // handoff, because the response head commits from inside the sink's
+    // first write (`createSSRResponse`) and projects `solid-shell` from it.
+    if (render) render.shell();
     // `preloads`, `preloadLinks` and `inlineStyles` are the LIVE tracking
     // containers, not snapshots: a post-shell registration pushes into them
     // AND arrives separately through `sink.asset`. Consume them inside this
@@ -2450,18 +3110,31 @@ export function renderToStream(code, options = {}) {
   const pipeToImpl = w => {
     let resolve;
     const p = new Promise(r => (resolve = r));
+    // A render failure (see `abandon`) completes this consumer: the promise
+    // settles and the writable — alive; the RENDER died — is closed so a
+    // `Response` built on `readable` completes instead of hanging. Post-
+    // shell the live wrapper ends (flushing what it coalesced, then the
+    // writer's own close path); pre-shell nothing was written yet.
+    onFailure(sink => {
+      try {
+        if (sink) sink.end();
+        else w.close().catch(() => {});
+      } catch (_) {}
+      resolve();
+    });
     function flush() {
       allSettled(blockingPromises).then(awaited => {
         scheduleFlush(() => {
           if (dead) return resolve();
           // Root-hole retries and shell assembly run inside this microtask —
           // a real error here (see failRender) must fail the request, not
-          // reject an unhandled promise.
+          // reject an unhandled promise. The failure completion above closes
+          // the writable and settles the promise.
           try {
             doShell();
           } catch (err) {
-            failRender(err);
-            return resolve();
+            failRootRender(err);
+            return;
           }
           if (!shellCompleted) return flush();
           const encoder = new TextEncoder();
@@ -2484,7 +3157,7 @@ export function renderToStream(code, options = {}) {
           // rejects `closed`; `ended` keeps that from reading as failure.)
           const failed = () => {
             if (!ended) {
-              abandon();
+              abandon("consumer");
               resolve();
             }
           };
@@ -2541,7 +3214,8 @@ export function renderToStream(code, options = {}) {
     // `createSSRResponse`/`commitEventResponse` pass through idempotently.
     then(onFulfilled, onRejected) {
       const freezeHead = () => {
-        if (requestEvent && requestEvent.response) commitResponseStub(requestEvent.response);
+        if (requestEvent && requestEvent.response)
+          commitResponseStub(requestEvent.response, { event: requestEvent });
       };
       const p = new Promise(resolve => {
         function complete() {
@@ -2556,9 +3230,21 @@ export function renderToStream(code, options = {}) {
             complete();
           };
         } else onCompleteAll = complete;
+        // A render failure (see `abandon`) — the renderer's own retry pass
+        // below, or a boundary's resume loop through `failRender` — resolves
+        // with whatever HTML the render produced (nothing, pre-shell): the
+        // thenable never rejects, `onError` already heard the failure. The
+        // head is deliberately NOT frozen: the render died, its teardown
+        // retracts the declarations as it always did, and the consumer
+        // keeps a writable head for whatever error response it builds
+        // around the partial HTML.
+        onFailure(() => resolve(tmp));
         function flush() {
           allSettled(blockingPromises).then(awaited => {
             scheduleFlush(() => {
+              // The wind-down already completed this consumer; a re-pull on
+              // the disposed render would only find another failure.
+              if (dead) return;
               // Same gates as doShell: pending root head props are shell
               // blockers, so flushEnd must not run ahead of them (their
               // source may not be serialized, so the serializer alone
@@ -2574,15 +3260,10 @@ export function renderToStream(code, options = {}) {
                 )
                   return flush();
               } catch (err) {
-                // Contain retry-pass errors (see failRender); the thenable
-                // contract already routes render errors through onError and
-                // resolves with whatever HTML the render produced. The head
-                // is deliberately NOT frozen on this path: the render died,
-                // its teardown retracts the declarations as it always did,
-                // and the consumer keeps a writable head for whatever error
-                // response it builds around the partial HTML.
-                failRender(err);
-                return resolve(tmp);
+                // Contain retry-pass errors (see failRender): the failure
+                // completion above resolves the thenable.
+                failRootRender(err);
+                return;
               }
               queue(flushEnd);
             }, awaited);
@@ -2594,6 +3275,15 @@ export function renderToStream(code, options = {}) {
     },
     pipe(w) {
       claimConsumer("pipe");
+      // A render failure (see `abandon`) ends the sink: it is still alive —
+      // the RENDER died — and leaving it open would hang the response. Post-
+      // shell through the live wrapper (coalesced bytes flush first); pre-
+      // shell nothing was written, end the raw sink.
+      onFailure(sink => {
+        try {
+          sink ? sink.end() : w.end();
+        } catch (_) {}
+      });
       function flush() {
         allSettled(blockingPromises).then(awaited => {
           scheduleFlush(() => {
@@ -2601,13 +3291,9 @@ export function renderToStream(code, options = {}) {
             try {
               doShell();
             } catch (err) {
-              // Contain retry-pass errors (see failRender) and end the sink:
-              // it is still alive — the RENDER died — and leaving it open
-              // would hang the response.
-              failRender(err);
-              try {
-                w.end();
-              } catch (_) {}
+              // Contain retry-pass errors (see failRender): the failure
+              // completion above ends the sink.
+              failRootRender(err);
               return;
             }
             if (!shellCompleted) return flush();
@@ -2783,6 +3469,14 @@ function ssrGroupSlot(fn, idx) {
   };
 }
 
+// A binding's terminal failure surfaces to the client as a keyed error
+// chunk carrying a message: the wire policy's (`ssrSanitizeError`, #3468) —
+// the original stays server-side.
+function wireErrorMessage(err) {
+  const wire = ssrSanitizeError(err, null);
+  return String((wire && wire.message) || wire);
+}
+
 // ---- live markup holes (Stage 3): the DR-2 binding ledger generalized ----
 //
 // In a live frame render (the call-driven face), thunk-compiled content
@@ -2906,9 +3600,9 @@ export function createLiveHoles(sink, scoped) {
   // face never noticed — its whole response is one render, so the global
   // still points at the armed context when async sweeps fire. The document
   // face replaces it as the document renders past the component, so swept
-  // re-emissions there lost every context-derived byte: `_bnd` claim
-  // markers vanished from late holes (a copy button that compiled, streamed
-  // its markup, and never armed).
+  // re-emissions there lost every context-derived byte: handler-position
+  // slot markers (`_s:on:click`) vanished from late holes (a copy button
+  // that compiled, streamed its markup, and never bound).
   const swept = (owner, ctx, fn) => {
     const prev = sharedConfig.context;
     sharedConfig.context = ctx;
@@ -3040,7 +3734,7 @@ export function createLiveHoles(sink, scoped) {
             // markup stands and the failure surfaces as a keyed error.
             b.closed = true;
             sink.closeBinding(b.key);
-            sink.error(b.key, String((err && err.message) || err));
+            sink.error(b.key, wireErrorMessage(err));
             return;
           } finally {
             engine.sweeping = prevSweeping;
@@ -3189,8 +3883,10 @@ export function createLiveHoles(sink, scoped) {
      * re-runnable parts (`{ f }` thunks, `{ g, i }` group positions). Sweeps
      * rebuild the text, equality-gate against the baseline, and ship
      * changes as an element-keyed `attr` chunk. Names that vanish between
-     * rebuilds ride an explicit `removed` list — the server holds the
-     * previous text, so the client never tracks name history.
+     * rebuilds ride an explicit `removed` list where the server holds the
+     * previous text; the client also matches the element to the whole
+     * text (the morph's rule), so a resume's re-emission — previous text
+     * known only as a digest, no list — removes them too.
      */
     attr(cap) {
       const owner = getOwner();
@@ -3237,7 +3933,7 @@ export function createLiveHoles(sink, scoped) {
             if (ssrHandleError(err, true)) return;
             b.closed = true;
             sink.closeBinding(b.key);
-            sink.error("lha:" + cap.id, String((err && err.message) || err));
+            sink.error("lha:" + cap.id, wireErrorMessage(err));
             return;
           } finally {
             engine.sweeping = prevSweeping;
@@ -3255,6 +3951,9 @@ export function createLiveHoles(sink, scoped) {
           sink.attr(String(cap.id), html, removed);
         }
       };
+      // The first-render text is the digest source for the element's
+      // ledger entry (frame sinks; the document sink has no ledger yet).
+      if (sink.attrBaseline) sink.attrBaseline(b.key, cap.base);
       sink.openBinding(b.key, b);
     }
   };
@@ -3412,6 +4111,11 @@ export function ssr(t) {
         }
       }
     } else if (ht === "function") {
+      // Dev: bracket the evaluation of an `escape`d function value (`$reg`,
+      // set by `escapeLate`; scope wrappers and group fns are not candidates
+      // and skip the read). `checkUnscopedHole` reports a hole that built
+      // content at a position other than the one it was registered at.
+      const devNext = "_SOLID_DEV_" && hole.$reg !== undefined ? devPeekId() : undefined;
       // Live frame renders route thunk content holes through the live-hole
       // engine (mark + ledger binding). In-tag positions must never be
       // intercepted — a comment cannot sit inside a tag — including by the
@@ -3467,6 +4171,7 @@ export function ssr(t) {
           appendResolvedNode(result, r);
         }
       }
+      if ("_SOLID_DEV_" && devNext !== undefined) checkUnscopedHole(devNext, t, i - 1, hole);
     } else if (result !== null) {
       resolveSSRNode(hole, result);
     } else {
@@ -3523,14 +4228,20 @@ export function ssrClassName(value) {
   if (typeof value === "number") return "" + value;
   if (!value) return "";
   if (typeof value === "string") return escape(value, true);
+  // An attribute-slot value here (whole, or as a class-name's condition) landed
+  // inside `class="…"` quotes, where its position marker cannot be emitted
+  // (see ssrElementAttribute): the element was compiled without the
+  // `serverComponents` option. Say so; nothing renders (either face).
+  if (isSlotValue(value)) return slotValueInline("class", value) ?? "";
   value = classListToObject(value);
   let classKeys = Object.keys(value),
     result = "";
   for (let i = 0, len = classKeys.length; i < len; i++) {
-    const key = classKeys[i],
-      classValue = !!value[key];
+    const key = classKeys[i];
+    let classValue = value[key];
+    if (isSlotValue(classValue)) classValue = slotValueInline("class", classValue);
     if (!key || key === "undefined" || !classValue) continue;
-    i && (result += " ");
+    result && (result += " ");
     // Object keys land inside class="..." so they must be attribute-escaped.
     result += escape(key, true);
   }
@@ -3541,6 +4252,7 @@ export function ssrStyle(value: string | { [k: string]: string }): string;
 export function ssrStyle(value) {
   if (!value) return "";
   if (typeof value === "string") return escape(value, true);
+  if (isSlotValue(value)) return slotValueInline("style", value) ?? "";
 
   let result = "";
   const k = Object.keys(value);
@@ -3548,11 +4260,12 @@ export function ssrStyle(value) {
     // Object keys land inside style="..." so they must be attribute-escaped
     // to prevent breaking out via `"`.
     const s = escape(k[i], true);
-    const v = value[k[i]];
+    let v = value[k[i]];
+    if (isSlotValue(v)) v = slotValueInline("style", v);
     if (v != undefined) {
-      if (i) result += ";";
       const r = escape(v, true);
       if (r != undefined && r !== "undefined") {
+        if (result) result += ";";
         result += `${s}:${r}`;
       }
     }
@@ -3567,17 +4280,20 @@ export function ssrStyleProperty(name, value) {
   // `style={{ [k]: v }}` the compiler wraps the key with `_$escape(k, true)`
   // before concatenating the `:` suffix. Either way `name` is safe to splice
   // into style="..." without further escaping.
+  if (isSlotValue(value)) value = slotValueInline("style", value);
   return value != null ? name + value : "";
 }
 export function ssrElement(
   name: string,
-  props: any,
+  props: any | any[] | (() => any | any[]),
   children: any,
-  needsId: boolean
+  needsId: boolean,
+  skip?: (key: string) => boolean,
+  attrs?: string | (() => string),
+  claims?: () => Record<number, Record<string, unknown>>
 ): { t: string };
 
-// review with new ssr
-export function ssrElement(tag, props, children, needsId) {
+export function ssrElement(tag, props, children, needsId, skip, attrs, claims) {
   // The hydration key must be allocated before the props thunk runs: dynamic
   // props (`mergeProps(() => ...)`) create a memo, which consumes a child id.
   // The client claims the element (getNextElement) before applying the spread,
@@ -3585,77 +4301,299 @@ export function ssrElement(tag, props, children, needsId) {
   // shifts by one and it is left unclaimed on hydration.
   const hk = needsId ? ssrHydrationKey() : "";
   if (typeof props === "function") props = props();
-  // A nullish source (static or resolved) is an empty spread (#3297).
-  if (props == null) props = {};
-  const skipChildren = VOID_ELEMENTS.test(tag);
-  const keys = Object.keys(props);
-  let result = `<${tag}${hk} `;
-  for (let i = 0; i < keys.length; i++) {
-    const prop = keys[i];
-    // Every branch reads `props[prop]` itself, and only when it will use it.
-    // On a spread these are compiled getters: `children` builds the child
-    // element and consumes hydration ids as it goes. Reading it more than
-    // once — or at all when JSX children already own the slot — burns ids
-    // the client never allocates, and every element after it hydrates
-    // against the wrong node (#3313). Keep the general read below the two
-    // early-outs.
-    //
-    // The compiler moves static textarea values into children, but an
-    // element with a spread is serialized here instead. Keep the runtime
-    // path equivalent: textarea value/defaultValue are its text content,
-    // never HTML attributes (#3286).
-    if (tag === "textarea" && (prop === "value" || prop === "defaultValue")) {
-      const value = props[prop];
-      if (value !== null) children = escape(value);
-      continue;
-    }
-    if (ChildProperties.has(prop)) {
-      if (children === undefined && !skipChildren)
-        children =
-          tag === "script" || tag === "style" || prop === "innerHTML"
-            ? props[prop]
-            : escape(props[prop]);
-      continue;
-    }
-    const value = props[prop];
-    if (prop === "style") {
-      result += `style="${ssrStyle(value)}"`;
-    } else if (prop === "class") {
-      result += `class="${ssrClassName(value)}"`;
-    } else if (
-      value == undefined ||
-      prop === "ref" ||
-      prop.slice(0, 2) === "on" ||
-      prop.slice(0, 5) === "prop:"
-    ) {
-      // Behavior claims ride NAMED ref/on* positions only — the compiler
-      // can't see through a spread, so a claim-carrying stub landing here
-      // silently drops. Say so where the author can act on it.
-      if (
-        "_SOLID_DEV_" &&
-        typeof value === "function" &&
-        value[CLAIM_PROP] !== undefined &&
-        (prop === "ref" || prop.slice(0, 2) === "on")
-      ) {
-        console.warn(
-          `A spread on a server-rendered <${tag}> carries \`${prop}\` from client props — ` +
-            `spreads don't participate in behavior claims, so this drops. ` +
-            `Write the position out: \`${prop}={props.${String(value[CLAIM_PROP])}}\`.`
-        );
+  // `props` is now one props object or an ARRAY of prop sources (either may
+  // arrive through the thunk above, which runs after the key is taken). The
+  // array form serializes straight from the sources as if they had been
+  // merged (`ssrElement(tag, merge(...sources), ...)`): later sources win per
+  // key, and the attribute order is the merged one — every key at the
+  // position of the LAST source that carries it. It exists so libraries and
+  // the compilers can spread several sources without building an
+  // intermediate object that only gets walked once. Unlike
+  // `mergeProps(() => x)`, a function source here is a plain thunk: it is
+  // called once and creates no memo, so the array form allocates no
+  // hydration ids of its own — the client `spread` array form follows the
+  // same rule. A nullish source is an empty source.
+  //
+  // The common case — one plain object, or an array of them (the compiled
+  // form) — is walked as it was handed in: `Object.keys` per source, and "a
+  // later source owns this key" a lookup in its list. Nothing is allocated
+  // but the key lists.
+  //
+  // Anything else among the sources — a merge()/omit() view, a store, a
+  // thunk — is collected by ONE pass (`sourceOwners`) into two lists: every
+  // key in merged order with the object that owns it. A view is never
+  // enumerated through its traps (a descriptor trap per key, allocating, on
+  // every element) and never asked for its resolved table (worth building
+  // for a client spread that reruns, not for a pass that reads each key
+  // once and lets the view go): the pass walks its leaves through the
+  // merge/omit layers, and each prop below is one direct read of its owner —
+  // no `in` walk per key, no key list per leaf.
+  let sources = null;
+  let proxy = false;
+  let viewKeys = null;
+  let owners = null;
+  // Under `slots`, the collecting pass also records which source each key
+  // came from (`ownerIndex`, parallel to `viewKeys`): a handler position's
+  // precedence against the element's named claims is source order
+  // (spreadBehaviorMarkers).
+  let ownerIndex = null;
+  // An attribute slot's object spread whole (`<li {...row}>`) is the retired
+  // 09-27 shape (principles §9.2.3): the client would decide what it owns
+  // and the template could not show it. Its range tag (`$slot`) is how it
+  // surfaces among the sources; name the positions instead. The tag is
+  // probed where the sources are already being classified, and a tagged
+  // source leaves the plain path with the other non-literal kinds — the
+  // collecting pass (`collectSpreadSources`) replaces it. This function is
+  // the SSR spread's hot path: what is not the plain walk lives in helpers
+  // so the walk itself stays small enough to optimize as one unit
+  // (spread-static-tail bench), and every slot probe on it — the `$slot`
+  // tag per source, the object test per attribute — sits behind `slots`:
+  // a stand-in is only ever met inside a server component's render, where
+  // the frame renderers arm `context.claims` (the compiled `ssrClaim`
+  // guard's value), so a render with no server components walks exactly
+  // as it did before attribute slots existed.
+  const ctx = renderConfig.context;
+  const slots = ctx !== undefined && ctx.claims !== undefined;
+  if (Array.isArray(props)) {
+    if (slots && props.$slot === true) props = slotSpreadSource(tag, props);
+    else {
+      let i = 0;
+      for (; i < props.length; i++) {
+        const s = props[i];
+        if (s == null || typeof s === "function" || $PROXY in s || (slots && s.$slot === true))
+          break;
       }
-      continue;
-    } else if (typeof value === "boolean") {
-      if (!value) continue;
-      result += escape(prop);
-    } else {
-      result += value === "" ? escape(prop) : `${escape(prop)}="${escape(value, true)}"`;
+      if (i === props.length) sources = props;
+      else {
+        viewKeys = [];
+        owners = [];
+        if (slots) ownerIndex = [];
+        collectSpreadSources(tag, props, viewKeys, owners, slots, ownerIndex);
+      }
     }
-    if (i !== keys.length - 1) result += " ";
+  } else if (props == null) {
+    // A nullish source (static or resolved) is an empty spread (#3297).
+    props = {};
+  } else if ($PROXY in props) {
+    if (viewOf(props) !== undefined) {
+      viewKeys = [];
+      owners = [];
+      sourceOwners(props, viewKeys, owners);
+    } else proxy = true;
+  } else if (slots && props.$slot === true) {
+    props = slotSpreadSource(tag, props);
+  }
+  const info = tagInfo(tag);
+  const skipChildren = info.isVoid;
+  // Each emitted attribute carries its own leading space (the hydration key
+  // already does), so skipped props leave no stray whitespace behind:
+  // `<li _hk=0>` rather than `<li _hk=0 >` (#3382).
+  let result = info.open + hk;
+  // Handler/ref positions met under `slots` (principles §9.2.3), by position
+  // with the index of the source that owns each; emitted as one marker each
+  // after the walk, settled against the compiled `claims` in source order
+  // (see spreadBehaviorMarkers). Never touched outside a server component's
+  // render.
+  let behaviors = null;
+  // One walk over one prop body: the outer loop runs once for a single props
+  // object and once per source otherwise. With several sources every
+  // source's key list is taken once up front, and "a later source owns this
+  // key" is a lookup in that list — one `ownKeys` per source rather than an
+  // `in` (a trap, or a filtered view's) per key per later source.
+  //
+  // Whatever the body — a plain object, a view's leaf, a store or foreign
+  // proxy — a prop is read as `props[prop]`: a plain read, or the proxy's
+  // `get` trap, which is all `sourceGet` does for these kinds. Only the key
+  // list differs: a proxy is asked through ONE `ownKeys` trap (`Object.keys`
+  // on a proxy adds a descriptor trap per key), which may list symbols and
+  // non-enumerable keys, as `sourceKeys` did. Keeping the kind out of the
+  // loop is worth having: the body runs once per attribute of every spread
+  // element, and it is too large for a helper call per read to be inlined.
+  const last = sources === null ? 0 : sources.length - 1;
+  let keysOf = null;
+  if (sources !== null) {
+    keysOf = new Array(last + 1);
+    for (let s = 0; s <= last; s++) keysOf[s] = Object.keys(sources[s]);
+  }
+  for (let s = 0; s <= last; s++) {
+    const keys =
+      owners !== null
+        ? viewKeys
+        : keysOf !== null
+          ? keysOf[s]
+          : proxy
+            ? Reflect.ownKeys(props)
+            : Object.keys(props);
+    if (sources !== null) props = sources[s];
+    nextKey: for (let i = 0; i < keys.length; i++) {
+      const prop = keys[i];
+      if (typeof prop !== "string" || (skip !== undefined && skip(prop))) continue;
+      // A view's key is read from the leaf that owns it (a plain leaf, or a
+      // store proxy read through its trap).
+      if (owners !== null) props = owners[i];
+      // A later source that has the key owns it; this source's getter stays
+      // unread.
+      for (let j = s + 1; j <= last; j++) {
+        if (keysOf[j].includes(prop)) continue nextKey;
+      }
+      // Every branch reads the prop itself, and only when it will use it.
+      // On a spread these are compiled getters: `children` builds the child
+      // element and consumes hydration ids as it goes. Reading it more than
+      // once — or at all when JSX children already own the slot — burns ids
+      // the client never allocates, and every element after it hydrates
+      // against the wrong node (#3313). Keep the general read below the two
+      // early-outs.
+      //
+      // The compiler moves static textarea values into children, but an
+      // element with a spread is serialized here instead. Keep the runtime
+      // path equivalent: textarea value/defaultValue are its text content,
+      // never HTML attributes (#3286).
+      if (info.textarea && (prop === "value" || prop === "defaultValue")) {
+        const value = props[prop];
+        if (value !== null) children = escape(value);
+        continue;
+      }
+      if (ChildProperties.has(prop)) {
+        if (children === undefined && !skipChildren)
+          children = info.raw || prop === "innerHTML" ? props[prop] : escape(props[prop]);
+        continue;
+      }
+      const value = props[prop];
+      // Nullish is "not set" for every attribute, `style`/`class` included —
+      // the client removes the attribute for `undefined`, and emitting
+      // `style=""` here made the server disagree with it (#3382). A nullish
+      // handler/ref key still OWNS its position under `slots`: the client's
+      // spread shadows an earlier source's key by presence (`collectProps`,
+      // `sourceHas`), then attaches nothing for `undefined` — so a named
+      // handler before this source binds nothing either.
+      if (value == undefined) {
+        if (slots && claims !== undefined && (prop === "ref" || prop.startsWith("on")))
+          behaviors = spreadBehaviorPosition(
+            behaviors,
+            prop,
+            value,
+            ctx.claims,
+            ownerIndex !== null ? ownerIndex[i] : s,
+            true
+          );
+        continue;
+      }
+      if (prop.startsWith("prop:")) {
+        // A property write has no server side; a stand-in there is named.
+        if (slots && typeof value === "object") spreadPropPosition(prop, value);
+        continue;
+      }
+      // An attribute-slot value at this key (principles §9.2.3) binds the position
+      // the key names: an attribute, a handler, a ref, or — for `class` /
+      // `style` objects — a name inside the attribute. A stand-in is an
+      // object, so under `slots` every object value takes the one helper
+      // that knows them (`spreadObjectAttribute`; the compiled positions
+      // share it); strings and booleans — the walk's common case — never
+      // do, and outside a server component the ladder is the pre-slot one.
+      if (prop === "ref" || prop.startsWith("on")) {
+        if (slots)
+          behaviors = spreadBehaviorPosition(
+            behaviors,
+            prop,
+            value,
+            ctx.claims,
+            ownerIndex !== null ? ownerIndex[i] : s,
+            claims !== undefined
+          );
+        continue;
+      }
+      if (slots && typeof value === "object") {
+        result += spreadObjectAttribute(prop, value);
+      } else if (prop === "style") {
+        result += ` style="${ssrStyle(value)}"`;
+      } else if (prop === "class") {
+        result += ` class="${ssrClassName(value)}"`;
+      } else if (typeof value === "boolean") {
+        if (!value) continue;
+        result += ` ${attrName(prop)}`;
+      } else {
+        result +=
+          value === "" ? ` ${attrName(prop)}` : ` ${attrName(prop)}="${escape(value, true)}"`;
+      }
+    }
   }
 
-  if (skipChildren) return { t: result + "/>" };
+  // `attrs` is attribute markup the caller already has as a string — the
+  // static attributes of a spread element, or a class a library computed and
+  // knows is clean — appended after the props' attributes as the last source
+  // would be. It is markup, not a source: no key of it is walked, so it is
+  // not escaped here (the caller did that, or knows it need not be) and a
+  // key it carries must be kept off the props with `skip`, or the element
+  // gets the attribute twice (and the parser keeps the first). What it buys
+  // is the object, its key list and the precedence walk that a `{ class }`
+  // source costs on every render of an element whose attribute string is
+  // fixed, or one concat away.
+  //
+  // A function is that markup computed now — the compiler's form for a
+  // dynamic attribute after the element's last spread (`ssrElementAttribute`
+  // per attribute, concatenated). It is called HERE, after every source's
+  // getters and before the children, which is exactly where the trailing
+  // source it replaces had its getters read: the expressions run at the same
+  // point in the hydration-id sequence. Evaluating it in argument position
+  // would move them ahead of the element's own key.
+  // `claims` is the compiled claim map of the element's named `ref`/`on*`
+  // attributes (the spread element's counterpart of the template path's
+  // guarded `ssrClaim` hole), keyed by the source index each attribute sits
+  // before, a thunk read only inside a server component's render — the same
+  // gate the template path's guard reads — so plain SSR never evaluates a
+  // handler expression. Called here, after the walk and before the tail
+  // thunk, for the same hydration-id reason.
+  if (slots && (behaviors !== null || claims !== undefined))
+    result += spreadBehaviorMarkers(behaviors, claims, ctx.claims);
+  if (attrs !== undefined) result += typeof attrs === "function" ? attrs() : attrs;
+  // The hydration key is unquoted, so a void element needs the space before
+  // `/>` or the slash becomes part of the key's value.
+  if (skipChildren) return { t: result + " />" };
   if (typeof children === "function") children = children();
-  return ssr([result + ">", `</${tag}>`], resolveSSRNode(children, undefined, true));
+  // The content most elements end up with — one string (a text child, escaped
+  // above or by the compiler), a number, nothing, or one finished node — joins
+  // in place. That is exactly what the general path below produces for these
+  // shapes, minus its allocations: `resolveSSRNode` builds a `{ t, h, p }`
+  // result (an object and three arrays) to append one string to, and `ssr()`
+  // takes a template array and runs its hole loop to join it back. A spread
+  // element is serialized here on every render, so that was the largest
+  // single cost of the element path (profiled at a third of it on a
+  // text-content-heavy page). The text-adjacency marker state
+  // (`ssrTextTail`) is not touched: the parent resets it on this element's
+  // finished node either way.
+  const ct = typeof children;
+  if (ct === "string" || ct === "number") return { t: result + ">" + children + info.close };
+  if (children == null || ct === "boolean") return { t: result + ">" + info.close };
+  if (ct === "object" && !children.h && typeof children.t === "string")
+    return { t: result + ">" + children.t + info.close };
+  return ssr([result + ">", info.close], resolveSSRNode(children, undefined, true));
+}
+export function ssrElementAttribute(key: string, value: any): string;
+
+export function ssrElementAttribute(key, value) {
+  // One attribute of a spread element, written as `ssrElement`'s walk writes
+  // it — the compiler's form for a dynamic attribute after the element's last
+  // spread, which used to be a getter in a trailing source. Same rules as the
+  // walk, in the same order: nullish is "not set" (`class`/`style` included,
+  // #3382), `style`/`class` take their serializers, a boolean is present or
+  // absent, `""` is a bare attribute, anything else is attribute-escaped.
+  // `key` is a compile-time attribute name (never `ref`, `on*` or `prop:*`,
+  // which the compiler drops) and is trusted like `ssrAttribute`'s.
+  //
+  // Under the `serverComponents` compiler option a dynamic `class`/`style`
+  // on an intrinsic element compiles to THIS helper rather than into
+  // template quotes, so an attribute-slot value (principles §9.2.3) — the whole
+  // value, or a name's condition inside the object — can emit its position
+  // marker beside the attribute.
+  if (value == undefined) return "";
+  if (key === "style" || key === "class") {
+    return typeof value === "object"
+      ? slotClassOrStyle(key, value)
+      : ` ${key}="${key === "class" ? ssrClassName(value) : ssrStyle(value)}"`;
+  }
+  if (isSlotValue(value)) return slotAttribute(key, value);
+  if (typeof value === "boolean") return value ? ` ${key}` : "";
+  return value === "" ? ` ${key}` : ` ${key}="${escape(value, true)}"`;
 }
 export function ssrAttribute(key: string, value: any): string;
 
@@ -3663,9 +4601,17 @@ export function ssrAttribute(key, value) {
   // Compiler contract: `key` is always a compile-time string literal emitted
   // from a JSX attribute name (see setAttr in babel-plugin/src/ssr/element.js)
   // which can never contain `"`, `<`, `&`, or `>`. `value` is already
-  // attribute-escaped by the compiler via `_$escape(..., true)`. Both are
-  // trusted here so this hot path stays a pure string concatenation.
-  return value == null || value === false ? "" : value === true ? ` ${key}` : ` ${key}="${value}"`;
+  // attribute-escaped by the compiler via `_$escape(..., true)` — which
+  // passes an attribute-slot value through untouched, so the position it names
+  // is bound here (principles §9.2.3). Both are trusted here so this hot
+  // path stays a pure string concatenation.
+  if (value == null || value === false) return "";
+  if (typeof value === "object") {
+    return isSlotValue(value)
+      ? slotAttribute(key, value)
+      : ` ${key}="${escape(String(value), true)}"`;
+  }
+  return value === true ? ` ${key}` : ` ${key}="${value}"`;
 }
 export function ssrHydrationKey(): string;
 
@@ -3674,76 +4620,529 @@ export function ssrHydrationKey() {
   return hk ? ` _hk=${hk}` : "";
 }
 
-// ---- server-component behavior claims (Stage 6: ref/event props) ----
+// ---- Attribute slots: positions in server markup that a client fill's values own ----
 //
-// Compiled SSR output (behind the `serverComponents` compiler option) emits
-// `ctx.claims ? ssrClaim({ click: expr, ref: expr2 }) : ""` as a
-// whole-attribute hole on intrinsic elements carrying ref/on* positions. The
-// brand is the slot-props stub: a function-valued prop read off a server
-// component's props proxy carries its prop name (CLAIM_PROP), and the marker
-// simply names it — `_bnd="click=onCopy"`. Resolution happens client-side at
-// dispatch/adoption time through the frame's LIVE props (nearest `data-fid`
-// ancestor), which is what makes re-renders latest-props by construction: no
-// binding table, no versioning, no supersession window.
+// (server-components-principles.md §9.2.3.) A slot is a client render; a
+// ATTRIBUTE slot's fill returns a plain object instead of JSX, and the server
+// template consumes it by reading properties at positions:
 //
-// The gate has two layers, split between evaluation and mint:
-// - `ctx.claims` (the compiled guard) is ARMING — a plain enum the frame
-//   renderers set at server-component entry, so renders with no server
-//   components never evaluate the expressions (a property miss), and
-//   context clones carry it by spread.
-// - the mint check here is SCOPE — on the document face (CLAIMS_DOCUMENT)
-//   only owner chains inside the component barrier mint. Client fill
-//   content re-enters the zone owner captured OUTSIDE the barrier, so
-//   fills neither claim nor warn (their handlers are hydration's, and
-//   legitimate). The stream face (CLAIMS_STREAM) mints unconditionally:
-//   the whole response is the component and fills never render there.
-export const CLAIM_PROP = /*#__PURE__*/ Symbol.for("solid.claim-prop");
+//   const row = props.row({ id, completed });
+//   <li class={row.rowClass} hidden={row.removed}>
+//     <input checked={row.done} onInput={row.toggle} />
+//
+// The call mints the occurrence and its args record exactly as a placed
+// (markup) slot call does; what comes back is the slot PROXY (frame-sink.ts),
+// whose property reads hand out `SLOT_VALUE`-branded stand-ins: the
+// occurrence, the property name and — on the document face, where the fill
+// ran at t=0 — the value. Every place an attribute value is written on the
+// server recognizes the brand and does two things: writes the t=0 value as
+// the attribute (document face; the stream face never runs fills and writes
+// nothing) and emits the position's MARKER beside it, on the consuming
+// element:
+//
+//   _s:<attribute>="<occurrence>:<key>"            whole attribute
+//   _s:class="<occurrence>:<key>=<class name>,…"   a name inside class/style
+//   _s:on:<event>="<occurrence>:<key>"             handler
+//   _s:ref="<occurrence>:<key>[,…]"                ref
+//
+// The `_hk` family: framework-owned marks. The client frame discovers
+// consumers by these attributes, groups them by occurrence, runs the fill
+// once per occurrence and writes each position from the returned object;
+// the morph reads the same markers off incoming markup to know which
+// positions are the client's. Keys are semantic (the client's names),
+// positions structural (the template decides what a property IS by where it
+// binds it) — nothing in the object says attribute, handler or ref.
+//
+// Where the brand is met: `ssrAttribute` (a compiled attribute; `escape`
+// passes the stand-in through), `ssrElementAttribute` (a compiled
+// `class`/`style` under the `serverComponents` option, or a trailing
+// attribute of a spread element), `ssrElement`'s walk (a runtime spread),
+// `ssrClaim` (the compiled per-element hole for ref/on* positions). The
+// grammar: the occurrence alphabet (frame-sink.ts) excludes `:`, `,` and
+// `=`; keys and names percent-encode onto an alphabet that excludes them
+// too, so every split is exact and the client decodes names back.
+
+// The compiled guard's arming values (`sharedConfig.context.claims`): the
+// frame renderers set one at server-component entry so renders with no
+// server components never evaluate the ref/on* hole's expressions. On the
+// document face only owner chains inside the component barrier warn about
+// server-local handlers (client fill content re-enters the zone owner
+// captured OUTSIDE the barrier — its handlers are hydration's).
 export const CLAIMS_STREAM = 1;
 export const CLAIMS_DOCUMENT = 2;
 
-// `_bnd` value grammar: `pos=prop[,pos=prop]*`. Prop names are client-
-// controlled strings landing in a quoted attribute that splits on `,`/`=`,
-// so unsafe characters percent-encode — URI-style (UTF-8 %XX sequences),
-// because unlike occurrence ids the CLIENT decodes these back to prop names
-// (`decodeURIComponent` at dispatch). The passthrough alphabet is attribute-
-// and grammar-safe; `%` itself encodes, so the mapping is injective.
-// Position names come from static JSX attribute names and are grammar-safe
-// by construction.
-const CLAIM_UNSAFE = /[^A-Za-z0-9_.!~*'()-]/g;
-function encodeClaimKey(key) {
-  return String(key).replace(CLAIM_UNSAFE, c => encodeURIComponent(c));
+/** The brand on an attribute slot's stand-in for one property read. */
+export const SLOT_VALUE = /*#__PURE__*/ Symbol.for("solid.slot-value");
+/** Marker attribute prefix on a consuming element (`_s:class`, `_s:on:click`, `_s:ref`). */
+export const SLOT_MARKER = "_s:";
+/** Faces a stand-in can come from (`slotValue`'s `face`). */
+export const SLOT_FACE_STREAM = 0;
+export const SLOT_FACE_DATA = 1;
+export const SLOT_FACE_MARKUP = 2;
+
+const ATTRIBUTE_SLOT_POSITION = "ATTRIBUTE_SLOT_POSITION";
+
+/**
+ * Report a position finding once per (occurrence, key, reason, position) for
+ * the current render: a live hole evaluates its expression more than once
+ * (registration, then the baseline the re-emission ledger keeps), and the
+ * same misuse must not print twice. The set lives on the render context and
+ * dies with it.
+ */
+function slotFinding(sv, reason, position, message, severity = "warn") {
+  if ("_SOLID_DEV_") {
+    const ctx = sharedConfig.context;
+    if (ctx) {
+      const id = `${sv[SLOT_VALUE]}\u0000${sv.k}\u0000${reason}\u0000${position || ""}`;
+      const seen = ctx.slotFindings || (ctx.slotFindings = new Set());
+      if (seen.has(id)) return;
+      seen.add(id);
+    }
+    devCheck({
+      code: ATTRIBUTE_SLOT_POSITION,
+      kind: "ssr",
+      severity,
+      message,
+      data: { reason, occurrence: sv[SLOT_VALUE], key: sv.k, position }
+    });
+  }
 }
+
+export function isSlotValue(value: unknown): boolean;
+
+export function isSlotValue(value) {
+  return value !== null && typeof value === "object" && value[SLOT_VALUE] !== undefined;
+}
+
+/**
+ * An attribute slot's stand-in for one property read. `face` says what the
+ * occurrence's fill produced where this read happens: nothing (the stream
+ * face never runs fills), a data object (the document face — `value` is
+ * the t=0 value of `key`), or markup (the document face ran the fill and
+ * it returned content — a read off it is a dev finding at the position).
+ * The server has no value to compute with — on the stream face none at
+ * all, on the document face only the t=0 one — so the ONLY thing a stand-in
+ * can be is the whole value at one position. Every coercion the runtime can
+ * see (a template literal, `+`, a comparison, an explicit `String()`) is a
+ * dev finding, and it renders NOTHING on either face: the document face
+ * never shows a t=0 value the stream face cannot reproduce, so a misuse is
+ * visible on the first render rather than on the first refetch. Truthiness
+ * (`if (row.done)`, `row.x && …`) has no hook and is the one misuse only
+ * the rule can catch — a stand-in is an object and always truthy.
+ * @internal Created by the slot proxies (frames server).
+ */
+export function slotValue(occurrence: string, key: string, value: unknown, face: number): object;
+
+export function slotValue(occurrence, key, value, face) {
+  const sv = { [SLOT_VALUE]: occurrence, k: key, v: value, f: face };
+  // Every implicit coercion goes through `Symbol.toPrimitive` first:
+  // `>`/`<`/arithmetic/`==` with hint "number" or "default", template
+  // literals, `String(x)` and string concatenation with "string". An
+  // explicit `.toString()` call is the one path around it.
+  Object.defineProperty(sv, Symbol.toPrimitive, {
+    value: hint => slotValueString(sv, hint === "string" ? "stringified" : "coerced")
+  });
+  Object.defineProperty(sv, "toString", { value: () => slotValueString(sv, "stringified") });
+  return sv;
+}
+
+function slotValueString(sv, reason) {
+  if ("_SOLID_DEV_") {
+    const prop = propOfOccurrence(sv[SLOT_VALUE]);
+    slotFinding(
+      sv,
+      reason,
+      undefined,
+      reason === "coerced"
+        ? `[${ATTRIBUTE_SLOT_POSITION}] \`${prop}\`'s \`${sv.k}\` is an attribute-slot value used in an expression ` +
+            `(a comparison, arithmetic, or a branch on its result). The server does not have the value — ` +
+            `the client owns it — so nothing can be computed from it here. It must be the WHOLE value of ` +
+            `an attribute, class name, style property, handler or ref; a decision that depends on it ` +
+            `belongs in the client fill (return the decided value) or in a markup slot.`
+        : `[${ATTRIBUTE_SLOT_POSITION}] \`${prop}\`'s \`${sv.k}\` is an attribute-slot value ` +
+            `and was stringified outside a bindable position — it must be the WHOLE value of an attribute, ` +
+            `class name, style property, handler or ref (\`class={row.${sv.k}}\`, not \`class={\`x \${row.${sv.k}}\`}\`). ` +
+            `If it is, the element was compiled without the \`serverComponents\` compiler option. ` +
+            `Nothing renders here on either face.`
+    );
+  }
+  return "";
+}
+
+function slotTextPosition(sv) {
+  if ("_SOLID_DEV_") {
+    slotFinding(
+      sv,
+      "text",
+      undefined,
+      `[${ATTRIBUTE_SLOT_POSITION}] \`${sv.k}\` of slot \`${propOfOccurrence(sv[SLOT_VALUE])}\` is placed as TEXT. ` +
+        `Text is not a bindable position yet: nothing renders here on either face. ` +
+        `Bind it to an attribute, or render the text in a markup slot.`
+    );
+  }
+  return "";
+}
+
+function slotMarkupRead(sv, position) {
+  if ("_SOLID_DEV_" && sv.f === SLOT_FACE_MARKUP) {
+    slotFinding(
+      sv,
+      "markup",
+      position,
+      `[${ATTRIBUTE_SLOT_POSITION}] \`${position}\` reads \`${sv.k}\` off slot \`${propOfOccurrence(sv[SLOT_VALUE])}\`, ` +
+        `but the client fill returned markup, not an object. A slot renders one or the other: ` +
+        `return an object (\`{ ${sv.k}: … }\`) for positions, or place the slot as content.`
+    );
+  }
+}
+
+/** A stand-in rendered where its marker cannot go (inside template quotes):
+ *  a dev finding; the position gets no value (`undefined`) on either face. */
+function slotValueInline(kind, sv) {
+  if ("_SOLID_DEV_") {
+    slotFinding(
+      sv,
+      "inline",
+      kind,
+      `[${ATTRIBUTE_SLOT_POSITION}] An attribute-slot value (\`${sv.k}\` of \`${propOfOccurrence(sv[SLOT_VALUE])}\`) ` +
+        `reached \`${kind}\` inside template quotes, where its position marker cannot be emitted — the ` +
+        `element was compiled without the \`serverComponents\` compiler option. Nothing renders here ` +
+        `on either face.`
+    );
+  }
+  return undefined;
+}
+
+// `<occurrence>:<key>[=<name>]` — the marker value's one entry. Keys and
+// names are client-controlled strings landing in a quoted attribute that
+// splits on `,`, `:` and `=`; they percent-encode URI-style onto an
+// alphabet that excludes all three (and `%`, so the mapping is injective),
+// and the CLIENT decodes them back (`decodeURIComponent`).
+const SLOT_KEY_UNSAFE = /[^A-Za-z0-9_.!~*'()-]/g;
+function encodeSlotKey(key) {
+  return String(key).replace(SLOT_KEY_UNSAFE, c => encodeURIComponent(c));
+}
+function slotEntry(sv, name) {
+  return `${sv[SLOT_VALUE]}:${encodeSlotKey(sv.k)}${name !== undefined ? "=" + encodeSlotKey(name) : ""}`;
+}
+function slotMarker(position, entries) {
+  return ` ${SLOT_MARKER}${position}="${entries}"`;
+}
+function propOfOccurrence(occurrence) {
+  const i = occurrence.indexOf("#");
+  return i === -1 ? occurrence : occurrence.slice(0, i);
+}
+
+/** One whole attribute bound to a stand-in: the t=0 value, then the marker. */
+function slotAttribute(key, sv) {
+  slotMarkupRead(sv, key);
+  let out = "";
+  if (sv.f === SLOT_FACE_DATA) {
+    const v = sv.v;
+    if (v != null && v !== false) {
+      out = v === true || v === "" ? ` ${key}` : ` ${key}="${escape(String(v), true)}"`;
+    }
+  }
+  return out + slotMarker(key, slotEntry(sv));
+}
+
+/**
+ * `class`/`style` as `ssrElementAttribute` writes them: the whole value may
+ * be a stand-in, or the object's members may be (a class name's condition,
+ * a style property's value) — each member binds that NAME. Without a
+ * stand-in anywhere the output is the plain helpers', byte for byte.
+ */
+function slotClassOrStyle(key, value) {
+  const isClass = key === "class";
+  if (isSlotValue(value)) {
+    slotMarkupRead(value, key);
+    let out = "";
+    if (value.f === SLOT_FACE_DATA && value.v != null) {
+      out = ` ${key}="${isClass ? ssrClassName(value.v) : ssrStyle(value.v)}"`;
+    }
+    return out + slotMarker(key, slotEntry(value));
+  }
+  if (typeof value === "object" && value !== null) {
+    const obj = isClass ? classListToObject(value) : value;
+    let entries = "";
+    let inner = "";
+    for (const name of Object.keys(obj)) {
+      let v = obj[name];
+      if (isSlotValue(v)) {
+        slotMarkupRead(v, `${key}:${name}`);
+        entries += (entries ? "," : "") + slotEntry(v, name);
+        v = v.f === SLOT_FACE_DATA ? v.v : undefined;
+      }
+      if (isClass) {
+        if (!name || name === "undefined" || !v) continue;
+        inner += (inner ? " " : "") + escape(name, true);
+      } else if (v != undefined) {
+        const r = escape(v, true);
+        if (r != undefined && r !== "undefined") {
+          inner += (inner ? ";" : "") + `${escape(name, true)}:${r}`;
+        }
+      }
+    }
+    // No stand-in: `inner` IS the plain helper's string (same walk, same
+    // escaping, same skips), written as the plain path writes it.
+    if (entries === "") return ` ${key}="${inner}"`;
+    return (inner ? ` ${key}="${inner}"` : "") + slotMarker(key, entries);
+  }
+  return ` ${key}="${isClass ? ssrClassName(value) : ssrStyle(value)}"`;
+}
+
+/** `onClick` → `click` (the client runtime's derivation). */
+function eventPosition(prop) {
+  return prop.slice(2).toLowerCase();
+}
+
+/**
+ * A `ref`/`on*` key met by `ssrElement`'s walk under `slots` — in a
+ * source, whatever its shape: a stand-in, a list of them (refs), a handler
+ * tuple, a server-local function, nothing — collected by position into
+ * `behaviors` exactly as `ssrClaim` reads the compiled claim map, so the
+ * spread path and the template path bind the same shapes and raise the
+ * same finding. A later source owns a key outright (the walk reads only
+ * the owner), so within the sources a position is one value. With no
+ * compiled claims on the element (`settle` false — the common spread, and
+ * the gated walk's hot path) the map is `pos` → marker entries, empty
+ * positions left out. With claims to settle, `pos` → `{ e: entries, at:
+ * owning source index }`, every position recorded whatever its value: a
+ * server-local function or `undefined` owns the position as the client
+ * sees it (`collectProps` shadows by key presence) and binds nothing
+ * (spreadBehaviorMarkers).
+ */
+function spreadBehaviorPosition(behaviors, prop, value, mode, index, settle) {
+  const pos = prop === "ref" ? "ref" : eventPosition(prop);
+  const entries = value == null ? "" : claimEntries(pos, value, mode);
+  if (!settle) {
+    if (entries) (behaviors ||= new Map()).set(pos, entries);
+    return behaviors;
+  }
+  behaviors ||= new Map();
+  const b = behaviors.get(pos);
+  if (b === undefined) behaviors.set(pos, { e: entries, at: index });
+  else {
+    b.e = entries;
+    b.at = index;
+  }
+  return behaviors;
+}
+
+/**
+ * The behavior markers of a spread element: the sources' (`behaviors`)
+ * settled against its compiled claim map (`claims` — the named `ref`/`on*`
+ * attributes, keyed by the index of the source each sits before; a thunk
+ * `ssrElement` calls only under `slots`, so plain SSR never evaluates
+ * them). The marker promises what the client binds, and the client's
+ * `spread(el, [a, { onClick }, b])` keeps the LAST source that HAS the key
+ * (`collectProps`: a later source's key shadows by presence; `merge()`'s
+ * lookup is `property in s`), a named attribute being a source at its
+ * position: a named handler at index `k` binds unless a spread at index
+ * `k` or later owns the position — with any value, `undefined` included —
+ * and a nullish named handler that is not so owned clears the position
+ * (the client attaches nothing for `undefined`); a later named attribute
+ * overrides an earlier one (the compilers keep only the last, so a segment
+ * never repeats a handler). Refs merge whatever their order (the client
+ * fires every ref); a nullish ref contributes nothing. One marker per
+ * position.
+ */
+function spreadBehaviorMarkers(behaviors, claims, mode) {
+  if (claims !== undefined) {
+    const segments = claims();
+    // Integer keys enumerate in ascending order: source order.
+    for (const k in segments) {
+      const map = segments[k];
+      for (const pos in map) {
+        const value = map[pos];
+        behaviors ||= new Map();
+        const b = behaviors.get(pos);
+        if (pos === "ref") {
+          if (value == null) continue;
+          const entries = claimEntries("ref", value, mode);
+          if (!entries) continue;
+          if (b === undefined) behaviors.set("ref", { e: entries, at: -1 });
+          else b.e = b.e ? b.e + "," + entries : entries;
+          continue;
+        }
+        if (b !== undefined && b.at >= +k) continue;
+        const entries = value == null ? "" : claimEntries(pos, value, mode);
+        if (b === undefined) behaviors.set(pos, { e: entries, at: -1 });
+        else b.e = entries;
+      }
+    }
+  }
+  let out = "";
+  if (behaviors !== null) {
+    for (const [pos, b] of behaviors) {
+      const e = claims === undefined ? b : b.e;
+      if (e) out += slotMarker(pos === "ref" ? "ref" : "on:" + pos, e);
+    }
+  }
+  return out;
+}
+
+/**
+ * `ssrElement`'s collecting pass for sources that are not all plain
+ * literals: a function source is a plain thunk, called once (see the walk;
+ * the compilers thunk a spread CALL, `{...props.row(args)}`); a nullish
+ * source contributes nothing (#3297); a slot's return spread whole is the
+ * retired shape (`slotSpreadSource`, probed only under `slots` — see the
+ * walk); everything else is collected through its leaves (`sourceOwners`).
+ * Under `slots` (`ownerIndex` given) each key also records the index of the
+ * source it came from, kept in step with `sourceOwners`' merge (a key seen
+ * again moves to the end, owned by the later source): what settles a
+ * handler position against the element's named claims.
+ */
+function collectSpreadSources(tag, props, viewKeys, owners, slots, ownerIndex) {
+  for (let i = 0; i < props.length; i++) {
+    let s = props[i];
+    if (typeof s === "function") s = s();
+    if (s != null) {
+      if (slots && !($PROXY in s) && s.$slot === true) s = slotSpreadSource(tag, s);
+      if (ownerIndex === null) sourceOwners(s, viewKeys, owners);
+      else {
+        const ks = [];
+        const os = [];
+        sourceOwners(s, ks, os);
+        for (let j = 0; j < ks.length; j++) {
+          const at = viewKeys.indexOf(ks[j]);
+          if (at !== -1) {
+            viewKeys.splice(at, 1);
+            owners.splice(at, 1);
+            ownerIndex.splice(at, 1);
+          }
+          viewKeys.push(ks[j]);
+          owners.push(os[j]);
+          ownerIndex.push(i);
+        }
+      }
+    }
+  }
+}
+
+/**
+ * A `prop:*` key of a runtime spread whose value is a stand-in: the
+ * compiler drops `prop:` on the server (a property is the client DOM's), so
+ * a slot cannot bind there yet — nothing renders, and dev says so.
+ */
+function spreadPropPosition(prop, value) {
+  if ("_SOLID_DEV_" && isSlotValue(value)) {
+    slotFinding(
+      value,
+      "prop",
+      prop,
+      `[${ATTRIBUTE_SLOT_POSITION}] \`${value.k}\` of slot \`${propOfOccurrence(value[SLOT_VALUE])}\` is bound ` +
+        `at \`${prop}\`. Property positions are not bindable (the server renders no properties): nothing ` +
+        `renders here. Bind the attribute form (\`${prop.slice(5)}\`), or set the property in the client fill's ref.`
+    );
+  }
+}
+
+/**
+ * An object value at an attribute key of a runtime spread: a `class`/`style`
+ * map (which may carry stand-ins as its conditions), a stand-in for the
+ * whole attribute, or any other object, attribute-escaped as its string.
+ */
+function spreadObjectAttribute(prop, value) {
+  if (prop === "style" || prop === "class") return slotClassOrStyle(prop, value);
+  if (value[SLOT_VALUE] !== undefined) return slotAttribute(attrName(prop), value);
+  return ` ${attrName(prop)}="${escape(value, true)}"`;
+}
+
+/**
+ * A slot's return spread whole onto an element (`<li {...row}>`): the
+ * retired shape — the client would decide what it owns and the template
+ * could not show it. Dev throws; prod contributes nothing.
+ */
+function slotSpreadSource(tag, source) {
+  if ("_SOLID_DEV_") {
+    const occurrence = source.$occurrence;
+    const text =
+      `[${ATTRIBUTE_SLOT_POSITION}] A slot${occurrence ? ` (\`${propOfOccurrence(occurrence)}\`)` : ""} is spread ` +
+      `onto a server-rendered <${tag}>. An attribute slot binds by position — name each one ` +
+      `(\`class={row.rowClass} onClick={row.remove}\`) so the template shows what the client owns.`;
+    recordFinding({
+      code: ATTRIBUTE_SLOT_POSITION,
+      kind: "ssr",
+      severity: "error",
+      message: text,
+      data: { reason: "spread", tag, occurrence }
+    });
+    throw new Error(text);
+  }
+  return {};
+}
+
+/**
+ * The compiled per-element hole for ref/on* positions on a server
+ * intrinsic (behind the `serverComponents` compiler option):
+ * `ctx.claims ? ssrClaim({ click: expr, ref: expr2 }) : ""`. The compiler
+ * drops handler and ref expressions from plain SSR output, so this is
+ * where a stand-in at one of those positions is seen. A server-local
+ * function there can never run (the server has no client to run it on);
+ * dev says so, inside the component barrier only.
+ */
+export function ssrClaim(map: Record<string, unknown>): string;
 
 export function ssrClaim(map) {
   const mode = sharedConfig.context && sharedConfig.context.claims;
-  if (
-    !mode ||
-    (mode === CLAIMS_DOCUMENT &&
-      !(typeof inServerComponentScope === "function" && inServerComponentScope()))
-  ) {
-    return "";
-  }
+  if (!mode) return "";
   let out = "";
   for (const pos in map) {
-    const value = map[pos];
-    const list = Array.isArray(value) ? value : [value];
-    for (const fn of list) {
-      const prop = (typeof fn === "function" && fn[CLAIM_PROP]) || undefined;
-      if (prop === undefined) {
-        if ("_SOLID_DEV_") {
-          console.warn(
-            `A \`${pos}\` position on a server-rendered element received a server-local ` +
-              `${typeof fn} — this handler can never run. Pass the function through the ` +
-              `server component's props from the client (compose on the client before ` +
-              `passing), or bind a mutation to \`action=\`.`
-          );
-        }
-        continue;
-      }
-      out += `${out ? "," : ""}${pos}=${encodeClaimKey(prop)}`;
-    }
+    const entries = claimEntries(pos, map[pos], mode);
+    if (entries) out += slotMarker(pos === "ref" ? "ref" : "on:" + pos, entries);
   }
-  return out ? ` _bnd="${out}"` : "";
+  return out;
+}
+
+/**
+ * One handler/ref position's marker entries (`occ:key[,occ:key…]`, "" for
+ * none): a stand-in, or a list of values (several refs; a handler tuple)
+ * each read for its stand-in. A server-local function — the one shape that
+ * can never run — is a dev finding inside the component barrier (`mode` is
+ * the render context's claims enum: the stream face is always in scope, the
+ * document face asks `inServerComponentScope`).
+ */
+function claimEntries(pos, value, mode) {
+  if (Array.isArray(value)) {
+    // Nested lists flatten: a merged duplicate of an array ref is
+    // `[[a, b], c]`.
+    let entries = "";
+    for (const v of value) {
+      const inner = claimEntries(pos, v, mode);
+      if (inner) entries += (entries ? "," : "") + inner;
+    }
+    return entries;
+  }
+  if (isSlotValue(value)) {
+    slotMarkupRead(value, pos);
+    return slotEntry(value);
+  }
+  if ("_SOLID_DEV_" && typeof value === "function" && !value.$slotWarned && claimInScope(mode)) {
+    // Once per function: a live hole evaluates its expression more than
+    // once, and a row template hands the same handler to every row.
+    value.$slotWarned = true;
+    devCheck({
+      code: ATTRIBUTE_SLOT_POSITION,
+      kind: "ssr",
+      severity: "warn",
+      message:
+        `[${ATTRIBUTE_SLOT_POSITION}] A \`${pos}\` position on a server-rendered element received a server-local ` +
+        `function — it can never run. Bind an attribute slot's property there ` +
+        `(\`const row = props.row(args); ${pos === "ref" ? "ref" : "onX"}={row.${pos === "ref" ? "ref" : "onX"}}\`) ` +
+        `so the client supplies it, or bind a mutation to \`action=\`.`,
+      data: { reason: "server-local", position: pos }
+    });
+  }
+  return "";
+}
+
+function claimInScope(mode) {
+  return (
+    mode === CLAIMS_STREAM ||
+    (typeof inServerComponentScope === "function" && inServerComponentScope())
+  );
 }
 
 // --- <select value> resolution (solidjs/solid#3013) ---------------------------
@@ -3958,6 +5357,9 @@ export function escape(s, attr) {
       // so coerce to the final string here first — matching what the
       // client DOM receives — and run it through the normal string path.
       if (s == null || t === "boolean" || t === "number") return s;
+      // An attribute slot's stand-in passes through: the attribute helper it is
+      // headed for binds the position and serializes the t=0 value itself.
+      if (t === "object" && s[SLOT_VALUE] !== undefined) return s;
       return escape(String(s), attr);
     }
     return s;
@@ -3997,6 +5399,12 @@ function escapeLate(fn) {
   if (fn.$esc) return fn;
   const w = () => escape(fn());
   w.$esc = true;
+  // Dev: the wrapped function and the counter position it was registered
+  // at, for `UNSCOPED_HOLE_ALLOCATED_IDS` (`checkUnscopedHole`).
+  if ("_SOLID_DEV_") {
+    w.$fn = fn;
+    w.$reg = devPeekId();
+  }
   if (fn.$lhSkip) w.$lhSkip = true;
   if (fn.$lhSuppress) w.$lhSuppress = true;
   if (fn.$lhBinding) w.$lhBinding = fn.$lhBinding;
@@ -4455,6 +5863,27 @@ function flattenClassList(list, result) {
 //                 read stateful getters such as JSX `props.children`
 //                 whose backing component rebuilds an owner subtree on
 //                 each access, producing a divergent hydration tree.
+// Text-hole separators. The client claims a multi-insert's nodes positionally
+// after FLATTENING its value (memos resolved, nested arrays spliced, nullish
+// dropped), so two consecutive items that both land as TEXT must arrive in
+// distinct text nodes: `<!--!$-->` between them keeps the parser from merging
+// them into one. Elements and template markup are nodes of their own and need
+// no separator on either side. The decision is therefore made on the RESOLVED
+// value, not the item's static type: a memo or component is a function here
+// and may yield either, and separating every adjacent pair of functions cost
+// eight bytes plus a comment node per component in a list (#3383).
+//
+// `ssrTextTail`: whether the last thing appended to the output of the region
+// being walked was text. Leaves maintain it; arrays and functions pass it
+// through (flattening semantics); an unresolved async hole counts as text on
+// both sides since its content is unknown. Each independent region — a root
+// resolve, a template hole, an element's children — starts fresh at an entry
+// call; the walkers' own recursion passes `nested` and keeps the state. (A
+// parameter rather than a separate entry wrapper: these bodies are too big for
+// V8 to inline, and the extra call per hole cost 2–5% of SSR throughput on
+// element-heavy pages.)
+let ssrTextTail = false;
+
 /**
  * A v2 path read in a content position (`{props.children}` in a
  * `$component` view: the prop forwarded without `yield*`) renders as the
@@ -4466,24 +5895,26 @@ function readOpThunk(op) {
   return () => op.source();
 }
 
-function tryResolveString(node) {
+function tryResolveString(node, nested?: boolean) {
+  if (!nested) ssrTextTail = false;
   if (isReadOp(node)) node = readOpThunk(node);
   const t = typeof node;
-  if (t === "string") return node;
-  if (t === "number") return "" + node;
+  if (t === "string" || t === "number") {
+    const s = ssrTextTail ? "<!--!$-->" + node : "" + node;
+    ssrTextTail = true;
+    return s;
+  }
   if (node == null || t === "boolean") return "";
   if (t === "object") {
     if (Array.isArray(node)) {
       const joined = tryJoinPlainSSRArray(node);
-      if (joined !== undefined) return joined;
+      if (joined !== undefined) {
+        ssrTextTail = false;
+        return joined;
+      }
       let s = "";
-      let prevNonObj = false;
       for (let i = 0, len = node.length; i < len; i++) {
-        const item = node[i];
-        const itemNonObj = item !== null && typeof item !== "object";
-        if (prevNonObj && itemNonObj) s += "<!--!$-->";
-        prevNonObj = itemNonObj;
-        const r = tryResolveString(item);
+        const r = tryResolveString(node[i], true);
         if (typeof r !== "string") return { bail: node };
         s += r;
       }
@@ -4493,9 +5924,10 @@ function tryResolveString(node) {
     if (node.t === undefined) {
       // Not a template object — mirror the client's dev warn-and-skip
       // instead of crashing downstream on a malformed template shape.
-      if ("_SOLID_DEV_") console.warn(`Unrecognized value. Skipped inserting`, node);
+      if ("_SOLID_DEV_") unrecognizedInsert(node);
       return "";
     }
+    ssrTextTail = false;
     return Array.isArray(node.t) ? node.t[0] : node.t;
   }
   if (t === "function") {
@@ -4503,16 +5935,20 @@ function tryResolveString(node) {
     try {
       v = node();
     } catch (err) {
-      return buildAsyncWrap(err, node) || "";
+      const wrap = buildAsyncWrap(err, node);
+      if (wrap) ssrTextTail = true;
+      return wrap || "";
     }
     // Recurse on the evaluated value. If recursion bails, propagate the
     // bail object unchanged — its `bail` field already carries the
     // deepest evaluated form, so the caller never re-invokes `node`.
-    return tryResolveString(v);
+    return tryResolveString(v, true);
   }
   return "";
 }
-export function resolveSSRNode(node: any, result?: any, top?: boolean): any;
+// `nested` is the walker's own recursion flag (see `ssrTextTail` above);
+// callers never pass it.
+export function resolveSSRNode(node: any, result?: any, top?: boolean, nested?: boolean): any;
 
 export function resolveSSRNode(
   node,
@@ -4521,12 +5957,15 @@ export function resolveSSRNode(
     h: [],
     p: []
   },
-  top
+  top,
+  nested
 ) {
+  if (!nested) ssrTextTail = false;
   if (isReadOp(node)) node = readOpThunk(node);
   const t = typeof node;
   if (t === "string" || t === "number") {
-    result.t[result.t.length - 1] += node;
+    result.t[result.t.length - 1] += ssrTextTail ? "<!--!$-->" + node : node;
+    ssrTextTail = true;
   } else if (node == null || t === "boolean") {
   } else if (Array.isArray(node)) {
     // A `$slot`-tagged array is a slot RANGE reaching the walker as a plain
@@ -4537,13 +5976,11 @@ export function resolveSSRNode(
     const slotLive = node.$slot && sharedConfig.context && sharedConfig.context.liveHoles;
     if (slotLive) slotLive.suppressed++;
     try {
-      let prevNonObj = false;
       for (let i = 0, len = node.length; i < len; i++) {
-        const item = node[i];
-        const itemNonObj = item !== null && typeof item !== "object";
-        if (!top && prevNonObj && itemNonObj) result.t[result.t.length - 1] += `<!--!$-->`;
-        prevNonObj = itemNonObj;
-        resolveSSRNode(item, result);
+        // An element's direct children (`top`) are never separated from each
+        // other; separators still apply inside any nested array.
+        if (top) ssrTextTail = false;
+        resolveSSRNode(node[i], result, false, true);
       }
     } finally {
       if (slotLive) slotLive.suppressed--;
@@ -4556,9 +5993,19 @@ export function resolveSSRNode(
         result.h.push(...node.h);
         result.p.push(...node.p);
       }
+      ssrTextTail = false;
     } else if (node.t !== undefined) {
       result.t[result.t.length - 1] += node.t;
-    } else if ("_SOLID_DEV_") console.warn(`Unrecognized value. Skipped inserting`, node);
+      ssrTextTail = false;
+    } else if (node[SLOT_VALUE] !== undefined) {
+      // An attribute-slot value at a TEXT position (`<b>{row.count}</b>`): not a
+      // bindable position yet (principles §9.2.3, open). Nothing renders on
+      // either face — the document face never shows a t=0 value the stream
+      // face cannot reproduce — and dev says so (slotTextPosition).
+      const text = escape(slotTextPosition(node));
+      result.t[result.t.length - 1] += ssrTextTail ? "<!--!$-->" + text : text;
+      ssrTextTail = true;
+    } else if ("_SOLID_DEV_") unrecognizedInsert(node);
   } else if (t === "function") {
     // Function nodes reaching the tree resolver are content by construction
     // (in-tag holes route here only under `ssr()`'s suppression window), so
@@ -4569,17 +6016,23 @@ export function resolveSSRNode(
     const live = sharedConfig.context && sharedConfig.context.liveHoles;
     let liveNode = null;
     if (live && (liveNode = live.content(node)) !== null) {
-      if (typeof liveNode === "string") result.t[result.t.length - 1] += liveNode;
-      else resolveSSRNode(liveNode, result);
+      if (typeof liveNode === "string") {
+        // Engine-rendered hole text: content of unknown shape, treated like
+        // an unresolved hole.
+        result.t[result.t.length - 1] += ssrTextTail ? "<!--!$-->" + liveNode : liveNode;
+        ssrTextTail = true;
+      } else resolveSSRNode(liveNode, result, false, true);
     } else {
       try {
-        resolveSSRNode(node(), result);
+        resolveSSRNode(node(), result, false, true);
       } catch (err) {
         const wrap = buildAsyncWrap(err, node);
         if (wrap) {
+          if (ssrTextTail) result.t[result.t.length - 1] += "<!--!$-->";
           result.h.push(wrap.fn);
           result.p.push(wrap.p);
           result.t.push("");
+          ssrTextTail = true;
         }
       }
     }
@@ -4598,6 +6051,105 @@ function resolveSSRSync(node) {
 // found by every copy of this module (core entry and server-functions entry
 // bundle separately downstream).
 export const RequestContext: unique symbol = Symbol.for("solid.RequestContext") as any; /**
+ * Where a server-side failure was met, as the server error hook hears it.
+ *
+ * `kind: "render"` — `fallback`: an `<Errored>` rendered its fallback;
+ * `client`: a `<Loading>` fragment rejected and the client re-renders the
+ * subtree; `failed`: nothing contained it and the request fails;
+ * `serialize`: a hydration value would not serialize and the render went on
+ * without it (a render that passed `onError`). `kind: "server-function"` — `thrown`:
+ * the body threw; `channel`: a rejection or throw escaping through the
+ * result graph (a promise, an iterable, a stream) with the head already
+ * committed. `boundary` is the hydration id the boundary records and
+ * findings use; `ownerPath` is where the error was THROWN — the component
+ * labels root-first up the owner chain it escaped, when the compiler emitted
+ * them — and `boundaryPath` where it was MET, the same labels up the
+ * boundary's chain (what broke, and what the user saw); `functionId`/`direct`
+ * name the server function and whether it was an in-process call during
+ * SSR; `event` the request, when the failure happened inside one.
+ */
+export interface ServerErrorContext extends Omit<ServerErrorSite, "event"> {
+  event?: RequestEvent;
+}
+
+/**
+ * The server error hook (see `configureServerErrors`): every failure the
+ * server runtime handles or fails on, once per error object, with where it
+ * was met. Return the value the client should receive in place of the error
+ * — rendered into the fallback, serialized for hydration, sent as the RPC
+ * error — or nothing for the default policy (a generic `Error` outside the
+ * dev build, the error itself in it; `markSafeError` still passes through).
+ * A returned value is taken as intended client-facing content and is not
+ * sanitized again. Ignored for `handling: "failed"`, which has no wire.
+ *
+ * One road a mapping does not reach: a rejected async source's serialized
+ * rejection is encoded the moment the source rejects, ahead of the boundary
+ * that meets the failure, and carries the default policy's value there. The
+ * hydrating client renders from the boundary's record, which carries the
+ * mapping; no tick is added to the error path to make the two agree.
+ */
+export type ServerErrorHook = (error: unknown, context: ServerErrorContext) => unknown | void;
+
+export interface ServerErrorsConfig {
+  /** The hook, or `undefined` to clear it. */
+  onError?: ServerErrorHook;
+}
+
+const ServerErrors: unique symbol = Symbol.for("solid-js/server/errors") as any;
+
+/**
+ * Registers the ambient server error hook — the one call a server
+ * `init()` makes to see every failure the runtime handles in production:
+ * an `<Errored>` fallback rendered, a `<Loading>` fragment rejected, a
+ * server-function throw (HTTP dispatch or an in-process call during SSR),
+ * the failure that fails a request. Called once per error object, at first
+ * sight, wherever the runtime met it; its return, when given, is the wire
+ * value (see `ServerErrorHook`). A per-request hook — `renderToStream`'s
+ * `onError`, the server-function handler's — overrides it for that
+ * request. Registered on `globalThis` under a registered symbol, so a
+ * bundled server build and an instrumented `--import`ed module share it.
+ *
+ * ```ts
+ * configureServerErrors({
+ *   onError: (error, { kind, handling, boundary, functionId }) => {
+ *     Sentry.captureException(error, {
+ *       mechanism: { type: `solid.${kind}.${handling}`, handled: handling !== "failed" }
+ *     });
+ *   }
+ * });
+ * ```
+ */
+export function configureServerErrors(config: ServerErrorsConfig): void;
+
+/**
+ * The serializer's `onError`, when a render passed one: seroval reports a
+ * value that would not serialize here instead of throwing at the write
+ * (that difference is why this is only wired when a hook was given — as
+ * `onError` always was). The hook hears it as `handling: "serialize"`.
+ */
+function serializerErrorHook(hook) {
+  return hook === undefined
+    ? undefined
+    : err => {
+        reportServerError(err, { kind: "render", handling: "serialize" }, null, hook);
+      };
+}
+
+/** The ambient hook (`configureServerErrors`), for the render's own reads. */
+function ambientServerErrorHook(): ServerErrorHook | undefined {
+  const slot = (globalThis as { [ServerErrors]?: { hook?: ServerErrorHook } })[ServerErrors];
+  return slot === undefined ? undefined : slot.hook;
+}
+
+export function configureServerErrors(config) {
+  const g = globalThis as { [ServerErrors]?: { hook?: ServerErrorHook } };
+  if (config && config.onError !== undefined && typeof config.onError !== "function") {
+    throw new TypeError(`Invalid onError: expected a function, received ${typeof config.onError}.`);
+  }
+  (g[ServerErrors] ||= {}).hook = config ? config.onError : undefined;
+}
+
+/**
  * The current request event, when called on the server inside a request
  * scope (established by `provideRequestEvent` from `@solidjs/web/storage`
  * or by the framework). Undefined on the client and outside a request.
@@ -4606,13 +6158,64 @@ export const RequestContext: unique symbol = Symbol.for("solid.RequestContext") 
 export function getRequestEvent(): RequestEvent | undefined;
 
 export function getRequestEvent() {
-  return (globalThis as any)[RequestContext]
-    ? (globalThis as any)[RequestContext].getStore() ||
-        (sharedConfig.context && sharedConfig.context.event) ||
-        console.warn(
-          "RequestEvent is missing. This is most likely due to accessing `getRequestEvent` non-managed async scope in a partially polyfilled environment. Try moving it above all `await` calls."
-        )
-    : undefined;
+  const store = (globalThis as any)[RequestContext];
+  if (!store) return undefined;
+  const event = store.getStore();
+  if (event) return event;
+  // The store is empty where it does not follow the call (a sync-only
+  // polyfill across an `await`, a callback it never saw). The event an
+  // integration put on its render's context (`sharedConfig.context.event`)
+  // is taken from the caller's own render, found through its owner — never
+  // off the module global, which is whichever render started or finished
+  // last and can belong to another request.
+  const ctx = renderContextOf(getOwner());
+  return (
+    (ctx && ctx.event) ||
+    console.warn(
+      "RequestEvent is missing. This is most likely due to accessing `getRequestEvent` non-managed async scope in a partially polyfilled environment. Try moving it above all `await` calls."
+    )
+  );
+}
+
+// Render root owner → that render's context. Claimed from inside the root
+// and released by the root's own disposal, which runs before the owner goes
+// back to the pool: a reissued owner must not answer for its old render.
+// Parked on the global under a registered symbol, like `RequestContext`:
+// the server-functions entry bundles its own copy of `getRequestEvent`
+// (a direct call's event) and must see the roots this copy's renders claim.
+const RENDER_ROOTS = Symbol.for("@solidjs/web/render-roots");
+
+function renderRoots(): WeakMap<object, any> {
+  const g = globalThis as any;
+  return g[RENDER_ROOTS] || (g[RENDER_ROOTS] = new WeakMap());
+}
+
+function claimRenderRoot(context) {
+  const owner = getOwner();
+  const roots = renderRoots();
+  roots.set(owner, context);
+  onCleanup(() => roots.delete(owner));
+  return owner;
+}
+
+// A render record settles off its render's pass — after the string root
+// returned, from the stream's completion or wind-down — so it settles under
+// the render's root owner: a listener reading `getTraceContext()` from its
+// callback finds this render's trace. `root` is unset only for a stream torn
+// down before its root existed.
+function settleRender(render, root, outcome) {
+  runWithOwner(root || null, () => render.settle(outcome));
+}
+
+// Disposal unlinks an owner (`_parent = null`), so a disposed subtree walks
+// to no render at all.
+function renderContextOf(owner) {
+  const roots = (globalThis as any)[RENDER_ROOTS];
+  if (!roots) return undefined;
+  for (; owner; owner = owner._parent) {
+    const context = roots.get(owner);
+    if (context) return context;
+  }
 }
 
 // The runtime's own silent read of the request scope's event, for
@@ -4626,7 +6229,83 @@ export function getRequestEvent() {
 function peekRequestEvent() {
   const store = (globalThis as any)[RequestContext];
   return store ? store.getStore() : undefined;
-} /** A fresh, uncommitted response head. */
+}
+
+// --- Trace context -----------------------------------------------------------
+//
+// The trace a request belongs to is derived once and memoized — keyed on the
+// event's `request` (shared by the derived events direct server-function
+// calls run under, so a call during a render sees the render's trace), or
+// on the render context for a render outside any request scope. The record
+// also says whether the browser is told (a continued trace, or a provider
+// answered); see trace.ts.
+
+/**
+ * Opens the render's recording, from which the response's `Server-Timing`
+ * metrics are projected at head commit (trace.ts `TimedWork`): the
+ * `"render"` record (`observeRender` — `solid-shell` is its `shellMs`,
+ * stamped when the shell completes) under its own gate, and the seam the
+ * reactive library's boundary files its `"boundary"` records through
+ * (`_recordBoundary` on the render context — it formats nothing) for
+ * `solid-boundary`. The seam is installed under the boundary record's own
+ * gate (`timesServerWork("boundary")`, the rule the boundary applies before
+ * building one): the two sides of one measurement agree by construction,
+ * and a render context from a build tier the boundary's differs from (a
+ * test harness) cannot make the header say what no listener asked for.
+ * Returns the render observation, or `undefined` when nothing records the
+ * render; a closure in observe builds, nothing in prod.
+ */
+function timeDocument(context, trace, mode, requestEvent) {
+  if (!"_SOLID_OBSERVE_" || records() === undefined) return undefined;
+  const render = observeRender(trace, mode, requestEvent);
+  // The router's initial-route declaration (the server entry's `withOrigin`
+  // files it here) lands on the render record: under the record's own gate,
+  // since the record is its only reader.
+  if (render) context._declareRoute = ref => render.route(ref);
+  if (timesServerWork("boundary")) {
+    context._recordBoundary = event => {
+      trace.timing.push({ type: "boundary", event });
+      if (render) render.boundary();
+    };
+  }
+  return render;
+}
+
+/**
+ * The trace the current request belongs to — continued from the incoming
+ * W3C `traceparent` when there was one, originated by the runtime
+ * otherwise; in observe/dev builds, merged with the installed provider's
+ * answer (`OBSERVE.server.trace`). Same object for every read within the
+ * request, direct server-function calls included. For a render outside a
+ * request scope, the render's own trace, read within it (under its owner).
+ * `undefined` outside both, and on the client. Forward it downstream from a
+ * server function with `getTraceContext()?.entries.traceparent`.
+ */
+export function getTraceContext(): TraceContext | undefined;
+
+export function getTraceContext() {
+  const event = peekRequestEvent();
+  if (event) return traceForEvent(event).context;
+  // Outside a request scope the trace is the caller's own render's, found
+  // through its owner (see `getRequestEvent`) — never the module global's,
+  // which can be another render's.
+  const ctx = renderContextOf(getOwner());
+  return ctx && ctx.trace ? ctx.trace.context : undefined;
+}
+
+// The record a response head is emitted from: the event named by the
+// committer, else the ambient event when THIS stub is its head (an
+// integration deriving its own head under `provideRequestEvent`). No event
+// matched → nothing to say.
+function traceForStub(stub, event) {
+  if (!event) {
+    event = peekRequestEvent();
+    if (!event || event.response !== stub) return undefined;
+  }
+  return traceForEvent(event);
+}
+
+/** A fresh, uncommitted response head. */
 export function createResponseStub(): ResponseStub;
 
 // --- HTTP response-head lifecycle ---------------------------------------
@@ -4673,13 +6352,26 @@ export function createRequestEvent(request, init) {
 // to check `committed` first): the moment a stub commits, its `headers`'
 // mutating methods fail loudly — throw in the dev build, report through
 // console.error and no-op otherwise (a late write must not crash a
-// production request that is already on the wire).
+// production request that is already on the wire). Every tier that observes
+// also records it as a finding (`LATE_HEADER_WRITE`): the one server fault
+// a production consumer most wants counted, since the response looked fine.
 
 function reportLostHeaderWrite(method, name) {
   const message =
-    `Response header write dropped: headers.${method}(${JSON.stringify(String(name))}) ` +
+    `[LATE_HEADER_WRITE] Response header write dropped: headers.${method}(${JSON.stringify(String(name))}) ` +
     "ran after the response head was sent. Write headers before the shell flushes " +
     "(or before the handler returns).";
+  // Located by the current owner when there is one (a write from inside a
+  // late-rendering component names that component); none for a handler
+  // writing after the render.
+  if ("_SOLID_OBSERVE_")
+    recordFinding({
+      code: "LATE_HEADER_WRITE",
+      kind: "head",
+      severity: "error",
+      message,
+      data: { method, name: String(name) }
+    });
   if ("_SOLID_DEV_") throw new Error(message);
   console.error(message);
 } /**
@@ -4697,10 +6389,15 @@ function reportLostHeaderWrite(method, name) {
  * `Location` set after the shell flushed is still honored client-side
  * (stream completion appends a `window.location` script), so that one
  * write stays permitted there.
+ *
+ * The commit is also where the request's trace reaches the head: its
+ * `Server-Timing` entries (see `getTraceContext`) are appended for the
+ * request `event` — defaulting to the ambient event when this stub is its
+ * `response` — immediately before the head freezes.
  */
 export function commitResponseStub(
   stub: ResponseStub,
-  options?: { allowLateLocation?: boolean }
+  options?: { allowLateLocation?: boolean; event?: RequestEvent }
 ): ResponseStub;
 
 /**
@@ -4721,10 +6418,17 @@ export function commitResponseStub(
  * honored — stream completion appends a `window.location` script — so
  * that one write stays permitted there.
  */
-export function commitResponseStub(stub, { allowLateLocation = false } = {}) {
+export function commitResponseStub(stub, { allowLateLocation = false, event } = {}) {
   if (!stub || stub.committed) return stub;
-  stub.committed = true;
   const headers = stub.headers;
+  // The trace's Server-Timing entries: the last write before the head
+  // freezes, so the app's own `Server-Timing` (an `httpHeader` declaration,
+  // an integration's write) is already there to be respected by name.
+  if (headers && typeof headers.append === "function") {
+    const trace = traceForStub(stub, event);
+    if (trace) appendTraceServerTiming(headers, trace);
+  }
+  stub.committed = true;
   if (!headers || typeof headers.set !== "function") return stub;
   for (const method of ["set", "append", "delete"]) {
     const original = headers[method].bind(headers);
@@ -4759,11 +6463,14 @@ export function getExpectedRedirectStatus(response) {
 
 // Merge the stub's headers over a base Headers. Set-Cookie is the one
 // header where multiple values must survive as separate entries, so it is
-// appended cookie-by-cookie rather than set.
+// appended cookie-by-cookie rather than set; Server-Timing is a list whose
+// entries are folded by name (the stub's trace entries beside the base's
+// own metrics — see trace.ts) rather than one replacing the other.
 function mergeStubHeaders(target, stub) {
   if (!stub) return target;
   stub.headers.forEach((value, key) => {
-    if (key !== "set-cookie") target.set(key, value);
+    if (key === "server-timing") mergeServerTiming(target, value);
+    else if (key !== "set-cookie") target.set(key, value);
   });
   const setCookies = stub.headers.getSetCookie ? stub.headers.getSetCookie() : [];
   for (const cookie of setCookies) target.append("set-cookie", cookie);
@@ -4859,14 +6566,35 @@ export function commitEventResponse(response: Response, event?: RequestEvent): R
  */
 export function commitEventResponse(response, event = getRequestEvent()) {
   const stub = event && event.response;
-  if (!stub || !stub.headers || stub.committed) return response;
+  if (!stub || !stub.headers || stub.committed) {
+    // No head to fold. The trace is the REQUEST's, not the stub's: an event
+    // without a `response` (the server-function handler's default event, a
+    // bare integration) still hands it on — the response is rebuilt only
+    // when there is something to say. An already-committed stub said it.
+    if (!event || stub) return response;
+    const trace = traceForEvent(event);
+    if (!hasServerTiming(trace)) return response;
+    const headers = copyInitHeaders(response.headers);
+    appendTraceServerTiming(headers, trace);
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers
+    });
+  }
   const cookies = stub.headers.getSetCookie ? stub.headers.getSetCookie() : [];
-  commitResponseStub(stub);
+  commitResponseStub(stub, { event });
   let hasGaps = false;
   stub.headers.forEach((value, key) => {
     if (fillsStubGap(key, response.headers, response)) hasGaps = true;
   });
-  if (!cookies.length && !hasGaps) return response;
+  // Server-Timing is a list: when both sides carry one, the stub's entries
+  // (the trace's) fold in by name beside the response's own metrics —
+  // neither gap-fill (the response's would silently drop the trace) nor
+  // replace.
+  const timing = stub.headers.get("server-timing");
+  const mergesTiming = timing !== null && response.headers.has("server-timing");
+  if (!cookies.length && !hasGaps && !mergesTiming) return response;
   // Always fold onto a rebuilt Response, never in place: the response is the
   // application's object, and an app may return the same one again — a
   // module-level redirect singleton, a memoized per-tenant Response. Folding
@@ -4879,6 +6607,7 @@ export function commitEventResponse(response, event = getRequestEvent()) {
   stub.headers.forEach((value, key) => {
     if (fillsStubGap(key, headers, response)) headers.set(key, value);
   });
+  if (mergesTiming) mergeServerTiming(headers, timing);
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
@@ -4920,11 +6649,12 @@ export function createSSRResponse(
  *
  * - String results commit the stub and return a `Response` synchronously;
  *   a `Location` on the stub becomes a real redirect
- *   (`getExpectedRedirectStatus`) instead of an HTML response. An awaited
- *   `renderToStream(...)` result arrives with its stub ALREADY committed —
- *   the render froze the head at completion, before its final dispose, so
- *   `httpStatus`/`httpHeader` declarations survive into the derived head —
- *   and the commit here is an idempotent pass-through for it.
+ *   (`getExpectedRedirectStatus`) instead of an HTML response. A
+ *   `renderToString(...)` or awaited `renderToStream(...)` result rendered
+ *   under this event's request scope arrives with its stub ALREADY
+ *   committed — the render froze the head at completion, before its final
+ *   dispose, so `httpStatus`/`httpHeader` declarations survive into the
+ *   derived head — and the commit here is an idempotent pass-through for it.
  * - Stream results (`renderToStream(...)`) resolve at shell flush — the
  *   moment the head freezes: the stub is committed there (post-commit
  *   header writes fail loudly — see `commitResponseStub`), its
@@ -4945,7 +6675,7 @@ export function createSSRResponse(result, event, options = {}) {
   const nonce = normalizeNonce(options.nonce);
 
   if (typeof result === "string") {
-    if (stub) commitResponseStub(stub);
+    if (stub) commitResponseStub(stub, { event });
     const head = deriveHead(stub, responseInit);
     if (stub && stub.headers.get("Location")) {
       return new Response(null, { status: getExpectedRedirectStatus(stub), headers: head.headers });
@@ -4981,7 +6711,7 @@ export function createSSRResponse(result, event, options = {}) {
           flushed = true;
           // Late-Location stays writable: this path honors it client-side
           // through the completion script below.
-          if (stub) commitResponseStub(stub, { allowLateLocation: true });
+          if (stub) commitResponseStub(stub, { allowLateLocation: true, event });
           const head = deriveHead(stub, responseInit);
           if (stub && stub.headers.get("Location")) {
             // Pre-flush redirect: the shell never reaches the wire.

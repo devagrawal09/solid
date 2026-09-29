@@ -1,5 +1,7 @@
-import { getOwner, getNextChildId, getContext } from "./signals.js";
+import { getOwner, getNextChildId, getContext, devPeekNextChildId } from "./signals.js";
 import type { Context } from "./signals.js";
+import type { BoundaryEvent } from "./observe.js";
+import type { NavigationRef, Observe } from "@solidjs/signals";
 
 export type SSRTemplateObject =
   | { t: string[]; h: Function[]; p: Promise<any>[] }
@@ -66,6 +68,27 @@ export type HydrationContext = {
   /** @internal Tracks which Loading boundary is currently rendering. Set by @solidjs/web via applyAssetTracking(). */
   _currentBoundaryId?: string | null;
   /**
+   * @internal The seam a `<Loading>` boundary files its `"boundary"` record
+   * through for the response's `Server-Timing` (`solid-boundary` is a
+   * projection of the record). Set by @solidjs/web at render start in
+   * observe builds; `ssrLoadingBoundary` calls it with the record of each
+   * boundary that waited and settled before the shell — the ones whose wait
+   * the head can still account for — under its own gate (dev, or a
+   * `"boundary"` listener). Absent outside observe builds.
+   */
+  _recordBoundary?: (event: BoundaryEvent) => void;
+  /**
+   * @internal The seam a router's initial-route declaration reaches the
+   * render's `"render"` record through (`RenderEvent.route`). Set by
+   * @solidjs/web at render start in observe builds while a `"render"`
+   * listener exists; the server entry's `OBSERVE.attribution.withOrigin`
+   * calls it with an `initial` ref (there is no engine on the server — the
+   * declaration is the whole of what the call does here). The ref is kept
+   * and read when the render settles, so a match refined during the render
+   * is what lands. Absent outside observe builds.
+   */
+  _declareRoute?: (ref: NavigationRef) => void;
+  /**
    * @internal Containment channel for errors surfacing in async resume loops
    * (boundary retries, flush passes), where nothing is on the stack to catch
    * a throw. Set by @solidjs/web's renderToStream: reports through the
@@ -73,6 +96,21 @@ export type HydrationContext = {
    * process survives.
    */
   failRender?: (err: any) => void;
+  /**
+   * @internal The per-request server error hook (`renderToStream`'s
+   * `onError`), set by @solidjs/web. The boundaries read it off the context
+   * they were created under and hand it to `reportServerError`, ahead of the
+   * ambient registration — never off the module global, which may be
+   * another request's context by the time an async failure lands.
+   */
+  errorPolicy?: (error: unknown, context: any) => unknown | void;
+  /**
+   * @internal Whether the shell has flushed — a fragment that fails now
+   * rejects to the client (`handling: "client"`) rather than failing the
+   * request or inlining into a parent's fallback. Set by @solidjs/web's
+   * renderToStream.
+   */
+  flushed?: () => boolean;
   /**
    * @internal Per-request memo of `resolveAssets(moduleUrl)` results, keyed
    * by moduleUrl. lazy() consults it so a component re-created across
@@ -124,6 +162,16 @@ export const NoHydrateContext: Context<boolean> = {
 type SharedConfig = {
   context?: HydrationContext;
   getNextContextId(): string | undefined;
+  /**
+   * Dev builds only: the id `getNextContextId()` would hand out next, read
+   * without consuming it (`undefined` outside an id-carrying tree). The web
+   * runtime brackets an unscoped hole's evaluation with it to detect one that
+   * took ids from the enclosing counter (`UNSCOPED_HOLE_ALLOCATED_IDS`).
+   * Absent in prod and observe builds — callers gate on `_SOLID_DEV_`.
+   *
+   * @internal
+   */
+  devPeekNextContextId?: () => string | undefined;
 };
 
 export const sharedConfig: SharedConfig = {
@@ -134,3 +182,42 @@ export const sharedConfig: SharedConfig = {
     return getNextChildId(o);
   }
 };
+// Installed here, not in the literal, so the dev gate can fold the helper
+// out of the prod and observe artifacts along with this statement. The gate
+// is a local of this module (not `IS_DEV` from diagnostics.ts): the two sit
+// in an import cycle, and a hoisted function reference is the one thing
+// safe to touch at top level from every entry order.
+const IS_DEV = "_SOLID_DEV_" as string | boolean;
+if (IS_DEV) sharedConfig.devPeekNextContextId = devPeekNextChildId;
+
+/**
+ * Gives the core's `OBSERVE.attribution.withOrigin` its one server meaning.
+ * The server reimplements reactivity and installs no attribution engine, so
+ * the core's `withOrigin` is `fn()` here; a router calls it the same way on
+ * both sides, and the initial-route declaration it makes while building its
+ * context under a render is the fact the server has nowhere else to learn
+ * — the route a request resolved to, for the request's `"render"` record
+ * (`RenderEvent.route`). Filed through the render context's `_declareRoute`
+ * seam, which @solidjs/web installs while a `"render"` listener exists; a
+ * non-initial ref (nothing writes a location on the server) and a call
+ * outside a render are `fn()` as before. A host that bundles the runtime
+ * twice (two copies of this entry over one core) wraps twice, each copy
+ * reading its own `sharedConfig` — only the copy running the render has a
+ * context, so the declaration lands once, on that render. Called from the
+ * server entry under `_SOLID_OBSERVE_`.
+ */
+export function installServerWithOrigin(observe: Observe): void {
+  const slot = observe.attribution;
+  const inner = slot.withOrigin;
+  observe.attribution = {
+    get installed() {
+      return slot.installed;
+    },
+    withInteraction: slot.withInteraction,
+    currentOrigin: slot.currentOrigin,
+    withOrigin<T>(ref: NavigationRef, fn: () => T): T {
+      if (ref.initial === true) sharedConfig.context?._declareRoute?.(ref);
+      return inner(ref, fn);
+    }
+  };
+}

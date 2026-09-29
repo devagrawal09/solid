@@ -208,6 +208,24 @@ export function invoke(fn, options, ...args) {
 // dispatch path, face policies), never in this eager layer.
 export const LIVE_SOURCE = Symbol.for("solid.LiveSource");
 
+// Where a live iteration resumes from. Hydration's takeover run stamps the
+// live answer it returns with the value the page was served with (the
+// adopted SSR value); the client's `live()` iteration digests it into the
+// position its first connection names, so a takeover that finds the same
+// value on the server costs nothing on the wire. Registered for the same
+// reason as the brand above: stamped by solid-js, read by this package.
+export const LIVE_RESUME_FROM = Symbol.for("solid.LiveResumeFrom");
+
+// The document's answer for a live call. When an integration already shows
+// the call at the moment `live()` is called (a frames boundary the page
+// carries, at t=0), the client's `live()` files that local answer on the
+// iterable it returns. A hydrating node adopts it as its value NOW — there
+// is no serialized value to hydrate, the markup is the value — and takes
+// over at its scope's release; any other consumer's iteration yields it
+// first and then connects. Registered for the same reason as the brand
+// above: filed by this package, read by solid-js's hydration wrapper.
+export const LIVE_LOCAL = Symbol.for("solid.LiveLocal");
+
 // ---- late-bound RPC seam ----
 //
 // The transport surface routers consume (`GET` re-declaration, response

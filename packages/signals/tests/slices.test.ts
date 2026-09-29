@@ -88,7 +88,11 @@ describe("link-time feature switches", () => {
     const sliced = await measure(floorSync, { asyncCapability: false, off: FEATURE_NAMES });
     expect(sliced.esm).toBeLessThan(sync.esm);
     // Measured at 12,440 (ESM minify; sync floor 13,138) when this landed.
-    expect(sliced.esm).toBeLessThan(13_000);
+    // MERGE (upstream `next` 0bf57589, 2026-09-29): 13,749. Upstream's sync
+    // semantics that no switch owns stay (A28 visibility at flush, A30
+    // dependency tails, unwind-order disposal, void mid-pass disposal; see
+    // treeshake.test.ts's async-free floor note).
+    expect(sliced.esm).toBeLessThan(13_800);
   });
 
   // ---- published trees ----

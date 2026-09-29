@@ -1,3 +1,4 @@
+import { NOT_PENDING } from "./constants.js";
 import {
   CONFIG_AUTO_DISPOSE,
   CONFIG_CHILDREN_FORBIDDEN,
@@ -12,6 +13,8 @@ import {
 import {
   computed,
   createEffectNode,
+  enterCallback,
+  exitCallback,
   recompute,
   setStrictRead,
   staleValues,
@@ -21,6 +24,7 @@ import {
 import { attrHooks } from "./attribution-hooks.js";
 import { emitDiagnostic, reportDiagnostic } from "./dev.js";
 import { StatusError, unwrapStatusError } from "./error.js";
+import { trimStaleDeps } from "./graph.js";
 import { enqueueSub } from "./heap.js";
 import {
   _hitUnhandledAsync,
@@ -71,7 +75,11 @@ export function effect<T>(
     options
   ) as Effect<T>;
   recompute(node, true);
+  // A first pass that derived from a live transaction's staged world was
+  // staged into that transaction (recompute: born held); the transaction's
+  // commit replays this effect. Its first run is not this creation's (A29).
   !options?.defer &&
+    node._pendingValue === NOT_PENDING &&
     (node._type === EFFECT_USER || options?.schedule
       ? node._queue.enqueue(node._type, runEffect.bind(null, node))
       : runEffect(node, LANE_RUN));
@@ -207,12 +215,20 @@ function runEffect(node: Effect<any>, type: number): void {
     }
     return;
   }
+  // Captured before the callback: its own throw errors the node below, but
+  // the compute pass that produced `_value` was clean, so its tail still goes.
+  const cleanPass = node._x?._error == null;
   let prevStrictRead: string | false = false;
   if (__DEV__) {
     prevStrictRead = setStrictRead("an effect callback");
     setEffectCallback(true);
-    if (attrHooks !== null) attrHooks.effectRunStart(node);
+    enterCallback();
   }
+  // Observe tier, like its `effectRunEnd` twin below: the frame the engine
+  // opens here is what stamps the callback's writes as the effect's (the
+  // cascade an observer reports) and what times the callback (the `effect`
+  // record) — facts a production observer needs, not only a dev console.
+  if (__OBSERVE__ && attrHooks !== null) attrHooks.effectRunStart(node);
   const prevCleanup = node._cleanup;
   node._cleanup = undefined;
   try {
@@ -236,9 +252,16 @@ function runEffect(node: Effect<any>, type: number): void {
     if (__DEV__) {
       setStrictRead(prevStrictRead);
       setEffectCallback(false);
+      exitCallback();
     }
     node._prevValue = node._value;
     node._modified = false;
+    // The run applied: this is the frame now, so the dependency tail the
+    // compute pass left linked goes (A30, #3438 — `recompute` defers an
+    // effect's trim while a run is owed; the twin of `commitPendingNode`'s
+    // trim for a staged pass). An errored compute kept its full list with
+    // `_depsTail` marking where it stopped; leave it, as the commit does.
+    if (cleanPass) trimStaleDeps(node);
   }
   // Outside the try (see the rule in attribution-hooks.ts). Reached whether or
   // not the callback threw — a throw that escapes the catch above halts.

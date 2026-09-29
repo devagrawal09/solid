@@ -14,7 +14,6 @@ import { className as _$className } from "r-dom";
 import { ref as _$ref } from "r-dom";
 import { claimElement as _$claimElement } from "r-dom";
 import { spread as _$spread } from "r-dom";
-import { mergeProps as _$mergeProps } from "r-dom";
 var _tmpl$ = /*#__PURE__*/ _$template(`<div><h1><a href=/>Welcome`),
   _tmpl$2 = /*#__PURE__*/ _$template(`<div><div></div><div> </div><div>`),
   _tmpl$3 = /*#__PURE__*/ _$template(`<div foo>`),
@@ -87,7 +86,7 @@ var _el$ = _tmpl$(),
   _el$3 = _el$2.firstChild;
 _$spread(
   _el$,
-  _$mergeProps(
+  [
     {
       id: "main"
     },
@@ -100,12 +99,12 @@ _$spread(
         color
       }
     }
-  ),
+  ],
   true
 );
 _$spread(
   _el$2,
-  _$mergeProps(
+  [
     {
       id: "my-h1"
     },
@@ -122,7 +121,7 @@ _$spread(
           "margin-right": "40px"
         };
       },
-      get ["class"]() {
+      get class() {
         return [
           "base",
           {
@@ -132,15 +131,15 @@ _$spread(
         ];
       }
     }
-  ),
+  ],
   true
 );
-var _ref$ = link;
-typeof _ref$ === "function" || Array.isArray(_ref$) ? _$ref(() => _ref$, _el$3) : (link = _el$3);
 _$claimElement(_el$3);
 _$className(_el$3, {
   "ccc ddd": true
 });
+var _ref$ = link;
+typeof _ref$ === "function" || Array.isArray(_ref$) ? _$ref(() => _ref$, _el$3) : (link = _el$3);
 const template = _el$;
 var _el$4 = _tmpl$2(),
   _el$5 = _el$4.firstChild,
@@ -302,9 +301,12 @@ var _el$29 = _tmpl$14();
 _$claimElement(_el$29);
 _$spread(
   _el$29,
-  _$mergeProps(props, {
-    something: true
-  }),
+  [
+    props,
+    {
+      something: true
+    }
+  ],
   false
 );
 const template24 = _el$29;
@@ -314,29 +316,32 @@ _$insert(_el$30, () => props.children, _el$31);
 _$claimElement(_el$31);
 _$spread(
   _el$31,
-  _$mergeProps(props, {
-    something: true
-  }),
+  [
+    props,
+    {
+      something: true
+    }
+  ],
   false
 );
 const template25 = _el$30;
 var _el$32 = _tmpl$16();
 _$spread(
   _el$32,
-  _$mergeProps(
+  [
     {
       start: "Hi",
       middle: middle
     },
     spread
-  ),
+  ],
   true
 );
 const template26 = _el$32;
 var _el$33 = _tmpl$16();
 _$spread(
   _el$33,
-  _$mergeProps(
+  [
     {
       start: "Hi"
     },
@@ -345,7 +350,7 @@ _$spread(
       middle: middle
     },
     second
-  ),
+  ],
   true
 );
 const template27 = _el$33;
@@ -595,36 +600,39 @@ const template81 = _el$96;
 var _el$97 = _tmpl$4();
 _$spread(
   _el$97,
-  _$mergeProps(propsSpread, {
-    get ["data-dynamic"]() {
-      return color();
-    },
-    "data-static": /* @static */ color()
-  }),
+  [
+    propsSpread,
+    {
+      get "data-dynamic"() {
+        return color();
+      },
+      "data-static": /* @static */ color()
+    }
+  ],
   false
 );
 const template82 = _el$97;
 var _el$98 = _tmpl$4();
 _$spread(
   _el$98,
-  _$mergeProps(
+  [
     {
       ...propsSpread
     },
     {
-      get ["data-dynamic"]() {
+      get "data-dynamic"() {
         return color();
       },
       "data-static": /* @static */ color()
     }
-  ),
+  ],
   false
 );
 const template83 = _el$98;
 var _el$99 = _tmpl$4();
 _$spread(
   _el$99,
-  _$mergeProps(
+  [
     {
       ...propsSpread1
     },
@@ -633,12 +641,12 @@ _$spread(
       ...propsSpread3
     },
     {
-      get ["data-dynamic"]() {
+      get "data-dynamic"() {
         return color();
       },
       "data-static": /* @static */ color()
     }
-  ),
+  ],
   false
 );
 const template84 = _el$99;

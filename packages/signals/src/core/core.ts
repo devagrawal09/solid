@@ -19,13 +19,19 @@ import {
   CONFIG_FRESH_READ,
   CONFIG_IN_SNAPSHOT_SCOPE,
   CONFIG_HAS_COMPANIONS,
+  CONFIG_HELD_CHILDREN,
   CONFIG_HAS_LANE,
   CONFIG_HAS_SNAPSHOT,
   CONFIG_INPUTS_PUBLISHED,
+  CONFIG_LANE_FRAME,
   CONFIG_NO_SNAPSHOT,
+  CONFIG_PLUMBING,
   CONFIG_OPTIMISTIC,
+  CONFIG_DERIVED_OVERRIDE,
   CONFIG_OVERRIDE_SUPERSEDED,
   CONFIG_OWNED_WRITE,
+  CONFIG_ADOPTED_UNFLUSHED,
+  CONFIG_PROMOTED,
   CONFIG_SLOT_NODE,
   CONFIG_NOTHROW,
   CONFIG_EFFECT_EQUALS,
@@ -63,7 +69,7 @@ import {
 } from "./constants.js";
 import { featureExcluded, NotReadyError } from "./error.js";
 import { COMPILED_SEAMS, OPTIMISTIC, SNAPSHOTS, STORES, VERDICTS } from "./features.js";
-import { dormantNodes, link, trimStaleDeps } from "./graph.js";
+import { clearDeps, dormantNodes, link, trimStaleDeps } from "./graph.js";
 import {
   deleteFromHeap,
   enqueueSub,
@@ -78,6 +84,8 @@ import {
   clearSignals,
   DEV,
   emitDiagnostic,
+  asyncTailFlights,
+  checkPostAwaitRead,
   GRAPH_SIZE_WARN_AT,
   markFeature,
   noteFanIn,
@@ -86,9 +94,9 @@ import {
   warnStrictReadUntracked
 } from "./dev.js";
 import { attrHooks } from "./attribution-hooks.js";
-import { devTrackHeldPending } from "./invariants.js";
-import { cleanup, disposeChildren, inheritId, markDisposal } from "./owner.js";
-import type { Transition } from "./scheduler.js";
+import { devTrackHeldPending, devUntrackCompanionOwner } from "./invariants.js";
+import { cleanup, disposeChildren, inheritId, linkChild, markDisposal } from "./owner.js";
+import type { IQueue, Transition } from "./scheduler.js";
 import {
   notifyEpoch,
   bumpNotifyEpoch,
@@ -98,13 +106,17 @@ import {
   clock,
   currentTransition,
   dirtyQueue,
+  findLane,
   globalQueue,
   GlobalQueue,
   insertSubs,
+  batchJoins,
   projectionWriteActive,
   queuePendingNode,
+  heldTrims,
   runInTransition,
   schedule,
+  wakeParked,
   zombieQueue
 } from "./scheduler.js";
 import type {
@@ -144,6 +156,10 @@ export const REACTIVE_WRITE_IN_OWNED_SCOPE_SIGNAL_MESSAGE =
 export const REACTIVE_WRITE_IN_OWNED_SCOPE_REFRESH_MESSAGE =
   "[REACTIVE_WRITE_IN_OWNED_SCOPE] Calling refresh() inside an owned scope (component, computation) is not allowed. " +
   "Move the invalidation outside pure computation.";
+export const ASYNC_STORE_SETTER_MESSAGE =
+  "[ASYNC_STORE_SETTER] Store setter callback returned a Promise. A store setter is a synchronous transaction: " +
+  "the draft closes when the callback returns, so writes after an `await` are lost. " +
+  "Move the await into an action() and call the setter from there.";
 
 export let tracking = false;
 /** @internal verdict-module glue */
@@ -179,6 +195,22 @@ export let pendingCheckActive = false;
 export let latestReadActive = false;
 export let context: Owner | null = null;
 export let currentOptimisticLane: OptimisticLane | null = null;
+
+/** Notify `node`'s subscribers on `lane`'s channel: they recompute as the
+ * lane's passes — a memo publishes a derived override (lanes stage, #3479),
+ * an effect runs from the lane's queue, at the park, ahead of the
+ * transaction — the display-ahead view. The write itself is already staged
+ * (setSignal) and commits with the frame; this walk shows it now. Used by a
+ * boundary re-armed from a lane pass (boundaries.ts `_swap`, #3540). */
+export function notifyOnLane(node: Signal<any>, lane: OptimisticLane): void {
+  const prev = currentOptimisticLane;
+  currentOptimisticLane = lane;
+  try {
+    insertSubs(node, true);
+  } finally {
+    currentOptimisticLane = prev;
+  }
+}
 
 export let snapshotCaptureActive = false;
 export let snapshotSources: Set<any> | null = null;
@@ -233,10 +265,15 @@ function releaseSubtree(owner: Owner): void {
 export function clearSnapshots(): void {
   if (snapshotSources) {
     for (const source of snapshotSources) {
-      delete source._x?._snapshotValue;
+      // The extension is a fixed-shape object with `_snapshotValue`
+      // pre-initialized to undefined (see ext()), and every reader tests
+      // `!== undefined` — assign, don't `delete`: deleting a field pushes the
+      // object to dictionary mode for every later read of every field.
+      const x = source._x;
+      if (x != null) x._snapshotValue = undefined;
       // StoreNode targets share one pre-initialized hidden class (see
-      // createStoreProxy) — assign undefined instead of deleting, and only
-      // when present so signal-node sources don't grow the field.
+      // createStoreProxy) — same rule, and only when present so signal-node
+      // sources don't grow the field.
       if (source[STORE_SNAPSHOT_PROPS] !== undefined) source[STORE_SNAPSHOT_PROPS] = undefined;
     }
     snapshotSources = null;
@@ -263,13 +300,46 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   // triggered this run, and the baseline for the engine's subscription diff).
   let devChanged = false;
   if (__OBSERVE__ && attrHooks !== null) attrHooks.recomputeStart(el, create);
+  // Lane posture is resolved BEFORE the previous frame is parked below: a
+  // lane pass parks a lane frame, not a transaction zombie (#3662, #3698;
+  // see the parking site), so the decision must be known there. `lane` is applied to
+  // `currentOptimisticLane` further down, once the previous posture is saved.
+  // Optimistic state and its lanes ride transactions: async capabilities.
+  let isOptimisticDirty = __ASYNC__ && OPTIMISTIC && !!(el._flags & REACTIVE_OPTIMISTIC_DIRTY);
+  let lane: OptimisticLane | null | false = null;
+  if (!__ASYNC__ || !OPTIMISTIC) {
+    // No lanes exist in the async-free or the optimistic-free runtime.
+  } else if (isOptimisticDirty) {
+    lane = GlobalQueue._recomputeLane!(el, true);
+    // `false` = wake-only lane demotion: recompute plain so a mid-tick
+    // latest()/isPending() pull stages instead of direct-committing (#3009).
+    // The predicate lives with the engine (recomputeLane).
+    if (lane === false) isOptimisticDirty = false;
+  } else if (el._config & CONFIG_DERIVED_OVERRIDE) {
+    // Lanes stage (#3479): a pass over a live lane member carrying a derived
+    // override is the lane's pass whatever channel dirtied it (a boundary
+    // reset, an unrelated sync write) — its inputs serve the lane's view, so
+    // its result is the lane's and belongs in the override slot. Run plain,
+    // A18's sync twin below read that re-derived lane view as a differing
+    // truth (a fresh array), superseded the override and demoted the lane;
+    // the lane's next pass then dropped the staged "truth" and left the node
+    // flagged superseded with nothing to serve (fuzzer latest-1 #2481). A
+    // demoted node resolves no lane and stays plain: its pass IS the truth.
+    lane = GlobalQueue._recomputeLane!(el, true);
+    if (lane) isOptimisticDirty = true;
+  } else if (activeTransition && !create && activeTransition._optimisticNodes.length) {
+    // Lane adoption: parent-deeper-than-owned-child can run before its OPT-dirty
+    // child propagates. Walk deps once and inherit the OPT lane so this node
+    // recomputes under the right posture and propagates correctly.
+    lane = GlobalQueue._recomputeLane!(el, false);
+    if (lane) isOptimisticDirty = true;
+  }
   if (!create) {
-    if (
-      __ASYNC__ &&
-      el._transition &&
-      (!isEffect || activeTransition) &&
-      activeTransition !== el._transition
-    )
+    // A stamped memo re-enters its hold: its value is that transaction's work.
+    // An effect's pass belongs to whatever dirtied it (A15 corollary: effects
+    // don't entangle parallel transactions); it joins its stamp only when the
+    // pass observes the held flight — queue notification (#3407).
+    if (__ASYNC__ && el._transition && !isEffect && activeTransition !== el._transition)
       globalQueue.initTransition(el._transition);
     deleteFromHeap(el, queueFor(el));
     if (__ASYNC__ && el._x !== null) {
@@ -281,8 +351,35 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
       // work that replaced it. Idempotent with the cleanup-channel close.
       releaseFlightTeardown(el);
     }
-    // Tracked effects run after finalizePureQueue, so dispose immediately instead of deferring
-    if ((__ASYNC__ && el._transition) || isEffect === EFFECT_TRACKED) disposeChildren(el);
+    // Tracked effects run after finalizePureQueue, so dispose immediately
+    // instead of deferring. Children built by an uncommitted recompute
+    // (CONFIG_HELD_CHILDREN) die immediately too: no frame ever showed them.
+    // Everything else is the committed frame's. Which frame retires it is
+    // decided by who owns the pass, never by the node's kind (A15 lane work
+    // and transaction work, ruled 2026-09-28, #3698). Transaction work — a
+    // pass under a held transaction — defers them as zombies until this
+    // node's commit, a transaction-owned node included (#3404): a parked
+    // node's children predate the hold, and tearing them down when the
+    // source lands ran cleanups before the transaction's atomic reveal.
+    // Lane work — a pass over a lane, effect or memo alike — parks a LANE
+    // frame instead (CONFIG_LANE_FRAME, #3662, #3698): the frame it replaces
+    // leaves the screen when the lane's queue applies this pass (A30) — not
+    // at the action's commit — and a held lane defers that with the frame
+    // still displayed. The drain is the lane's first render entry for this
+    // pass, pushed before the pass builds the new frame: cleanups before
+    // side effects — the retired frame's `onCleanup`s run ahead of every
+    // effect callback of the new frame. While the frame waits, the live
+    // children were never shown: a superseding pass disposes them here like
+    // held children, and the parked frame stays. Zombies exist for
+    // transaction work only: #3662 gated the lane frame on `isEffect`, and a
+    // memo's lane pass (its value a derived override, A17) parked a
+    // transaction zombie that made the memo a pending node of the action,
+    // stamped it, and sent its next mainline recompute through the
+    // stamped-memo arm above — a `Show` whose `when` getter owns a
+    // compiler-emitted memo held an unrelated sync write for the action's
+    // lifetime, against the #3460 ruling that a lane never holds a sync write.
+    if (isEffect === EFFECT_TRACKED || el._config & (CONFIG_HELD_CHILDREN | CONFIG_LANE_FRAME))
+      disposeChildren(el);
     else if (el._firstChild !== null || el._disposal !== null) {
       markDisposal(el);
       const x = ext(el);
@@ -291,16 +388,24 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
       el._disposal = null;
       el._firstChild = null;
       el._childCount = 0;
+      if (__ASYNC__ && OPTIMISTIC && lane) {
+        el._config |= CONFIG_LANE_FRAME;
+        findLane(lane)._effectQueues[0].push(() => {
+          el._config &= ~CONFIG_LANE_FRAME;
+          disposeChildren(el, false, true);
+        });
+      }
       if (__DEV__) clearSignals(el);
     } else if (__DEV__) clearSignals(el);
   }
 
-  // Optimistic state and its lanes ride transactions: async capabilities.
-  let isOptimisticDirty = __ASYNC__ && OPTIMISTIC && !!(el._flags & REACTIVE_OPTIMISTIC_DIRTY);
+  // A derived override (lanes stage, #3479) is override-covered like a written
+  // one: a plain pass over it — its source superseded (A18) — stages the truth
+  // and supersedes the override through the sync twin below.
   const hasOverride =
     __ASYNC__ &&
     OPTIMISTIC &&
-    (el._config & CONFIG_OPTIMISTIC) !== 0 &&
+    (el._config & (CONFIG_OPTIMISTIC | CONFIG_DERIVED_OVERRIDE)) !== 0 &&
     el._x?._overrideValue !== NOT_PENDING &&
     el._x?._overrideValue !== undefined;
   const wasUninitialized = !!(el._statusFlags & STATUS_UNINITIALIZED);
@@ -308,8 +413,8 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   // A conditional can drop its pending source and recover to an unchanged
   // value, leaving blocked dependents outside that source’s settle walk.
   const outgoingError = el._statusFlags & STATUS_ERROR ? el._x?._error : undefined;
-  const outgoingPendingSources =
-    __ASYNC__ && el._statusFlags & STATUS_PENDING ? el._x?._pendingSources : undefined;
+  const wasPending = __ASYNC__ && (el._statusFlags & STATUS_PENDING) !== 0;
+  const outgoingPendingSources = wasPending ? el._x?._pendingSources : undefined;
   // Pending SOURCE-hood, captured before the compute clears status: a node
   // whose own flight parked dependents self-registers in _pendingSources
   // (notifyStatus, isSource). If this recompute supersedes that flight and
@@ -326,11 +431,23 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   // a pending frame to live observers of the verdict (#2990).
   const wasLoading = el._loading;
 
+  // Creation-time A29 (see enterStagedRead): a pass outside a flush that is
+  // served a live transaction's staged value records the transaction here
+  // and is staged INTO it below — "born held" — instead of committing.
+  const prevStagedEntry = stagedEntry;
+  stagedEntry = null;
   const oldcontext = context;
   context = el;
   el._depsTail = null;
   el._depGen++;
-  el._flags = REACTIVE_RECOMPUTING_DEPS;
+  // REACTIVE_ZOMBIE is position, not scheduling state: it says the node sits
+  // on its owner's `_pendingFirstChild` chain, and `disposeChildren` keys its
+  // parent-chain splice off it. A zombie reruns for mainline writes until the
+  // commit that disposes it (#3463), so the per-pass wipe here — and in the
+  // finally below and in updateIfNecessary — must carry it (#3543): a
+  // de-flagged zombie spliced itself out of the LIVE chain at disposal,
+  // orphaning the owner's current child, which stayed subscribed forever.
+  el._flags = REACTIVE_RECOMPUTING_DEPS | (el._flags & REACTIVE_ZOMBIE);
   el._time = clock;
   let value = el._pendingValue === NOT_PENDING ? el._value : el._pendingValue;
   let oldHeight = el._height;
@@ -358,28 +475,22 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   // covers creation-time computes and flushes that run inside the window.
   const prevLatestRead = latestReadActive;
   latestReadActive = false;
+  // A memo computes under its OWN lane posture, never the puller's (A31,
+  // #3442): its value is one shared slot every reader sees, so a pull from a
+  // lane-carrying reader (a probe effect on its companion lane pulling a sync
+  // memo) must not run it with that lane's read carve-outs — under a lane, a
+  // pending node on no lane serves its committed value instead of throwing,
+  // and the memo then published a stale "settled" value, dropped its
+  // pending status, and stopped holding its transaction. The branches below
+  // re-establish the posture the memo itself owns (OPT-dirty, or adopted
+  // through its deps). Effects keep the ambient lane: their runs are the
+  // lane's own view.
+  if (!isEffect) currentOptimisticLane = null;
   // Lane posture lives with the engine: OPTIMISTIC_DIRTY is only ever set by
   // engine-driven paths, and _optimisticNodes is only pushed by
   // _optimisticWrite, so the hook is installed whenever either gate holds.
-  if (!__ASYNC__ || !OPTIMISTIC) {
-    // No lanes exist in the async-free or the optimistic-free runtime.
-  } else if (isOptimisticDirty) {
-    const lane = GlobalQueue._recomputeLane!(el, true);
-    if (lane) currentOptimisticLane = lane;
-    // `false` = wake-only lane demotion: recompute plain so a mid-tick
-    // latest()/isPending() pull stages instead of direct-committing (#3009).
-    // The predicate lives with the engine (recomputeLane).
-    else if (lane === false) isOptimisticDirty = false;
-  } else if (activeTransition && !create && activeTransition._optimisticNodes.length) {
-    // Lane adoption: parent-deeper-than-owned-child can run before its OPT-dirty
-    // child propagates. Walk deps once and inherit the OPT lane so this node
-    // recomputes under the right posture and propagates correctly.
-    const lane = GlobalQueue._recomputeLane!(el, false);
-    if (lane) {
-      isOptimisticDirty = true;
-      currentOptimisticLane = lane;
-    }
-  }
+  // (Resolved at the top of this pass, ahead of the parking site.)
+  if (__ASYNC__ && OPTIMISTIC && lane) currentOptimisticLane = lane;
   const isStaleEffect = isEffect && isEffect !== EFFECT_USER;
   const prevStale = stale;
   if (isStaleEffect) stale = true;
@@ -426,7 +537,9 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
     // its body gates on is either _statusFlags or lives in the cold
     // extension — no extension, no status to clear. (_x from an unrelated
     // installer just makes clearStatus a cheap re-verified no-op.)
-    if (el._statusFlags !== 0 || el._x !== null) clearStatus(el, create);
+    // A node born held keeps STATUS_UNINITIALIZED until its transaction
+    // commits: it has no committed value, and read() holds its readers.
+    if (el._statusFlags !== 0 || el._x !== null) clearStatus(el, create && stagedEntry === null);
     // _optimisticLane is only ever assigned by engine paths (CONFIG_HAS_LANE
     // is their sticky presence mark).
     // (No OPTIMISTIC switch here: inside a try, a `true` switch would not
@@ -466,6 +579,18 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
       // The replacement source is fully propagated now. If no new flight
       // re-owned self, retire the superseded flight and its dependent copies.
       if (__ASYNC__ && notReady && wasPendingSource && !el._x?._inFlight) settlePendingSource(el);
+      // A re-park drops what the earlier pass carried (#3456): a source this
+      // pass no longer reaches — its branch switched, or a fresh flight
+      // replaced the inputs' pending with its own — stays copied onto
+      // dependents that reached it only through here, and its landing walk
+      // stops at this node (nothing left to retire) before it finds them. A
+      // dependent then waits forever on a flight it has no path to. The
+      // re-park twin of the unchanged-value recovery sweep below; dependents
+      // with another path keep the source (retryReaches).
+      if (__ASYNC__ && notReady && outgoingPendingSources)
+        for (const source of outgoingPendingSources)
+          if (source !== el && !el._x?._pendingSources?.has(source))
+            settlePendingSource(el, source);
       if (__ASYNC__ && reaskChanged) GlobalQueue._repollVerdicts!(el);
     }
   } finally {
@@ -480,22 +605,57 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
     // (markNode(c) in read()) marks the running node as part of ordinary
     // bookkeeping, and those marks are correctly discarded here.
     missedWake = (el._flags & REACTIVE_MISSED_WAKE) !== 0;
-    el._flags = REACTIVE_NONE | (create ? el._flags & REACTIVE_SNAPSHOT_STALE : 0);
+    // REACTIVE_DISPOSED survives too (#3621): the pass may have disposed its
+    // own owner (a memo calling its root's `dispose()`, a cleanup doing so
+    // #3601/#3606), and `disposeChildren` set the flag on this node
+    // reentrantly. Dropped, the node read as live — `refresh()` re-ran it
+    // and `isDisposed()` lied.
+    el._flags =
+      (el._flags & (REACTIVE_ZOMBIE | REACTIVE_DISPOSED)) |
+      (create ? el._flags & REACTIVE_SNAPSHOT_STALE : 0);
     context = oldcontext;
+  }
+  // The cast re-widens: TS narrowed `stagedEntry` to `null` at the reset
+  // above and does not invalidate that across the compute call that
+  // `enterStagedRead` runs under. No emitted code.
+  const bornHeld = stagedEntry as Transition | null;
+  stagedEntry = prevStagedEntry;
+
+  // A node that died during its own pass (#3621) is dead at the end of it,
+  // and the pass is void. Its owner's teardown already unlinked its deps,
+  // removed it from the heap and ran its cleanups; what remains is what the
+  // body did AFTER the `dispose()` call: reads that re-linked the dead node
+  // to its sources (unlinked here — the leak that kept it re-running in a
+  // torn-down tree), a flight it may have started (retired: the landing
+  // checks `_inFlight` identity), and the value it returned. That value is
+  // NOT published: a dead node freezes at its last committed value (#3024),
+  // so nothing is staged, committed, or propagated to subscribers, and an
+  // effect's run is not enqueued (runEffect would refuse it anyway). The
+  // attribution frame opened at the top is still closed.
+  if (el._flags & REACTIVE_DISPOSED) {
+    clearDeps(el);
+    if (el._x !== null) el._x._inFlight = null;
+    if (__OBSERVE__ && attrHooks !== null)
+      attrHooks.recomputeEnd(el, create, false, false, false, false);
+    currentOptimisticLane = prevLane;
+    return;
   }
 
   if (!el._x?._error) {
-    trimStaleDeps(el);
-    // Observe-tier fan-in (HUGE_FAN_IN): with the stale tail trimmed, the dep
-    // list IS this pass's distinct sources — count it here rather than per
-    // link. A begin/end bracket around the pass plus a per-link increment
-    // measured -5.8% on createRenderEffects:create1to1 (CodSpeed, dev tier)
-    // and cost several points of the shape wins elsewhere; this walk is a
-    // fraction of the reads that built the list and keeps no module state,
-    // so nested pulls need no save/restore.
+    // Observe-tier fan-in (HUGE_FAN_IN): the validated prefix [_deps.._depsTail]
+    // IS this pass's distinct sources — count it here rather than per link. A
+    // begin/end bracket around the pass plus a per-link increment measured
+    // -5.8% on createRenderEffects:create1to1 (CodSpeed, dev tier) and cost
+    // several points of the shape wins elsewhere; this walk is a fraction of
+    // the reads that built the list and keeps no module state, so nested
+    // pulls need no save/restore. (The stale tail is trimmed at the end of
+    // this pass, or at its commit — see recompute's tail.)
     if (__OBSERVE__) {
       let fanIn = 0;
-      for (let d = el._deps; d !== null; d = d._nextDep) fanIn++;
+      for (let d = el._deps; d !== null; d = d._nextDep) {
+        fanIn++;
+        if (d === el._depsTail) break;
+      }
       if (fanIn >= GRAPH_SIZE_WARN_AT) noteFanIn(el, fanIn);
     }
     // INV-11 (#3330): the equality gate compares against the slot this run
@@ -581,7 +741,7 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
       const prevVisible = hasOverride ? el._x?._overrideValue : undefined;
 
       if (
-        create ||
+        (create && bornHeld === null) ||
         // Plain sync flush (no transition on either side) commits effect
         // values directly — the pending round-trip (queuePendingNode +
         // commitPendingNodes) exists to sequence transition reveals, and
@@ -591,6 +751,7 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
         // not the stashed queues, so a staged value would hand the immediate
         // apply stale state — see CONFIG_DIRECT_COMMIT.
         (isEffect &&
+          bornHeld === null &&
           (activeTransition !== el._transition ||
             activeTransition === null ||
             el._config & CONFIG_DIRECT_COMMIT)) ||
@@ -603,20 +764,35 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
         // round-trip is that separation; it cannot be skipped on any path a
         // pull can reach.
       ) {
-        el._value = value;
-        // Lane-propagated correction: upstream data is fresh, correct the
-        // override unconditionally. The direct _value commit is the lane's
-        // own reveal schedule; drop any superseded older hold so its queued
-        // commit can't clobber the fresh value.
-        if (__ASYNC__ && hasOverride && isOptimisticDirty) {
-          ext(el)._overrideValue = value === undefined ? OVERRIDE_UNDEFINED : value;
-          el._pendingValue = NOT_PENDING;
-        }
+        // Lanes stage (#3479): a lane pass on a memo publishes its speculative
+        // result as an OVERRIDE — `_value` stays the committed truth, so a
+        // reader off the lane (A17's committed view, #3460) sees a whole
+        // committed frame: the source's shadow and its derivations together,
+        // never a committed shadow beside a speculative memo. The lane's own
+        // readers and untracked reads see the override (A17); the revert
+        // drops it and re-derives (resolveOptimisticNodes). Effects keep the
+        // direct commit — their `_value` is a run result the lane's queues
+        // already sequence. Either way the lane pass drops any superseded
+        // older hold so its queued commit can't clobber the fresh frame: a
+        // hold staged on an earlier, lane-free pass of the SAME transaction
+        // is superseded — left in place, the commit published the older
+        // frame over the fresh one (#3377). A reversion pass (OPT-dirty with
+        // no lane — the override dropped) commits directly: it IS the truth.
+        if (
+          __ASYNC__ &&
+          OPTIMISTIC &&
+          isOptimisticDirty &&
+          !isEffect &&
+          currentOptimisticLane !== null
+        )
+          GlobalQueue._laneOverride!(el, value, currentOptimisticLane);
+        else el._value = value;
+        if (__ASYNC__ && OPTIMISTIC && isOptimisticDirty) el._pendingValue = NOT_PENDING;
       } else {
         el._pendingValue = value;
         if (
           __ORACLE__ &&
-          el._config & CONFIG_ORACLE_DIRECT &&
+          el._oracle! & CONFIG_ORACLE_DIRECT &&
           activeTransition === null &&
           el._transition === null
         ) {
@@ -626,18 +802,46 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
           el._pendingValue = NOT_PENDING;
         }
         if (__DEV__) devTrackHeldPending(el);
+        // (Born held is transaction work: an async capability.)
+        if (__ASYNC__ && bornHeld !== null) {
+          // Born held: the pass ran from mainline and derived from this
+          // transaction's staged world (enterStagedRead). Its value is the
+          // transaction's — staged into it directly, stamped, and committed
+          // with it; mainline's batch never sees it. A born-held effect
+          // skips its synchronous first run (effect()) and is replayed by
+          // the commit like a stale reader that showed the committed frame.
+          // (A re-pass under a fresh boundary — the in-flush form — is
+          // already the transaction's: restaged, not re-queued.)
+          if (el._transition !== bornHeld) {
+            el._transition = bornHeld;
+            bornHeld._pendingNodes.push(el);
+          }
+          if (isEffect) bornHeld._gatedSubs.add(el);
+          // Under a boundary that has not revealed, a held first value is
+          // something not ready under it (#3540): the boundary collects this
+          // node as a source and shows its fallback; the source stays
+          // collected while born held (CollectionQueue._checkSources) and
+          // is released by the commit that initializes it. A boundary that
+          // already shows content is not told — it holds like any reader.
+          if (underFreshLoadingBoundary(el))
+            el._queue.notify(el, STATUS_PENDING, STATUS_PENDING, new NotReadyError(el));
+        }
         // A window landing that gets held re-opens the window until the hold
         // commits — the verdict's held-value branch is window-gated (#2990).
         if (wasLoading) el._loading = true;
-        // Transition-held sync recompute is a write path like setSignal/asyncWrite,
+        // A staged sync recompute is a write path like setSignal/asyncWrite,
         // so sync derivations of held sources stay visible to isPending()/latest()
         // (#2831). Both companion writes are transition-scoped (optimistic) and
-        // auto-revert/re-derive at commit. Skipped for plain flushes where the
-        // pending value commits before effects run.
+        // auto-revert/re-derive at commit. Not gated on an active transition:
+        // a plain flush can still become a hold after this recompute — an
+        // async memo downstream pends and the batch is adopted into a
+        // transaction (scheduler.enterTransition) — and nothing re-derives
+        // the companion at adoption, so a memo held that way read
+        // isPending() false while its held source read true (#3413).
         if (
           __ASYNC__ &&
           VERDICTS &&
-          (activeTransition || el._transition) &&
+          el._config & CONFIG_HAS_COMPANIONS &&
           GlobalQueue._syncCompanions !== null
         )
           GlobalQueue._syncCompanions(el, value);
@@ -706,8 +910,62 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
       __ASYNC__ &&
       wasPendingSource &&
       !(el._statusFlags & (STATUS_PENDING | STATUS_UNINITIALIZED))
-    )
+    ) {
       settlePendingSource(el);
+      // The superseded flight will not enter its waiting transactions at
+      // landing. Recheck them now so an unchanged value cannot leave their
+      // writes parked after the last pending source has settled.
+      wakeParked();
+    }
+  }
+  // A REPORTER whose pass stopped reading a source it reported on (a gate
+  // closed) stops counting for the transaction waiting on it (A15 / #3426:
+  // the hold lasts while a live reporter observes the flight). Nothing else
+  // re-judges a parked transaction (see wokenTransitions; the disposal
+  // (#3372) and boundary (#3375) twins of this site), so the writes it held
+  // stayed staged for as long as the flight stayed up — forever, for one
+  // that never lands (fuzzer #3446 P1, spec O3). The event is "this pass
+  // dropped a dep" — deps past `_depsTail` (trimmed below, or kept by A30
+  // for a staged pass), or a pass that read nothing — not "recovered from
+  // pending": a reporter registered by the stale-reader carve-out
+  // (heldFromStale, an INITIALIZED source refetching) displays the committed
+  // value and is never pending (fuzzer case 79). Every parked transaction,
+  // not the reporter's stamp: the transaction waiting on it registered it
+  // without stamping it. One idle pass per parked transaction; done ones
+  // return at re-entry. Effects only — reporters register from render-effect
+  // notification (INV-3).
+  // (`_depsTail` was reset at the top of the pass; TS keeps that narrowing.)
+  const tail = (el as Computed<any>)._depsTail as Link | null;
+  if (
+    __ASYNC__ &&
+    isEffect &&
+    ((wasPending && !(el._statusFlags & STATUS_PENDING)) ||
+      (tail === null ? el._deps !== null : tail._nextDep !== null))
+  )
+    wakeParked();
+  // Dependencies are the committed frame's until it is replaced (A30, #3410; the
+  // deps twin of the held children above): a pass that staged its value
+  // leaves the previous pass's tail linked for `commitPendingNode` to trim,
+  // so a write to a dependency the committed value still derives from
+  // reaches this node — and joins its hold if the stage is transaction-held
+  // by then (a plain flush decides nothing here: the transaction that holds
+  // the pass may open later in the same flush). A pass that published
+  // directly (a first pass, a lane's own reveal) trims now. An errored pass
+  // (a throw, NotReady included, or a comparator throw above) keeps its full
+  // list as before — `_depsTail` marks where it stopped — and the commit
+  // skips it by the same `_error`. An effect's frame is the run its value is
+  // applied by, not the value slot (#3438): a direct-committed pass that
+  // still owes a run (`_modified`) has not replaced what the last run
+  // published — the same flush may stash that run into a transaction it
+  // opens later — so its tail waits for `runEffect` to trim once the run
+  // applies. A pass that changed nothing replaced nothing either (#3469): the
+  // same flush may park with its inputs held, and the committed frame still
+  // derives from the tail — its trim waits on the flush's verdict (heldTrims).
+  // A tracked effect's pass IS its run (it bypasses the heap and runs after
+  // the commit): the frame is replaced, trim now.
+  if (!el._x?._error && el._pendingValue === NOT_PENDING && !(isEffect && (el as any)._modified)) {
+    if (create || isOptimisticDirty || isEffect === EFFECT_TRACKED) trimStaleDeps(el);
+    else if ((el._depsTail as Link | null)?._nextDep ?? el._deps) heldTrims.push(el);
   }
   // Attribution hook: fired before the lane restore so `currentOptimisticLane`
   // still reflects THIS run's posture. The facts distinguish an overlay
@@ -724,24 +982,66 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
       el._pendingValue !== NOT_PENDING
     );
   currentOptimisticLane = prevLane;
+  // A parked LANE frame is not a hold (#3662): its drain is the effect's own
+  // run, not a commit — the node is neither queued nor stamped for it, and
+  // the release below (for transaction zombies) leaves it parked.
+  const laneFrame = (el._config & CONFIG_LANE_FRAME) !== 0;
   const needsPendingCommit =
     el._pendingValue !== NOT_PENDING ||
-    (el._x !== null && (el._x._pendingFirstChild !== null || el._x._pendingDisposal !== null)) ||
+    (!laneFrame &&
+      el._x !== null &&
+      (el._x._pendingFirstChild !== null || el._x._pendingDisposal !== null)) ||
     (el._statusFlags & (STATUS_PENDING | STATUS_UNINITIALIZED)) !== 0;
   // Override-covered holds (hasOverride) always queue: their commit belongs
   // to their own transition's schedule (A18 re-rule) and is unobservable
   // under the override (A17). Revert no longer commits anything, so an
   // unqueued covered hold would leak (INV-7) once the revert clears
   // _transition.
-  needsPendingCommit &&
-    (!create || el._statusFlags & STATUS_PENDING) &&
-    (!el._transition || hasOverride) &&
-    queuePendingNode(el);
-  __ASYNC__ &&
+  //
+  // While a pass's result waits on a commit, its children (and `_disposal`)
+  // wait with it, and a re-run may tear them down immediately
+  // (CONFIG_HELD_CHILDREN, #3404). One exception: a transaction-owned effect
+  // recomputed mainline (contested, #3322) published its value directly — a
+  // `_pendingValue` left from an earlier held pass is that transaction's,
+  // not this one's — so this pass's children are the frame's, and any
+  // zombies deferred at the top are superseded on that same frame. Its
+  // commit rides the transaction, not this flush: release them here rather
+  // than let two generations render at once. A LANE pass is the same case
+  // (#3662): it direct-commits ahead of its transaction, so its children are
+  // the frame's too. Left flagged for an OLDER frame's zombies, the stamped
+  // transaction's same-flush re-run below disposed the lane's freshly built
+  // children (an insert's inner effect, its run still queued in the lane)
+  // and held their replacements for a commit that never came.
+  let held =
+    needsPendingCommit &&
+    (!create || bornHeld !== null || (el._statusFlags & STATUS_PENDING) !== 0);
+  if (held && (!el._transition || hasOverride)) queuePendingNode(el);
+  else if (
+    held &&
+    (activeTransition === null || isOptimisticDirty) &&
+    !(el._statusFlags & (STATUS_PENDING | STATUS_UNINITIALIZED))
+  ) {
+    held = false;
+    if (!laneFrame) disposeChildren(el, false, true);
+  }
+  if (held) el._config |= CONFIG_HELD_CHILDREN;
+  else el._config &= ~CONFIG_HELD_CHILDREN;
+  // (A born-held pass IS the transaction's staged view — nothing to refresh.)
+  if (
+    __ASYNC__ &&
     el._transition &&
     isEffect &&
     activeTransition !== el._transition &&
+    bornHeld === null
+  ) {
+    // The re-run refreshes the transaction's STAGED view (_pendingValue); the
+    // value this pass published in _value belongs to the run that just
+    // finished. Keep that ownership, or the effect phase parks a
+    // mainline-computed value with the transaction (#3412).
+    const owner = (el as any)._valueTransition;
     runInTransition(el._transition, () => recompute(el));
+    (el as any)._valueTransition = owner;
+  }
   // Missed-wake reschedule (see the finally above): values this pass read
   // before the nested commit are stale, so run again now that the heap will
   // accept the node. Equality gates stop same-value landings from cascading,
@@ -822,22 +1122,25 @@ function updateIfNecessary(el: Computed<unknown>): void {
     recompute(el);
   }
 
-  const flags = el._flags;
-  el._flags = flags & (REACTIVE_SNAPSHOT_STALE | REACTIVE_IN_HEAP | REACTIVE_IN_HEAP_HEIGHT);
-  // The mask drops REACTIVE_ZOMBIE: a pulled zombie is served like a live
-  // node until its owner's pending disposal commits (as after a recompute,
-  // which also clears it). A zombie pulled while it still holds a heap
-  // entry (in practice a height-adjust entry, which the pull does not
-  // consume) is physically linked in `zombieQueue`; left there, every later
-  // `deleteFromHeap(el, queueFor(el))` unlinks it from `dirtyQueue` instead,
-  // clearing or re-tailing a dirty bucket and leaving a dangling zombie
-  // bucket that a later insert chains onto (TypeError in deleteFromHeap, or
-  // lost dirty work). Move the entry to the heap the flags now name.
-  if (flags & REACTIVE_ZOMBIE && flags & (REACTIVE_IN_HEAP | REACTIVE_IN_HEAP_HEIGHT)) {
-    deleteFromHeap(el, zombieQueue);
-    if (flags & REACTIVE_IN_HEAP) insertIntoHeap(el, dirtyQueue);
-    else insertIntoHeapHeight(el, dirtyQueue);
-  }
+  // The mask keeps REACTIVE_ZOMBIE (#3543: a zombie that recomputes stays a
+  // zombie until its owner's pending disposal commits), so a pulled zombie
+  // still holding a heap entry keeps naming `zombieQueue`, the heap it is
+  // linked in (tests/zombie-pull-heap.test.ts).
+  // The guard above refused an already-disposed node; the recompute it just
+  // ran may have disposed it (#3621) — carry the flag, or it comes back alive.
+  // The manual-write mask is state, not scheduling (#3612): it says the
+  // node's staging is a PROPOSAL, and only the commit (or a later-tick
+  // refresh, #3026) lifts it — a pull that recomputed nothing must not, or
+  // an isPending()/latest() probe decided whether a later write to a held
+  // node was a second proposal or the derivation's `prev`.
+  el._flags =
+    el._flags &
+    (REACTIVE_SNAPSHOT_STALE |
+      REACTIVE_IN_HEAP |
+      REACTIVE_IN_HEAP_HEIGHT |
+      REACTIVE_ZOMBIE |
+      REACTIVE_DISPOSED |
+      REACTIVE_MANUAL_WRITE);
 }
 
 export function computed<T>(fn: (prev?: T) => T | PromiseLike<T> | AsyncIterable<T>): Computed<T>;
@@ -872,6 +1175,9 @@ export function computed<T>(
           (options?.sync ? CONFIG_SYNC : 0) |
           (COMPILED_SEAMS && options?.noThrow ? CONFIG_NOTHROW : 0) |
           (options?._noSnapshot ? CONFIG_NO_SNAPSHOT : 0) |
+          // Plumbing is an observe-tier notion (a name and records to
+          // withhold); the prod literal never carries the bit.
+          (options?._plumbing ? CONFIG_PLUMBING : 0) |
           (SNAPSHOTS && snapshotCaptureActive && ownerInSnapshotScope(context)
             ? CONFIG_IN_SNAPSHOT_SCOPE
             : 0),
@@ -902,7 +1208,9 @@ export function computed<T>(
         _notifiedAt: -1,
         _loading: loading,
         _x: null,
-        _name: options?.name ?? "computed"
+        // The slot is always present (hidden class); plumbing leaves it
+        // unset, which `ownerPath` skips.
+        _name: options?._plumbing ? undefined : (options?.name ?? "computed")
       } as Computed<T>)
     : ({
         id: inheritId(options, transparent, context),
@@ -953,7 +1261,7 @@ export function computed<T>(
   if (options?.unobserved) (ext(self) as NodeExtension)._unobserved = options.unobserved;
   // Oracle bits (CONFIG_ORACLE_*): assumed facts, measurement builds only.
   // The option is unprefixed so prod property mangling leaves it readable.
-  if (__ORACLE__ && (options as any)?.oracle) self._config |= (options as any).oracle;
+  if (__ORACLE__ && (options as any)?.oracle) self._oracle = (options as any).oracle;
   setupComputedNode(self, options);
   return self;
 }
@@ -967,6 +1275,7 @@ export function ext(el: { _x: NodeExtension | null }): NodeExtension {
     _overrideValue: undefined,
     _overrideOwner: undefined,
     _overrideTime: 0,
+    _flushedStaged: NOT_PENDING,
     _overrideStamp: 0,
     _optimisticLane: undefined,
     _pendingSignal: undefined,
@@ -1115,7 +1424,7 @@ export function createEffectNode<T>(
     self._equals = options.equals;
     self._config |= CONFIG_EFFECT_EQUALS;
   }
-  if (__ORACLE__ && (options as any)?.oracle) self._config |= (options as any).oracle;
+  if (__ORACLE__ && (options as any)?.oracle) self._oracle = (options as any).oracle;
   setupComputedNode(self, lazyOptions);
   return self;
 }
@@ -1162,18 +1471,9 @@ function setupComputedNode<T>(self: Computed<T>, options: NodeOptions<T> | undef
     });
     throw new Error(PRIMITIVE_IN_FORBIDDEN_SCOPE_MESSAGE);
   }
-  if (__ORACLE__ && self._config & CONFIG_ORACLE_DETACHED) {
+  if (__ORACLE__ && self._oracle! & CONFIG_ORACLE_DETACHED) {
     // Oracle H8: nothing on disposal needs to reach a detached node.
-  } else if (context) {
-    const lastChild = context._firstChild;
-    if (lastChild === null) {
-      context._firstChild = self;
-    } else {
-      self._nextSibling = lastChild;
-      lastChild._prevSibling = self;
-      context._firstChild = self;
-    }
-  }
+  } else if (context) linkChild(context, self);
   if (__DEV__) DEV.hooks.onOwner?.(self);
   if (parent) self._height = parent._height + 1;
   if (GlobalQueue._wireExternalSource !== null) GlobalQueue._wireExternalSource(self);
@@ -1317,9 +1617,10 @@ function linkFirewallChild(firewall: Computed<unknown>, s: FirewallSignal<unknow
 /** Release a firewall child the store no longer addresses (unobserved sweep
  * dropped it from its target's cache): unlink it from the chain so the
  * projection stops retaining it and its last value. The node keeps its own
- * `_nextChild` so a walk that is mid-chain on it still terminates. Nodes in
- * `_companionChildren` stay there — companions are permanent by contract
- * and snap through that set, not the chain. */
+ * `_nextChild` so a walk that is mid-chain on it still terminates. It also
+ * leaves `_companionChildren` (#3503): the companions themselves are
+ * permanent on the node, but the node is unreachable through the store, so
+ * the set would only retain it and its last value. */
 export function unlinkFirewallChild(node: Signal<any>): void {
   const n = node as FirewallSignal<any>;
   const fw = n._firewall;
@@ -1330,6 +1631,12 @@ export function unlinkFirewallChild(node: Signal<any>): void {
   else if (fw._x!._child === n) fw._x!._child = next;
   if (next !== null) next._prevChild = prev;
   n._prevChild = null;
+  // #3503: the companion set is the last projection-side reference to a
+  // released leaf; leaving it there kept the leaf and its last value alive
+  // for the projection's lifetime after every latest()/isPending() reader
+  // was disposed.
+  fw._x!._companionChildren?.delete(n);
+  if (__DEV__) devUntrackCompanionOwner(n);
 }
 
 export function slotSignal<T>(
@@ -1462,6 +1769,40 @@ function throwDirectReadInBlock(el: any): never {
   });
   throw new Error(message);
 }
+/** Dev-only: explicit untrack() nesting, so deliberate post-await reads stay quiet. */
+export let untrackDepth = 0;
+/**
+ * Dev-only: > 0 while Solid runs user code that is imperative by construction
+ * — an effect callback (effect.ts) or an action body's synchronous slice
+ * (action.ts). Both run with no owner, exactly like an async continuation, so
+ * the post-await read check (dev.ts) consults this rather than blame the
+ * continuation that called flush() or invoked the action. Both sites bracket
+ * with try/finally, so a throw cannot leave it raised.
+ */
+export let callbackDepth = 0;
+export function enterCallback(): void {
+  callbackDepth++;
+}
+export function exitCallback(): void {
+  callbackDepth--;
+}
+/**
+ * Dev-only: > 0 while owner teardown runs cleanups (`_disposal` entries and
+ * effect-returned cleanups — owner.ts), for the same reason. Kept apart from
+ * `callbackDepth` because its sites cannot use try/finally (the frame would
+ * survive into prod): a throwing cleanup leaves it raised, and dev.ts resets
+ * it on the next microtask, which teardown — synchronous — never spans.
+ */
+export let disposalDepth = 0;
+export function enterDisposal(): void {
+  disposalDepth++;
+}
+export function exitDisposal(): void {
+  disposalDepth--;
+}
+export function resetDisposalDepth(): void {
+  disposalDepth = 0;
+}
 export function setStrictRead(v: string | false): string | false {
   const prev = strictRead;
   strictRead = v;
@@ -1494,19 +1835,53 @@ export function untrack<T>(fn: () => T, strictReadLabel?: string | false): T {
   if (
     GlobalQueue._externalUntrack === null &&
     !tracking &&
-    (!__DEV__ || (!strictRead && !strictReadLabel))
+    (!__DEV__ || (!strictRead && !strictReadLabel && asyncTailFlights === 0))
   )
     return fn();
   const prevTracking = tracking;
   const prevStrictRead = strictRead;
   tracking = false;
-  if (__DEV__) strictRead = strictReadLabel || false;
+  if (__DEV__) {
+    strictRead = strictReadLabel || false;
+    untrackDepth++;
+  }
   try {
     if (GlobalQueue._externalUntrack !== null) return GlobalQueue._externalUntrack(fn);
     return fn();
   } finally {
     tracking = prevTracking;
-    if (__DEV__) strictRead = prevStrictRead;
+    if (__DEV__) {
+      strictRead = prevStrictRead;
+      untrackDepth--;
+    }
+  }
+}
+
+/**
+ * Set while runtime bookkeeping reads a node inside another node's pass (a
+ * loading boundary priming its tree at creation, from whatever pass is
+ * mounting it). `context` is that node, but the read is nobody's: the value
+ * is probed, never derived from, so nothing the read would normally record
+ * on `context` may be recorded — not the untracked-pending re-run link
+ * (`read`, `!tracking`; #3528: a boundary's `on` key read this way from
+ * `notify` linked the key's source into an unrelated async memo, a cycle that
+ * never converged), and not a transaction entry (`enterStagedRead`; #3540: a
+ * born-held tree would otherwise pull the mounting pass into the hold).
+ */
+export let spectating = false;
+
+/**
+ * Evaluates `fn` untracked, recording nothing on the current `context`: no
+ * untracked-pending re-run link, no transaction entry. For bookkeeping reads
+ * made on behalf of no node — see `spectating`.
+ */
+export function spectate<T>(fn: () => T): T {
+  const prev = spectating;
+  spectating = true;
+  try {
+    return untrack(fn);
+  } finally {
+    spectating = prev;
   }
 }
 
@@ -1526,7 +1901,21 @@ export function prepareComputed(comp: Computed<unknown>, refresh: boolean): void
     // pay-for-use contract. Owner-lifecycle nodes are dead: recomputing would
     // re-run user code in a torn-down tree (and discard manual writes on
     // derived-writable signals), so reads return the last committed value.
-    if (comp._config & CONFIG_AUTO_DISPOSE) recompute(comp as Computed<any>, true);
+    if (comp._config & CONFIG_AUTO_DISPOSE) {
+      const parent = comp._parent as Computed<unknown> | null;
+      if (parent !== null) {
+        // A dormant node was off the chain when its owner died, so the strip
+        // in disposeChildren missed it: freeze here instead (#3024).
+        if (parent._flags & REACTIVE_DISPOSED) {
+          comp._config &= ~CONFIG_AUTO_DISPOSE;
+          return;
+        }
+        // A zombie never left its chain: settleAutodispose releases without
+        // the !ZOMBIE check its siblings have, so this guard is load-bearing.
+        if (!(comp._flags & REACTIVE_ZOMBIE)) linkChild(parent, comp);
+      }
+      recompute(comp as Computed<any>, true);
+    }
   } else if (refresh) {
     updateIfNecessary(comp);
   }
@@ -1590,14 +1979,319 @@ export function installAuthoritativeRead(): void {
  * already use). An effect the transaction itself computed re-derives at its
  * commit on its own (parked run, or the contested re-derive, #3322) and is
  * not recorded — replaying it too would publish the frame twice.
+ *
+ * Flight twin (the pending-branch carve-out): the reader is served the
+ * node's committed, pre-flight value and now observes that flight — A15:
+ * async work observed by a reader settles as one unit with the writes that
+ * asked it — so it joins the transaction's reporters for the node. The
+ * reporter the transaction recorded when the flight started may be gone (a
+ * keyed remount disposed it, #3374); a completion check that found no live
+ * reporter committed the writes ahead of the answer, tearing the new
+ * reader's frame (`Count: 1` beside `Details: 0`). Joins an entry the
+ * transaction already holds; a flight nobody had observed yet has none (the
+ * reader is its first observer — a conditional that just revealed it, #3458)
+ * and is notified up the reader's own queue chain under that transaction,
+ * the one sanctioned registration site (INV-3): a collecting boundary above
+ * the reader consumes it as it would any pending, an unboundaried reader
+ * opens the entry — and the transaction, judged complete on its other
+ * flights, revealed the inputs beside the reader's pre-flight value
+ * otherwise (`Count: 1 | A: 1` beside `B: 0`). A staged signal or a settled
+ * node registers nothing. Every reporter dies with its reader
+ * (reporterBlocksSource: the read linked it as a dep). The node's own entry
+ * is the only one that can matter: a chain's intermediate memo is re-pulled
+ * by the read (updateIfNecessary's retry) and enters the transaction, so the
+ * reader holds through the normal path; a node with its own flight that is
+ * also pending on an upstream re-ask blocks through that flight until it
+ * lands, and its landing re-runs the reader into the normal path.
  */
-function heldFromStale(el: Signal<any> | Computed<any>, c: Computed<any>): boolean {
-  const t = el._transition;
-  if (t === null || t === activeTransition) return false;
-  const txn = currentTransition(t);
+/** The replay half of the stale-of-foreign clause (A15 / A26): a stale reader
+ * served the committed value because `txn` holds what it read re-runs at
+ * txn's commit, when the value it was denied becomes the frame — unless its
+ * own last value already came from that transaction. One registration for
+ * the node path (heldFromStale) and the store's backing paths, which have
+ * no node to carry the hold (heldFromReader, the adoption hold view). */
+export function recordStaleReplay(txn: Transition, c: Computed<any>): void {
   const vt: Transition | null | undefined = (c as any)._valueTransition;
   if (vt == null || currentTransition(vt) !== txn) txn._gatedSubs.add(c);
+}
+
+/**
+ * The ownership relation (DESIGN-CONSOLIDATION §6, ruled 2026-09-17): is
+ * `hold` part of the running pass's world? A plain reader's world is the
+ * transaction it runs under, through merges. A lane reader's world is its
+ * lane AND the transition that owns the lane — the one asymmetry between a
+ * lane and a separate transaction (a lane sees what lands from its parent as
+ * its own; a separate transaction would wait for the parent to settle) —
+ * see `ownsLane` in lanes.ts, built on this. One relation for the
+ * stale-of-foreign clause (heldFromStale), the lane arm (readsHeldCommitted)
+ * and the store's backing holds (foreignHold); `serve` has no lane arm of
+ * its own, the lane's extra visibility lives here.
+ */
+export function ownsHold(hold: Transition): boolean {
+  return (
+    activeTransition !== null && currentTransition(hold) === currentTransition(activeTransition)
+  );
+}
+
+function heldFromStale(el: Signal<any> | Computed<any>, c: Computed<any>): boolean {
+  const t = el._transition;
+  if (t === null || ownsHold(t)) return false;
+  const txn = currentTransition(t);
+  recordStaleReplay(txn, c);
+  const reporters = txn._asyncReporters.get(el as Computed<any>);
+  if (reporters) reporters.add(c);
+  else if ((el as Computed<any>)._statusFlags & STATUS_PENDING)
+    runInTransition(txn, () => c._queue.notify(c, STATUS_PENDING, STATUS_PENDING, el._x!._error));
   return true;
+}
+
+/**
+ * A tracked computation about to be served a live transaction's staged value
+ * derives from that transaction's world, so it enters the transaction and
+ * this pass's result is held with it (A29, #3408). The write side (`setSignal`)
+ * and a stamped node's recompute already enter; a reader that only now
+ * starts reading the held node — a conditional memo whose branch flipped —
+ * was the gap: it published a value derived from the staged world into the
+ * mainline frame. Not for a probe (`isPending(() => x())` observes, it does
+ * not derive) and a no-op for the ambient batch (`_transition` null) or the
+ * transaction already active.
+ */
+/** The transaction a pass running OUTSIDE a flush was served a staged value
+ * from (A29, creation-time form). Inside a flush the pass enters through
+ * initTransition; outside one — a memo or effect created from mainline code
+ * while a hold is live — entering would leave `activeTransition` and the
+ * batch pointed at the transaction for the rest of the synchronous block,
+ * so an unrelated write made after the mount was held with someone else's
+ * action. The entry is the pass's alone: recompute stages the node into the
+ * transaction (born held) and mainline is never touched.
+ *
+ * A pass under a FRESH loading boundary takes this path inside a flush too
+ * (#3540). Born held is right for a plain memo or effect: published, its
+ * value would tear the frame. A boundary that has not revealed yet is the
+ * exception by definition — its job is to catch what is not ready under it
+ * rather than let it hold: the pass is staged into the transaction as
+ * above, and the boundary is told (recompute's born-held arm notifies it
+ * with a `NotReadyError` sourced at the node) so it shows its fallback now
+ * and reveals the staged result at the commit.
+ * Entering instead adopted the whole flush into the hold — a `Show` that
+ * flipped mainline to mount a `Loading` over a held value waited for the
+ * hold with it. A boundary that already shows content keeps the entering
+ * path: it has content to keep, and holds like any reader. */
+let stagedEntry: Transition | null = null;
+
+/** Is `el` routed to a loading boundary that still shows its fallback — the
+ * nearest pending-collecting queue up its chain is uninitialized? (Measured
+ * 2026-09-18: relocating the walk behind a `GlobalQueue` slot installed by
+ * boundaries.ts saved ~8 B on the core floor and cost boundary-using apps
+ * 50–70 B — the indirection's tokens outweigh the walk. Kept inline.) */
+function underFreshLoadingBoundary(el: Computed<any>): boolean {
+  for (let q: IQueue | null = el._queue; q !== null; q = q._parent)
+    if (q._collectionType! & STATUS_PENDING) return !q._initialized;
+  return false;
+}
+
+export function enterStagedRead(
+  el: Signal<any> | Computed<any> | null,
+  t: Transition | null | undefined = el!._transition
+): void {
+  if (!t || t === activeTransition || pendingCheckActive) return;
+  // A companion (the latest() shadow, the isPending() verdict signal) is the
+  // engine's mirror of the flushed world — reading it, or being it, is an
+  // observation, not a derivation from the hold: latest(x) never enters x's
+  // transaction, and the shadow's own pass never enters either (it would
+  // flip activeTransition under the reader that pulled it). (`el` is null for
+  // a store backing served under a hold — no node, the transaction is the
+  // fold's.)
+  if (el?._x?._parentSource || (context as Computed<any> | null)?._x?._parentSource) return;
+  // A bookkeeping read (`spectate`) is nobody's derivation: it compares or
+  // probes, and enters nothing — the boundary priming read of a born-held
+  // tree must not enter the creator's pass into the hold (#3540).
+  if (spectating) return;
+  // Verdict machinery (GlobalQueue._verdictPull: companion creation and the
+  // latest()/isPending() pulls — the latest() shadow is created before it is
+  // marked optimistic, so the bit alone cannot tell) and optimistic nodes
+  // (own lane posture, A31) read staged truth by design; they keep the
+  // entering path.
+  // (`context` is non-null here: every caller selected a value for a reader.)
+  const ctx = context as Computed<any>;
+  const mainline = activeTransition === null && !globalQueue._running;
+  // Verdict pulls are observations, not derivations: a latest() /
+  // isPending() call from mainline must never enter a transaction (it
+  // would capture the rest of the caller's synchronous block).
+  if (mainline && GlobalQueue._verdictPull) return;
+  if (
+    ctx._flags & REACTIVE_RECOMPUTING_DEPS &&
+    !(ctx._config & CONFIG_OPTIMISTIC) &&
+    (stagedEntry === null || stagedEntry === t) &&
+    (mainline || (!GlobalQueue._verdictPull && underFreshLoadingBoundary(ctx)))
+  ) {
+    stagedEntry = t;
+    return;
+  }
+  globalQueue.initTransition(t);
+}
+
+/**
+ * Rule 1 (value selection), the full arm: does this reader see a STAGED
+ * node's COMMITTED value? One implementation of the rule the fast paths
+ * (readNodeFast, read's fast block) carry as their trivial ternary and that
+ * every slow site — read's tail, the store's backing selection, the lane and
+ * verdict arms — used to restate by hand (docs/DESIGN-CONSOLIDATION.md, move 3b). In order:
+ * - no reader at all (an untracked read) — the committed frame;
+ * - a reader under an optimistic lane the engine says reads committed
+ *   (laneReadsCommitted: another lane's hold, #3460);
+ * - nothing staged;
+ * - a children-forbidden reader (createTrackedEffect / onSettled: the frame,
+ *   never the graph — A32);
+ * - a stale reader (render effect) of a FOREIGN transaction's staged write —
+ *   committed, no entanglement (heldFromStale registers the replay; a node
+ *   born held has no committed frame to fall back to, `noCommitted`);
+ * - HELD truth (#3164, CONFIG_HELD_TRUTH) read by a LANE pass: staged
+ *   confirming truth — fold-staged onto an armed family, or entangle-stolen
+ *   by an awaited until() — is masked from lane passes only, owning
+ *   transaction or not. A lane applies its frame display-ahead at the park,
+ *   so a lane pass served the truth would paint the confirmation beside the
+ *   optimism it confirms (`saving=true` beside the saved row — the #3164
+ *   tear); it keeps committed and is re-run by the reveal's post-revert
+ *   wake. Every other deriving reader falls through to A29 below: the truth
+ *   is a staged value like any other, and the pass that derives from it is
+ *   held with it — including the retaining transaction's own passes, which
+ *   a superseded override already hands the truth (#3568: masking them
+ *   composed the landed `length` with rows still masked to committed).
+ *   latest() and authoritative readers (until()'s predicate) tunnel
+ *   through — the tunnel that keeps the hold deadlock-free.
+ * False means the reader derives from the staged value and enters its
+ * transaction (enterStagedRead, A29).
+ */
+export function readerSeesCommitted(
+  el: Signal<any> | Computed<any>,
+  c: Computed<any> | null,
+  owner: Signal<any> | Computed<any>,
+  noCommitted: boolean
+): boolean {
+  // Lanes and held truth are optimistic (OPTIMISTIC switch); stale readers of
+  // a foreign transaction exist only with async (transactions).
+  return !!(
+    !c ||
+    (__ASYNC__ &&
+      OPTIMISTIC &&
+      currentOptimisticLane !== null &&
+      GlobalQueue._laneReadsCommitted!(el, owner, c)) ||
+    el._pendingValue === NOT_PENDING ||
+    c._config & CONFIG_CHILDREN_FORBIDDEN ||
+    (__ASYNC__ && stale && !noCommitted && heldFromStale(el, c)) ||
+    (__ASYNC__ &&
+      OPTIMISTIC &&
+      el._config & CONFIG_HELD_TRUTH &&
+      currentOptimisticLane !== null &&
+      !latestReadActive &&
+      !(c._config & CONFIG_AUTHORITATIVE_READ))
+  );
+}
+
+/** A28 — set when a node is staged (queuePendingNode) or a held node rewritten
+ * (stashHeldRewrite) OUTSIDE a flush; cleared when the next flush begins. The
+ * read sites test this one module boolean instead of `globalQueue._running`:
+ * inside a flush it is false and the A28 arm costs nothing; outside, only a
+ * tick with unflushed writes pays the staged-node check. */
+export let unflushedStaged = false;
+export function markUnflushedStaged(): void {
+  unflushedStaged = true;
+}
+
+/** A28 — a write becomes visible at flush. Outside a flush, a node holding an
+ * AMBIENT staged value (no transaction stamp) was written since the last
+ * flush: ambient staging commits at flush end, so nothing else leaves a node
+ * in this state; a stamped value is the flushed held world, which A28 says
+ * latest() serves. Inside a flush the rule does not apply (A28 (4): promoted
+ * within the round). Structural — no marker on the write path. */
+export function unflushed(el: Signal<any> | Computed<any>): boolean {
+  return unflushedValue(el) !== NOT_PENDING;
+}
+/** The value an unflushed node serves — the committed value for an ambient
+ * write, the flushed staged value for a rewrite of a held node — or
+ * NOT_PENDING when nothing is unflushed. Exempt: owned-write nodes (A28 (4):
+ * a write issued inside a recompute is promoted at that recompute's end —
+ * boundary and loading machinery, until()'s internals, signals declared for
+ * in-computation writes) and engine companions (the isPending() verdict
+ * signal, the latest() shadow: the system's own writes, made at the source's
+ * write to mirror it, installing eagerly — A28, A8). */
+export function unflushedValue(el: Signal<any> | Computed<any>, committed = el._value): unknown {
+  if (
+    globalQueue._running ||
+    el._pendingValue === NOT_PENDING ||
+    el._config & CONFIG_PROMOTED ||
+    el._x?._parentSource
+  )
+    return NOT_PENDING;
+  // Ambient, or adopted by a transaction before any flush carried the staging
+  // (CONFIG_ADOPTED_UNFLUSHED): nothing flushed is staged — the committed
+  // value answers (the caller's notion of committed: a store node's backing).
+  // A held node: unflushed only if rewritten since the last flush (stash).
+  if (el._transition === null || el._config & CONFIG_ADOPTED_UNFLUSHED) return committed;
+  return el._x === null ? NOT_PENDING : el._x._flushedStaged;
+}
+/** Held nodes rewritten since the last flush (setSignal); the flush clears
+ * their stash — from then on latest() answers with the rewrite. */
+const unflushedRewrites: Array<Signal<any> | Computed<any>> = [];
+/** Nodes written inside a creation-time recompute (CONFIG_PROMOTED). */
+const promotedWrites: Array<Signal<any> | Computed<any>> = [];
+/** A28 (5): an optimistic write becomes the ACTIVE override at the flush that
+ * carries it. `_overrideTime` is stamped with `clock` at the write and `clock`
+ * advances after every flush, so "this tick, outside a flush" is unflushed. */
+export function unflushedOverride(el: Signal<any> | Computed<any>): boolean {
+  // Companions are optimistic signals written by the engine (see unflushed).
+  return !globalQueue._running && el._x?._overrideTime === clock && !el._x?._parentSource;
+}
+/** Active optimistic override on an armed node (an armed slot idles at
+ * NOT_PENDING; undefined = unarmed plain node). The writer's own channels —
+ * the draft, `in`/keys inside the setter — compose on this regardless of
+ * flush state. */
+export function hasActiveOverride(el: Signal<any> | Computed<any>): boolean {
+  const x = el._x;
+  return x !== null && x._overrideValue !== undefined && x._overrideValue !== NOT_PENDING;
+}
+/** The override a READER sees: installed, and carried by a flush (A28 (5) —
+ * an optimistic write is a write; until its flush no reader sees it). One
+ * implementation for read()'s override arm, the verdict channels
+ * (latestRead, computePendingState) and the store's selection
+ * (docs/DESIGN-CONSOLIDATION.md, move 3b). */
+export function visibleOverride(el: Signal<any> | Computed<any>): boolean {
+  return hasActiveOverride(el) && !unflushedOverride(el);
+}
+/** A derivation served the committed value because of an unflushed write
+ * (A28) must run again in the flush that carries it — the late-linker case
+ * (#3337's reason to defer the walk): it linked after the write walked. */
+export function markLateLinker(c: Computed<any>): true {
+  // The pass's own tail re-enqueues on this latch (recompute's finally) —
+  // a direct enqueue here would be wiped by the pass's flag reset.
+  c._flags |= REACTIVE_MISSED_WAKE;
+  return true;
+}
+
+/** Companion-bearing nodes written outside a flush (setSignal); the flush
+ * that carries their writes re-syncs their companions (A28). */
+export const unflushedCompanions: Array<Signal<any> | Computed<any>> = [];
+export function resyncUnflushedCompanions(): void {
+  unflushedStaged = false;
+  // Length-guarded: the common flush has nothing here, and must allocate nothing.
+  // Length-guarded: the common flush has nothing here and allocates nothing.
+  if (unflushedRewrites.length !== 0) {
+    for (const el of unflushedRewrites) el._x!._flushedStaged = NOT_PENDING;
+    unflushedRewrites.length = 0;
+  }
+  if (promotedWrites.length !== 0) {
+    for (const el of promotedWrites) el._config &= ~CONFIG_PROMOTED;
+    promotedWrites.length = 0;
+  }
+  if (VERDICTS && unflushedCompanions.length !== 0) {
+    for (const el of unflushedCompanions)
+      GlobalQueue._syncCompanions!(
+        el,
+        el._pendingValue !== NOT_PENDING ? el._pendingValue : el._value
+      );
+    unflushedCompanions.length = 0;
+  }
 }
 
 export function readNodeFast<T>(el: Signal<T>): T | typeof READ_SLOW {
@@ -1612,6 +2306,9 @@ export function readNodeFast<T>(el: Signal<T>): T | typeof READ_SLOW {
     activeTransition !== null ||
     (OPTIMISTIC && currentOptimisticLane !== null) ||
     (SNAPSHOTS && snapshotCaptureActive) ||
+    // A28: a staged node read outside a flush may serve its committed value;
+    // that arm lives on the slow path so this body stays inlinable.
+    (unflushedStaged && el._pendingValue !== NOT_PENDING) ||
     (__DEV__ && strictRead)
   )
     return READ_SLOW;
@@ -1634,7 +2331,7 @@ export function readNodeFast<T>(el: Signal<T>): T | typeof READ_SLOW {
     c._config & CONFIG_CHILDREN_FORBIDDEN ||
     (__ASYNC__ && stale && heldFromStale(el, c as Computed<any>))
       ? el._value
-      : el._pendingValue
+      : (__ASYNC__ && enterStagedRead(el), el._pendingValue)
   ) as T;
 }
 
@@ -1646,6 +2343,16 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
   // the _pendingSignal of _latestValueComputed (async in flight) rather
   // than the original node (which stays "pending" while held in a transition).
   if (__ASYNC__ && VERDICTS && latestReadActive) return GlobalQueue._latestRead!(el) as T;
+
+  if (__DEV__ && asyncTailFlights !== 0 && !tracking && untrackDepth === 0 && !pendingCheckActive)
+    checkPostAwaitRead(
+      el,
+      el,
+      undefined,
+      (el as any)._name,
+      (((el as any)._firewall || el)._statusFlags & (STATUS_PENDING | STATUS_UNINITIALIZED)) ===
+        (STATUS_PENDING | STATUS_UNINITIALIZED)
+    );
 
   let c = context;
   if ((c as Root)?._root) c = (c as Root)._parentComputed;
@@ -1670,6 +2377,7 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
     activeTransition === null &&
     (!OPTIMISTIC || currentOptimisticLane === null) &&
     (!SNAPSHOTS || !snapshotCaptureActive) &&
+    (!unflushedStaged || el._pendingValue === NOT_PENDING) && // A28, see readNodeFast
     (!__DEV__ || !strictRead)
   ) {
     if (c && tracking) link(el, c as Computed<any>);
@@ -1681,7 +2389,7 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
       c._config & CONFIG_CHILDREN_FORBIDDEN ||
       (__ASYNC__ && stale && heldFromStale(el, c as Computed<any>))
         ? el._value
-        : el._pendingValue
+        : (__ASYNC__ && enterStagedRead(el), el._pendingValue)
     ) as T;
   }
 
@@ -1778,10 +2486,31 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
       // lane (#3276); that check rides laneSuspends so floor bundles don't
       // pay for it.
       if (!OPTIMISTIC || currentOptimisticLane === null || GlobalQueue._laneSuspends!(owner)) {
-        if (!tracking && el !== c) link(el, c as Computed<any>);
+        // An untracked read of a pending node still re-runs its reader when
+        // the node settles — unless nobody is reading (`spectating`, #3528)
+        // or the reader is the node itself.
+        if (!tracking && !spectating && el !== c) link(el, c as Computed<any>);
         throw owner._x?._error;
       }
-    } else if (!c && owner._statusFlags & STATUS_UNINITIALIZED) {
+    } else if (
+      !c &&
+      owner._statusFlags & STATUS_UNINITIALIZED &&
+      // An armed DERIVED override shields the uninitialized state from a
+      // read with no reader identity (#3648 follow-up, A18 (d)): a memo
+      // whose first landing rode its lane (asyncWrite's lane branch →
+      // `laneOverride`) has no `_value` — the flag stays set until the lane's
+      // commit promotes the override — yet the override IS the displayed
+      // value of a pending node (A18 (c), the screen keeps it until the
+      // commit), exactly as an initialized node re-deriving under its override
+      // displays it. "Uninitialized must suspend" (#3276, A19 exception 1) was
+      // written for a node with NOTHING to show; this node has the override.
+      // The arm fires in the body-end window: the source override superseded
+      // (A18 body-end, #3427), the memo re-deriving on the plain channel and
+      // held, its own slot still armed. Fall through to serve()'s override
+      // arm. Readers WITH identity are untouched: a tracked lane reader keeps
+      // the override (A17), an off-lane one suspends (#3651, `overrideRead`).
+      !(hasActiveOverride(el) && el._config & CONFIG_DERIVED_OVERRIDE)
+    ) {
       throw owner._x?._error;
     }
   }
@@ -1800,6 +2529,16 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
     } else throw (owner as Computed<any>)._x?._error;
   }
 
+  // Ahead of the snapshot serve below: a component body's direct read is
+  // wrong in the same way whether the pass is hydrating or not, and the
+  // hydration pass is the console nobody is watching (#3675).
+  if (__DEV__ && strictRead)
+    warnStrictReadUntracked(strictRead, {
+      ownerId: c?.id,
+      ownerName: (c as any)?._name,
+      nodeName: (owner as any)?._name
+    });
+
   if (
     SNAPSHOTS &&
     snapshotCaptureActive &&
@@ -1815,19 +2554,55 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
     }
   }
 
-  if (__DEV__ && strictRead)
-    warnStrictReadUntracked(strictRead, {
-      ownerId: c?.id,
-      ownerName: (c as any)?._name,
-      nodeName: (owner as any)?._name
-    });
-
+  const value = serve(el, c as Computed<any> | null, owner, el._value) as T;
   if (
-    __ASYNC__ &&
-    OPTIMISTIC &&
-    el._x?._overrideValue !== undefined &&
-    el._x?._overrideValue !== NOT_PENDING
+    !c &&
+    owner === el &&
+    typeof computed._fn === "function" &&
+    el._config & CONFIG_AUTO_DISPOSE &&
+    !(owner._statusFlags & STATUS_PENDING) &&
+    !el._subs &&
+    // An untracked read served a visible override returned before this
+    // sweep registration when the arm was inline; keep that.
+    !(OPTIMISTIC && visibleOverride(el))
   ) {
+    // Deferred, not inline (#3078): an inline unobserved() here made untracked
+    // reads destructive — dispose on this read, full revival recompute on the
+    // next — so consecutive reads could answer differently with no write in
+    // between (the revival samples the ambient transition/lane context).
+    // The sweep at flush finalization re-validates and reclaims; schedule()
+    // guarantees that flush happens even if nothing else is queued.
+    dormantNodes.add(el as Computed<unknown>);
+    schedule();
+  }
+  return value;
+}
+
+/**
+ * Rule 1, the one slow implementation (DESIGN-CONSOLIDATION move 3b, step
+ * 6c): the value a reader `c` (null = untracked, no pass) is served from
+ * `el`, whose committed value is `committed` — the node's own `_value` for
+ * a signal or memo, the BACKING for a store property node (single-home rule,
+ * O6: committed truth lives in the backing and a node's `_value` is never
+ * served for one). Called by read()'s slow tail and by the store's untracked
+ * node path (nodeValue); the fast paths (readNodeFast, read's fast block)
+ * keep their trivial ternary by design (perf, see the doc). Arms, in order:
+ * - the override (A17), routed through the engine for a tracked reader under
+ *   a lane or a supersession (A18), an authoritative reader marked instead;
+ * - the lane entanglement gate (committed, recorded for replay);
+ * - a node born held has nothing for an untracked reader (A19 exception 1);
+ * - an unflushed write serves committed and re-runs the reader in the
+ *   carrying flush (A28);
+ * - readerSeesCommitted, else the staged value and the transaction (A29).
+ */
+export function serve(
+  el: Signal<any> | Computed<any>,
+  c: Computed<any> | null,
+  owner: Signal<any> | Computed<any>,
+  committed: unknown
+): unknown {
+  // Optimistic overrides are an async capability (OPTIMISTIC switch).
+  if (__ASYNC__ && OPTIMISTIC && hasActiveOverride(el)) {
     // A17: the override IS the value for every reader — except an authoritative
     // reader (until()'s predicate carries CONFIG_AUTHORITATIVE_READ): it must
     // observe independently-arriving truth, and serving it the caller's own
@@ -1838,15 +2613,19 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
     // authoritative — optimism never lives there); the sticky mark makes the
     // A17-silent "landing equals override" paths notify this node's subs so
     // the reader re-runs when truth arrives.
-    if (!(c && c._config & CONFIG_AUTHORITATIVE_READ)) {
-      // A18 supersession (#3331): the node's own source answered with a
-      // DIFFERENT value. The optimism is over for the graph — a tracked
-      // reader sees the staged truth — while the override remains the
-      // DISPLAYED value for untracked reads (and for a stale reader of some
-      // other transaction). The selection lives with the engine.
-      if (c && el._config & CONFIG_OVERRIDE_SUPERSEDED)
-        return GlobalQueue._supersededRead!(el) as T;
-      return unwrapOverride<T>(el._x?._overrideValue);
+    // A28 (5): an optimistic write written this tick, outside a flush, is not
+    // yet the active override — fall through to the normal selection (the
+    // authoritative mark below still applies: until() must wake on landing).
+    if (!(c && c._config & CONFIG_AUTHORITATIVE_READ) && !unflushedOverride(el)) {
+      // A tracked read of an override is the engine's selection (a lane or a
+      // supersession implies the engine): a render effect OFF the override's
+      // held lane sees the committed value (#3460, lanes mirror transitions);
+      // a node whose own source answered with a DIFFERENT value hands a
+      // tracked reader the staged truth (A18 supersession, #3331). Untracked
+      // reads display the override.
+      if (c && el._config & (CONFIG_HAS_LANE | CONFIG_OVERRIDE_SUPERSEDED))
+        return GlobalQueue._overrideRead!(el as Computed<any>, c);
+      return unwrapOverride(el._x?._overrideValue);
     }
     el._config |= CONFIG_AUTHORITATIVE_OBSERVED;
   }
@@ -1864,9 +2643,9 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
     currentOptimisticLane !== null &&
     activeTransition !== null &&
     c !== null &&
-    GlobalQueue._gatedRead!(el as Signal<any>, owner, c as Computed<any>)
+    GlobalQueue._gatedRead!(el as Signal<any>, owner, c)
   ) {
-    return el._value as T;
+    return committed;
   }
 
   // In optimistic lane context, return _value for optimistic/lane-assigned signals
@@ -1875,65 +2654,47 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
   // (The lane-context clause lives with the engine.) Children-forbidden readers
   // (createTrackedEffect / onSettled callbacks) get committed visibility — see
   // readNodeFast (#3006).
-  const value =
-    !c ||
-    (__ASYNC__ &&
-      OPTIMISTIC &&
-      currentOptimisticLane !== null &&
-      GlobalQueue._laneReadsCommitted!(el, owner, c as Computed<any>)) ||
-    el._pendingValue === NOT_PENDING ||
-    c._config & CONFIG_CHILDREN_FORBIDDEN ||
-    (__ASYNC__ && stale && heldFromStale(el, c as Computed<any>)) ||
-    // A17 for HELD truth (#3164, see CONFIG_HELD_TRUTH): staged confirming
-    // truth — fold-staged onto an armed family, or entangle-stolen by an
-    // awaited until() — is masked from ordinary readers until its
-    // transaction's reveal; the retaining transaction's own speculative
-    // recomputes included (partial override coverage would otherwise
-    // compose override + staged truth into a state no timeline contains).
-    // Authoritative readers (until()'s predicate) and latest() see the
-    // staged truth — the tunnel that keeps the hold deadlock-free.
-    (__ASYNC__ &&
-      OPTIMISTIC &&
-      el._config & CONFIG_HELD_TRUTH &&
-      !latestReadActive &&
-      !((c as Computed<any>)._config & CONFIG_AUTHORITATIVE_READ))
-      ? el._value
-      : (el._pendingValue as T);
+  // A node born held (recompute) has a staged value and no committed one: a
+  // stale reader cannot fall back to the committed frame, so it takes the
+  // staged value and enters like a tracked reader (A29); an untracked reader
+  // has nothing to serve and holds (A19 exception 1) — a bookkeeping read
+  // (`spectate`) likewise: it derives nothing, so it cannot enter, and a
+  // held-only value is simply not ready to it.
+  // (Born held is transaction work: an async capability.)
+  const noCommitted =
+    __ASYNC__ &&
+    el._pendingValue !== NOT_PENDING &&
+    ((el as Computed<any>)._statusFlags & STATUS_UNINITIALIZED) !== 0;
+  if (noCommitted && (!c || spectating)) throw new NotReadyError(null);
+  const u = c && unflushedStaged ? unflushedValue(el, committed) : NOT_PENDING;
+  if (u !== NOT_PENDING) {
+    markLateLinker(c!);
+    if (__ASYNC__ && VERDICTS && pendingCheckActive) GlobalQueue._recordFresh!(el, u);
+    return u;
+  }
+  const value = readerSeesCommitted(el, c, owner, noCommitted)
+    ? committed
+    : (__ASYNC__ && enterStagedRead(el), el._pendingValue);
   // Record that this isPending() probe observed the fresh pending value, so
   // the probe doesn't pair "pending" with the new value (#2831).
   if (__ASYNC__ && VERDICTS && pendingCheckActive) GlobalQueue._recordFresh!(el, value);
-  if (
-    !c &&
-    owner === el &&
-    typeof computed._fn === "function" &&
-    el._config & CONFIG_AUTO_DISPOSE &&
-    !(owner._statusFlags & STATUS_PENDING) &&
-    !el._subs
-  ) {
-    // Deferred, not inline (#3078): an inline unobserved() here made untracked
-    // reads destructive — dispose on this read, full revival recompute on the
-    // next — so consecutive reads could answer differently with no write in
-    // between (the revival samples the ambient transition/lane context).
-    // The sweep at flush finalization re-validates and reclaims; schedule()
-    // guarantees that flush happens even if nothing else is queued.
-    dormantNodes.add(el as Computed<unknown>);
-    schedule();
-  }
   return value;
 }
 
 /**
  * Store-rewrite setter guard: the rewrite parks writes in a pending backing
  * (no setSignal at write time), so the owned-scope write protection must
- * fire at the setter entry instead. Mirrors setSignal's guard condition
+ * fire at the setter entry instead. Exactly setSignal's guard condition
  * minus the node-specific exemptions (ownedWrite/firewall), which don't
- * apply to plain store setters.
+ * apply to plain store setters. Roots are NOT exempt (#3500): a root body is
+ * tree construction — every dev component body, every context Provider, the
+ * top of `render()`, and the whole SSR pass run directly under one — and a
+ * write there re-runs what already read the old value (or on the server,
+ * can't). Same rule as setSignal, which never exempted roots.
  */
 export function devGuardStoreSetterWrite(): void {
   if (!__DEV__) return;
-  // Roots are not owned computation scopes — setters inside createRoot bodies
-  // are legal (legacy parity; the guard targets computed/effect bodies).
-  if (context && !(context as any)._root && !(context._config & CONFIG_CHILDREN_FORBIDDEN)) {
+  if (context && !(context._config & CONFIG_CHILDREN_FORBIDDEN)) {
     emitDiagnostic({
       code: "REACTIVE_WRITE_IN_OWNED_SCOPE",
       kind: "write",
@@ -1949,11 +2710,80 @@ export function devGuardStoreSetterWrite(): void {
   }
 }
 
+/**
+ * Store setter result guard: the callback's return has one meaning — a
+ * replacement root to adopt — and a thenable can never be that. It is the
+ * signature of `setStore(async d => …)` (or a sync arrow whose helper is
+ * async): only the writes before the first `await` were in the transaction;
+ * the rest land on a closed draft and vanish. Setters are synchronous
+ * transactions; async orchestration is `action()`'s job. Store-specific —
+ * a signal may legitimately hold a promise, so its setter has no such rule.
+ */
+export function devGuardStoreSetterResult(result: unknown): void {
+  if (!__DEV__ || result == null) return;
+  if (
+    (typeof result === "object" || typeof result === "function") &&
+    typeof (result as PromiseLike<unknown>).then === "function"
+  ) {
+    emitDiagnostic({
+      code: "ASYNC_STORE_SETTER",
+      kind: "write",
+      severity: "error",
+      message: ASYNC_STORE_SETTER_MESSAGE,
+      ownerId: context?.id,
+      ownerName: (context as any)?._name,
+      data: { operation: "setStore" }
+    });
+    throw new Error(ASYNC_STORE_SETTER_MESSAGE);
+  }
+}
+
 function ownedScopeWriteMessage(owner: Owner) {
   const name = (owner as any)._name;
   return name
     ? `${REACTIVE_WRITE_IN_OWNED_SCOPE_SIGNAL_MESSAGE} (in ${name})`
     : REACTIVE_WRITE_IN_OWNED_SCOPE_SIGNAL_MESSAGE;
+}
+
+/** A28 — a rewrite of a HELD node outside a flush keeps the staged value the
+ * last flush left, for latest()/verdicts, until the next flush carries it
+ * (stash, cleared at that flush). Cold: only stamped nodes reach here. */
+function stashHeldRewrite(el: Signal<any> | Computed<any>): void {
+  if (globalQueue._running) return;
+  const x = ext(el);
+  if (x._flushedStaged === NOT_PENDING) {
+    x._flushedStaged = el._pendingValue;
+    unflushedRewrites.push(el);
+    unflushedStaged = true;
+  }
+}
+/** A28 (4) — written inside a recompute that runs OUTSIDE a flush (a
+ * creation-time compute): promoted at that pass's end, visible to the rest of
+ * the block. Cold: only contextual writes reach here. */
+function notePromotedWrite(el: Signal<any> | Computed<any>): void {
+  if (globalQueue._running || el._config & CONFIG_PROMOTED) return;
+  el._config |= CONFIG_PROMOTED;
+  promotedWrites.push(el);
+}
+
+/** Cold half of setSignal's snapshot arm (see there): first write during
+ * capture to a plain signal without a live snapshot records the pre-write
+ * value. Only plain user signals qualify. Computeds reach setSignal from an
+ * async landing (asyncWrite), and a value arriving from async during the pass
+ * REVEALS — the creation-time arm skips pending computeds for the same
+ * reason. Firewall leaves belong to a projection whose compute is the tree's
+ * own work, captured (or deliberately not) at creation. */
+function captureWriteSnapshot<T>(el: Signal<T> | Computed<T>, current: T): void {
+  if (
+    el._config & CONFIG_NO_SNAPSHOT ||
+    (el as Computed<T>)._fn !== undefined ||
+    (el as FirewallSignal<T>)._firewall ||
+    el._x?._snapshotValue !== undefined
+  )
+    return;
+  ext(el)._snapshotValue = current === undefined ? NO_SNAPSHOT : current;
+  el._config |= CONFIG_HAS_SNAPSHOT;
+  snapshotSources!.add(el);
 }
 
 export function setSignal<T>(el: Signal<T> | Computed<T>, v: T | ((prev: T) => T)): T {
@@ -1977,8 +2807,26 @@ export function setSignal<T>(el: Signal<T> | Computed<T>, v: T | ((prev: T) => T
     throw new Error(ownedScopeWriteMessage(context));
   }
 
-  if (__ASYNC__ && el._transition && activeTransition !== el._transition)
-    globalQueue.initTransition(el._transition);
+  // A write to a held node is a second proposal on a contested node (A34, #3494):
+  // the writer's tick reveals with the hold, the same value or another. Inside
+  // a flush the round enters now; from mainline the entry waits for the next
+  // flush's start (batchJoins) — entering here left activeTransition set for
+  // the rest of the caller's block, so a memo created after the write became
+  // the transaction's instead of mainline's (A28, A29). Before the equality
+  // gate below: repeating the held value proposes it too — and that repeat
+  // leaves through the gate, so the join schedules its own flush here; left
+  // for the next flush to find, it adopted an unrelated tick (#3519 review).
+  // A held DERIVATION is not a proposal (A34 amendment, #3612): the user
+  // setters of derived nodes (setMemo, the derived store's setter) classify
+  // the write before it reaches here — see heldDerivation — and re-derive
+  // under the hold instead of masking; the join stands either way.
+  if (__ASYNC__ && el._transition && activeTransition !== el._transition) {
+    if (globalQueue._running) globalQueue.initTransition(el._transition);
+    else {
+      batchJoins.push(el._transition); // dupes: a bare return in initTransition
+      schedule();
+    }
+  }
 
   // The optimistic write path lives with the engine: only optimisticSignal /
   // optimisticComputed callers and optimistic store nodes carry an
@@ -2008,20 +2856,40 @@ export function setSignal<T>(el: Signal<T> | Computed<T>, v: T | ((prev: T) => T
   // Attribution hook: this committed write is where a re-run chain begins.
   if (__OBSERVE__ && attrHooks !== null) attrHooks.write(el, currentValue, v);
 
+  // A write during hydration's snapshot capture to a source that has no
+  // snapshot — created BEFORE capture began (module-level state: an identity
+  // minted from onSettled in the pass, a preference read from storage) —
+  // captures the pre-write value now, so the write is held like any other:
+  // in-scope readers keep serving what the server rendered with and replay
+  // at release. Left uncaptured, the write cascades live through a claim
+  // pass whose DOM writes are skipped, and a component rendered later in the
+  // pass reads a value the server never had. Store leaves written here are
+  // plain signals and qualify the same way.
+  if (SNAPSHOTS && snapshotCaptureActive) captureWriteSnapshot(el, currentValue);
+
   const wasStaged = el._pendingValue !== NOT_PENDING;
   if (!wasStaged) queuePendingNode(el);
+  // A28 arms, gated on the loads the write already pays for (a plain ambient
+  // rewrite outside a flush — the write-loop shape — costs `_transition` and
+  // `context` here and nothing else; the arms themselves are cold helpers so
+  // setSignal stays within every setter's inlining budget, ~300 B bytecode).
+  else if (__ASYNC__ && el._transition !== null) stashHeldRewrite(el);
   el._pendingValue = v;
   if (__DEV__) devTrackHeldPending(el);
+  if (context !== null) notePromotedWrite(el);
 
   // syncCompanions only pokes _pendingSignal/_latestValueComputed — with
   // neither companion present the call is a guaranteed no-op (companions are
   // only ever created, never removed, and creating one installs the hook and
   // sets CONFIG_HAS_COMPANIONS — one masked read replaces two optional-field
   // probes on every write).
-  VERDICTS &&
-    el._config & CONFIG_HAS_COMPANIONS &&
-    GlobalQueue._syncCompanions !== null &&
+  if (VERDICTS && el._config & CONFIG_HAS_COMPANIONS && GlobalQueue._syncCompanions !== null) {
     GlobalQueue._syncCompanions(el, v);
+    // A28 (2): the verdict computed here is the PRE-flush one (an unflushed
+    // write is not pending); the flush that carries the write re-syncs so
+    // the companions mirror the flushed world. Only companion nodes pay.
+    if (!globalQueue._running) unflushedCompanions.push(el);
+  }
 
   // _time is a computed-only slot (§12e): writing it on a signal would fork
   // the lean shape. Every read site is computed-typed.
@@ -2060,15 +2928,51 @@ export function suppressComputedRecompute(el: Computed<unknown>): void {
   el._manualWriteTime = clock;
 }
 
+/** A34 amendment (#3612) — is `el`'s staging a DERIVATION another transaction
+ * holds: stamped by a transaction that is not the writer's, and not a manual
+ * proposal (the mask, on the node or — a store leaf — its firewall)? #2692's
+ * "manual write wins" is a rule for one synchronous frame; across a hold the
+ * held pass result is nobody's proposal, and a user setter reaching it
+ * composes on the committed frame it was written against and becomes `prev`
+ * for the transaction's re-derivation (rederiveHeld) instead of replacing it.
+ * Writes made under the holding transaction masked the node and keep
+ * A34(1)'s last-write-wins. Only the user setters ask; an async landing or a
+ * companion writing a stamped node is the transaction's own work. */
+export function heldDerivation(el: Signal<any> | Computed<any>): boolean {
+  return (
+    el._transition !== null &&
+    activeTransition !== el._transition &&
+    !(
+      (((el as FirewallSignal<any>)._firewall || el) as Computed<any>)._flags &
+      REACTIVE_MANUAL_WRITE
+    )
+  );
+}
+
+/** The held-derivation write's second half: the node re-derives under its
+ * hold with the written staging as the pass's `prev`. Nothing is masked. The
+ * write took the A34 join (setSignal), which scheduled the flush that drains
+ * this; recompute re-enters the stamp. */
+export function rederiveHeld(el: Computed<unknown>): void {
+  el._flags |= REACTIVE_DIRTY; // over CHECK: the heap visit recomputes, not re-checks
+  enqueueSub(el);
+}
+
 /**
  * User-facing setter for the memo form of `createSignal(fn)`. Behaves like
  * `setSignal`, but also cancels any pending recompute of the memo so the
  * manual value wins over a value that would otherwise be produced by an
- * upstream change in the same tick.
+ * upstream change in the same tick. Across a hold the write is not a
+ * proposal: a memo another transaction holds as a pass result composes on the
+ * committed value and re-derives under the hold with the write as `prev`
+ * (A34 amendment, #3612; heldDerivation).
  */
 export function setMemo<T>(el: Computed<T>, v: T | ((prev: T) => T)): T {
+  // (A held derivation is transaction work: an async capability.)
+  const held = __ASYNC__ && heldDerivation(el);
+  if (held && typeof v === "function") v = (v as (prev: T) => T)(el._value);
   const result = setSignal(el, v);
-  suppressComputedRecompute(el as Computed<unknown>);
+  held ? rederiveHeld(el as Computed<unknown>) : suppressComputedRecompute(el as Computed<unknown>);
   return result;
 }
 

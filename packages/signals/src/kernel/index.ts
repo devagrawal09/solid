@@ -25,8 +25,9 @@
  * - memos cut off on `===` (or `equals`), effects never do;
  * - render effects run their effect half synchronously on creation, user
  *   effects queue it;
- * - disposal: children newest first, then onCleanup in registration order,
- *   then the effect's returned cleanup.
+ * - disposal: children newest first, then onCleanup in unwind order (later
+ *   registrations first, the core's #3572 rule), then the effect's returned
+ *   cleanup.
  *
  * The API names and call shapes are the core's, so compiled activation code
  * binds to either runtime with an import swap (tier 1 <-> tier 2). The
@@ -80,6 +81,7 @@ interface Comp extends Src, Owner {
   hq?: Heap; // the heap the node is linked into
   zc: Owner | null; // zombie children (deferred disposal)
   zd: (() => void)[] | null; // zombie cleanups
+  hc: 0 | 1; // held children: the last pass has not committed (core CONFIG_HELD_CHILDREN)
   t: 0 | 1 | 2; // 0 memo, 1 render effect, 2 user effect
   ef?: (v: any, prev: any) => void | (() => void);
   c?: (() => void) | void; // effect cleanup
@@ -102,6 +104,8 @@ const CHECK = 1,
 let context: Owner | null = null;
 let tracking = false;
 let pending: Src[] = [];
+// Unchanged passes whose stale tail waits on the flush's commit (core heldTrims).
+const heldTrims: Comp[] = [];
 let queues: [(() => void)[], (() => void)[]] = [[], []];
 const eq = (a: any, b: any) => a === b;
 
@@ -289,19 +293,26 @@ function markDisposal(el: Owner) {
 function dispose(node: Owner, self: boolean, zombie?: boolean) {
   const f = node.f;
   if (f & DISPOSED) return;
+  // As in the core (#3561): a previous frame parked as zombies dies with its
+  // owner, ahead of the owner's own children.
+  if (self && !zombie && ((node as Comp).zc || (node as Comp).zd)) dispose(node, false, true);
   if (self) node.f = f | DISPOSED;
   let child = zombie ? (node as Comp).zc : node.fc;
+  // As in the core (#3554): the chain is detached before the drain, so a node
+  // a cleanup links mid-drain lands on the fresh head and survives; each
+  // drained child's `pv` points at itself (its later splice stays on the
+  // detached chain) and its `nx` is read after its disposal.
+  if (!zombie) node.fc = null;
   while (child) {
-    const next = child.nx;
     if ((child as Comp).fn) {
       remove(child as Comp);
       clearDeps(child as Comp);
     }
+    child.pv = child;
     dispose(child, true);
-    child = next;
+    child = child.nx;
   }
   if (zombie) (node as Comp).zc = null;
-  else node.fc = null;
   if (self && !zombie && !(f & ZOMBIE) && node.o && !(node.o.f & DISPOSED)) {
     const { pv, nx } = node;
     if (pv) pv.nx = nx;
@@ -309,11 +320,13 @@ function dispose(node: Owner, self: boolean, zombie?: boolean) {
     if (nx) nx.pv = pv;
     node.pv = null;
   }
+  // Detached before it runs (the core's #3601): a cleanup that disposes an
+  // ancestor re-enters this node and finds nothing left to run.
   const cl = zombie ? (node as Comp).zd : node.cl;
   if (cl) {
     if (zombie) (node as Comp).zd = null;
     else node.cl = null;
-    for (let i = 0; i < cl.length; i++) cl[i]();
+    for (let i = cl.length - 1; i >= 0; i--) cl[i]();
   }
   if (self && (node as Comp).c) {
     const c = (node as Comp).c!;
@@ -326,7 +339,10 @@ function dispose(node: Owner, self: boolean, zombie?: boolean) {
 function recompute(el: Comp, create?: boolean) {
   if (!create) {
     remove(el);
-    if (el.fc || el.cl) {
+    // As in the core (#3404): children built by a pass that never committed
+    // die now (no frame showed them); the parked frame stays parked.
+    if (el.hc) dispose(el, false);
+    else if (el.fc || el.cl) {
       markDisposal(el);
       el.zc = el.fc;
       el.zd = el.cl;
@@ -338,7 +354,8 @@ function recompute(el: Comp, create?: boolean) {
   context = el;
   el.dt = null;
   el.dg++;
-  el.f = RECOMPUTING;
+  // A zombie that recomputes stays a zombie (the core's #3543).
+  el.f = RECOMPUTING | (el.f & ZOMBIE);
   const oldHeight = el.h;
   let value = el.p === NOT ? el.v : el.p;
   tracking = true;
@@ -348,17 +365,15 @@ function recompute(el: Comp, create?: boolean) {
   } finally {
     tracking = prevTracking;
     missed = el.f & MISSED_WAKE;
-    el.f = 0;
+    // ZOMBIE and DISPOSED survive the pass (the core's #3543, #3621).
+    el.f &= ZOMBIE | DISPOSED;
     context = prevContext;
   }
-  // trim the links this pass did not reuse
-  const tail = el.dt as Link | null;
-  let stale = tail ? tail.nd : el.dp;
-  if (stale) {
-    do stale = unlink(stale);
-    while (stale);
-    if (tail) tail.nd = null;
-    else el.dp = null;
+  // A node that died during its own pass is dead at its end and the pass is
+  // void (the core's #3621): unlink what it read after dying, publish nothing.
+  if (el.f & DISPOSED) {
+    clearDeps(el);
+    return;
   }
   const changed = create || !el.e || !el.e(el.p === NOT ? el.v : el.p, value);
   if (el.t && changed) {
@@ -370,10 +385,32 @@ function recompute(el: Comp, create?: boolean) {
     else el.p = value;
     notify(el);
   } else if (el.h !== oldHeight) for (let s = el.su; s; s = s.ns) insertHeight(s.s, queueFor(s.s));
-  if (!create && (el.p !== NOT || el.zc || el.zd)) pending.push(el);
+  // Dependencies are the committed frame's until it is replaced (the core's
+  // A30, #3410 / #3438 / #3469): a staged pass leaves the previous pass's
+  // tail linked for the commit to trim, an effect that owes a run leaves it
+  // for that run, and an unchanged pass's trim waits on the flush's commit.
+  // Only a first pass trims now.
+  if (el.p === NOT && !(el.t && el.m)) {
+    if (create) trim(el);
+    else if ((el.dt as Link | null)?.nd ?? el.dp) heldTrims.push(el);
+  }
+  const held = !create && (el.p !== NOT || !!el.zc || !!el.zd);
+  if (held) pending.push(el);
+  el.hc = held ? 1 : 0;
   if (missed) {
     enqueueSub(el);
     schedule();
+  }
+}
+/** Unlink the dependencies past this pass's tail (core trimStaleDeps). */
+function trim(el: Comp) {
+  const tail = el.dt as Link | null;
+  let stale = tail ? tail.nd : el.dp;
+  if (stale) {
+    do stale = unlink(stale);
+    while (stale);
+    if (tail) tail.nd = null;
+    else el.dp = null;
   }
 }
 function updateIfNecessary(el: Comp) {
@@ -384,16 +421,12 @@ function updateIfNecessary(el: Comp) {
       if (el.f & DIRTY) break;
     }
   if (el.f & DIRTY) recompute(el);
-  // As in the core, this drops ZOMBIE from a doomed node; one still linked
-  // into the zombie heap moves to the heap its flags now name (the core's
-  // zombie-heap fix, see the doc's defects).
-  const f = el.f;
-  el.f = f & (IN_HEAP | IN_HEAP_HEIGHT);
-  if (f & ZOMBIE && f & (IN_HEAP | IN_HEAP_HEIGHT)) {
-    remove(el);
-    if (f & IN_HEAP) insert(el, dirty);
-    else insertHeight(el, dirty);
-  }
+  // As in the core (#3543, #3621), the mask keeps ZOMBIE and DISPOSED: a
+  // pulled zombie stays one until its owner's pending disposal commits, so
+  // one still linked into the zombie heap keeps naming it (the zombie-heap
+  // defect, see the doc's defects, cannot arise), and a pass that disposed
+  // its own node leaves it disposed.
+  el.f &= IN_HEAP | IN_HEAP_HEIGHT | ZOMBIE | DISPOSED;
 }
 function runEffect(el: Comp) {
   if (!el.m || el.f & DISPOSED) return;
@@ -405,6 +438,8 @@ function runEffect(el: Comp) {
   } finally {
     el.pr = el.v;
     el.m = false;
+    // The run applied: the tail its pass left linked goes (the core's A30).
+    trim(el);
   }
 }
 function node(fn: (p: any) => any, t: 0 | 1 | 2, e: Src["e"], init?: any): Comp {
@@ -427,6 +462,7 @@ function node(fn: (p: any) => any, t: 0 | 1 | 2, e: Src["e"], init?: any): Comp 
     cl: null,
     zc: null,
     zd: null,
+    hc: 0,
     f: 0,
     t
   } as unknown as Comp;
@@ -501,6 +537,7 @@ function enqueue(type: number, fn: () => void) {
   schedule();
 }
 function commit() {
+  while (heldTrims.length) trim(heldTrims.pop()!);
   const list = pending;
   for (let i = 0; i < list.length; i++) {
     const n = list[i];
@@ -508,7 +545,11 @@ function commit() {
       n.v = n.p;
       n.p = NOT;
     }
-    if (n.fn && ((n as Comp).zc || (n as Comp).zd)) dispose(n as Comp, false, true);
+    if (n.fn) {
+      trim(n as Comp);
+      (n as Comp).hc = 0;
+      if ((n as Comp).zc || (n as Comp).zd) dispose(n as Comp, false, true);
+    }
   }
   list.length = 0;
 }
