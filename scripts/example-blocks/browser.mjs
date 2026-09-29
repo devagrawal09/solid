@@ -50,9 +50,16 @@ const loaded = await import(pathToFileURL(join(twinDir, "tests/browser.steps.mjs
 const modeArg = process.argv.includes("--mode")
   ? process.argv[process.argv.indexOf("--mode") + 1]
   : undefined;
-const mode = modeArg ?? loaded.mode;
-const spec = { ...loaded, mode, steps: loaded[`${mode}Steps`] ?? loaded.steps };
-console.log(`mode: ${mode}`);
+// `--variant <v>` applies the module's `variants[v]` overrides (mode, server,
+// dist, steps, …): one steps module for an example with several builds.
+const variantArg = process.argv.includes("--variant")
+  ? process.argv[process.argv.indexOf("--variant") + 1]
+  : undefined;
+if (variantArg && !loaded.variants?.[variantArg]) throw new Error(`no variant ${variantArg}`);
+const base = { ...loaded, ...(variantArg ? loaded.variants[variantArg] : undefined) };
+const mode = modeArg ?? base.mode;
+const spec = { ...base, mode, steps: base[`${mode}Steps`] ?? base.steps };
+console.log(`mode: ${mode}${variantArg ? `, variant: ${variantArg}` : ""}`);
 
 const TYPES = {
   ".html": "text/html",
