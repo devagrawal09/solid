@@ -1077,7 +1077,9 @@ pub(crate) fn manifest(
             // islands are in their own modules' manifests).
             w.key("renders");
             w.begin_array();
-            let mut seen = BTreeSet::new();
+            // name → (in a server row, passed a `$key`)
+            let mut seen: std::collections::BTreeMap<String, (bool, bool)> = Default::default();
+            let rows = in_rows(a);
             let mut stack = vec![fr.comp];
             let mut visited = BTreeSet::new();
             while let Some(x) = stack.pop() {
@@ -1091,14 +1093,33 @@ pub(crate) fn manifest(
                     match &call.tag {
                         Tag::Comp(k) => stack.push(*k),
                         Tag::Opaque(n) => {
-                            seen.insert(n.clone());
+                            let row = rows.contains(&x)
+                                || call
+                                    .regions
+                                    .iter()
+                                    .any(|r| a.facts[x].sites[*r].kind == SiteKind::For);
+                            let key = call.props.iter().any(|(p, _)| p == "$key");
+                            let e = seen.entry(n.clone()).or_default();
+                            e.0 |= row;
+                            e.1 |= key;
                         }
                         _ => {}
                     }
                 }
             }
-            for n in seen {
+            for (n, (row, key)) in seen {
+                w.begin_object();
+                w.key("component");
                 w.string(&n);
+                w.key("key");
+                if key {
+                    w.string("$key");
+                } else if row {
+                    w.string("row item id");
+                } else {
+                    w.null();
+                }
+                w.end_object();
             }
             w.end_array();
             // Authorization: every frame is a public endpoint taking its
@@ -1225,8 +1246,18 @@ fn key_kind(m: &Model<'_>, a: &Analysis<'_>, root: usize) -> Option<&'static str
             }
         }
     }
-    // Rendered in a server row (a `<For>`), directly or under a component
-    // that is: the row's item keys it.
+    let rows = in_rows(a).contains(&root);
+    // A scope extracted from a row block is its row.
+    if rows || m.comps[root].name.contains("$For") {
+        Some("row item id")
+    } else {
+        None
+    }
+}
+
+/// Components rendered in a server row (a `<For>`), directly or under a
+/// component that is: the row's item keys their islands.
+fn in_rows(a: &Analysis<'_>) -> HashSet<usize> {
     let mut in_rows: HashSet<usize> = HashSet::new();
     let mut stack: Vec<usize> = Vec::new();
     for f in &a.facts {
@@ -1248,11 +1279,5 @@ fn key_kind(m: &Model<'_>, a: &Analysis<'_>, root: usize) -> Option<&'static str
             }
         }
     }
-    let rows = in_rows.contains(&root);
-    // A scope extracted from a row block is its row.
-    if rows || m.comps[root].name.contains("$For") {
-        Some("row item id")
-    } else {
-        None
-    }
+    in_rows
 }

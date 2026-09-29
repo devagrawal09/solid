@@ -269,6 +269,65 @@ function navModule(routes, { client = FRAMES_CLIENT, args = f => f + ARGS } = {}
   return s;
 }
 
+/**
+ * The page's frames report (\`.vite/solid-frames.json\`): every derived
+ * frame with its arguments, server functions and the islands its HTML
+ * carries (with how each is keyed), the candidates that are not frames and
+ * why, and the route table. Paths are relative to \`root\` and entries
+ * sorted, so the report is stable for CI diffing.
+ */
+function framesReport(collected, root) {
+  const rel = f => (f ? path.relative(root, f).split(path.sep).join("/") : null);
+  const byName = name => collected.islands.filter(i => i.root === name);
+  const frames = collected.frames
+    .map(f => {
+      const islands = [
+        ...f.islands.map(i => ({ ...i, module: rel(f.file) })),
+        ...(f.renders || []).flatMap(r =>
+          byName(r.component).map(i => ({
+            id: i.id,
+            root: i.root,
+            module: rel(i.file),
+            key: r.key,
+            transplant: !!i.transplant,
+            serialized: i.serialized
+          }))
+        )
+      ].sort((x, y) => (x.id < y.id ? -1 : 1));
+      return {
+        id: f.id,
+        module: rel(f.file),
+        root: f.root,
+        memo: f.memo,
+        region: f.region,
+        driver: f.driver,
+        arguments: f.arguments,
+        argumentsFrom: f.argumentsFrom,
+        serverFunctions: f.serverFunctions,
+        tainted: f.tainted,
+        islands,
+        public: f.public,
+        guard: f.guard
+      };
+    })
+    .sort((x, y) => (x.id < y.id ? -1 : 1));
+  return {
+    version: 1,
+    frames,
+    candidates: (collected.candidates || [])
+      .map(c => ({ ...c, module: rel(c.module) }))
+      .sort((x, y) => (x.module + x.root + x.memo < y.module + y.root + y.memo ? -1 : 1)),
+    routes: routeTable(collected).map(r => ({
+      paths: r.paths,
+      component: r.component,
+      module: rel(r.file),
+      frame: r.frame,
+      preload: r.preload,
+      guard: null
+    }))
+  };
+}
+
 /** The page's route table from the collected manifests. */
 function routeTable(collected) {
   const out = [];
@@ -488,6 +547,7 @@ class IslandsCompiler {
     const chunks = new Map();
     const fallbacks = [];
     const frames = [];
+    const candidates = [];
     const framesClient = new Map();
     const routers = [];
     let streams = false;
@@ -499,6 +559,7 @@ class IslandsCompiler {
       if (out.fallback) fallbacks.push({ file, reason: out.fallback });
       if (out.manifest.streams) streams = true;
       for (const f of out.manifest.frames || []) frames.push({ ...f, file });
+      for (const c of out.manifest.frameCandidates || []) candidates.push({ ...c, module: file });
       if (out.framesClient) framesClient.set(file, out.framesClient);
       if (out.manifest.router) routers.push({ file, router: out.manifest.router });
       for (const i of out.manifest.islands) {
@@ -519,6 +580,7 @@ class IslandsCompiler {
       files: [...seen],
       streams,
       frames,
+      candidates,
       framesClient,
       routers
     };
@@ -681,6 +743,12 @@ function solidIslands(options = {}) {
       return code;
     },
     generateBundle(_, bundle) {
+      if (collected && (collected.frames.length || collected.candidates.length))
+        this.emitFile({
+          type: "asset",
+          fileName: ".vite/solid-frames.json",
+          source: JSON.stringify(framesReport(collected, config.root), null, 2) + "\n"
+        });
       if (budget == null) return;
       const sizes = bundledIslandSizes(bundle);
       // Next to Vite's manifest: what each lazy island adds to the page.
@@ -845,6 +913,7 @@ module.exports = {
   islandsEntry,
   navModule,
   routeTable,
+  framesReport,
   NAV,
   ARGS,
   hostModule,
