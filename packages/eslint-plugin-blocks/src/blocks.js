@@ -1,0 +1,121 @@
+/**
+ * What the rules share: recognizing blocks from syntax.
+ *
+ * A block is a generator function that is
+ * - the argument of a block constructor (`$component` → setup, `$memo`,
+ *   `$effect`, `$event`, `$settled`, `$` → hole, or row when it has
+ *   parameters, `$scope` → row);
+ * - returned by a setup or a row block's setup (→ view);
+ * - a render callback written inline in JSX (→ row);
+ * - a generator declared inside a setup (a named row block → row).
+ */
+
+export const CONSTRUCTORS = {
+  $component: "setup",
+  $memo: "memo",
+  $effect: "effect",
+  $event: "event",
+  $settled: "settled",
+  $scope: "row"
+};
+
+/** Kinds whose body is a reactive computation (reads, no writes). */
+export const REACTIVE = new Set(["memo", "view", "hole", "setup", "row"]);
+
+function isFunction(node) {
+  return (
+    node &&
+    (node.type === "FunctionExpression" ||
+      node.type === "FunctionDeclaration" ||
+      node.type === "ArrowFunctionExpression")
+  );
+}
+
+function calleeName(call) {
+  const c = call.callee;
+  if (c.type === "Identifier") return c.name;
+  if (c.type === "MemberExpression" && !c.computed && c.property.type === "Identifier")
+    return c.property.name;
+  return null;
+}
+
+/** The nearest enclosing function of `node` (not `node` itself). */
+export function enclosingFunction(node) {
+  let p = node.parent;
+  while (p && !isFunction(p)) p = p.parent;
+  return p || null;
+}
+
+const kinds = new WeakMap();
+/** The block kind of a function node, or null for a function that is not a block. */
+export function blockKind(fn) {
+  if (!fn || !fn.generator) return null;
+  if (kinds.has(fn)) return kinds.get(fn);
+  const kind = computeKind(fn);
+  kinds.set(fn, kind);
+  return kind;
+}
+
+function computeKind(fn) {
+  const parent = fn.parent;
+  if (parent.type === "CallExpression" && parent.arguments[0] === fn) {
+    const name = calleeName(parent);
+    if (name === "$") return fn.params.length > 0 ? "row" : "hole";
+    if (name && CONSTRUCTORS[name]) return CONSTRUCTORS[name];
+  }
+  // returned by a setup (or a row block's setup): the view
+  if (parent.type === "ReturnStatement") {
+    const outer = enclosingFunction(parent);
+    const k = blockKind(outer);
+    if (k === "setup" || k === "row") return "view";
+  }
+  if (parent.type === "JSXExpressionContainer") return "row";
+  if (fn.type === "FunctionDeclaration") {
+    const outer = enclosingFunction(fn);
+    const k = blockKind(outer);
+    if (k === "setup" || k === "row") return "row";
+  }
+  return null;
+}
+
+/** The block kind of the function a node sits in (null outside blocks). */
+export function kindAt(node) {
+  return blockKind(enclosingFunction(node));
+}
+
+/**
+ * Where a node sits relative to the nearest JSX before a function boundary:
+ * `null` (not in JSX), `{ hole: "child" | "attribute" | "spread" | "spread-child", name }`.
+ */
+export function jsxPosition(node) {
+  let child = node;
+  let p = node.parent;
+  while (p) {
+    if (isFunction(p) || p.type === "ClassBody") return null;
+    if (p.type === "JSXSpreadAttribute") return { hole: "spread" };
+    if (p.type === "JSXSpreadChild") return { hole: "spread-child" };
+    if (p.type === "JSXExpressionContainer") {
+      const owner = p.parent;
+      if (owner && owner.type === "JSXAttribute") {
+        const n = owner.name;
+        const name = n.type === "JSXNamespacedName" ? `${n.namespace.name}:${n.name.name}` : n.name;
+        return { hole: "attribute", name };
+      }
+      return { hole: "child" };
+    }
+    child = p;
+    p = p.parent;
+  }
+  void child;
+  return null;
+}
+
+export function isCallTo(node, names) {
+  return node && node.type === "CallExpression" && names.includes(calleeName(node));
+}
+
+export function isCapitalizedCall(node) {
+  if (!node || node.type !== "CallExpression") return false;
+  const name = calleeName(node);
+  return !!name && /^[A-Z]/.test(name);
+}
