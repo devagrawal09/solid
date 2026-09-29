@@ -2943,7 +2943,7 @@ export function heldDerivation(el: Signal<any> | Computed<any>): boolean {
     el._transition !== null &&
     activeTransition !== el._transition &&
     !(
-      (((el as FirewallSignal<any>)._firewall || el) as Computed<any>)._flags &
+      (((STORES && (el as FirewallSignal<any>)._firewall) || el) as Computed<any>)._flags &
       REACTIVE_MANUAL_WRITE
     )
   );
