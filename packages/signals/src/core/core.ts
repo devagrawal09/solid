@@ -434,8 +434,10 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   // Creation-time A29 (see enterStagedRead): a pass outside a flush that is
   // served a live transaction's staged value records the transaction here
   // and is staged INTO it below — "born held" — instead of committing.
-  const prevStagedEntry = stagedEntry;
-  stagedEntry = null;
+  // (Async only: the async-free runtime has no transactions, so stagedEntry
+  // is never written there and folds to null.)
+  const prevStagedEntry = __ASYNC__ ? stagedEntry : null;
+  if (__ASYNC__) stagedEntry = null;
   const oldcontext = context;
   context = el;
   el._depsTail = null;
@@ -618,8 +620,8 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   // The cast re-widens: TS narrowed `stagedEntry` to `null` at the reset
   // above and does not invalidate that across the compute call that
   // `enterStagedRead` runs under. No emitted code.
-  const bornHeld = stagedEntry as Transition | null;
-  stagedEntry = prevStagedEntry;
+  const bornHeld = __ASYNC__ ? (stagedEntry as Transition | null) : null;
+  if (__ASYNC__) stagedEntry = prevStagedEntry;
 
   // A node that died during its own pass (#3621) is dead at the end of it,
   // and the pass is void. Its owner's teardown already unlinked its deps,
@@ -1015,7 +1017,7 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   let held =
     needsPendingCommit &&
     (!create || bornHeld !== null || (el._statusFlags & STATUS_PENDING) !== 0);
-  if (held && (!el._transition || hasOverride)) queuePendingNode(el);
+  if (held && (!__ASYNC__ || !el._transition || hasOverride)) queuePendingNode(el);
   else if (
     held &&
     (activeTransition === null || isOptimisticDirty) &&

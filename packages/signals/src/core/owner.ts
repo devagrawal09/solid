@@ -117,9 +117,11 @@ export function disposeChildren(node: Owner, self: boolean = false, zombie?: boo
     // A pending reader parked in a transaction may be the only thing holding
     // it (#3372): its death is a completion event the transaction must be
     // re-judged for, and nothing else re-enters a parked transaction.
-    const t = n._transition;
-    if (__ASYNC__ && t && n._statusFlags & STATUS_PENDING && !wokenTransitions.includes(t))
-      (wokenTransitions.push(t), schedule());
+    if (__ASYNC__) {
+      const t = n._transition;
+      if (t && n._statusFlags & STATUS_PENDING && !wokenTransitions.includes(t))
+        (wokenTransitions.push(t), schedule());
+    }
   }
   if (self && __DEV__) clearSignals(node);
   if (self && (node as any)._fn && (node as Computed<unknown>)._x !== null)

@@ -1120,7 +1120,7 @@ export function notifyStatus(
       // nothing (A15 shared-hole corollary): their reader registers with the
       // flight's transaction at queue notification.
       if (!downstreamBlockStatus)
-        sub._transition
+        __ASYNC__ && sub._transition
           ? pendingSource &&
             !(sub as any)._type &&
             (sub._statusFlags & STATUS_PENDING || sub._pendingValue !== NOT_PENDING) &&
