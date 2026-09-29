@@ -704,6 +704,8 @@ pub(crate) fn detect<'a>(m: &Model<'a>, a: &mut Analysis<'a>, filename: Option<&
                 refs: r,
                 regions: vec![],
                 param: None,
+                param2: None,
+                unkeyed: false,
             });
             fr.site = Some(si);
         }

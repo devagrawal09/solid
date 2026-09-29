@@ -140,6 +140,13 @@ function islandsEntry({
   eager.forEach((i, n) => {
     s += `import { activate as a${n}${i.tier ? `, flush as f${n}` : ""} } from ${J(chunk(i.id))};\n`;
   });
+  // An island's root disposer (tier 1 / 2 `activate` returns it), kept per
+  // anchor and island id: the frames applier disposes the islands of the
+  // anchors a morph or a navigation removes (their cleanups, effects,
+  // timers, window listeners). Tier 0 returns nothing (its handlers are
+  // properties of its own nodes).
+  if (islands.length)
+    s += `const $sd = (el, id, d) => { if (typeof d === "function") (el.$d ||= {})[id] = d; };\n`;
   if (eager.some(i => i.anchor === "comment"))
     s += `const $ca = id => { const out = [], w = document.createTreeWalker(document.body, 128); for (let n; (n = w.nextNode()); ) if (n.data.startsWith("i:") && n.data.slice(2).split(" ").includes(id)) out.push(n); return out; };\n`;
   // Streaming (islands-stream.js): boundary chunks land after the shell.
@@ -227,7 +234,7 @@ function islandsEntry({
       (i, n) =>
         `[a${n}, ${i.tier ? `f${n}` : 0}, ${J(i.id)}${i.anchor === "comment" || (waits && i.waits) ? `, ${i.anchor === "comment" ? 1 : 0}` : ""}${waits && i.waits ? ", 1" : ""}]`
     );
-    s += `const $act = () => { for (const [a, f, id, c, w] of [${rows.join(", ")}]) for (const el of ${eager.some(i => i.anchor === "comment") ? `c ? $ca(id) : ` : ""}document.querySelectorAll('[data-i~="' + id + '"]')) { const s = (el.$i ||= {}); if (s[id]${waits ? " || (w && $pd(el))" : ""}) continue; s[id] = 1; a(el); f && f(); } };\n`;
+    s += `const $act = () => { for (const [a, f, id, c, w] of [${rows.join(", ")}]) for (const el of ${eager.some(i => i.anchor === "comment") ? `c ? $ca(id) : ` : ""}document.querySelectorAll('[data-i~="' + id + '"]')) { const s = (el.$i ||= {}); if (s[id]${waits ? " || (w && $pd(el))" : ""}) continue; s[id] = 1; $sd(el, id, a(el)); f && f(); } };\n`;
     s += `$act();\ndocument.addEventListener("solid-islands", $act);\n`;
   } else {
     eager.forEach((i, n) => {
@@ -235,7 +242,7 @@ function islandsEntry({
         i.anchor === "comment"
           ? `$ca(${J(i.id)})`
           : `document.querySelectorAll('[data-i~="${i.id}"]')`;
-      s += `for (const el of ${find}) a${n}(el);\n`;
+      s += `for (const el of ${find}) $sd(el, ${J(i.id)}, a${n}(el));\n`;
     });
     eager.forEach((i, n) => {
       if (i.tier) s += `f${n}();\n`;
@@ -263,7 +270,7 @@ function framesEntry(islands, eager, chunk, frames) {
     return `${J(i.id)}: ${load}`;
   });
   let s = `const $SL = {\n  ${rows.join(",\n  ")}\n};\n`;
-  s += `self.$SI = { act: (el, id, st) => $SL[id] && $SL[id]().then(m => { (el.$i ||= {})[id] = 1; m.activate(el, st); m.flush && m.flush(); })${frames.nav ? ", links: $links" : ""} };\n`;
+  s += `self.$SI = { act: (el, id, st) => $SL[id] && $SL[id]().then(m => { (el.$i ||= {})[id] = 1; $sd(el, id, m.activate(el, st)); m.flush && m.flush(); })${frames.nav ? ", links: $links" : ""} };\n`;
   if (frames.nav) {
     s += `const $nav = () => import(${J(frames.navModule || NAV)});\n`;
     // @solidjs/router's link state: aria-current="page" on same-origin
@@ -428,7 +435,7 @@ function loader({ wins, nest, pd, click, waits }) {
     : "";
   const load = waits ? `Promise.all([L[id][0](), ready(el, id)]).then(([m]) => m)` : `L[id][0]()`;
   let s = `const has = (el, id) => el.$i && el.$i[id];
-${ready}const act = (el, id) => ${load}.then(m => { if (!has(el, id)) { (el.$i ||= {})[id] = 1; m.activate(el); m.flush && m.flush(); } });
+${ready}const act = (el, id) => ${load}.then(m => { if (!has(el, id)) { (el.$i ||= {})[id] = 1; $sd(el, id, m.activate(el)); m.flush && m.flush(); } });
 const done = () => { if (!--B) { R = 1; for (const [t, e] of Q.splice(0)) t.dispatchEvent(new e.constructor(e.type, e)); R = 0; } };
 const wait = (t, e, p) => { Q.push([t, e]); B++; Promise.all(p).then(done, done); };
 function E(e) {

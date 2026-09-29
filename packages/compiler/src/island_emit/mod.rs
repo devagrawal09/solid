@@ -23,6 +23,7 @@
 //! compiles, and the manifest says why.
 mod callforms;
 mod client;
+mod dynamic;
 mod frames;
 mod graph;
 mod inline;
@@ -30,8 +31,10 @@ mod jsx;
 mod model;
 mod scopes;
 mod server;
+mod spreads;
 mod store_paths;
 mod tx;
+mod views;
 
 pub use inline::{ImportedModule, island_exports};
 use oxc_allocator::Allocator;
@@ -217,8 +220,18 @@ fn prepare(original: &str, opts: &IslandOptions, components: bool) -> Option<Str
     let s1 = a.as_deref().unwrap_or(original);
     let b = callforms::rewrite(s1, f);
     let s2 = b.as_deref().unwrap_or(s1);
-    let c = inline::inline_calls(s2, f);
-    let s3 = c.as_deref().unwrap_or(s2);
+    // `<Dynamic>` over a static component: that element (before spreads,
+    // which then see an intrinsic element's spread).
+    let b = dynamic::rewrite(s2, f).or(b);
+    let s2 = b.as_deref().unwrap_or(s1);
+    // View reads bound to a local before the view's `return`: read at
+    // their sites.
+    let b = views::inline_view_reads(s2, f).or(b);
+    let s2 = b.as_deref().unwrap_or(s1);
+    let sp = spreads::rewrite(s2, f);
+    let s2b = sp.as_deref().unwrap_or(s2);
+    let c = inline::inline_calls(s2b, f);
+    let s3 = c.as_deref().unwrap_or(s2b);
     // Scopes: row blocks become components the partitioner sees.
     let d = scopes::extract_rows(s3, f);
     let s4 = d.as_deref().unwrap_or(s3);
@@ -227,7 +240,7 @@ fn prepare(original: &str, opts: &IslandOptions, components: bool) -> Option<Str
     let s5 = e.as_deref().unwrap_or(s4);
     // Helper generators (one `return` of an expression) read at their sites.
     let g = scopes::inline_helpers(s5, f);
-    g.or(e).or(d).or(c).or(b).or(a)
+    g.or(e).or(d).or(c).or(sp).or(b).or(a)
 }
 
 fn compile_pass(

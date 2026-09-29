@@ -37,9 +37,9 @@ function _$v(x) { return () => x; }
 function _$cell(x) { return [() => x, y => y]; }
 function _$noop() {}
 function _$ctx(c, k) { return c && c.has(k) ? c.get(k) : k.defaultValue; }
-function _$forR(l, f, fb) { if (!l || !l.length) return _$e(fb); let s = ""; for (let i = 0; i < l.length; i++) s += f(l[i], () => i); return s; }
-function _$for(l, f, fb) { if (!l || !l.length) return _$e(fb); let s = ""; for (let i = 0; i < l.length; i++) s += _$e(f(l[i], () => i)); return s; }
-async function _$forA(l, f, fb) { if (!l || !l.length) return _$e(fb); const r = await Promise.all(l.map((x, i) => f(x, () => i))); let s = ""; for (const x of r) s += _$e(x); return s; }
+function _$forR(l, f, fb, u) { if (!l || !l.length) return _$e(fb); let s = ""; for (let i = 0; i < l.length; i++) s += u ? f(() => l[i], i) : f(l[i], () => i); return s; }
+function _$for(l, f, fb, u) { if (!l || !l.length) return _$e(fb); let s = ""; for (let i = 0; i < l.length; i++) s += _$e(u ? f(() => l[i], i) : f(l[i], () => i)); return s; }
+async function _$forA(l, f, fb, u) { if (!l || !l.length) return _$e(fb); const r = await Promise.all(l.map((x, i) => u ? f(() => x, i) : f(x, () => i))); let s = ""; for (const x of r) s += _$e(x); return s; }
 function _$err(f, fb) { try { return _$e(f()); } catch (e) { return _$e(typeof fb === "function" ? fb(() => e, () => {}) : fb); } }
 async function _$errA(f, fb) { try { return _$e(await f()); } catch (e) { return _$e(typeof fb === "function" ? fb(() => e, () => {}) : fb); } }
 async function _$proj(f, seed) { const d = seed === undefined ? {} : structuredClone(seed); const r = await f(d); return r === undefined ? d : r; }
@@ -76,9 +76,9 @@ struct Se<'x, 'a> {
 pub(crate) const KEY_HELPERS: &str = r#"const _$RK = Symbol.for("solid.frames.key");
 function _$k(p, $c) { const k = p && p.$key != null ? p.$key : $c && $c.get(_$RK); return k == null ? "" : ' data-k="' + _$ea(k) + '"'; }
 function _$rk($c, x) { if (!x || typeof x !== "object" || x.id == null) return $c; const p = $c && $c.get(_$RK); return new Map($c).set(_$RK, p != null ? p + "/" + x.id : "" + x.id); }
-function _$forK($c, l, f, fb) { if (!l || !l.length) return _$e(fb); let s = ""; for (let i = 0; i < l.length; i++) s += f(l[i], () => i, _$rk($c, l[i])); return s; }
-function _$forFK($c, l, f, fb) { if (!l || !l.length) return _$e(fb); let s = ""; for (let i = 0; i < l.length; i++) s += _$e(f(l[i], () => i, _$rk($c, l[i]))); return s; }
-async function _$forAK($c, l, f, fb) { if (!l || !l.length) return _$e(fb); const r = await Promise.all(l.map((x, i) => f(x, () => i, _$rk($c, x)))); let s = ""; for (const x of r) s += _$e(x); return s; }
+function _$forK($c, l, f, fb, u) { if (!l || !l.length) return _$e(fb); let s = ""; for (let i = 0; i < l.length; i++) s += u ? f(() => l[i], i, _$rk($c, l[i])) : f(l[i], () => i, _$rk($c, l[i])); return s; }
+function _$forFK($c, l, f, fb, u) { if (!l || !l.length) return _$e(fb); let s = ""; for (let i = 0; i < l.length; i++) s += _$e(u ? f(() => l[i], i, _$rk($c, l[i])) : f(l[i], () => i, _$rk($c, l[i]))); return s; }
+async function _$forAK($c, l, f, fb, u) { if (!l || !l.length) return _$e(fb); const r = await Promise.all(l.map((x, i) => u ? f(() => x, i, _$rk($c, x)) : f(x, () => i, _$rk($c, x)))); let s = ""; for (const x of r) s += _$e(x); return s; }
 "#;
 
 /// The module's router: match the request's URL (`$c`) against the route
@@ -592,9 +592,24 @@ impl<'x, 'a> Se<'x, 'a> {
                 match b.as_str() {
                     "Loading" => {
                         let kids = jsx::children(&el.children)?;
+                        // A client pending boundary: mark its region.
+                        let pending = self.a.pending_boundaries.contains(&(comp, el.span.start));
+                        if pending && is_async {
+                            return Err(
+                                "a <Loading> the client creates over async state, around server data the server awaits"
+                                    .into(),
+                            );
+                        }
                         if !is_async {
                             // Nothing to wait for: the content renders in place.
-                            return self.kids(comp, &kids, out, anchor, false);
+                            if pending {
+                                out.push_str("<!--$-->");
+                            }
+                            self.kids(comp, &kids, out, anchor, false)?;
+                            if pending {
+                                out.push_str("<!--/-->");
+                            }
+                            return Ok(());
                         }
                         // A boundary over server data: streamed out of order
                         // when the render has a stream (`_$ld`), its fallback
@@ -682,6 +697,16 @@ impl<'x, 'a> Se<'x, 'a> {
                             let Some(f) = func else {
                                 return Err("<For> children must be a callback".into());
                             };
+                            // `keyed={false}`: the row gets an item accessor
+                            // and a number index.
+                            let u = if matches!(
+                                jsx::attr(&attrs, "keyed").map(|a| &a.value),
+                                Some(AttrVal::Expr(e)) if matches!(e.without_parentheses(), Expression::BooleanLiteral(b) if !b.value)
+                            ) {
+                                ", 1"
+                            } else {
+                                ""
+                            };
                             if let (Some(body), false) = (jsx_body(f), is_async) {
                                 // A row template: the callback returns markup, joined raw.
                                 let params = self.tx().params(&SEnv { se: self, comp }, f)?;
@@ -691,13 +716,13 @@ impl<'x, 'a> Se<'x, 'a> {
                                     // Each row's islands are keyed by its item.
                                     let _ = write!(
                                         out,
-                                        "${{_$forK($c, {iv}, ({}) => `{inner}`, {fb})}}",
+                                        "${{_$forK($c, {iv}, ({}) => `{inner}`, {fb}{u})}}",
                                         keyed_params(&params)
                                     );
                                 } else {
                                     let _ = write!(
                                         out,
-                                        "${{_$forR({iv}, ({params}) => `{inner}`, {fb})}}"
+                                        "${{_$forR({iv}, ({params}) => `{inner}`, {fb}{u})}}"
                                     );
                                 }
                             } else if self.keyed && !live {
@@ -708,13 +733,13 @@ impl<'x, 'a> Se<'x, 'a> {
                                 let helper = if is_async { "_$forAK" } else { "_$forFK" };
                                 let _ = write!(
                                     out,
-                                    "${{{aw}{helper}($c, {iv}, {asy}({}) => {body}, {fb})}}",
+                                    "${{{aw}{helper}($c, {iv}, {asy}({}) => {body}, {fb}{u})}}",
                                     keyed_params(&params)
                                 );
                             } else {
                                 let ft = self.func(comp, f, is_async)?;
                                 let helper = if is_async { "_$forA" } else { "_$for" };
-                                let _ = write!(out, "${{{aw}{helper}({iv}, {ft}, {fb})}}");
+                                let _ = write!(out, "${{{aw}{helper}({iv}, {ft}, {fb}{u})}}");
                             }
                         }
                         if live {
@@ -722,6 +747,56 @@ impl<'x, 'a> Se<'x, 'a> {
                         }
                         Ok(())
                     }
+                    "Switch" => {
+                        // The first `<Match>` whose `when` holds, else the
+                        // fallback; one region when live.
+                        let live = self.a.is_live_site(comp, el.span.start);
+                        let fb = self.fallback(comp, &attrs)?;
+                        let mut body = String::from("let $w;");
+                        for k in jsx::children(&el.children)? {
+                            let Child::Element(mel) = k else {
+                                return Err("a <Switch> child other than a <Match>".into());
+                            };
+                            let mattrs = jsx::attrs(mel)?;
+                            let Some(AttrVal::Expr(we)) =
+                                jsx::attr(&mattrs, "when").map(|a| &a.value)
+                            else {
+                                return Err("<Match> without `when`".into());
+                            };
+                            let wv = self.expr(comp, we)?;
+                            let keyed = jsx::attr(&mattrs, "keyed").is_some();
+                            let kids = jsx::children(&mel.children)?;
+                            let func = match kids.as_slice() {
+                                [Child::Expr(e)] => FnRef::from_expr(e),
+                                _ => None,
+                            };
+                            let child = match func {
+                                Some(f) => {
+                                    let ft = self.func(comp, f, is_async)?;
+                                    let arg = if keyed { "$w" } else { "() => $w" };
+                                    format!("{aw}({ft})({arg})")
+                                }
+                                None => {
+                                    let mut inner = String::new();
+                                    self.kids(comp, &kids, &mut inner, None, false)?;
+                                    format!("{{ t: `{inner}` }}")
+                                }
+                            };
+                            let _ = write!(body, " if (($w = ({wv}))) return {child};");
+                        }
+                        let _ = write!(body, " return {fb};");
+                        if live {
+                            out.push_str("<!--$-->");
+                        }
+                        let _ = write!(out, "${{_$e({aw}({asy}() => {{ {body} }})())}}");
+                        if live {
+                            out.push_str("<!--/-->");
+                        }
+                        Ok(())
+                    }
+                    // Client-only: the server renders nothing (as the
+                    // runtime's server `Portal` does).
+                    "Portal" => Ok(()),
                     other => Err(format!("<{other}> in islands mode")),
                 }
             }

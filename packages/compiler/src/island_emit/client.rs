@@ -171,6 +171,9 @@ enum Slot<'a> {
     /// over server data holding the island's sites or members, between a
     /// marker pair; the island adopts its branch / rows in place.
     Struct(&'a JSXElement<'a>, usize),
+    /// A `<Portal>`: nothing in place; its content is built and mounted
+    /// elsewhere.
+    Portal(&'a JSXElement<'a>, usize),
 }
 
 struct Ce<'x, 'a> {
@@ -185,6 +188,8 @@ struct Ce<'x, 'a> {
     cur: usize,
     uid: usize,
     helpers: BTreeSet<&'static str>,
+    /// Event types the island's handlers are delegated for (`$dg`).
+    events: BTreeSet<String>,
     rt: BTreeSet<&'static str>,
     /// Core-only runtime exports the chunk imports (tier 2: `name as $$name`).
     core: BTreeSet<String>,
@@ -192,7 +197,13 @@ struct Ce<'x, 'a> {
     /// actions, boundaries in live regions).
     t2: bool,
     top_syms: BTreeSet<SymbolId>,
-    templates: Vec<String>,
+    /// Client templates: markup and, for SVG / MathML content, the wrapper
+    /// element it parses under (an HTML `<template>` would create it in the
+    /// HTML namespace).
+    templates: Vec<(String, Option<&'static str>)>,
+    /// Namespace of the children of the element being laid out: 0 HTML,
+    /// 1 SVG, 2 MathML.
+    ns: u8,
     settled: Vec<String>,
     serial: Vec<Serial>,
     lazy_ok: bool,
@@ -261,20 +272,67 @@ const HELPERS: &[(&str, &str)] = &[
         "const $tpl = h => { const t = document.createElement(\"template\"); t.innerHTML = h; return () => t.content.firstChild.cloneNode(true); };",
     ),
     (
+        "$tplw",
+        // SVG / MathML content: parsed under its wrapper element.
+        "const $tplw = (h, w) => { const t = document.createElement(\"template\"); t.innerHTML = \"<\" + w + \">\" + h + \"</\" + w + \">\"; return () => t.content.firstChild.firstChild.cloneNode(true); };",
+    ),
+    (
         "$start",
         "const $start = e => { let d = 0, n = e; while ((n = n.previousSibling)) if (n.nodeType === 8) { if (n.data === \"/\") d++; else if (n.data === \"$\" && !d--) return n; } };",
     ),
     (
         "$show",
-        // Content created after activation is owned by the island (its
-        // cleanups run when the island is disposed).
-        "const $show = (e, w, b) => { let d; const o = $O(); $E(() => !!w(), (on, p) => { if (p === undefined) { if (on) $R(x => { d = x; const n = e.previousSibling; b(w, n.nodeType === 1 ? n : null) }); return; } if (on === p) return; if (on) $W(o, () => $R(x => { d = x; e.before(b(w, null)); })); else { d(); d = undefined; const s = $start(e); while (s.nextSibling !== e) s.nextSibling.remove(); } }); };",
+        // Adopts the server's content (or creates it in fresh content, whose
+        // region is an empty marker pair). Content created after activation
+        // is owned by the island (its cleanups run when the island is
+        // disposed).
+        "const $show = (e, w, b) => { let d; const o = $O(); $E(() => !!w(), (on, p) => { if (p === undefined) { if (on) $R(x => { d = x; const n = e.previousSibling; n.nodeType === 1 ? b(w, n) : e.before(b(w, null)); }); return; } if (on === p) return; if (on) $W(o, () => $R(x => { d = x; e.before(b(w, null)); })); else { d(); d = undefined; const s = $start(e); while (s.nextSibling !== e) s.nextSibling.remove(); } }); };",
+    ),
+    (
+        "$showf",
+        // A `Show` with a fallback: either branch is adopted at activation
+        // (an element, or the text of a string fallback), and each flip
+        // disposes one branch and builds the other (owned by the island).
+        "const $showf = (e, w, b, f) => { let d; const o = $O(); const mk = (g, a) => $R(x => { d = x; const n = g(w, a); a || e.before(n); }); $E(() => !!w(), (on, p) => { if (p === undefined) { const n = e.previousSibling; mk(on ? b : f, n.nodeType === 8 && n.data === \"$\" ? null : n); return; } if (on === p) return; d(); const s = $start(e); while (s.nextSibling !== e) s.nextSibling.remove(); $W(o, () => mk(on ? b : f, null)); }); };",
     ),
     (
         "$list",
         // Keyed rows; `plain` rows create no reactive work, so they get no root.
         // The input is copied in the compute (a store array tracks its items).
-        "const $list = (e, each, row, plain) => { let rows = new Map(); const o = $O(); const mk = plain ? (it, n) => ({ n: row(it, n) }) : (it, n) => $W(o, () => $R(d => ({ n: row(it, n), d }))); $E(() => { const l = each(); return l ? Array.from(l) : []; }, (items, p) => { if (p === undefined) { let n = $start(e).nextSibling; for (const it of items) { while (n.nodeType !== 1) n = n.nextSibling; const r = mk(it, n); rows.set(it, r); n = r.n.nextSibling; } return; } const next = new Map(); for (const it of items) next.set(it, rows.get(it) || mk(it, null)); for (const [it, r] of rows) if (!next.has(it)) { r.d && r.d(); r.n.remove(); } let c = $start(e).nextSibling; for (const r of next.values()) { if (r.n === c) c = c.nextSibling; else e.parentNode.insertBefore(r.n, c); } rows = next; }); };",
+        "const $list = (e, each, row, plain) => { let rows = new Map(); const o = $O(); const mk = plain ? (it, n) => ({ n: row(it, n) }) : (it, n) => $W(o, () => $R(d => ({ n: row(it, n), d }))); $E(() => { const l = each(); return l ? Array.from(l) : []; }, (items, p) => { if (p === undefined) { let n = $start(e).nextSibling; for (const it of items) { while (n !== e && n.nodeType !== 1) n = n.nextSibling; const r = mk(it, n === e ? null : n); rows.set(it, r); if (n === e) e.before(r.n); else n = r.n.nextSibling; } return; } const next = new Map(); for (const it of items) next.set(it, rows.get(it) || mk(it, null)); for (const [it, r] of rows) if (!next.has(it)) { r.d && r.d(); r.n.remove(); } let c = $start(e).nextSibling; for (const r of next.values()) { if (r.n === c) c = c.nextSibling; else e.parentNode.insertBefore(r.n, c); } rows = next; }); };",
+    ),
+    (
+        "$listf",
+        // `$list` with a fallback: shown (adopted, or built) while the list
+        // is empty, disposed when rows arrive.
+        "const $listf = (e, each, row, plain, fb) => { let rows = new Map(), F; const o = $O(); const mk = plain ? (it, n) => ({ n: row(it, n) }) : (it, n) => $W(o, () => $R(d => ({ n: row(it, n), d }))); const fo = a => { F = $W(o, () => $R(d => ({ n: fb(a), d }))); a || e.before(F.n); }; $E(() => { const l = each(); return l ? Array.from(l) : []; }, (items, p) => { if (p === undefined) { let n = $start(e).nextSibling; if (!items.length) return fo(n === e ? null : n); for (const it of items) { while (n !== e && n.nodeType !== 1) n = n.nextSibling; const r = mk(it, n === e ? null : n); rows.set(it, r); if (n === e) e.before(r.n); else n = r.n.nextSibling; } return; } if (F && items.length) { F.d(); F.n.remove(); F = undefined; } const next = new Map(); for (const it of items) next.set(it, rows.get(it) || mk(it, null)); for (const [it, r] of rows) if (!next.has(it)) { r.d && r.d(); r.n.remove(); } let c = $start(e).nextSibling; for (const r of next.values()) { if (r.n === c) c = c.nextSibling; else e.parentNode.insertBefore(r.n, c); } rows = next; if (!items.length && !F) fo(null); }); };",
+    ),
+    (
+        "$listi",
+        // Keyed rows whose callback takes the index: each row owns an index
+        // signal, written when the row moves.
+        "const $listi = (e, each, row, fb) => { let rows = new Map(), F; const o = $O(); const mk = (it, j, n) => $W(o, () => $R(d => { const [g, s] = $S(j); return { n: row(it, n, g), d, s }; })); const fo = a => { F = $W(o, () => $R(d => ({ n: fb(a), d }))); a || e.before(F.n); }; $E(() => { const l = each(); return l ? Array.from(l) : []; }, (items, p) => { if (p === undefined) { let n = $start(e).nextSibling; if (!items.length) return fb && fo(n === e ? null : n); items.forEach((it, j) => { while (n !== e && n.nodeType !== 1) n = n.nextSibling; const r = mk(it, j, n === e ? null : n); rows.set(it, r); if (n === e) e.before(r.n); else n = r.n.nextSibling; }); return; } if (F && items.length) { F.d(); F.n.remove(); F = undefined; } const next = new Map(); items.forEach((it, j) => { const r = rows.get(it); if (r) r.s(j); next.set(it, r || mk(it, j, null)); }); for (const [it, r] of rows) if (!next.has(it)) { r.d(); r.n.remove(); } let c = $start(e).nextSibling; for (const r of next.values()) { if (r.n === c) c = c.nextSibling; else e.parentNode.insertBefore(r.n, c); } rows = next; if (!items.length && fb && !F) fo(null); }); };",
+    ),
+    (
+        "$listu",
+        // `keyed={false}` rows, by position: each row owns its item's signal
+        // (written when the item at its position changes); rows are added
+        // and removed at the end.
+        "const $listu = (e, each, row, fb) => { let rows = [], F; const o = $O(); const mk = (it, j, n) => $W(o, () => $R(d => { const [g, s] = $S([it]); const r = { v: it, d, s }; r.n = row(() => g()[0], n, j); return r; })); const fo = a => { F = $W(o, () => $R(d => ({ n: fb(a), d }))); a || e.before(F.n); }; $E(() => { const l = each(); return l ? Array.from(l) : []; }, (items, p) => { if (p === undefined) { let n = $start(e).nextSibling; if (!items.length) return fb && fo(n === e ? null : n); items.forEach((it, j) => { while (n !== e && n.nodeType !== 1) n = n.nextSibling; const r = mk(it, j, n === e ? null : n); rows.push(r); if (n === e) e.before(r.n); else n = r.n.nextSibling; }); return; } if (F && items.length) { F.d(); F.n.remove(); F = undefined; } items.forEach((it, j) => { if (j < rows.length) { const r = rows[j]; if (r.v !== it) { r.v = it; r.s([it]); } } else { const r = mk(it, j, null); rows.push(r); e.before(r.n); } }); while (rows.length > items.length) { const r = rows.pop(); r.d(); r.n.remove(); } if (!items.length && fb && !F) fo(null); }); };",
+    ),
+    (
+        "$sw",
+        // `<Switch>`: the first `when` that holds picks its branch (the last
+        // builder is the fallback, if any); a change of choice disposes the
+        // branch and builds the next one. At activation the server's branch
+        // (an element, or a string fallback's text) is adopted.
+        "const $sw = (e, ws, bs) => { let d; const o = $O(); const mk = (i, a) => { const b = bs[i < 0 ? ws.length : i]; if (b) $W(o, () => $R(x => { d = x; const n = b(ws[i], a); a || e.before(n); })); }; $E(() => { for (let i = 0; i < ws.length; i++) if (ws[i]()) return i; return -1; }, (i, p) => { if (p === undefined) { const n = e.previousSibling; return mk(i, n.nodeType === 8 && n.data === \"$\" ? null : n); } if (i === p) return; if (d) { d(); d = undefined; } const s = $start(e); while (s.nextSibling !== e) s.nextSibling.remove(); mk(i, null); }); };",
+    ),
+    (
+        "$portal",
+        // `<Portal>`: content built on the client, appended to its mount,
+        // removed with its owner.
+        "const $portal = (m, b) => { const n = b(null); m.appendChild(n); $C(() => n.remove()); };",
     ),
     (
         "$err",
@@ -289,6 +347,32 @@ const HELPERS: &[(&str, &str)] = &[
         // Structural rows (a `<For>` over server data inside an island): the
         // server's row elements, in order, each activated by `row(item, node)`.
         "const $rows = (e, l, row) => { let n = $start(e).nextSibling; if (l) for (const it of l) { while (n.nodeType !== 1) n = n.nextSibling; row(it, n); n = n.nextSibling; } };",
+    ),
+    (
+        "$ld",
+        // A client pending boundary (a `<Loading>` the client creates over
+        // async state): the content's activation runs inside it; while it is
+        // pending the content is detached (kept, still bound) and the
+        // fallback shows.
+        "const $ld = (e, content, fb) => { let kept, shown; const acc = $$createLoadingBoundary(() => ($U(content), 1), () => 0); $E(acc, v => { if (v === 1) { if (kept) { shown.remove(); for (const n of kept) e.before(n); kept = shown = undefined; } return; } if (!kept) { kept = []; for (let n = $start(e).nextSibling; n !== e; n = n.nextSibling) kept.push(n); for (const n of kept) n.remove(); shown = fb(); e.before(shown); } }); };",
+    ),
+    (
+        "$dg",
+        // Delegated handlers (`node.$$type = h`, Solid's protocol): one
+        // listener per event type on the document (`document.$$E` lists the
+        // types), walking from the target up as Solid's `eventHandler` does
+        // (`$$typeData`, `handleEvent`, disabled nodes skipped) and stopping
+        // at `stopPropagation`. It is an outer delegation root: where a
+        // Solid root below already walked the event (a hydrated fallback
+        // module, its portals: `_$SOLID_EVENT_OWNER`), it resumes above that
+        // root, so no handler runs twice. The islands loader's capture
+        // listener runs first and stops an event whose islands are not
+        // active yet (activate, then replay: the replay reaches this one).
+        DELEGATE,
+    ),
+    (
+        "$ref",
+        "const $ref = (r, e) => Array.isArray(r) ? r.flat(Infinity).forEach(f => f && f(e)) : r(e);",
     ),
     (
         "$cls",
@@ -314,13 +398,22 @@ pub(crate) const CORE_ONLY: &[&str] = &[
     "createLoadingBoundary",
 ];
 
+/// The `$dg` helper (see `HELPERS`).
+pub(crate) const DELEGATE: &str = "const $dg = t => { const D = (self.$$D ||= e => { let n = e.target, p = e._$SOLID_EVENT_OWNER; const k = \"$$\" + e.type; if (p) { if (p === true || !document.contains(p)) return; n = p === n ? p.parentNode : p; } Object.defineProperty(e, \"currentTarget\", { configurable: true, get: () => n || document }); for (; n; n = n.parentNode) { const h = n[k]; if (h && !n.disabled) { const d = n[k + \"Data\"]; d !== undefined ? h.call(n, d, e) : typeof h === \"function\" ? h.call(n, e) : h.handleEvent(e); if (e.cancelBubble) return; } } }), s = (document.$$E ||= new Set()); for (const x of t) s.has(x) || (s.add(x), document.addEventListener(x, D)); };";
+
 fn helper_deps(h: &str) -> &'static [&'static str] {
     match h {
         "$tx" => &["$s"],
         "$show" => &["$start"],
         "$list" => &["$start"],
+        "$showf" => &["$start"],
+        "$listf" => &["$start"],
+        "$listi" => &["$start"],
+        "$listu" => &["$start"],
+        "$sw" => &["$start"],
         "$err" => &["$start"],
         "$rows" => &["$start"],
+        "$ld" => &["$start"],
         _ => &[],
     }
 }
@@ -377,11 +470,13 @@ pub(crate) fn emit_group<'a>(
         cur: 0,
         uid: 0,
         helpers: BTreeSet::new(),
+        events: BTreeSet::new(),
         rt: BTreeSet::new(),
         core: BTreeSet::new(),
         t2: g.tier >= 2 || core,
         top_syms: BTreeSet::new(),
         templates: Vec::new(),
+        ns: 0,
         settled: Vec::new(),
         serial: Vec::new(),
         lazy_ok: true,
@@ -1145,7 +1240,10 @@ impl<'x, 'a> Ce<'x, 'a> {
                 "createRenderEffect as $E".to_string(),
                 "flush as $F".to_string(),
             ];
-            if self.helpers.contains("$list") || self.helpers.contains("$show") {
+            if ["$list", "$show", "$listf", "$showf", "$listi", "$listu", "$sw"]
+                .iter()
+                .any(|h| self.helpers.contains(h))
+            {
                 names.push("getOwner as $O".into());
                 names.push("runWithOwner as $W".into());
             }
@@ -1196,8 +1294,15 @@ impl<'x, 'a> Ce<'x, 'a> {
                 out.push('\n');
             }
         }
-        for (i, t) in self.templates.iter().enumerate() {
-            let _ = writeln!(out, "const $t{i} = $tpl({});", js_str(t));
+        for (i, (t, w)) in self.templates.iter().enumerate() {
+            match w {
+                Some(w) => {
+                    let _ = writeln!(out, "const $t{i} = $tplw({}, {});", js_str(t), js_str(w));
+                }
+                None => {
+                    let _ = writeln!(out, "const $t{i} = $tpl({});", js_str(t));
+                }
+            }
         }
         let data = if serial.is_empty() {
             String::new()
@@ -1311,6 +1416,15 @@ impl<'x, 'a> Ce<'x, 'a> {
             None => ("$a", String::new(), String::new()),
         };
         let st_in = if tier == 0 || self.transplant.is_none() { st_in } else { String::new() };
+        // The page-level listeners of the island's delegated handlers.
+        let data = if self.events.is_empty() {
+            data
+        } else {
+            format!(
+                "$dg([{}]);\n{data}",
+                self.events.iter().map(|e| js_str(e)).collect::<Vec<_>>().join(", ")
+            )
+        };
         if tier == 0 {
             let _ = write!(
                 out,
@@ -2340,15 +2454,26 @@ impl<'x, 'a> Ce<'x, 'a> {
         let comp = self.insts[inst].comp;
         match jsx::tag_of(self.m, &el.opening_element.name) {
             Tag::Intrinsic(_) => out.push(Slot::Elem(el, inst)),
-            Tag::Builtin(b) if b == "Show" || b == "For" => {
+            Tag::Builtin(b) if b == "Portal" => out.push(Slot::Portal(el, inst)),
+            Tag::Builtin(b) if b == "Show" || b == "For" || b == "Switch" => {
                 let attrs = jsx::attrs(el)?;
                 let input = if b == "Show" { "when" } else { "each" };
-                let (live, mine) = match jsx::attr(&attrs, input).map(|a| &a.value) {
-                    Some(AttrVal::Expr(e)) => (
-                        self.a.is_live_site(comp, e.span().start),
-                        !self.site_other(comp, e.span().start, &format!("a <{b}>"))?,
+                // The region's site: its input expression (a `Switch`'s
+                // element).
+                let key = if b == "Switch" {
+                    Some(el.span.start)
+                } else {
+                    match jsx::attr(&attrs, input).map(|a| &a.value) {
+                        Some(AttrVal::Expr(e)) => Some(e.span().start),
+                        _ => None,
+                    }
+                };
+                let (live, mine) = match key {
+                    Some(k) => (
+                        self.a.is_live_site(comp, k),
+                        !self.site_other(comp, k, &format!("a <{b}>"))?,
                     ),
-                    _ => (false, true),
+                    None => (false, true),
                 };
                 if live && !mine {
                     // Another island's region: its DOM is that island's. A
@@ -2377,7 +2502,14 @@ impl<'x, 'a> Ce<'x, 'a> {
                     out.push(Slot::Opaque(sh.0, sh.1));
                 }
             }
-            Tag::Builtin(b) if b == "Errored" && self.t2 && self.boundary_live(comp, el) => {
+            Tag::Builtin(b)
+                if (b == "Errored" && self.t2 && self.boundary_live(comp, el))
+                    || (b == "Loading"
+                        && self.a.pending_boundaries.contains(&(comp, el.span.start))) =>
+            {
+                if !self.t2 {
+                    return Err("a client pending boundary below tier 2".into());
+                }
                 // Its content activates inside a client error boundary: a
                 // scope of its own (the members it renders set up there),
                 // adopted or fresh as its enclosing scope is.
@@ -2638,6 +2770,26 @@ impl<'x, 'a> Ce<'x, 'a> {
         match jsx::tag_of(self.m, &el.opening_element.name) {
             Tag::Intrinsic(_) => (Some(1), Some(0)),
             Tag::Comp(k) => self.shape_comp(k, depth),
+            Tag::Builtin(b) if b == "Portal" => (Some(0), Some(0)),
+            Tag::Builtin(b) if b == "Switch" => {
+                if self.a.is_live_site(comp, el.span.start) {
+                    (None, Some(1))
+                } else {
+                    // Inert: one branch's content, in place.
+                    let mut pairs = Some(0);
+                    if let Ok(ks) = jsx::children(&el.children) {
+                        for k in &ks {
+                            if let Child::Element(mel) = k
+                                && let Ok(mk) = jsx::children(&mel.children)
+                                && self.shape_kids(&mk, comp, depth + 1).1 != Some(0)
+                            {
+                                pairs = None;
+                            }
+                        }
+                    }
+                    (None, pairs)
+                }
+            }
             Tag::Builtin(b) if b == "Show" || b == "For" => {
                 let live = jsx::attrs(el).ok().is_some_and(|attrs| {
                     matches!(jsx::attr(&attrs, if b == "Show" { "when" } else { "each" }).map(|a| &a.value),
@@ -2744,6 +2896,7 @@ impl<'x, 'a> Ce<'x, 'a> {
             Slot::Region(_, _, live) => (None, Some(usize::from(*live))),
             Slot::Struct(..) => (None, Some(1)),
             Slot::Opaque(e, p) => (*e, *p),
+            Slot::Portal(..) => (Some(0), Some(0)),
             // Its content's elements, in place; one marker pair around it.
             Slot::Boundary(_, _, bi) => (
                 self.bounds[*bi]
@@ -2957,6 +3110,7 @@ impl<'x, 'a> Ce<'x, 'a> {
                     r?;
                     self.boundary(el, inst, bscope, end)?;
                 }
+                Slot::Portal(el, inst) => self.portal(el, inst)?,
                 Slot::Text | Slot::Opaque(..) => {}
             }
         }
@@ -3015,11 +3169,17 @@ impl<'x, 'a> Ce<'x, 'a> {
             rest.push_str(&self.assemble(bscope, i));
         }
         let fb = self.error_fallback(el, inst)?;
-        self.helpers.insert("$err");
-        self.core.insert("createErrorBoundary".into());
+        let loading = matches!(jsx::tag_of(self.m, &el.opening_element.name), Tag::Builtin(ref b) if b == "Loading");
+        let (helper, ctor) = if loading {
+            ("$ld", "createLoadingBoundary")
+        } else {
+            ("$err", "createErrorBoundary")
+        };
+        self.helpers.insert(helper);
+        self.core.insert(ctor.into());
         self.rt.insert("untrack");
         self.bucket(inst).seq.push(Seq::Line(format!(
-            "$err({end}, () => {{\n{nav}\n{body}{rest}}}, {fb});"
+            "{helper}({end}, () => {{\n{nav}\n{body}{rest}}}, {fb});"
         )));
         Ok(())
     }
@@ -3034,10 +3194,16 @@ impl<'x, 'a> Ce<'x, 'a> {
                 Some(AttrVal::Str(s)) => {
                     return Ok(format!("() => document.createTextNode({})", js_str(s)));
                 }
+                Some(AttrVal::Expr(e)) if matches!(jsx::root_of(e), Some(Root::Element(_))) => {
+                    let Some(Root::Element(r)) = jsx::root_of(e) else {
+                        unreachable!()
+                    };
+                    (r, Vec::new())
+                }
                 Some(AttrVal::Expr(e)) => {
                     let Some(f) = FnRef::from_expr(e) else {
                         return Err(
-                            "an <Errored> fallback that is not JSX or a render callback".into()
+                            "a boundary fallback that is not JSX or a render callback".into()
                         );
                     };
                     let Some(Root::Element(r)) = fn_root(f) else {
@@ -3089,10 +3255,7 @@ impl<'x, 'a> Ce<'x, 'a> {
         let comp = self.insts[inst].comp;
         let was = std::mem::replace(&mut self.in_fallback, true);
         let r = (|| -> R<(usize, String, String)> {
-            let tpl = self.template_html(root, comp)?;
-            let ti = self.templates.len();
-            self.templates.push(tpl);
-            self.helpers.insert("$tpl");
+            let ti = self.push_template(root, comp)?;
             self.element(root, inst, "$x")?;
             let body = self.assemble(self.cur, inst);
             let nav = self.scopes[self.cur].nav.join("\n");
@@ -3201,6 +3364,7 @@ impl<'x, 'a> Ce<'x, 'a> {
         };
         let attrs = jsx::attrs(el)?;
         let fresh = self.scopes[self.cur].builder;
+        let ns = self.ns_of(&tag);
         let none = HashMap::new();
         // An island frame's region: the driver refetches it when the server
         // call's arguments change (its content is server HTML: not walked).
@@ -3214,6 +3378,33 @@ impl<'x, 'a> Ce<'x, 'a> {
             self.frame_driver(inst, fi, var)?;
             return Ok(());
         }
+        // `ref` first (the DOM compiler runs it ahead of the element's other
+        // expressions): a setup local is assigned, anything else is called.
+        // Only this island's refs (another island rooted in the same
+        // component binds its own).
+        for at in &attrs {
+            if at.name != "ref" {
+                continue;
+            }
+            let AttrVal::Expr(e) = &at.value else {
+                continue;
+            };
+            if self.site_other(comp, e.span().start, "a ref")? {
+                continue;
+            }
+            self.helpers.insert("$ref");
+            let v = self.expr(inst, &none, e)?;
+            let lval = matches!(
+                e.without_parentheses(),
+                Expression::Identifier(_) | Expression::StaticMemberExpression(_)
+            ) && super::graph::ref_target(self.m, &self.m.comps[comp], e).is_some();
+            let line = if lval {
+                format!("typeof {v} === \"function\" ? $ref({v}, {var}) : ({v} = {var});")
+            } else {
+                format!("$ref({v}, {var});")
+            };
+            self.bucket(inst).handlers.push(line);
+        }
         for at in &attrs {
             let AttrVal::Expr(e) = &at.value else {
                 continue;
@@ -3224,9 +3415,20 @@ impl<'x, 'a> Ce<'x, 'a> {
                 }
                 let h = self.expr(inst, &none, e)?;
                 let ev = jsx::event_name(&at.name);
-                self.bucket(inst)
-                    .handlers
-                    .push(format!("{var}.addEventListener({}, {h});", js_str(&ev)));
+                // Solid's delegated events are delegated (one page-level
+                // listener per event type, `$dg`): a click reaching nested
+                // islands runs all their handlers in one listener, so the
+                // page flushes once. Other events (non-bubbling ones among
+                // them) keep a listener on the element, as in Solid.
+                let line = if crate::shared::constants::delegated_events(&ev) {
+                    self.helpers.insert("$dg");
+                    let line = format!("{var}.$${ev} = {h};");
+                    self.events.insert(ev);
+                    line
+                } else {
+                    format!("{var}.addEventListener({}, {h});", js_str(&ev))
+                };
+                self.bucket(inst).handlers.push(line);
                 continue;
             }
             if jsx::static_child(e).is_some() || at.name == "ref" {
@@ -3239,13 +3441,18 @@ impl<'x, 'a> Ce<'x, 'a> {
             if !live && !fresh {
                 continue;
             }
-            self.attr_parts(&tag, &at.name, e, inst, var, live)?;
+            self.attr_parts(&tag, &at.name, e, inst, var, live, ns)?;
         }
         let kids = jsx::children(&el.children)?;
-        let mut slots = Vec::new();
-        self.flatten(&kids, inst, &mut slots)?;
-        self.container(Some(var.to_string()), &slots)?;
-        Ok(())
+        let saved_ns = self.ns;
+        self.ns = if tag == "foreignObject" { 0 } else { ns };
+        let r = (|| {
+            let mut slots = Vec::new();
+            self.flatten(&kids, inst, &mut slots)?;
+            self.container(Some(var.to_string()), &slots)
+        })();
+        self.ns = saved_ns;
+        r
     }
 
     /// An island frame's driver: computes the server call's arguments (the
@@ -3322,6 +3529,7 @@ impl<'x, 'a> Ce<'x, 'a> {
             .collect()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn attr_parts(
         &mut self,
         tag: &str,
@@ -3330,6 +3538,7 @@ impl<'x, 'a> Ce<'x, 'a> {
         inst: usize,
         var: &str,
         live: bool,
+        ns: u8,
     ) -> R<()> {
         let none = HashMap::new();
         let cells = self.cells_of(inst, e);
@@ -3395,7 +3604,13 @@ impl<'x, 'a> Ce<'x, 'a> {
             }
             self.helpers.insert("$cls");
             let c = self.expr(inst, &none, e)?;
-            push(self, format!("$cls({c})"), format!("{var}.className = v"));
+            // An SVG / MathML element's `className` is not a string.
+            let apply = if ns == 0 {
+                format!("{var}.className = v")
+            } else {
+                format!("{var}.setAttribute(\"class\", v)")
+            };
+            push(self, format!("$cls({c})"), apply);
             return Ok(());
         }
         if name == "style" {
@@ -3436,8 +3651,19 @@ impl<'x, 'a> Ce<'x, 'a> {
             return Err("a non-literal `style` object in an island".into());
         }
         let c = self.expr(inst, &none, e)?;
-        if is_prop_attr(tag, name) {
+        if ns == 0 && is_prop_attr(tag, name) {
             push(self, c, format!("{var}.{name} = v"));
+        } else if let Some(local) = name.strip_prefix("xlink:") {
+            let xl = js_str("http://www.w3.org/1999/xlink");
+            push(
+                self,
+                c,
+                format!(
+                    "v == null || v === false ? {var}.removeAttributeNS({xl}, {l}) : {var}.setAttributeNS({xl}, {n}, v)",
+                    l = js_str(local),
+                    n = js_str(name)
+                ),
+            );
         } else {
             let n = js_str(name);
             push(
@@ -3523,17 +3749,176 @@ impl<'x, 'a> Ce<'x, 'a> {
         Ok(())
     }
 
+    /// A `Show` / `Match` branch's content: its markup children, or its
+    /// render callback's markup (the parameter is the `when` accessor).
+    fn branch_content(
+        &self,
+        attrs: &[jsx::Attr<'a>],
+        kids: Vec<Child<'a>>,
+        what: &str,
+    ) -> R<(Vec<Child<'a>>, Option<SymbolId>)> {
+        match kids.as_slice() {
+            [Child::Expr(e)] if FnRef::from_expr(e).is_some() => {
+                if jsx::attr(attrs, "keyed").is_some() {
+                    return Err(format!("a live keyed <{what}> with a render callback"));
+                }
+                let f = FnRef::from_expr(e).unwrap();
+                let p = f.params().items.first().and_then(|p| match &p.pattern {
+                    BindingPattern::BindingIdentifier(id) => id.symbol_id.get(),
+                    _ => None,
+                });
+                let Some(root) = fn_root(f) else {
+                    return Err(format!("a live <{what}> render callback must return JSX"));
+                };
+                let child = match root {
+                    Root::Element(e) => Child::Element(e),
+                    Root::Fragment(fr) => Child::Fragment(fr),
+                };
+                Ok((vec![child], p))
+            }
+            _ if kids
+                .iter()
+                .any(|k| matches!(k, Child::Expr(e) if FnRef::from_expr(e).is_some())) =>
+            {
+                Err(format!(
+                    "a live <{what}> with a render callback among other children"
+                ))
+            }
+            _ => Ok((kids, None)),
+        }
+    }
+
+    /// A live region's fallback: built on the client from its JSX (or its
+    /// text) when the region empties, adopted at activation when the server
+    /// showed it.
+    fn region_fallback(
+        &mut self,
+        attrs: &[jsx::Attr<'a>],
+        inst: usize,
+        head: &str,
+    ) -> R<Option<String>> {
+        Ok(match jsx::attr(attrs, "fallback").map(|a| &a.value) {
+            None => None,
+            Some(AttrVal::Expr(e))
+                if matches!(e.without_parentheses(), Expression::NullLiteral(_))
+                    || matches!(e.without_parentheses(), Expression::Identifier(id) if id.name == "undefined") =>
+            {
+                None
+            }
+            Some(v) => {
+                let not_markup =
+                    "a live <Show>/<For>/<Switch> fallback that is not an element or a string";
+                Some(match v {
+                    AttrVal::Str(t) => {
+                        format!("{head} => $e || document.createTextNode({})", js_str(t))
+                    }
+                    AttrVal::Element(e) => self.builder(vec![Child::Element(e)], inst, head)?,
+                    AttrVal::Expr(e) => match jsx::root_of(e) {
+                        Some(Root::Element(x)) => {
+                            self.builder(vec![Child::Element(x)], inst, head)?
+                        }
+                        _ => return Err(not_markup.into()),
+                    },
+                    _ => return Err(not_markup.into()),
+                })
+            }
+        })
+    }
+
+    /// A render parameter's client name, bound in the instance.
+    fn bind_param(&mut self, inst: usize, p: Option<SymbolId>, kind: Kind) -> Option<String> {
+        p.map(|p| {
+            let n = format!("{}{}", self.m.sym_name(p), self.fresh("$"));
+            self.insts[inst].names.insert(p, (n.clone(), kind));
+            n
+        })
+    }
+
+    /// A live `<Switch>`: one region showing the first `<Match>` whose `when`
+    /// holds (adopted at activation, rebuilt when the choice changes).
+    fn switch_region(&mut self, el: &'a JSXElement<'a>, inst: usize, end: String) -> R<()> {
+        let attrs = jsx::attrs(el)?;
+        let none = HashMap::new();
+        let mut whens = Vec::new();
+        let mut builders = Vec::new();
+        let saved_stmt = std::mem::replace(&mut self.stmt_in_region, false);
+        for k in jsx::children(&el.children)? {
+            let Child::Element(mel) = k else {
+                return Err("a <Switch> child other than a <Match>".into());
+            };
+            let mattrs = jsx::attrs(mel)?;
+            let Some(AttrVal::Expr(we)) = jsx::attr(&mattrs, "when").map(|a| &a.value) else {
+                return Err("<Match> without `when`".into());
+            };
+            whens.push(format!("() => {}", self.expr(inst, &none, we)?));
+            let kids = jsx::children(&mel.children)?;
+            let (content, param) = self.branch_content(&mattrs, kids, "Match")?;
+            let head = match self.bind_param(inst, param, Kind::Acc) {
+                Some(n) => format!("({n}, $e)"),
+                None => "(_, $e)".to_string(),
+            };
+            builders.push(self.builder(content, inst, &head)?);
+        }
+        if let Some(fb) = self.region_fallback(&attrs, inst, "(_, $e)")? {
+            builders.push(fb);
+        }
+        let stmt_here = self.stmt_in_region;
+        self.stmt_in_region = saved_stmt || stmt_here;
+        self.helpers.insert("$sw");
+        let line = format!(
+            "$sw({end}, [{}], [{}]);",
+            whens.join(", "),
+            builders.join(", ")
+        );
+        self.bucket(inst).seq.push(Seq::Line(line));
+        Ok(())
+    }
+
+    /// A `<Portal>`: its content is built on the client (the server rendered
+    /// nothing) and appended to its mount (`document.body` by default).
+    fn portal(&mut self, el: &'a JSXElement<'a>, inst: usize) -> R<()> {
+        if self.tier == 0 {
+            return Err("a <Portal> at tier 0".into());
+        }
+        let comp = self.insts[inst].comp;
+        let attrs = jsx::attrs(el)?;
+        let none = HashMap::new();
+        let mount = match jsx::attr(&attrs, "mount").map(|a| &a.value) {
+            Some(AttrVal::Expr(e)) => {
+                let r = super::graph::refs_expr(self.m, self.m.comps[comp].props, e);
+                if !self.a.live_reads(comp, &r).0.is_empty() {
+                    return Err("a <Portal> whose mount reads live state".into());
+                }
+                self.expr(inst, &none, e)?
+            }
+            _ => "document.body".into(),
+        };
+        let kids = jsx::children(&el.children)?;
+        // Built fresh, in its own scope (a builder called with no node).
+        let saved_ns = std::mem::replace(&mut self.ns, 0);
+        let builder = self.builder(kids, inst, "($e)");
+        self.ns = saved_ns;
+        let builder = builder?;
+        self.helpers.insert("$portal");
+        self.rt.insert("onCleanup");
+        self.bucket(inst)
+            .seq
+            .push(Seq::Line(format!("$portal({mount}, {builder});")));
+        Ok(())
+    }
+
     fn region(&mut self, el: &'a JSXElement<'a>, inst: usize, end: String) -> R<()> {
         if self.tier == 0 {
             return Err("dynamic structure at tier 0".into());
         }
         // A live region adopts the server's rows: its state cannot move.
         self.transplant = None;
-        let attrs = jsx::attrs(el)?;
-        let is_show = matches!(jsx::tag_of(self.m, &el.opening_element.name), Tag::Builtin(ref b) if b == "Show");
-        if jsx::attr(&attrs, "fallback").is_some() {
-            return Err("a live <Show>/<For> with a fallback".into());
+        let tag = jsx::tag_of(self.m, &el.opening_element.name);
+        if matches!(tag, Tag::Builtin(ref b) if b == "Switch") {
+            return self.switch_region(el, inst, end);
         }
+        let attrs = jsx::attrs(el)?;
+        let is_show = matches!(tag, Tag::Builtin(ref b) if b == "Show");
         let input = if is_show { "when" } else { "each" };
         let Some(AttrVal::Expr(input_expr)) = jsx::attr(&attrs, input).map(|a| &a.value) else {
             return Err("region input".into());
@@ -3541,71 +3926,126 @@ impl<'x, 'a> Ce<'x, 'a> {
         let none = HashMap::new();
         let input_text = self.expr(inst, &none, input_expr)?;
         let kids = jsx::children(&el.children)?;
-        let (content, param): (Vec<Child<'a>>, Option<SymbolId>) = if is_show {
-            match kids.as_slice() {
-                // A render callback: its parameter is the `when` accessor.
-                [Child::Expr(e)] if FnRef::from_expr(e).is_some() => {
-                    if jsx::attr(&attrs, "keyed").is_some() {
-                        return Err("a live keyed <Show> with a render callback".into());
-                    }
-                    let f = FnRef::from_expr(e).unwrap();
-                    let p = f.params().items.first().and_then(|p| match &p.pattern {
-                        BindingPattern::BindingIdentifier(id) => id.symbol_id.get(),
-                        _ => None,
-                    });
-                    let Some(root) = fn_root(f) else {
-                        return Err("a live <Show> render callback must return JSX".into());
-                    };
-                    let child = match root {
-                        Root::Element(e) => Child::Element(e),
-                        Root::Fragment(fr) => Child::Fragment(fr),
-                    };
-                    (vec![child], p)
+        // `<For keyed={false}>`: rows by position (item accessor, index number).
+        let unkeyed = !is_show
+            && matches!(
+                jsx::attr(&attrs, "keyed").map(|a| &a.value),
+                Some(AttrVal::Expr(e)) if matches!(e.without_parentheses(), Expression::BooleanLiteral(b) if !b.value)
+            );
+        let (content, param, index): (Vec<Child<'a>>, Option<SymbolId>, Option<SymbolId>) =
+            if is_show {
+                let (c, p) = self.branch_content(&attrs, kids, "Show")?;
+                (c, p, None)
+            } else {
+                let [Child::Expr(f)] = kids.as_slice() else {
+                    return Err("<For> children must be one callback".into());
+                };
+                let Some(f) = FnRef::from_expr(f) else {
+                    return Err("<For> children must be a callback".into());
+                };
+                if f.params().items.len() > 2 {
+                    return Err("<For> callback with more than (item, index)".into());
                 }
-                _ if kids
-                    .iter()
-                    .any(|k| matches!(k, Child::Expr(e) if FnRef::from_expr(e).is_some())) =>
-                {
-                    return Err("a live <Show> with a render callback among other children".into());
-                }
-                _ => (kids, None),
-            }
+                let id_of = |i: usize| {
+                    f.params().items.get(i).map(|p| match &p.pattern {
+                        BindingPattern::BindingIdentifier(id) => id.symbol_id.get().ok_or(()),
+                        _ => Err(()),
+                    })
+                };
+                let p = match id_of(0) {
+                    Some(Ok(s)) => Some(s),
+                    Some(Err(())) => return Err("<For> callback with a destructured item".into()),
+                    None => None,
+                };
+                let q = match id_of(1) {
+                    Some(Ok(s)) => Some(s),
+                    Some(Err(())) => return Err("<For> callback with a destructured index".into()),
+                    None => None,
+                };
+                let Some(root) = fn_root(f) else {
+                    return Err("<For> callback must return JSX".into());
+                };
+                let child = match root {
+                    Root::Element(e) => Child::Element(e),
+                    Root::Fragment(fr) => Child::Fragment(fr),
+                };
+                (vec![child], p, q)
+            };
+        // A row's item is a value (an accessor for `keyed={false}` rows); a
+        // `Show` callback's parameter is the `when` accessor; a row's index
+        // is an accessor (a number for `keyed={false}` rows).
+        let item_kind = if is_show || unkeyed {
+            Kind::Acc
         } else {
-            let [Child::Expr(f)] = kids.as_slice() else {
-                return Err("<For> children must be one callback".into());
-            };
-            let Some(f) = FnRef::from_expr(f) else {
-                return Err("<For> children must be a callback".into());
-            };
-            if f.params().items.len() > 1 {
-                return Err("<For> callback with an index".into());
-            }
-            let p = f.params().items.first().and_then(|p| match &p.pattern {
-                BindingPattern::BindingIdentifier(id) => id.symbol_id.get(),
-                _ => None,
-            });
-            let Some(root) = fn_root(f) else {
-                return Err("<For> callback must return JSX".into());
-            };
-            let child = match root {
-                Root::Element(e) => Child::Element(e),
-                Root::Fragment(fr) => Child::Fragment(fr),
-            };
-            (vec![child], p)
+            Kind::Val
         };
-        // Builder scope.
-        let param_name = param.map(|p| {
-            let n = format!("{}{}", self.m.sym_name(p), self.fresh("$"));
-            (p, n)
-        });
-        if let Some((p, n)) = &param_name {
-            // A row's item is a value; a `Show` callback's parameter is the
-            // `when` accessor.
-            let kind = if is_show { Kind::Acc } else { Kind::Val };
-            self.insts[inst].names.insert(*p, (n.clone(), kind));
-        }
-        let saved = self.cur;
+        let param_name = self.bind_param(inst, param, item_kind);
+        let index_name = self.bind_param(inst, index, if unkeyed { Kind::Val } else { Kind::Acc });
+        // Builders take (parameter, adopted node[, index]): a row's item, a
+        // `Show`'s `when` accessor.
+        let item_arg = param_name.clone().unwrap_or_else(|| "_".into());
+        let head = match (&param_name, &index_name) {
+            (_, Some(q)) => format!("({item_arg}, $e, {q})"),
+            (Some(n), None) => format!("({n}, $e)"),
+            (None, None) if is_show || unkeyed => "(_, $e)".to_string(),
+            (None, None) => "($e)".to_string(),
+        };
         let saved_stmt = std::mem::replace(&mut self.stmt_in_region, false);
+        let builder = self.builder(content, inst, &head)?;
+        let fb_head = if is_show { "(_, $e)" } else { "($e)" };
+        let fb = self.region_fallback(&attrs, inst, fb_head)?;
+        let stmt_here = self.stmt_in_region;
+        self.stmt_in_region = saved_stmt || stmt_here;
+        let line = if is_show {
+            match fb {
+                Some(f) => {
+                    self.helpers.insert("$showf");
+                    format!("$showf({end}, () => {input_text}, {builder}, {f});")
+                }
+                None => {
+                    self.helpers.insert("$show");
+                    format!("$show({end}, () => {input_text}, {builder});")
+                }
+            }
+        } else if unkeyed || index_name.is_some() {
+            // Rows with a reactive index (or by position): each row owns a
+            // signal the list writes when the row moves (or its item changes).
+            let helper = if unkeyed { "$listu" } else { "$listi" };
+            self.helpers.insert(helper);
+            self.rt.insert("createSignal");
+            let f = fb.unwrap_or_else(|| "0".into());
+            format!("{helper}({end}, () => {input_text}, {builder}, {f});")
+        } else {
+            // A row whose code creates no computation, cleanup or nested
+            // region needs no owner of its own.
+            let reactive = [
+                "$E(", "$M(", "$C(", "$Ef(", "$S(", "$show(", "$showf(", "$list(", "$listf(",
+                "$R(", "$listi(", "$listu(", "$sw(", "$portal(",
+            ]
+            .iter()
+            .any(|k| builder.contains(k))
+                || stmt_here;
+            match fb {
+                Some(f) => {
+                    self.helpers.insert("$listf");
+                    let plain = if reactive { "0" } else { "1" };
+                    format!("$listf({end}, () => {input_text}, {builder}, {plain}, {f});")
+                }
+                None => {
+                    self.helpers.insert("$list");
+                    let plain = if reactive { "" } else { ", 1" };
+                    format!("$list({end}, () => {input_text}, {builder}{plain});")
+                }
+            }
+        };
+        self.bucket(inst).seq.push(Seq::Line(line));
+        Ok(())
+    }
+
+    /// An adopt-or-create builder `head => { … return $x; }` over fresh
+    /// content that must be one element (a component whose view is one).
+    fn builder(&mut self, content: Vec<Child<'a>>, inst: usize, head: &str) -> R<String> {
+        let saved = self.cur;
         self.scopes.push(Scope {
             nav: vec![],
             buckets: HashMap::new(),
@@ -3613,58 +4053,26 @@ impl<'x, 'a> Ce<'x, 'a> {
             builder: true,
         });
         self.cur = self.scopes.len() - 1;
+        let r = self.builder_in_scope(content, inst, head);
+        self.cur = saved;
+        r
+    }
+
+    fn builder_in_scope(&mut self, content: Vec<Child<'a>>, inst: usize, head: &str) -> R<String> {
         let mut slots = Vec::new();
         self.flatten(&content, inst, &mut slots)?;
         let elems: Vec<&Slot<'a>> = slots.iter().filter(|s| !matches!(s, Slot::Text)).collect();
         let [Slot::Elem(root_el, root_inst)] = elems.as_slice() else {
-            self.cur = saved;
             return Err("region content must be a single element".into());
         };
         let (root_el, root_inst) = (*root_el, *root_inst);
-        let tpl = self.template_html(root_el, self.insts[root_inst].comp)?;
-        let ti = self.templates.len();
-        self.templates.push(tpl);
-        self.helpers.insert("$tpl");
+        let ti = self.push_template(root_el, self.insts[root_inst].comp)?;
         self.element(root_el, root_inst, "$x")?;
         let body = self.assemble(self.cur, inst);
         let nav = self.scopes[self.cur].nav.join("\n");
-        self.cur = saved;
-        // Builders take (parameter, adopted node): a row's item, a `Show`'s
-        // `when` accessor.
-        let builder = match &param_name {
-            Some((_, n)) => format!(
-                "({n}, $e) => {{ const $f = !$e, $x = $e || $t{ti}();\n{nav}\n{body}\nreturn $x; }}"
-            ),
-            None if is_show => format!(
-                "(_, $e) => {{ const $f = !$e, $x = $e || $t{ti}();\n{nav}\n{body}\nreturn $x; }}"
-            ),
-            None => format!(
-                "($e) => {{ const $f = !$e, $x = $e || $t{ti}();\n{nav}\n{body}\nreturn $x; }}"
-            ),
-        };
-        let stmt_here = self.stmt_in_region;
-        self.stmt_in_region = saved_stmt || stmt_here;
-        let line = if is_show {
-            self.helpers.insert("$show");
-            format!("$show({end}, () => {input_text}, {builder});")
-        } else {
-            self.helpers.insert("$list");
-            // A row whose code creates no computation, cleanup or nested
-            // region needs no owner of its own.
-            let reactive = [
-                "$E(", "$M(", "$C(", "$Ef(", "$S(", "$show(", "$list(", "$R(",
-            ]
-            .iter()
-            .any(|k| builder.contains(k))
-                || stmt_here;
-            if reactive {
-                format!("$list({end}, () => {input_text}, {builder});")
-            } else {
-                format!("$list({end}, () => {input_text}, {builder}, 1);")
-            }
-        };
-        self.bucket(inst).seq.push(Seq::Line(line));
-        Ok(())
+        Ok(format!(
+            "{head} => {{ const $f = !$e, $x = $e || $t{ti}();\n{nav}\n{body}\nreturn $x; }}"
+        ))
     }
 
     /// A structural region: a `<Show>` / `<For>` over server data that holds
@@ -3797,6 +4205,43 @@ impl<'x, 'a> Ce<'x, 'a> {
         Ok(())
     }
 
+    /// The namespace of an element `tag` laid out in the current context
+    /// (`self.ns`: its parent's children's namespace).
+    fn ns_of(&self, tag: &str) -> u8 {
+        if tag == "svg" {
+            1
+        } else if tag == "math" {
+            2
+        } else if self.ns != 0 {
+            self.ns
+        } else if crate::shared::constants::svg_elements(tag) {
+            1
+        } else if crate::shared::constants::mathml_elements(tag) {
+            2
+        } else {
+            0
+        }
+    }
+
+    /// Register the client template of fresh content rooted at `el`.
+    fn push_template(&mut self, el: &'a JSXElement<'a>, comp: usize) -> R<usize> {
+        let tpl = self.template_html(el, comp)?;
+        let tag = match jsx::tag_of(self.m, &el.opening_element.name) {
+            Tag::Intrinsic(t) => t,
+            _ => return Err("template root".into()),
+        };
+        let wrap = match self.ns_of(&tag) {
+            1 if tag != "svg" => Some("svg"),
+            2 if tag != "math" => Some("math"),
+            _ => None,
+        };
+        let ti = self.templates.len();
+        self.templates.push((tpl, wrap));
+        self.helpers
+            .insert(if wrap.is_some() { "$tplw" } else { "$tpl" });
+        Ok(ti)
+    }
+
     /// Static client HTML of fresh region content: holes empty, live text
     /// holes as marker pairs, inert ones as `<!--!-->` placeholders.
     fn template_html(&mut self, el: &'a JSXElement<'a>, comp: usize) -> R<String> {
@@ -3809,12 +4254,6 @@ impl<'x, 'a> Ce<'x, 'a> {
         let Tag::Intrinsic(tag) = jsx::tag_of(self.m, &el.opening_element.name) else {
             return Err("template root".into());
         };
-        if crate::shared::constants::svg_elements(&tag)
-            || crate::shared::constants::mathml_elements(&tag)
-        {
-            // An HTML <template> would create them in the HTML namespace.
-            return Err(format!("<{tag}> (SVG / MathML) inside a live region"));
-        }
         out.push('<');
         out.push_str(&tag);
         let attrs = jsx::attrs(el)?;
@@ -3887,14 +4326,20 @@ impl<'x, 'a> Ce<'x, 'a> {
                 }
                 Child::Element(c) => match jsx::tag_of(self.m, &c.opening_element.name) {
                     Tag::Intrinsic(_) => self.tpl_el(c, comp, out)?,
-                    Tag::Builtin(b) if b == "Show" || b == "For" => {
+                    Tag::Builtin(b) if b == "Show" || b == "For" || b == "Switch" => {
                         out.push_str("<!--$--><!--/-->")
                     }
+                    // Mounted elsewhere: nothing in place.
+                    Tag::Builtin(b) if b == "Portal" => {}
                     // A client error boundary's region; an inert one is
                     // its content in place.
-                    Tag::Builtin(b) if b == "Errored" => {
+                    Tag::Builtin(b) if b == "Errored" || b == "Loading" => {
                         let ks = jsx::children(&c.children)?;
-                        let live = self.t2 && self.boundary_live(comp, c);
+                        let live = if b == "Loading" {
+                            self.a.pending_boundaries.contains(&(comp, c.span.start))
+                        } else {
+                            self.t2 && self.boundary_live(comp, c)
+                        };
                         if live {
                             out.push_str("<!--$-->");
                         }
