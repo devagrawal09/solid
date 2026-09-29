@@ -6,6 +6,7 @@ import {
 } from "./constants.js";
 import { currentOptimisticLane, ext, hasActiveOverride, ownsHold } from "./core.js";
 import { markFeature } from "./dev.js";
+import { OPTIMISTIC } from "./features.js";
 export { hasActiveOverride };
 import { enqueueSub } from "./heap.js";
 import {
@@ -198,6 +199,9 @@ export function resolveLane(el: Signal<any> | Computed<any>): OptimisticLane | u
 }
 
 export function resolveTransition(el: Signal<any> | Computed<any>): Transition | null | undefined {
+  // Overrides and lanes are the optimistic engine's (OPTIMISTIC switch):
+  // without it a node's own transaction is the answer.
+  if (!OPTIMISTIC) return el._transition;
   // An active override answers with its owner, not its lane: lanes are
   // scheduling affinity and a shared subscriber merges them across
   // transactions (#2912) — the merged root's _transition would hand this

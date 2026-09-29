@@ -434,8 +434,10 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   // Creation-time A29 (see enterStagedRead): a pass outside a flush that is
   // served a live transaction's staged value records the transaction here
   // and is staged INTO it below — "born held" — instead of committing.
-  const prevStagedEntry = stagedEntry;
-  stagedEntry = null;
+  // (Async only: the async-free runtime has no transactions, so stagedEntry
+  // is never written there and folds to null.)
+  const prevStagedEntry = __ASYNC__ ? stagedEntry : null;
+  if (__ASYNC__) stagedEntry = null;
   const oldcontext = context;
   context = el;
   el._depsTail = null;
@@ -620,8 +622,8 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   // The cast re-widens: TS narrowed `stagedEntry` to `null` at the reset
   // above and does not invalidate that across the compute call that
   // `enterStagedRead` runs under. No emitted code.
-  const bornHeld = stagedEntry as Transition | null;
-  stagedEntry = prevStagedEntry;
+  const bornHeld = __ASYNC__ ? (stagedEntry as Transition | null) : null;
+  if (__ASYNC__) stagedEntry = prevStagedEntry;
 
   // A node that died during its own pass (#3621) is dead at the end of it,
   // and the pass is void. Its owner's teardown already unlinked its deps,
@@ -987,7 +989,7 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   // A parked LANE frame is not a hold (#3662): its drain is the effect's own
   // run, not a commit — the node is neither queued nor stamped for it, and
   // the release below (for transaction zombies) leaves it parked.
-  const laneFrame = (el._config & CONFIG_LANE_FRAME) !== 0;
+  const laneFrame = __ASYNC__ && OPTIMISTIC && (el._config & CONFIG_LANE_FRAME) !== 0;
   const needsPendingCommit =
     el._pendingValue !== NOT_PENDING ||
     (!laneFrame &&
@@ -1017,8 +1019,10 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   let held =
     needsPendingCommit &&
     (!create || bornHeld !== null || (el._statusFlags & STATUS_PENDING) !== 0);
-  if (held && (!el._transition || hasOverride)) queuePendingNode(el);
+  if (held && (!__ASYNC__ || !el._transition || hasOverride)) queuePendingNode(el);
   else if (
+    // (Async only: the async-free runtime queues every held pass above.)
+    __ASYNC__ &&
     held &&
     (activeTransition === null || isOptimisticDirty) &&
     !(el._statusFlags & (STATUS_PENDING | STATUS_UNINITIALIZED))
@@ -2115,7 +2119,9 @@ export function enterStagedRead(
   // flip activeTransition under the reader that pulled it). (`el` is null for
   // a store backing served under a hold — no node, the transaction is the
   // fold's.)
-  if (el?._x?._parentSource || (context as Computed<any> | null)?._x?._parentSource) return;
+  // (Companions exist only with the verdict layer: VERDICTS switch.)
+  if (VERDICTS && (el?._x?._parentSource || (context as Computed<any> | null)?._x?._parentSource))
+    return;
   // A bookkeeping read (`spectate`) is nobody's derivation: it compares or
   // probes, and enters nothing — the boundary priming read of a born-held
   // tree must not enter the creator's pass into the hold (#3540).
@@ -2131,12 +2137,12 @@ export function enterStagedRead(
   // Verdict pulls are observations, not derivations: a latest() /
   // isPending() call from mainline must never enter a transaction (it
   // would capture the rest of the caller's synchronous block).
-  if (mainline && GlobalQueue._verdictPull) return;
+  if (VERDICTS && mainline && GlobalQueue._verdictPull) return;
   if (
     ctx._flags & REACTIVE_RECOMPUTING_DEPS &&
-    !(ctx._config & CONFIG_OPTIMISTIC) &&
+    !(OPTIMISTIC && ctx._config & CONFIG_OPTIMISTIC) &&
     (stagedEntry === null || stagedEntry === t) &&
-    (mainline || (!GlobalQueue._verdictPull && underFreshLoadingBoundary(ctx)))
+    (mainline || (!(VERDICTS && GlobalQueue._verdictPull) && underFreshLoadingBoundary(ctx)))
   ) {
     stagedEntry = t;
     return;
@@ -2234,14 +2240,16 @@ export function unflushedValue(el: Signal<any> | Computed<any>, committed = el._
     globalQueue._running ||
     el._pendingValue === NOT_PENDING ||
     el._config & CONFIG_PROMOTED ||
-    el._x?._parentSource
+    (VERDICTS && el._x?._parentSource)
   )
     return NOT_PENDING;
   // Ambient, or adopted by a transaction before any flush carried the staging
   // (CONFIG_ADOPTED_UNFLUSHED): nothing flushed is staged — the committed
   // value answers (the caller's notion of committed: a store node's backing).
   // A held node: unflushed only if rewritten since the last flush (stash).
-  if (el._transition === null || el._config & CONFIG_ADOPTED_UNFLUSHED) return committed;
+  // (The async-free runtime holds nothing in a transaction.)
+  if (!__ASYNC__ || el._transition === null || el._config & CONFIG_ADOPTED_UNFLUSHED)
+    return committed;
   return el._x === null ? NOT_PENDING : el._x._flushedStaged;
 }
 /** Held nodes rewritten since the last flush (setSignal); the flush clears
@@ -2254,7 +2262,9 @@ const promotedWrites: Array<Signal<any> | Computed<any>> = [];
  * advances after every flush, so "this tick, outside a flush" is unflushed. */
 export function unflushedOverride(el: Signal<any> | Computed<any>): boolean {
   // Companions are optimistic signals written by the engine (see unflushed).
-  return !globalQueue._running && el._x?._overrideTime === clock && !el._x?._parentSource;
+  return (
+    !globalQueue._running && el._x?._overrideTime === clock && !(VERDICTS && el._x?._parentSource)
+  );
 }
 /** Active optimistic override on an armed node (an armed slot idles at
  * NOT_PENDING; undefined = unarmed plain node). The writer's own channels —
@@ -2289,7 +2299,7 @@ export function resyncUnflushedCompanions(): void {
   unflushedStaged = false;
   // Length-guarded: the common flush has nothing here, and must allocate nothing.
   // Length-guarded: the common flush has nothing here and allocates nothing.
-  if (unflushedRewrites.length !== 0) {
+  if (__ASYNC__ && unflushedRewrites.length !== 0) {
     for (const el of unflushedRewrites) el._x!._flushedStaged = NOT_PENDING;
     unflushedRewrites.length = 0;
   }
@@ -2522,7 +2532,7 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
       // held, its own slot still armed. Fall through to serve()'s override
       // arm. Readers WITH identity are untouched: a tracked lane reader keeps
       // the override (A17), an off-lane one suspends (#3651, `overrideRead`).
-      !(hasActiveOverride(el) && el._config & CONFIG_DERIVED_OVERRIDE)
+      !(OPTIMISTIC && hasActiveOverride(el) && el._config & CONFIG_DERIVED_OVERRIDE)
     ) {
       throw owner._x?._error;
     }
@@ -2956,7 +2966,7 @@ export function heldDerivation(el: Signal<any> | Computed<any>): boolean {
     el._transition !== null &&
     activeTransition !== el._transition &&
     !(
-      (((el as FirewallSignal<any>)._firewall || el) as Computed<any>)._flags &
+      (((STORES && (el as FirewallSignal<any>)._firewall) || el) as Computed<any>)._flags &
       REACTIVE_MANUAL_WRITE
     )
   );

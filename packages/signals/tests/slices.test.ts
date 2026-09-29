@@ -30,9 +30,21 @@ describe("link-time feature switches", () => {
       "unwrapOverride(",
       "_resolveOptimistic(",
       "_cleanupLanes(",
-      "_supersedeOverride("
+      "_supersedeOverride(",
+      // Upstream's lane-frame and lane-transaction seams (resolveTransition,
+      // cancelZombieRecompute) keep lanes.ts out with the engine.
+      "function findLane(",
+      "function laneZombie("
     ],
-    VERDICTS: ["_updatePendingSignal(", "_syncCompanions(", "_latestRead("],
+    VERDICTS: [
+      "_updatePendingSignal(",
+      "_syncCompanions(",
+      "_latestRead(",
+      // Companion snaps at disposal/commit and the companion (_parentSource)
+      // tests in the staged-read path.
+      "_snapCompanions(",
+      "._parentSource"
+    ],
     STORES: [
       "CONFIG_FW_CHILDREN",
       "CONFIG_SLOT_NODE",
@@ -92,7 +104,10 @@ describe("link-time feature switches", () => {
     // semantics that no switch owns stay (A28 visibility at flush, A30
     // dependency tails, unwind-order disposal, void mid-pass disposal; see
     // treeshake.test.ts's async-free floor note).
-    expect(sliced.esm).toBeLessThan(13_800);
+    // coreFloor (2026-09-29): 13,398 — upstream's async-only seams (born
+    // held, A28 held-rewrite stash, held-pass release, companion snaps) now
+    // fold with __ASYNC__ / VERDICTS.
+    expect(sliced.esm).toBeLessThan(13_450);
   });
 
   // ---- published trees ----

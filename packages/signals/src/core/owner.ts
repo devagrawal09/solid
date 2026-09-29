@@ -31,6 +31,7 @@ import {
   registerRoot,
   unregisterRoot
 } from "./dev.js";
+import { STORES, VERDICTS } from "./features.js";
 import { clearDeps, unobserved } from "./graph.js";
 import { deleteFromHeap, insertIntoHeap, insertIntoHeapHeight, queueFor } from "./heap.js";
 import {
@@ -103,20 +104,24 @@ export function disposeChildren(node: Owner, self: boolean = false, zombie?: boo
     // edge). Snap runs after the DISPOSED flag is set so the oracle reads
     // false, and notifies subscribers still watching the companion.
     const n = node as Computed<unknown>;
-    if (n._x?._pendingSignal || n._x?._latestValueComputed) GlobalQueue._snapCompanions!(n);
+    // (Companions exist only with the verdict layer: VERDICTS switch.)
+    if (VERDICTS && (n._x?._pendingSignal || n._x?._latestValueComputed))
+      GlobalQueue._snapCompanions!(n);
     // A firewall's leaves have no lifecycle of their own, so a companion on
     // one of them outlives its source the same way (INV-9's rationale). The
     // firewall knows which leaves carry companions (CONFIG_CHILD_COMPANIONS,
     // #3038): snap them with it — the snap retires a shadow whose firewall is
     // disposed (spec O5).
-    if (n._config & CONFIG_CHILD_COMPANIONS)
+    if (VERDICTS && STORES && n._config & CONFIG_CHILD_COMPANIONS)
       n._x!._companionChildren!.forEach(GlobalQueue._snapCompanions! as (leaf: unknown) => void);
     // A pending reader parked in a transaction may be the only thing holding
     // it (#3372): its death is a completion event the transaction must be
     // re-judged for, and nothing else re-enters a parked transaction.
-    const t = n._transition;
-    if (__ASYNC__ && t && n._statusFlags & STATUS_PENDING && !wokenTransitions.includes(t))
-      (wokenTransitions.push(t), schedule());
+    if (__ASYNC__) {
+      const t = n._transition;
+      if (t && n._statusFlags & STATUS_PENDING && !wokenTransitions.includes(t))
+        (wokenTransitions.push(t), schedule());
+    }
   }
   if (self && __DEV__) clearSignals(node);
   if (self && (node as any)._fn && (node as Computed<unknown>)._x !== null)

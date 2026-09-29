@@ -1476,7 +1476,9 @@ export function runEffectHalf(block: AnyBlock, values: unknown): (() => void) | 
 }
 
 let generatorHookInstalled = false;
-const GENERATOR_FUNCTION_PROTO = Object.getPrototypeOf(function* () {});
+// Pure: a bundler that cannot prove the call side-effect free (esbuild on
+// the published tree) would otherwise keep it in every app.
+const GENERATOR_FUNCTION_PROTO = /* @__PURE__ */ Object.getPrototypeOf(function* () {});
 
 /** @internal A generator function (`function* …`), which plain APIs accept as a block body. */
 export function isGeneratorFunction(value: unknown): value is (...args: any[]) => Generator {
@@ -2419,18 +2421,24 @@ function asyncBlockError(): TypeError {
  * writes; jsx: reads only; event: everything v1 had); the v2 operations are
  * admitted only where the design allows them (generator-blocks-v2.md).
  */
-const ALLOWED: Record<Op[typeof OP], number> = {
-  read: bit(REACTIVE) | bit(JSX) | bit(EVENT) | bit(EFFECT),
-  call: bit(REACTIVE) | bit(JSX) | bit(EVENT) | bit(EFFECT),
-  wait: bit(REACTIVE) | bit(EVENT),
-  attempt: bit(REACTIVE) | bit(EVENT) | bit(EFFECT),
-  raise: bit(REACTIVE) | bit(EVENT) | bit(EFFECT),
-  write: bit(EVENT) | bit(EFFECT),
-  create: bit(COMPONENT),
-  cleanup: bit(COMPONENT) | bit(EFFECT),
-  context: bit(COMPONENT),
-  flush: bit(EVENT)
-};
+// Built by an annotated call: esbuild cannot prove the table's shifts over
+// imported-looking bindings side-effect free, and would otherwise keep it in
+// every app that bundles the published tree (the core floor included).
+const ALLOWED: Record<Op[typeof OP], number> = /* @__PURE__ */ allowedHosts();
+function allowedHosts(): Record<Op[typeof OP], number> {
+  return {
+    read: bit(REACTIVE) | bit(JSX) | bit(EVENT) | bit(EFFECT),
+    call: bit(REACTIVE) | bit(JSX) | bit(EVENT) | bit(EFFECT),
+    wait: bit(REACTIVE) | bit(EVENT),
+    attempt: bit(REACTIVE) | bit(EVENT) | bit(EFFECT),
+    raise: bit(REACTIVE) | bit(EVENT) | bit(EFFECT),
+    write: bit(EVENT) | bit(EFFECT),
+    create: bit(COMPONENT),
+    cleanup: bit(COMPONENT) | bit(EFFECT),
+    context: bit(COMPONENT),
+    flush: bit(EVENT)
+  };
+}
 function bit(host: Host): number {
   return 1 << host;
 }

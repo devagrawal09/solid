@@ -406,7 +406,9 @@ export interface MemoOptions<T> {
  * keeps its pending / error channels. One shared frozen object — compiled
  * output allocates nothing per call site.
  */
-export const syncOnly: { readonly sync: true } = Object.freeze({ sync: true } as const);
+export const syncOnly: { readonly sync: true } = /* @__PURE__ */ Object.freeze({
+  sync: true
+} as const);
 
 // Magic type that when used at sites where generic types are inferred from, will prevent those sites from being involved in the inference.
 // https://github.com/microsoft/TypeScript/issues/14829

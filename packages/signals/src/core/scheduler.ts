@@ -41,7 +41,7 @@ import {
 } from "./core.js";
 import { DEV, emitDiagnostic, GRAPH_SIZE_WARN_AT, noteFanOut, reportDiagnostic } from "./dev.js";
 import { NotReadyError } from "./error.js";
-import { OPTIMISTIC, SNAPSHOTS, STORES } from "./features.js";
+import { OPTIMISTIC, SNAPSHOTS, STORES, VERDICTS } from "./features.js";
 import { sweepDormant, trimStaleDeps } from "./graph.js";
 import { deleteFromHeap, enqueueSub, runHeap, type Heap } from "./heap.js";
 import {
@@ -91,7 +91,9 @@ export const zombieQueue: Heap = {
  * lane's effect queue, so a held lane defers it exactly as it defers every
  * other reader's. */
 function cancelZombieRecompute(el: Computed<unknown>): void {
-  if (el._flags & REACTIVE_OPTIMISTIC_DIRTY && !laneZombie(el)) return GlobalQueue._update(el);
+  // REACTIVE_OPTIMISTIC_DIRTY and lane frames are the optimistic engine's.
+  if (__ASYNC__ && OPTIMISTIC && el._flags & REACTIVE_OPTIMISTIC_DIRTY && !laneZombie(el))
+    return GlobalQueue._update(el);
   if (el._flags & REACTIVE_IN_HEAP_HEIGHT)
     el._flags &= ~(REACTIVE_IN_HEAP | REACTIVE_DIRTY | REACTIVE_CHECK | REACTIVE_OPTIMISTIC_DIRTY);
   else {
@@ -287,7 +289,8 @@ function mergeTransitionState(target: Transition, outgoing: Transition): void {
   outgoing._done = target;
   target._actions.push(...outgoing._actions);
   target._acted ||= outgoing._acted;
-  for (const lane of activeLanes) if (lane._transition === outgoing) lane._transition = target;
+  if (OPTIMISTIC)
+    for (const lane of activeLanes) if (lane._transition === outgoing) lane._transition = target;
   if (outgoing._optimisticNodes.length) {
     // Move (don't copy): the global queue's batch may still be the outgoing
     // transition, and the adoption pass in initTransition would re-push its
@@ -410,7 +413,7 @@ function stealEntangledCargo(carrier: Signal<any>[], target: Transition): boolea
     // display (A17 — its staging never notified, its revert will), so their
     // subs saw nothing and re-running one would break the silence with a
     // duplicate fire of an unchanged view.
-    if (!hasActiveOverride(node)) {
+    if (!(OPTIMISTIC && hasActiveOverride(node))) {
       node._config |= CONFIG_HELD_TRUTH;
       for (let s = node._subs; s !== null; s = s._nextSub) {
         const sub = s._sub;
@@ -1349,7 +1352,7 @@ function commitPendingNode(n: Signal<any>): void {
       n._value = n._pendingValue as any;
       n._pendingValue = NOT_PENDING;
     }
-    if (n._config & CONFIG_HAS_COMPANIONS) GlobalQueue._snapCompanions!(n);
+    if (VERDICTS && n._config & CONFIG_HAS_COMPANIONS) GlobalQueue._snapCompanions!(n);
     return;
   }
   if (n._pendingValue !== NOT_PENDING) {
@@ -1388,7 +1391,7 @@ function commitPendingNode(n: Signal<any>): void {
   else n._config |= CONFIG_INPUTS_PUBLISHED;
   if (c._x != null && (c._x._pendingFirstChild !== null || c._x._pendingDisposal !== null))
     GlobalQueue._dispose(c as Computed<unknown>, false, true);
-  if (n._config & CONFIG_HAS_COMPANIONS) GlobalQueue._snapCompanions!(n);
+  if (VERDICTS && n._config & CONFIG_HAS_COMPANIONS) GlobalQueue._snapCompanions!(n);
 }
 
 // Store commit hook (INTERNALS-STORE-STATE.md §3): installed by the store
@@ -1772,7 +1775,14 @@ export function reporterBlocksSource(
     // A LANE frame's member (#3662) is displayed until its owner's run
     // applies, and the lane's transaction is what applies it (its completion
     // runs the lane's queue): moot for that verdict, live for every other.
-    if (!t && p && p._config & CONFIG_LANE_FRAME && p._x?._optimisticLane)
+    if (
+      __ASYNC__ &&
+      OPTIMISTIC &&
+      !t &&
+      p &&
+      p._config & CONFIG_LANE_FRAME &&
+      p._x?._optimisticLane
+    )
       t = findLane(p._x._optimisticLane)._transition;
     if (!t || (t = currentTransition(t))._done === true || t === verdict) return false;
   }
@@ -1817,7 +1827,8 @@ export function reporterBlocksSource(
         current._x?._pendingSources?.has(source)
       )
         return true;
-      current = current._x?._parentSource;
+      // A companion answers for its source (verdict layer only).
+      current = VERDICTS ? current._x?._parentSource : undefined;
     }
   }
   return !!(
