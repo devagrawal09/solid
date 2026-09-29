@@ -51,7 +51,15 @@ pub(crate) struct Refs {
     pub refreshed: Vec<SymbolId>,
     /// Roots of `yield*` reads (`yield* x`, `yield* x.a.b`).
     pub yielded: Vec<SymbolId>,
+    /// Reads of the client environment (`isServer`, `typeof window`,
+    /// `window.*`, `document.*`, `navigator.*`, `toLocale*`, `Intl`,
+    /// `Date.now()`, `new Date()`, `Math.random()`): the server's value is
+    /// not the client's, so a view hole reading one is client-live.
+    pub env: Vec<String>,
 }
+
+/// Globals whose value differs between the server and the client.
+const ENV_GLOBALS: &[&str] = &["window", "document", "navigator", "Intl"];
 
 struct Walker<'m, 'a> {
     m: &'m Model<'a>,
@@ -66,13 +74,40 @@ impl<'a> Visit<'a> for Walker<'_, 'a> {
             if Some(s) == self.props {
                 self.out.props_bare = true;
             } else {
+                if self.m.runtime.get(&s).is_some_and(|n| n == "isServer") {
+                    self.out.env.push("isServer".into());
+                }
                 self.out.syms.push((s, self.cond > 0));
             }
+        } else if ENV_GLOBALS.contains(&id.name.as_str()) {
+            self.out.env.push(id.name.to_string());
         }
+    }
+    fn visit_new_expression(&mut self, e: &oxc_ast::ast::NewExpression<'a>) {
+        if let Expression::Identifier(id) = &e.callee
+            && id.name == "Date"
+            && self.m.symbol_of(id).is_none()
+            && e.arguments.is_empty()
+        {
+            self.out.env.push("new Date()".into());
+        }
+        walk::walk_new_expression(self, e);
     }
     fn visit_static_member_expression(&mut self, e: &StaticMemberExpression<'a>) {
         if e.property.name == "preventDefault" {
             self.out.prevent_default = true;
+        }
+        if e.property.name.starts_with("toLocale") {
+            self.out.env.push(format!(".{}()", e.property.name));
+        }
+        if let Expression::Identifier(id) = &e.object
+            && self.m.symbol_of(id).is_none()
+            && matches!(
+                (id.name.as_str(), e.property.name.as_str()),
+                ("Date", "now") | ("Math", "random")
+            )
+        {
+            self.out.env.push(format!("{}.{}()", id.name, e.property.name));
         }
         if let Expression::Identifier(id) = &e.object
             && self.props.is_some()
@@ -674,6 +709,12 @@ pub(crate) struct Analysis<'a> {
     pub structural: HashMap<(usize, u32), usize>,
     pub callers: Vec<BTreeSet<usize>>,
     pub issues: Vec<String>,
+    /// Setup bindings whose value reads the client environment.
+    pub env_syms: HashMap<SymbolId, String>,
+    /// Props a caller passes a client-environment value to.
+    pub env_props: HashMap<(usize, String), String>,
+    /// View sites that read the client environment (client-live).
+    pub env_sites: HashMap<(usize, usize), String>,
 }
 
 impl<'a> Analysis<'a> {
@@ -734,6 +775,38 @@ impl<'a> Analysis<'a> {
             out.extend(av.reads.into_iter().filter(|k| self.live.contains(k)));
         }
         (out, cond)
+    }
+    /// The client-environment read a site's expression depends on, if any
+    /// (directly, through a setup binding, or through a prop).
+    pub(crate) fn env_of(&self, comp: usize, r: &Refs) -> Option<String> {
+        if let Some(e) = r.env.first() {
+            return Some(e.clone());
+        }
+        for (s, _) in &r.syms {
+            if let Some(e) = self.env_syms.get(s) {
+                return Some(e.clone());
+            }
+        }
+        for (p, _) in &r.props {
+            if let Some(e) = self.env_props.get(&(comp, p.clone())) {
+                return Some(e.clone());
+            }
+        }
+        if r.props_bare {
+            for ((c, _), e) in &self.env_props {
+                if *c == comp {
+                    return Some(e.clone());
+                }
+            }
+        }
+        None
+    }
+    /// Is the site at `span_start` a client-environment read?
+    pub(crate) fn is_env_site(&self, comp: usize, span_start: u32) -> bool {
+        self.facts[comp]
+            .site_at
+            .get(&span_start)
+            .is_some_and(|i| self.env_sites.contains_key(&(comp, *i)))
     }
     pub(crate) fn is_live_site(&self, comp: usize, span_start: u32) -> bool {
         self.facts[comp]
@@ -947,6 +1020,9 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
         structural: HashMap::new(),
         callers: vec![BTreeSet::new(); n],
         issues: m.issues.clone(),
+        env_syms: HashMap::new(),
+        env_props: HashMap::new(),
+        env_sites: HashMap::new(),
     };
     loop {
         let mut changed = false;
@@ -1022,6 +1098,48 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
             if let Tag::Comp(child) = call.tag {
                 a.callers[child].insert(ci);
             }
+        }
+    }
+    // Client-environment values: setup bindings (locals, memos, cell
+    // initializers) and props computed from an environment read.
+    loop {
+        let mut changed = false;
+        for (ci, c) in m.comps.iter().enumerate() {
+            for (ii, item) in c.setup.iter().enumerate() {
+                let targets: Vec<SymbolId> = match item {
+                    Item::Local { symbols, .. } => symbols.clone(),
+                    Item::Memo { sym, .. } => vec![*sym],
+                    Item::Cell { get, .. } => vec![*get],
+                    _ => continue,
+                };
+                if targets.iter().all(|t| a.env_syms.contains_key(t)) {
+                    continue;
+                }
+                if let Some(e) = a.env_of(ci, &a.facts[ci].item_refs[ii]) {
+                    for t in targets {
+                        changed |= a.env_syms.insert(t, e.clone()).is_none();
+                    }
+                }
+            }
+            for call in 0..a.facts[ci].calls.len() {
+                let Tag::Comp(child) = a.facts[ci].calls[call].tag else {
+                    continue;
+                };
+                for pi in 0..a.facts[ci].calls[call].props.len() {
+                    let (name, expr) = a.facts[ci].calls[call].props[pi].clone();
+                    let Some(e) = expr else { continue };
+                    if a.env_props.contains_key(&(child, name.clone())) {
+                        continue;
+                    }
+                    if let Some(x) = a.env_of(ci, &refs_expr(m, c.props, e)) {
+                        a.env_props.insert((child, name), x);
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
         }
     }
 
@@ -1181,8 +1299,18 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                 _ => reads,
             };
             let always = matches!(s.kind, SiteKind::Handler(_) | SiteKind::Effect(..));
-            if touches.is_empty() && !always {
+            // A view site reading the client environment is client-live:
+            // the server's value is not final.
+            let env = if always {
+                None
+            } else {
+                a.env_of(ci, &s.refs)
+            };
+            if touches.is_empty() && !always && env.is_none() {
                 continue;
+            }
+            if let Some(e) = env {
+                a.env_sites.insert((ci, si), e);
             }
             a.site_live[ci][si] = true;
             let e = elems.len();
@@ -1202,6 +1330,20 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
             if a.live.contains(&d) {
                 union(&mut parent, index[&k], index[&d]);
             }
+        }
+    }
+    // A component's client-environment sites activate together (one
+    // island per component instead of one per hole).
+    for ci in 0..n {
+        let mut mine: Vec<usize> = a
+            .env_sites
+            .keys()
+            .filter(|(c, _)| *c == ci)
+            .filter_map(|k| site_index.get(k).copied())
+            .collect();
+        mine.sort();
+        for w in mine.windows(2) {
+            union(&mut parent, w[0], w[1]);
         }
     }
     // A component whose setup has side-effect statements must run them
@@ -1427,8 +1569,25 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
         let mut window_events = BTreeSet::new();
         let mut hot = false;
         let mut prevent_default = false;
+        let mut env_why: Vec<String> = Vec::new();
         for (c, s) in &sites {
             let site = &a.facts[*c].sites[*s];
+            if let Some(e) = a.env_sites.get(&(*c, *s)) {
+                // Computed and written on the client at load: the server's
+                // value is only the first paint.
+                hot = true;
+                env_why.push(format!(
+                    "`{}`: `{}` reads the client environment ({e}): computed on the client at load",
+                    m.comps[*c].name,
+                    super::model::short(m.text(site.span))
+                ));
+                if matches!(site.kind, SiteKind::Show | SiteKind::For) {
+                    unsupported.push(format!(
+                        "`{}`: a <Show>/<For> over the client environment ({e}) (its branch or rows would need a client rebuild at load)",
+                        m.comps[*c].name
+                    ));
+                }
+            }
             let calls: Vec<&String> = site.refs.calls.iter().collect();
             for name in &calls {
                 if matches!(
@@ -1575,6 +1734,8 @@ pub(crate) fn analyze<'a>(m: &Model<'a>, id_prefix: &str) -> Analysis<'a> {
                     .count()
             )],
         };
+        let mut why = why;
+        why.extend(env_why);
         let mut own_tiers: Vec<(usize, u8)> = members.iter().map(|c| (*c, own[c])).collect();
         own_tiers.sort();
         for (c, s) in &sites {

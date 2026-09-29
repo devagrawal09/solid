@@ -50,6 +50,8 @@ pub(crate) struct GroupCode {
     pub runtime: String,
     /// Values the root instance reads from the anchor's `data-s`.
     pub serial: Vec<Serial>,
+    /// Per serialized prop, the paths the client reads (`None`: whole).
+    pub prop_paths: HashMap<String, Option<BTreeSet<Vec<String>>>>,
     /// An element anchor (`data-i` on the root's first element) or a comment.
     pub element_anchor: bool,
     /// Every handler sits under the anchor element (lazy activation possible).
@@ -132,6 +134,8 @@ struct AttrPart {
     apply: String,
     cells: BTreeSet<String>,
     live: bool,
+    /// Reads the client environment: applied at activation too.
+    env: bool,
 }
 
 /// One emission scope: the activation function or a region builder.
@@ -206,6 +210,9 @@ struct Ce<'x, 'a> {
     /// Per member component: the props its code in this island uses (a
     /// prop only handed on to another island's component is not bound).
     used: HashMap<usize, BTreeSet<String>>,
+    /// Per serialized root prop: the paths client code reads (`None`: the
+    /// whole value).
+    prop_paths: HashMap<String, Option<BTreeSet<Vec<String>>>>,
 }
 
 const HELPERS: &[(&str, &str)] = &[
@@ -371,6 +378,7 @@ pub(crate) fn emit_group<'a>(
         in_fallback: false,
         structs: Vec::new(),
         used: HashMap::new(),
+        prop_paths: HashMap::new(),
     };
     ce.run()
 }
@@ -390,6 +398,9 @@ struct Uses {
     core: BTreeSet<String>,
     top: BTreeSet<SymbolId>,
     serial: Vec<Serial>,
+    /// Per serialized prop: the static paths client code reads (`None`:
+    /// used whole).
+    prop_paths: Vec<(String, Option<Vec<String>>)>,
 }
 
 impl<'e, 'x, 'a> CEnv<'e, 'x, 'a> {
@@ -400,6 +411,10 @@ impl<'e, 'x, 'a> CEnv<'e, 'x, 'a> {
             .or_else(|| self.ce.insts[self.inst].names.get(&s).cloned())
     }
     fn prop(&self, name: &str) -> R<PBind> {
+        self.prop_at(name, None)
+    }
+    /// `props.name`, read along `path` (`[name, …]`; `None`: whole).
+    fn prop_at(&self, name: &str, path: Option<&[String]>) -> R<PBind> {
         let inst = &self.ce.insts[self.inst];
         if let Some(b) = inst.props.get(name) {
             return Ok(b.clone());
@@ -410,6 +425,8 @@ impl<'e, 'x, 'a> CEnv<'e, 'x, 'a> {
             if !u.serial.contains(&s) {
                 u.serial.push(s);
             }
+            u.prop_paths
+                .push((name.to_string(), path.map(|p| p[1..].to_vec())));
             return Ok(PBind::Val(format!("$d[{}]", js_str(name))));
         }
         // A prop the caller did not pass.
@@ -469,7 +486,8 @@ impl<'a> Env<'a> for CEnv<'_, '_, 'a> {
                     && let Expression::StaticMemberExpression(s) = first
                     && self.is_props(tx, &s.object)
                 {
-                    let head = match self.prop(s.property.name.as_str())? {
+                    let path = super::tx::props_chain(self, tx, arg).map(|x| x.1);
+                    let head = match self.prop_at(s.property.name.as_str(), path.as_deref())? {
                         PBind::Acc(v) | PBind::Get(v) => format!("{v}()"),
                         // A value of unknown kind (a caller's local, a row
                         // item): `yield*` reads an accessor by calling it.
@@ -561,6 +579,10 @@ impl<'a> Env<'a> for CEnv<'_, '_, 'a> {
                 self.uses.borrow_mut().rt.insert(r);
                 return Some(alias.into());
             }
+            // Island code runs in the browser.
+            if n == "isServer" {
+                return Some("false".into());
+            }
             if self.ce.t2 && CORE_ONLY.contains(&n.as_str()) {
                 self.uses.borrow_mut().core.insert(n.clone());
                 return Some(format!("$${n}"));
@@ -576,11 +598,19 @@ impl<'a> Env<'a> for CEnv<'_, '_, 'a> {
         let props = self.ce.m.comps[self.ce.insts[self.inst].comp].props;
         props.is_some() && self.ce.m.symbol_of_expr(e) == props
     }
-    fn props_member(&self, _tx: &Tx<'_, 'a>, name: &str) -> R<Option<String>> {
+    fn props_member(&self, tx: &Tx<'_, 'a>, name: &str) -> R<Option<String>> {
+        self.props_member_path(tx, name, None)
+    }
+    fn props_member_path(
+        &self,
+        _tx: &Tx<'_, 'a>,
+        name: &str,
+        path: Option<&[String]>,
+    ) -> R<Option<String>> {
         if name == "children" {
             return Err("`props.children` read by client code".into());
         }
-        Ok(Some(match self.prop(name)? {
+        Ok(Some(match self.prop_at(name, path)? {
             PBind::Acc(v) | PBind::Val(v) => v,
             PBind::Get(v) => format!("{v}()"),
         }))
@@ -682,6 +712,14 @@ impl<'a> Env<'a> for EffEnv<'_, '_, '_, 'a> {
     fn props_member(&self, tx: &Tx<'_, 'a>, name: &str) -> R<Option<String>> {
         self.inner.props_member(tx, name)
     }
+    fn props_member_path(
+        &self,
+        tx: &Tx<'_, 'a>,
+        name: &str,
+        path: Option<&[String]>,
+    ) -> R<Option<String>> {
+        self.inner.props_member_path(tx, name, path)
+    }
     fn call(&self, tx: &Tx<'_, 'a>, c: &'a CallExpression<'a>) -> R<Option<String>> {
         self.inner.call(tx, c)
     }
@@ -718,6 +756,14 @@ impl<'a> Env<'a> for AdoptEnv<'_, '_, '_, 'a> {
     }
     fn props_member(&self, tx: &Tx<'_, 'a>, name: &str) -> R<Option<String>> {
         self.inner.props_member(tx, name)
+    }
+    fn props_member_path(
+        &self,
+        tx: &Tx<'_, 'a>,
+        name: &str,
+        path: Option<&[String]>,
+    ) -> R<Option<String>> {
+        self.inner.props_member_path(tx, name, path)
     }
     fn call(&self, tx: &Tx<'_, 'a>, c: &'a CallExpression<'a>) -> R<Option<String>> {
         self.inner.call(tx, c)
@@ -775,6 +821,32 @@ impl<'a> CEnv<'_, '_, 'a> {
 impl<'x, 'a> Ce<'x, 'a> {
     fn tx(&self) -> Tx<'x, 'a> {
         Tx { m: self.m }
+    }
+
+    /// Merge what a translation used: serialized values and the paths read.
+    fn merge_uses(&mut self, uses: Uses) {
+        self.helpers.extend(uses.helpers);
+        self.rt.extend(uses.rt);
+        self.core.extend(uses.core);
+        self.top_syms.extend(uses.top);
+        for s in uses.serial {
+            if !self.serial.contains(&s) {
+                self.serial.push(s);
+            }
+        }
+        for (name, path) in uses.prop_paths {
+            let e = self
+                .prop_paths
+                .entry(name)
+                .or_insert_with(|| Some(BTreeSet::new()));
+            match (e.as_mut(), path) {
+                (Some(set), Some(p)) if !p.is_empty() => {
+                    set.insert(p);
+                }
+                (Some(_), _) => *e = None,
+                (None, _) => {}
+            }
+        }
     }
 
     fn fresh(&mut self, base: &str) -> String {
@@ -835,15 +907,7 @@ impl<'x, 'a> Ce<'x, 'a> {
                 .unwrap_or("");
             return Err(format!("runtime `{name}` in client code"));
         }
-        self.helpers.extend(uses.helpers);
-        self.rt.extend(uses.rt);
-        self.core.extend(uses.core);
-        self.top_syms.extend(uses.top);
-        for s in uses.serial {
-            if !self.serial.contains(&s) {
-                self.serial.push(s);
-            }
-        }
+        self.merge_uses(uses);
         Ok(out)
     }
 
@@ -1166,6 +1230,7 @@ impl<'x, 'a> Ce<'x, 'a> {
             tier,
             runtime,
             serial,
+            prop_paths: self.prop_paths.clone(),
             element_anchor: self.element_anchor,
             nests: anchor_nests(m, view),
             mutable_top: self.mutable_top.clone(),
@@ -1638,10 +1703,7 @@ impl<'x, 'a> Ce<'x, 'a> {
                             r.map(|c| (c, uses))
                         };
                         let (adopt, uses) = adopt?;
-                        self.helpers.extend(uses.helpers);
-                        self.rt.extend(uses.rt);
-                        self.core.extend(uses.core);
-                        self.top_syms.extend(uses.top);
+                        self.merge_uses(uses);
                         let run =
                             self.translate(inst, &none, |tx, env| tx.func(env, *body, true))?;
                         self.rt.insert("createMemo");
@@ -1711,10 +1773,7 @@ impl<'x, 'a> Ce<'x, 'a> {
                         (r.map(|c| (c, uses)), reads)
                     };
                     let (code, uses) = code?;
-                    self.helpers.extend(uses.helpers);
-                    self.rt.extend(uses.rt);
-                    self.core.extend(uses.core);
-                    self.top_syms.extend(uses.top);
+                    self.merge_uses(uses);
                     self.rt.insert("createEffect");
                     let body_inner = code
                         .trim()
@@ -2376,11 +2435,7 @@ impl<'x, 'a> Ce<'x, 'a> {
                 let u = env.uses.into_inner();
                 (r, u)
             };
-            for s in env_prop.1.serial {
-                if !self.serial.contains(&s) {
-                    self.serial.push(s);
-                }
-            }
+            self.merge_uses(env_prop.1);
             return env_prop.0;
         }
         let text = self.translate(caller, extra, |tx, env| tx.expr(env, e))?;
@@ -3078,12 +3133,14 @@ impl<'x, 'a> Ce<'x, 'a> {
     ) -> R<()> {
         let none = HashMap::new();
         let cells = self.cells_of(inst, e);
+        let env = live && self.a.is_env_site(self.insts[inst].comp, e.span().start);
         let push = |ce: &mut Self, compute: String, apply: String| {
             ce.bucket(inst).attrs.push(AttrPart {
                 compute,
                 apply,
                 cells: cells.clone(),
                 live,
+                env,
             });
         };
         if name == "class" {
@@ -3228,14 +3285,29 @@ impl<'x, 'a> Ce<'x, 'a> {
             return Ok(());
         }
         let cells = self.cells_of(inst, e);
-        if self.tier == 0 {
+        // A client-environment read: the server's text is only the first
+        // paint, so activation computes and writes it.
+        let env = self.a.is_env_site(self.insts[inst].comp, e.span().start);
+        if self.tier == 0 && env {
+            let line = format!(
+                "{{ const $h = () => {c}, $p = v => {{ {apply}; }}; $p($h()); $hole([{}], $h, $p); }}",
+                cells.iter().cloned().collect::<Vec<_>>().join(", ")
+            );
+            self.bucket(inst).seq.push(Seq::Line(line));
+        } else if self.tier == 0 {
             let line = format!(
                 "$hole([{}], () => {c}, v => {{ {apply}; }});",
                 cells.iter().cloned().collect::<Vec<_>>().join(", ")
             );
             self.bucket(inst).seq.push(Seq::Line(line));
         } else {
-            let skip = if fresh { "$f ? 0 : 1" } else { "1" };
+            let skip = if env {
+                "0"
+            } else if fresh {
+                "$f ? 0 : 1"
+            } else {
+                "1"
+            };
             let line = format!(
                 "{{ let $k = {skip}; $E(() => {c}, v => {{ if ($k) {{ $k = 0; return; }} {apply}; }}); }}"
             );
@@ -3687,7 +3759,34 @@ impl<'x, 'a> Ce<'x, 'a> {
             out.push_str(&s);
         }
         if !live.is_empty() {
-            if self.tier == 0 {
+            let env = live.iter().any(|p| p.env);
+            if self.tier == 0 && env {
+                // Client-environment parts: computed and written at activation.
+                let cells: BTreeSet<String> =
+                    live.iter().flat_map(|p| p.cells.iter().cloned()).collect();
+                let fields: Vec<String> = live
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| format!("_{i}: {}", p.compute))
+                    .collect();
+                let applies: Vec<String> = live
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| {
+                        format!(
+                            "if (o._{i} !== q?._{i}) {{ const v = o._{i}; {}; }}",
+                            p.apply
+                        )
+                    })
+                    .collect();
+                let _ = writeln!(
+                    out,
+                    "{{ const $h = () => ({{ {} }}), $p = (o, q) => {{ {} }}; $p($h()); $hole([{}], $h, $p); }}",
+                    fields.join(", "),
+                    applies.join(" "),
+                    cells.into_iter().collect::<Vec<_>>().join(", ")
+                );
+            } else if self.tier == 0 {
                 let cells: BTreeSet<String> =
                     live.iter().flat_map(|p| p.cells.iter().cloned()).collect();
                 if live.len() == 1 {
@@ -3725,14 +3824,26 @@ impl<'x, 'a> Ce<'x, 'a> {
                 }
             } else if live.len() == 1 {
                 let p = live[0];
-                let skip = if fresh { "$f ? 0 : 1" } else { "1" };
+                let skip = if env {
+                    "0"
+                } else if fresh {
+                    "$f ? 0 : 1"
+                } else {
+                    "1"
+                };
                 let _ = writeln!(
                     out,
                     "{{ let $k = {skip}; $E(() => {}, v => {{ if ($k) {{ $k = 0; return; }} {}; }}); }}",
                     p.compute, p.apply
                 );
             } else {
-                let skip = if fresh { "$f ? 0 : 1" } else { "1" };
+                let skip = if env {
+                    "0"
+                } else if fresh {
+                    "$f ? 0 : 1"
+                } else {
+                    "1"
+                };
                 let fields: Vec<String> = live
                     .iter()
                     .enumerate()

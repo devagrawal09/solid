@@ -439,7 +439,14 @@ fn manifest(
         w.begin_array();
         for s in &code.serial {
             match s {
-                client::Serial::Prop(p) => w.string(&format!("props.{p}")),
+                client::Serial::Prop(p) => match code.prop_paths.get(p) {
+                    Some(Some(paths)) if !paths.is_empty() => {
+                        for path in paths {
+                            w.string(&format!("props.{p}.{}", path.join(".")));
+                        }
+                    }
+                    _ => w.string(&format!("props.{p}")),
+                },
                 client::Serial::Ctx(n) => w.string(&format!("context {n}")),
                 client::Serial::Cell(ii) => match &m.comps[g.root].setup[*ii] {
                     model::Item::Cell { name, .. } => w.string(&format!("cell {name}")),

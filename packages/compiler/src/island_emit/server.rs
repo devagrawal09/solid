@@ -61,7 +61,30 @@ struct Se<'x, 'a> {
     streams: std::cell::RefCell<HashSet<usize>>,
     /// Each group's effective tier (its chunk's).
     tiers: HashMap<usize, u8>,
+    /// Some island serializes a pruned prop (the `_$pp` helper is needed).
+    pruned: std::cell::Cell<bool>,
 }
+
+/// `[["title"], ["by", "name"]]`.
+pub(crate) fn paths_js(paths: &std::collections::BTreeSet<Vec<String>>) -> String {
+    let parts: Vec<String> = paths
+        .iter()
+        .map(|p| {
+            format!(
+                "[{}]",
+                p.iter()
+                    .map(|k| super::client_js_str(k))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })
+        .collect();
+    format!("[{}]", parts.join(", "))
+}
+
+/// A value pruned to the paths client code reads (`paths_js`): plain
+/// objects keep only those keys, anything else is kept whole.
+pub(crate) const PRUNE_HELPER: &str = "function _$pp(v, ps) { if (v === null || typeof v !== \"object\" || Array.isArray(v)) return v; const g = {}; for (const [k, ...r] of ps) g[k] = r.length && g[k] !== 0 ? (g[k] || []).concat([r]) : 0; const o = {}; for (const k in g) if (k in v) o[k] = g[k] === 0 ? v[k] : _$pp(v[k], g[k]); return o; }\n";
 
 struct SEnv<'e, 'x, 'a> {
     se: &'e Se<'x, 'a>,
@@ -762,11 +785,23 @@ impl<'x, 'a> Se<'x, 'a> {
                 let mut fields = Vec::new();
                 for s in &code.serial {
                     match s {
-                        Serial::Prop(p) => fields.push(format!(
-                            "{}: _$r({props}[{}])",
-                            super::client_js_str(p),
-                            super::client_js_str(p)
-                        )),
+                        Serial::Prop(p) => match code.prop_paths.get(p) {
+                            // Only the paths client code reads.
+                            Some(Some(paths)) if !paths.is_empty() => {
+                                self.pruned.set(true);
+                                fields.push(format!(
+                                    "{}: _$pp(_$r({props}[{}]), {})",
+                                    super::client_js_str(p),
+                                    super::client_js_str(p),
+                                    paths_js(paths)
+                                ))
+                            }
+                            _ => fields.push(format!(
+                                "{}: _$r({props}[{}])",
+                                super::client_js_str(p),
+                                super::client_js_str(p)
+                            )),
+                        },
                         Serial::Ctx(n) => fields.push(format!(
                             "{}: _$cv(_$ctx($c, {n}), {})",
                             super::client_js_str(&format!("$ctx:{n}")),
@@ -935,6 +970,7 @@ pub(crate) fn emit_server<'a>(
         pd,
         streams: Default::default(),
         tiers: codes.iter().map(|(gi, c)| (*gi, c.tier)).collect(),
+        pruned: Default::default(),
     };
     let mut edits: Vec<(Span, String)> = Vec::new();
     for (ci, c) in m.comps.iter().enumerate() {
@@ -961,6 +997,9 @@ pub(crate) fn emit_server<'a>(
     let mut out = splice(m.src, program_span, edits);
     out.push('\n');
     out.push_str(SERVER_HELPERS);
+    if se.pruned.get() {
+        out.push_str(PRUNE_HELPER);
+    }
     let _ = refs_expr;
     let streams = se.streams.borrow();
     Ok((out, (0..n).map(|c| streams.contains(&c)).collect()))

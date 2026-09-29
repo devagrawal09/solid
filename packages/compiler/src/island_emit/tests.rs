@@ -1374,3 +1374,170 @@ export const App = $component(function* (props) {
     assert_eq!(islands_of(&m).len(), 1, "{m}");
     assert!(m.contains(r#""tier":0"#), "{m}");
 }
+
+// --- client-environment reads (islands mode) ---------------------------------------
+
+fn env_page(expr: &str) -> String {
+    format!(
+        r#"
+import {{ $component, isServer }} from "solid-js";
+export const Page = $component(function* (props) {{
+  return function* () {{
+    return <main><h1>title</h1><p class="env">{{{expr}}}</p></main>;
+  }};
+}});
+"#
+    )
+}
+
+#[test]
+fn every_environment_read_in_a_view_is_client_live() {
+    for (expr, why) in [
+        ("isServer ? \"server\" : \"client\"", "isServer"),
+        ("typeof window === \"undefined\" ? \"s\" : \"c\"", "window"),
+        ("window.innerWidth", "window"),
+        ("document.title", "document"),
+        ("navigator.language", "navigator"),
+        ("(1234.5).toLocaleString()", ".toLocaleString()"),
+        ("new Intl.NumberFormat().format(3)", "Intl"),
+        ("Date.now()", "Date.now()"),
+        ("new Date().getFullYear()", "new Date()"),
+        ("Math.random()", "Math.random()"),
+    ] {
+        let out = run(&env_page(expr));
+        assert!(out.fallback.is_none(), "{expr}: {:?}", out.fallback);
+        let m = manifest(&out);
+        // One island, activated at load, rooted at the page.
+        assert_eq!(islands_of(&m).len(), 1, "{expr}: {m}");
+        assert!(m.contains(r#""activation":"load""#), "{expr}: {m}");
+        assert!(
+            m.contains(&format!("reads the client environment ({why})")),
+            "{expr}: {m}"
+        );
+        // Activation computes and writes the hole (tier 0: applied at once).
+        let chunk = &out.chunks[0].code;
+        assert!(chunk.contains("$p($h());"), "{expr}: {chunk}");
+    }
+}
+
+#[test]
+fn environment_reads_flow_through_locals_and_props() {
+    let out = run(r#"
+import { $component } from "solid-js";
+const Stamp = $component(function* (props) {
+  return function* () { return <time>{yield* props.at}</time>; };
+});
+export const Page = $component(function* () {
+  const now = new Date().toISOString();
+  return function* () {
+    return <main><Stamp at={now} /><b>{"static"}</b></main>;
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains("reads the client environment (new Date())"), "{m}");
+    assert!(m.contains(r#""activation":"load""#), "{m}");
+    // A deterministic view stays inert.
+    let out = run(r#"
+import { $component } from "solid-js";
+export const Page = $component(function* (props) {
+  const d = new Date(props.at).toISOString();
+  return function* () { return <time>{d}</time>; };
+});
+"#);
+    assert!(out.chunks.is_empty(), "{}", manifest(&out));
+}
+
+#[test]
+fn an_environment_read_in_a_live_island_hole_applies_at_activation() {
+    let out = run(r#"
+import { $component, $event, $signal } from "solid-js";
+export const Page = $component(function* () {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    return <button onClick={inc} title={`${yield* n} at ${Date.now()}`}>{yield* n}</button>;
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert_eq!(islands_of(&m).len(), 1, "{m}");
+    assert!(m.contains(r#""activation":"load""#), "{m}");
+    let chunk = &out.chunks[0].code;
+    assert!(chunk.contains("$p($h());"), "{chunk}");
+    // Handlers stay attached as before.
+    assert!(chunk.contains("addEventListener(\"click\""), "{chunk}");
+}
+
+#[test]
+fn a_show_over_the_environment_falls_back_with_the_reason() {
+    let reason = fallback_of(
+        r#"
+import { $component, Show } from "solid-js";
+export const Page = $component(function* () {
+  return function* () {
+    return <main><Show when={typeof window !== "undefined"}><p>client</p></Show></main>;
+  };
+});
+"#,
+    );
+    assert!(reason.contains("over the client environment (window)"), "{reason}");
+}
+
+// --- serialization pruned to the paths client code reads ---------------------------
+
+#[test]
+fn a_prop_is_serialized_only_along_the_paths_client_code_reads() {
+    let out = run(r#"
+import { $component, $event, $signal, For } from "solid-js";
+const Row = $component(function* (props) {
+  const [n, setN] = yield* $signal(0);
+  const click = $event(function* () { setN(x => x + 1); console.log(props.item.title, props.item.by.name); });
+  return function* () {
+    return <li><span>{props.label}</span><button onClick={click}>{yield* n}</button></li>;
+  };
+});
+export const Page = $component(function* (props) {
+  return function* () {
+    return <ul><For each={props.items}>{item => <Row item={item} label={"x" + item.id} />}</For></ul>;
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(
+        m.contains(r#""serialized":["props.item.by.name","props.item.title"]"#),
+        "{m}"
+    );
+    // Only those paths reach `data-s`; `label` (read by an inert hole) not at all.
+    assert!(
+        out.server
+            .contains(r#""item": _$pp(_$r(props["item"]), [["by", "name"], ["title"]])"#),
+        "{}",
+        out.server
+    );
+    assert!(out.server.contains("function _$pp(v, ps)"), "{}", out.server);
+    let ds = out.server.split("data-s=").nth(1).unwrap().split("}))}").next().unwrap();
+    assert!(!ds.contains("label"), "{ds}");
+}
+
+#[test]
+fn a_prop_used_whole_is_serialized_whole() {
+    let out = run(r#"
+import { $component, $event, $signal } from "solid-js";
+const Row = $component(function* (props) {
+  const [n, setN] = yield* $signal(0);
+  const click = $event(function* () { setN(x => x + 1); send(props.item); console.log(props.item.title); });
+  return function* () { return <button onClick={click}>{yield* n}</button>; };
+});
+export const Page = $component(function* (props) {
+  return function* () { return <main><Row item={props.item} /></main>; };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains(r#""serialized":["props.item"]"#), "{m}");
+    assert!(!out.server.contains("_$pp("), "{}", out.server);
+}
