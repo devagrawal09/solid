@@ -133,9 +133,9 @@ export const blocksRowList: Scenario = {
         "run setup b",
         "read open a = true",
         "read open b = true",
-        "run cleanup a",
         "run cleanup b",
-        'markup = <ul _hk=00><li _hk=01000 class="row r1"><!--$-->a<!--/-->=<!--$-->open<!--/--></li><!--!$--><li _hk=01100 class="row r2"><!--$-->b<!--/-->=<!--$-->open<!--/--></li></ul>',
+        "run cleanup a",
+        'markup = <ul _hk=00><li _hk=01000 class="row r1"><!--$-->a<!--/-->=<!--$-->open<!--/--></li><li _hk=01100 class="row r2"><!--$-->b<!--/-->=<!--$-->open<!--/--></li></ul>',
         'hydration-keys = ["00","01000","01100"]',
         "serialized = []"
       ]
@@ -312,25 +312,25 @@ export const blocksRowRecursive: Scenario = {
         "read open a = true",
         "hydration server-nodes 9/9 kept, 0 client-inserted",
         "## initial",
-        'html = <ul _hk="00" class="tree"><li _hk="01000" class="n1"><span>a</span><!--$--><a _hk="010030" class="t1">[-]</a><ul _hk="010031" style="display:block"><li _hk="010032000" class="n2"><span>a1</span><!--$--><a _hk="0100320030" class="t2">[-]</a><ul _hk="0100320031" style="display:block"><li _hk="0100320032000" class="n3"><span>a1x</span><!--$--><!--/--></li></ul><!--/--></li></ul><!--/--></li><li _hk="01100" class="n4"><span>b</span><!--$--><!--/--></li></ul>',
+        'html = <ul _hk="00" class="tree"><li _hk="01000" class="n1"><span>a</span><!--$--><a _hk="010040" class="t1">[-]</a><ul _hk="010041" style="display:block"><li _hk="010042000" class="n2"><span>a1</span><!--$--><a _hk="0100420040" class="t2">[-]</a><ul _hk="0100420041" style="display:block"><li _hk="0100420042000" class="n3"><span>a1x</span><!--$--><!--/--></li></ul><!--/--></li></ul><!--/--></li><li _hk="01100" class="n4"><span>b</span><!--$--><!--/--></li></ul>',
         "## collapse a1 (a nested instance)",
         "read open a1 = true",
         "write open a1 = false",
         "read open a1 = false",
         "read open a1 = false",
-        'html = <ul _hk="00" class="tree"><li _hk="01000" class="n1"><span>a</span><!--$--><a _hk="010030" class="t1">[-]</a><ul _hk="010031" style="display:block"><li _hk="010032000" class="n2"><span>a1</span><!--$--><a _hk="0100320030" class="t2">[+]</a><ul _hk="0100320031" style="display: none;"><li _hk="0100320032000" class="n3"><span>a1x</span><!--$--><!--/--></li></ul><!--/--></li></ul><!--/--></li><li _hk="01100" class="n4"><span>b</span><!--$--><!--/--></li></ul>',
+        'html = <ul _hk="00" class="tree"><li _hk="01000" class="n1"><span>a</span><!--$--><a _hk="010040" class="t1">[-]</a><ul _hk="010041" style="display:block"><li _hk="010042000" class="n2"><span>a1</span><!--$--><a _hk="0100420040" class="t2">[+]</a><ul _hk="0100420041" style="display: none;"><li _hk="0100420042000" class="n3"><span>a1x</span><!--$--><!--/--></li></ul><!--/--></li></ul><!--/--></li><li _hk="01100" class="n4"><span>b</span><!--$--><!--/--></li></ul>',
         "## collapse a (the outer instance)",
         "read open a = true",
         "write open a = false",
         "read open a = false",
         "read open a = false",
-        'html = <ul _hk="00" class="tree"><li _hk="01000" class="n1"><span>a</span><!--$--><a _hk="010030" class="t1">[+]</a><ul _hk="010031" style="display: none;"><li _hk="010032000" class="n2"><span>a1</span><!--$--><a _hk="0100320030" class="t2">[+]</a><ul _hk="0100320031" style="display: none;"><li _hk="0100320032000" class="n3"><span>a1x</span><!--$--><!--/--></li></ul><!--/--></li></ul><!--/--></li><li _hk="01100" class="n4"><span>b</span><!--$--><!--/--></li></ul>',
+        'html = <ul _hk="00" class="tree"><li _hk="01000" class="n1"><span>a</span><!--$--><a _hk="010040" class="t1">[+]</a><ul _hk="010041" style="display: none;"><li _hk="010042000" class="n2"><span>a1</span><!--$--><a _hk="0100420040" class="t2">[+]</a><ul _hk="0100420041" style="display: none;"><li _hk="0100420042000" class="n3"><span>a1x</span><!--$--><!--/--></li></ul><!--/--></li></ul><!--/--></li><li _hk="01100" class="n4"><span>b</span><!--$--><!--/--></li></ul>',
         "## expand a1 again",
         "read open a1 = false",
         "write open a1 = true",
         "read open a1 = true",
         "read open a1 = true",
-        'html = <ul _hk="00" class="tree"><li _hk="01000" class="n1"><span>a</span><!--$--><a _hk="010030" class="t1">[+]</a><ul _hk="010031" style="display: none;"><li _hk="010032000" class="n2"><span>a1</span><!--$--><a _hk="0100320030" class="t2">[-]</a><ul _hk="0100320031" style="display: block;"><li _hk="0100320032000" class="n3"><span>a1x</span><!--$--><!--/--></li></ul><!--/--></li></ul><!--/--></li><li _hk="01100" class="n4"><span>b</span><!--$--><!--/--></li></ul>',
+        'html = <ul _hk="00" class="tree"><li _hk="01000" class="n1"><span>a</span><!--$--><a _hk="010040" class="t1">[+]</a><ul _hk="010041" style="display: none;"><li _hk="010042000" class="n2"><span>a1</span><!--$--><a _hk="0100420040" class="t2">[-]</a><ul _hk="0100420041" style="display: block;"><li _hk="0100420042000" class="n3"><span>a1x</span><!--$--><!--/--></li></ul><!--/--></li></ul><!--/--></li><li _hk="01100" class="n4"><span>b</span><!--$--><!--/--></li></ul>',
         "## teardown"
       ]
     },
@@ -344,8 +344,8 @@ export const blocksRowRecursive: Scenario = {
         "read open a = true",
         "read open a1 = true",
         "read open a1 = true",
-        'markup = <ul _hk=00 class="tree"><li _hk=01000 class="n1"><span>a</span><!--$--><a _hk=010030 class="t1">[-]</a><ul _hk=010031 style="display:block"><li _hk=010032000 class="n2"><span>a1</span><!--$--><a _hk=0100320030 class="t2">[-]</a><ul _hk=0100320031 style="display:block"><li _hk=0100320032000 class="n3"><span>a1x</span><!--$--><!--/--></li></ul><!--/--></li></ul><!--/--></li><!--!$--><li _hk=01100 class="n4"><span>b</span><!--$--><!--/--></li></ul>',
-        'hydration-keys = ["00","01000","010030","010031","010032000","0100320030","0100320031","0100320032000","01100"]',
+        'markup = <ul _hk=00 class="tree"><li _hk=01000 class="n1"><span>a</span><!--$--><a _hk=010040 class="t1">[-]</a><ul _hk=010041 style="display:block"><li _hk=010042000 class="n2"><span>a1</span><!--$--><a _hk=0100420040 class="t2">[-]</a><ul _hk=0100420041 style="display:block"><li _hk=0100420042000 class="n3"><span>a1x</span><!--$--><!--/--></li></ul><!--/--></li></ul><!--/--></li><li _hk=01100 class="n4"><span>b</span><!--$--><!--/--></li></ul>',
+        'hydration-keys = ["00","01000","010040","010041","010042000","0100420040","0100420041","0100420042000","01100"]',
         "serialized = []"
       ]
     },
@@ -509,7 +509,7 @@ export const blocksRowKeyedStore: Scenario = {
         "Hydration keys only: the markup is the oracle's with different `_hk` values. A `$component` view and a row block's view are hydration id scopes (`blockScope`: one slot reserved where the block is created, its content numbered inside it), where the handwritten oracle numbers its templates in its component's own sequence. The client compiled the same way claims every key (see `hydrate/blocks-compiled`).",
       trace: [
         "## render",
-        'markup = <ul _hk=00><li _hk=01000 class="c1"><!--$-->a<!--/-->:<!--$-->open<!--/--></li><!--!$--><li _hk=01100 class="c2"><!--$-->b<!--/-->:<!--$-->open<!--/--></li><!--!$--><li _hk=01200 class="c3"><!--$-->c<!--/-->:<!--$-->open<!--/--></li></ul>',
+        'markup = <ul _hk=00><li _hk=01000 class="c1"><!--$-->a<!--/-->:<!--$-->open<!--/--></li><li _hk=01100 class="c2"><!--$-->b<!--/-->:<!--$-->open<!--/--></li><li _hk=01200 class="c3"><!--$-->c<!--/-->:<!--$-->open<!--/--></li></ul>',
         'hydration-keys = ["00","01000","01100","01200"]',
         "serialized = []"
       ]

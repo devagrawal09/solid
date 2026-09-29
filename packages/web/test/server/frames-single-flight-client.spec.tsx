@@ -5,7 +5,8 @@
  * single-flight, carrying its own region and the `{ value, data }` envelope
  * of what it invalidated. One response: the region lands in the host's store
  * under the call's address, the invalidated data reaches the flight
- * consumer, and the caller gets the envelope's value.
+ * consumer, and the caller gets the call's binding (the mutation answered
+ * with markup for its own boundary).
  *
  * Server half from the built bundles (like the other server-function
  * specs), client half from source (the switch lives there).
@@ -19,6 +20,7 @@ import {
 import { frameTransformFlightResult } from "@solidjs/web/frames/server";
 import { createServerComponentHandler } from "../../frames/src/frame-transport.js";
 import { createFrameHost } from "../../frames/src/frame-client.js";
+import { subscribeFlightData } from "../../server-functions/src/shared.js";
 
 const RequestContext = Symbol.for("solid.RequestContext");
 
@@ -59,20 +61,31 @@ describe("frames client: single-flight response", () => {
       applied.push(chunk);
       return apply(chunk);
     };
+    // Delivery is the one shared path (upstream #3638): the registered
+    // flight-data consumer (the unnamed one rides under the source id "true")
+    // receives its slice of the keyed envelope.
     let delivered: any;
+    const unsubscribe = subscribeFlightData(async (data: any) => {
+      delivered = data;
+    });
     const handler = createServerComponentHandler({
       host,
-      component: (id: string) => (props: any) => ({ id, props }),
-      consumer: () => async (data: any) => {
-        delivered = data;
-      }
+      component: (id: string) => (props: any) => ({ id, props })
     });
-    const result = await handler.handle(response, { id: "sf-client-markup", args: [] });
-    // The region is unrooted (an empty stream id), so the caller gets the
-    // envelope value; the region is applied through the host.
-    expect(result).toBeUndefined();
+    const result = await handler.handle(response, {
+      id: "sf-client-markup",
+      meta: undefined,
+      args: [],
+      context: undefined
+    });
+    unsubscribe();
+    // The mutation answered with markup for its own boundary: the server
+    // roots the region at the invocation id (`X-Frame-Stream`, upstream
+    // #3641), so the caller gets the call's binding, like a getter would;
+    // the region is applied through the host.
+    expect(typeof result).toBe("function");
     expect(applied.some(c => c.type === "html" || c.type === "start")).toBe(true);
-    // Keyed by the single-flight request key (`X-Single-Flight: true`).
-    expect(delivered).toEqual({ true: { "/notes": { count: 2 } } });
+    // The unnamed consumer's slice (`X-Single-Flight: true`).
+    expect(delivered).toEqual({ "/notes": { count: 2 } });
   });
 });

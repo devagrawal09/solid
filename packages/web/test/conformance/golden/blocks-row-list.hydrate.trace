@@ -6,13 +6,13 @@ read open a = true
 read open b = true
 hydration server-nodes 3/3 kept, 0 client-inserted
 ## initial
-html = <ul _hk="0"><li _hk="3" class="row r1"><!--$-->a<!--/-->=<!--$-->open<!--/--></li><li _hk="4" class="row r2"><!--$-->b<!--/-->=<!--$-->open<!--/--></li></ul>
+html = <ul _hk="0"><li _hk="3" class="row r1"><!--$-->a<!--/-->=<!--$-->open<!--/--></li><li _hk="5" class="row r2"><!--$-->b<!--/-->=<!--$-->open<!--/--></li></ul>
 ## toggle row b (its own state)
 run toggle b
 read open b = true
 write open b = false
 read open b = false
-html = <ul _hk="0"><li _hk="3" class="row r1"><!--$-->a<!--/-->=<!--$-->open<!--/--></li><li _hk="4" class="row r2"><!--$-->b<!--/-->=<!--$-->closed<!--/--></li></ul>
+html = <ul _hk="0"><li _hk="3" class="row r1"><!--$-->a<!--/-->=<!--$-->open<!--/--></li><li _hk="5" class="row r2"><!--$-->b<!--/-->=<!--$-->closed<!--/--></li></ul>
 ## reorder b, c, a (c is new: one setup; b keeps its state)
 write items = [{"id":2,"label":"b"},{"id":3,"label":"c"},{"id":1,"label":"a"}]
 read items = [{"id":2,"label":"b"},{"id":3,"label":"c"},{"id":1,"label":"a"}]

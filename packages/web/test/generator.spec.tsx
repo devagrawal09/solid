@@ -6,7 +6,6 @@ import { afterEach, describe, expect, test } from "vitest";
 import {
   $,
   attempt,
-  createErrorBoundary,
   createMemo,
   createRoot,
   createSignal,
@@ -19,6 +18,9 @@ import {
   renderBlock,
   type EventBlock
 } from "solid-js";
+// The boundary primitive is typed for renderers through `solid-js/internal`
+// (upstream #3709).
+import { createErrorBoundary } from "solid-js/internal";
 import type { JSX } from "../src/index.js";
 import { Errored, Loading, render } from "@solidjs/web";
 

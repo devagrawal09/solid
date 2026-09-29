@@ -1,5 +1,5 @@
 {
   "name": "v2-static-under-show",
-  "shell": "<article _hk=0><h3>s</h3><!--$--><span _hk=300>in<!--$--><em _hk=30100>leaf</em><!--/--></span><!--!$--><em _hk=310>on</em><!--/--><footer>f</footer></article>",
+  "shell": "<article _hk=0><h3>s</h3><!--$--><span _hk=300>in<!--$--><em _hk=30100>leaf</em><!--/--></span><em _hk=310>on</em><!--/--><footer>f</footer></article>",
   "rest": ""
 }

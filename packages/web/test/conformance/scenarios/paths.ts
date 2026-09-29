@@ -295,7 +295,7 @@ export function App() {
           "## mount",
           "run shown",
           `read label ! ${DIRECT_READ}`,
-          `console.error = [REACTIVITY_HALTED] An uncaught error halted the reactive system. No further updates will be processed. Handle errors with createErrorBoundary/<Errored> or treat this as a crash. ${DIRECT_READ}`,
+          `console.error = [REACTIVITY_HALTED] An uncaught error halted the reactive system. No further updates will be processed. Handle errors with <Errored> or treat this as a crash. ${DIRECT_READ}`,
           `uncaught mount = ${DIRECT_READ}`
         ]
       },

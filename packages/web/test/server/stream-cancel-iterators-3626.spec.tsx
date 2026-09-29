@@ -112,7 +112,9 @@ describe("renderToStream closes serialized async iterators once the response is 
     const { counts, tokens } = makeSource();
     const Stream = () => {
       const v = createMemo(async () => tokens());
-      return <b>{v()}</b>;
+      // An async iterable streams as a child at runtime; this branch's
+      // `Element` type excludes iterators (a generator there is a block).
+      return <b>{v() as any}</b>;
     };
     await cancelAfterShell(
       () => (
@@ -227,7 +229,9 @@ describe("renderToStream delivers every value of a serialized async iterator whe
     const { counts, tokens } = makeSource(5);
     const Stream = () => {
       const v = createMemo(async () => tokens());
-      return <b>{v()}</b>;
+      // An async iterable streams as a child at runtime; this branch's
+      // `Element` type excludes iterators (a generator there is a block).
+      return <b>{v() as any}</b>;
     };
     const html = await readToEnd(() => (
       <div>
