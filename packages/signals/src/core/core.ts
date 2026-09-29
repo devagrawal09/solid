@@ -985,7 +985,7 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   // A parked LANE frame is not a hold (#3662): its drain is the effect's own
   // run, not a commit — the node is neither queued nor stamped for it, and
   // the release below (for transaction zombies) leaves it parked.
-  const laneFrame = (el._config & CONFIG_LANE_FRAME) !== 0;
+  const laneFrame = __ASYNC__ && OPTIMISTIC && (el._config & CONFIG_LANE_FRAME) !== 0;
   const needsPendingCommit =
     el._pendingValue !== NOT_PENDING ||
     (!laneFrame &&
@@ -2509,7 +2509,7 @@ export function read<T>(el: Signal<T> | Computed<T>): T {
       // held, its own slot still armed. Fall through to serve()'s override
       // arm. Readers WITH identity are untouched: a tracked lane reader keeps
       // the override (A17), an off-lane one suspends (#3651, `overrideRead`).
-      !(hasActiveOverride(el) && el._config & CONFIG_DERIVED_OVERRIDE)
+      !(OPTIMISTIC && hasActiveOverride(el) && el._config & CONFIG_DERIVED_OVERRIDE)
     ) {
       throw owner._x?._error;
     }
