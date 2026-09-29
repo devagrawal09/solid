@@ -14,6 +14,9 @@ export const attributionOptions: AttributionOptions = {
   log: false,
   hotRuns: false,
   hotTime: false,
+  // Upstream's WASTED_RECOMPUTE (#3613) judges discarded compute against a
+  // wall-clock budget, like HOT_SCOPE_TIME: noise on a loaded runner.
+  wastedRecompute: false,
   waterfalls: { minFlightMs: 20 },
   holds: { infoMs: 50, warnMs: 100 },
   longHolds: { infoMs: 400, warnMs: 900 }

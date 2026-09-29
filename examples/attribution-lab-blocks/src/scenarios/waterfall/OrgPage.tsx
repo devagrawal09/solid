@@ -186,12 +186,12 @@ export const OrgPage = $component(function* (
 
   const onLanded = (value: Landed) => {
     setLanded(value);
-    // `waterfalls()` is a fact table, not a signal — read it once the chain
+    // `history("waterfall")` is a fact table, not a signal — read it once the chain
     // has settled, from outside the flush that landed it.
     setTimeout(
       () =>
         setChains(
-          attribution.waterfalls().map(record => ({
+          attribution.history("waterfall").map(record => ({
             names: record.chain.map(link => link.name),
             sequentialMs: Math.round(record.sequentialMs)
           }))
@@ -241,7 +241,7 @@ export const OrgPage = $component(function* (
 
           <Show when={(yield* chains).length > 0}>
             <div class="lab-timeline">
-              <h4>attribution.waterfalls()</h4>
+              <h4>attribution.history("waterfall")</h4>
               <ul id="flight-chains">
                 <For each={yield* chains}>
                   {chain => (

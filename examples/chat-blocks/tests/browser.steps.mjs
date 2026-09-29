@@ -10,7 +10,8 @@ export const normalize = html =>
   html
     .replace(/\d+ tok\/s · [\d.]+s/g, "# tok/s · #s")
     .replace(/\s(data-fid|data-sc|data-occ)="[^"]*"/g, "")
-    .replace(/\s_bnd="[^"]*"/g, ' _bnd=""');
+    .replace(/\s_bnd="[^"]*"/g, ' _bnd=""')
+    .replace(/\s(_s:[\w:-]+)="[^"]*"/g, ' $1=""');
 
 const doneCount = n => async page => {
   await page.waitForFunction(

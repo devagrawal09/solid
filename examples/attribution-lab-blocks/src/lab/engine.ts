@@ -7,7 +7,7 @@
  *   outlives `attribution.disable()`, so it is subscribed exactly once, at
  *   module scope.
  *
- *   `attribution.subscribe` — the "why did this run" record stream. Every
+ *   `OBSERVE.records.subscribe("rerun", …)` — the "why did this run" record stream. Every
  *   subscription is dropped by `disable()`, so `arm()` re-subscribes each time.
  *
  * Both listeners are invoked SYNCHRONOUSLY from inside the reactive flush that
@@ -24,7 +24,13 @@
  * writes and re-runs would appear in the tables it is rendering.
  */
 import { OBSERVE, createRoot, createSignal, getOwner, runWithOwner, type Owner } from "solid-js";
-import { attribution, type ChangeOrigin, type RerunEvent } from "solid-js/attribution";
+import {
+  attribution,
+  formatOrigin,
+  formatRerun,
+  type ChangeOrigin,
+  type RerunEvent
+} from "solid-js/attribution";
 
 export type Variant = "broken" | "fixed";
 
@@ -41,7 +47,7 @@ export interface RunLine {
   id: number;
   kind: "run";
   nodeName: string;
-  /** `attribution.format()` with run counters, timings and write sequence numbers removed. */
+  /** `formatRerun()` with run counters, timings and write sequence numbers removed. */
   text: string;
   /** Real self-time, kept out of `text` so `text` stays byte-comparable. */
   ms: number;
@@ -152,10 +158,18 @@ export const BASE_OPTIONS = {
   hotTime: false,
   wideDeps: false,
   unstableMemos: false,
-  wideWrites: false,
+  fanOut: false,
   holds: false,
   longHolds: false,
-  waterfalls: false
+  waterfalls: false,
+  // Detectors upstream added after the lab was written (#3604–#3619): off
+  // for the same reason as the rest.
+  wastedRecompute: false,
+  graphGrowth: false,
+  abandonedFlights: false,
+  fallbackFlashes: false,
+  stackedHolds: false,
+  optimisticReverts: false
 } as const;
 
 export interface ArmOptions {
@@ -170,9 +184,12 @@ export interface ArmOptions {
  *
  * `disable()` first, always: it is what clears the once-per-key verdict
  * ledgers (`reportedCycles`, `relays`) so flipping Broken → Fixed → Broken
- * re-reports instead of going quiet on the second visit, and it is what drops
- * the previous card's `attribution.subscribe` listener.
+ * re-reports instead of going quiet on the second visit. Record listeners
+ * belong to the channel and outlive `disable()` (upstream #3644), so the
+ * previous card's re-run listener is unsubscribed here explicitly.
  */
+let unsubscribeRuns: (() => void) | undefined;
+
 export function arm(options: ArmOptions = {}): void {
   if (OBSERVE === undefined) return;
   attribution.disable();
@@ -180,15 +197,16 @@ export function arm(options: ArmOptions = {}): void {
   runWithOwner(reportOwner, () => setLines([]));
   attribution.enable({ ...BASE_OPTIONS, waterfalls: options.waterfalls ?? false });
   const watch = new Set(options.watch ?? []);
-  attribution.subscribe((event: RerunEvent) => {
+  unsubscribeRuns?.();
+  unsubscribeRuns = OBSERVE.records.subscribe("rerun", (event: RerunEvent) => {
     if (!watch.has(event.nodeName)) return;
     const origin = rootOrigin(event);
     push({
       kind: "run",
       nodeName: event.nodeName,
-      text: stripVolatile(attribution.format(event)),
+      text: stripVolatile(formatRerun(event)),
       ms: event.selfMs,
-      origin: origin === undefined ? "no tracked cause" : attribution.formatOrigin(origin),
+      origin: origin === undefined ? "no tracked cause" : formatOrigin(origin),
       external: origin === undefined || origin.kind === "external"
     });
   });
@@ -197,6 +215,8 @@ export function arm(options: ArmOptions = {}): void {
 /** Tear the engine down — used when the lab unmounts. */
 export function disarm(): void {
   if (OBSERVE === undefined) return;
+  unsubscribeRuns?.();
+  unsubscribeRuns = undefined;
   attribution.disable();
   pending = [];
   runWithOwner(reportOwner, () => setLines([]));

@@ -36,9 +36,9 @@ async function drive(variant: Variant) {
       // One more settle turn so a late chain would have been recorded before
       // the negative assertions below look for its absence.
       await settle();
-      // `waterfalls()` is read INSIDE the capture: `captureArtifact` disables
+      // `history("waterfall")` is read INSIDE the capture: `captureArtifact` disables
       // the engine on the way out, and the aggregates reset with it.
-      chains = attribution.waterfalls().map(record => record.chain.map(link => link.name));
+      chains = attribution.history("waterfall").map(record => record.chain.map(link => link.name));
       lead = mounted.text("#lead-name");
       team = mounted.text("#team-name");
     },

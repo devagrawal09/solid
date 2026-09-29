@@ -76,7 +76,7 @@ The engine does not guess: a chain link exists only when the dependent flight's 
 _caused_ by the upstream's landing **and** its origin post-dates that landing, so work that was
 already in the air (a preloader, a cache hit, anything stamped with `attribution.markFlight`) is
 parallel and breaks the chain. Depth 2 is advisory; depth 3 that survives the origin test earns
-`warn`. The card renders `attribution.waterfalls()` — the fact table behind the verdict — beside
+`warn`. The card renders `attribution.history("waterfall")` — the fact table behind the verdict — beside
 the measured click-to-paint time. The fixed variant's table is empty.
 
 ### 4. The action that lost its click — provenance only, no diagnostic
@@ -112,11 +112,12 @@ building anything like it:
 
 - **`OBSERVE.diagnostics.subscribe`** is subscribed once at module scope. It survives
   `attribution.disable()`.
-- **`attribution.subscribe`** is re-subscribed by every `arm()`, because `disable()` drops all
-  subscriptions.
+- **`OBSERVE.records.subscribe("rerun", …)`** is re-subscribed by every `arm()`, which drops the
+  previous card's listener itself: record listeners belong to the channel and outlive
+  `attribution.disable()`.
 - **Neither listener writes reactive state.** Both are invoked _synchronously from inside the
-  flush that produced the record_ — the contract on `Attribution.subscribe` says so in as many
-  words. A listener that wrote a signal would be the observer changing what it observes. They
+  flush that produced the record_ — the contract on `OBSERVE.records.subscribe` says so in as
+  many words. A listener that wrote a signal would be the observer changing what it observes. They
   append to a plain array and schedule one microtask that commits the batch after the flush has
   unwound.
 - The panel's own state lives in a root handed to **`OBSERVE.exclude`**, so the report does not

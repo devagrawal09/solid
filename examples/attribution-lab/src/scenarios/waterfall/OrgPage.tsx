@@ -14,7 +14,7 @@
  *   fixed  — one memo, one scope. All three requests are launched from the
  *            same input in the same turn and composed with `Promise.all`, so
  *            nothing waits on anything: one round trip end to end. Nothing is
- *            sequential, so `attribution.waterfalls()` is empty and no
+ *            sequential, so `attribution.history("waterfall")` is empty and no
  *            diagnostic is emitted.
  *
  * Both variants read their async values under a `<Loading>` boundary — an
@@ -128,12 +128,12 @@ export function OrgPage(props: { variant: Variant; latency?: number }) {
 
   const onLanded = (value: Landed) => {
     setLanded(value);
-    // `waterfalls()` is a fact table, not a signal — read it once the chain
+    // `history("waterfall")` is a fact table, not a signal — read it once the chain
     // has settled, from outside the flush that landed it.
     setTimeout(
       () =>
         setChains(
-          attribution.waterfalls().map(record => ({
+          attribution.history("waterfall").map(record => ({
             names: record.chain.map(link => link.name),
             sequentialMs: Math.round(record.sequentialMs)
           }))
@@ -186,7 +186,7 @@ export function OrgPage(props: { variant: Variant; latency?: number }) {
 
       <Show when={chains().length > 0}>
         <div class="lab-timeline">
-          <h4>attribution.waterfalls()</h4>
+          <h4>attribution.history("waterfall")</h4>
           <ul id="flight-chains">
             <For each={chains()}>
               {chain => (

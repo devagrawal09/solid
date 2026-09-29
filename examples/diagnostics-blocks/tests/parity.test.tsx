@@ -34,6 +34,9 @@ function normalize(html: string) {
       // rendered from a view runs its setup outside the `<Name>`-labelled
       // root that dev `createComponent` opens. Checked separately below.
       .replace(/<p class="event-owner">in [^<]*<\/p>/g, '<p class="event-owner">in #path</p>')
+      // FALLBACK_FLASH (upstream #3608) names the boundary by the same owner
+      // path, inside its message.
+      .replace(/(the Loading fallback at ).*? › (boundary showed)/g, "$1#path › $2")
   );
 }
 
@@ -133,6 +136,18 @@ async function record(which: "original" | "twin") {
   const { render } = await import("@solidjs/web");
   const { flush } = await import("solid-js");
   const helpers = await import("./helpers");
+  // The page's own attribution posture (`startDiagnostics` in channel.ts,
+  // taken when the app module loads), minus the wall-clock verdicts
+  // (`HOT_SCOPE_TIME`, and upstream's `WASTED_RECOMPUTE`, #3613): on a loaded
+  // runner they fire for whichever app happens to be slow, which is noise
+  // here. Every `enable()` is a hold whose options combine by the most
+  // demanding value (upstream #3644), so the app's own hold would switch them
+  // back on: each hold taken in this module graph asks for them off.
+  const { attribution } = await import("solid-js/attribution");
+  const enable = attribution.enable.bind(attribution);
+  vi.spyOn(attribution, "enable").mockImplementation(options =>
+    enable({ ...options, hotTime: false, wastedRecompute: false })
+  );
   const app =
     which === "original" ? await import("../../diagnostics/src/app") : await import("../src/app");
   const stories =
@@ -143,10 +158,6 @@ async function record(which: "original" | "twin") {
     which === "original"
       ? await import("../../diagnostics/src/scenarios/action/cart-api")
       : await import("../src/scenarios/action/cart-api");
-  // The page's own attribution posture (`startDiagnostics` in channel.ts),
-  // minus the wall-clock `HOT_SCOPE_TIME` verdict: on a loaded runner it
-  // fires for whichever app happens to be slow, which is noise here.
-  const { attribution } = await import("solid-js/attribution");
   attribution.enable({
     log: false,
     hotTime: false,

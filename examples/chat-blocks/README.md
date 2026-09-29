@@ -26,7 +26,7 @@ and page errors, hydration warnings).
 | Module | v2? | Notes |
 | --- | --- | --- |
 | `src/app.tsx` `App` | yes | `$signal`s, `$event` handlers (submit, input), `$settled` + `$cleanup` for the autoscroll observer (the original's `onSettled(() => { …; return teardown })`). The per-message `For` callback stays a plain render callback (`m` is a plain object; the row holds no state), as does `copyCode` (DOM-only). |
-| `src/lib/ai.tsx` `Message` (server) | yes | `$memo` over the text iterable, `yield*` reads; `props.copy` is read once in the view (`const copy = yield* props.copy`) because the code blocks are produced in a `.map` callback. The `_bnd` claim marker still names `copy`: the value read is the props stub carrying its prop name. |
+| `src/lib/ai.tsx` `Message` (server) | yes | `$memo` over the text iterable, `yield*` reads; `props.block` (the `codeBlock` attribute slot's value) is read once in the view (`const block = yield* props.block`) because the code blocks are produced in a `.map` callback. The `_s:` position marker still names `codeBlock:onCopy`: the value read is the slot's proxy. |
 | `src/lib/ai.tsx` components returned by `reply` / `welcome` (server) | **no** | as `$component`s they render and stream, but their view runs under its own `blockScope`: the `status` slot fill's hydration keys shift (`…status#0-10000` vs `…status#0-1000`) and the `usage` projection arg stops updating on the client (meter stuck at ¶ 0) |
 | `src/components/status.tsx` `Status` (client, rendered in a server slot) | **no** | as a `$component` it is rendered inside the server component's scope instead of as a client fill: no hydration keys, live-hole markers around its reads, never updates |
 | `src/Document.tsx` (the `start` document shell) | **no** | as a `$component` it adds a hydration-key level (`_hk=000100120` vs `0010020` on `<main>`), so the server's ids no longer match the client hydration root and the welcome reply never renders on the client |
@@ -40,4 +40,4 @@ the originals, unchanged.
 | --- | --- | --- |
 | `<props.status progress={progress()} …/>` in a server component | `const StatusFill = yield* props.status; <StatusFill …/>` (tried; reverted with the component, see above) | a v2 prop is a read, not the value |
 | `createMemo(() => gen.progress)` (an AsyncIterable) | `$memo(function* () { return gen.progress as unknown as string })` (tried) | `$memo` types its value as the body's return: a memo returning an async source needs a cast, which hides its pending state from the type layer |
-| `onClick={props.copy}` inside `segments.map(…)` | `const copy = yield* props.copy` at the top of the view | a `.map` callback is a plain arrow and cannot `yield*`; a render-callback block would read it inline |
+| `onClick={props.block.onCopy}` inside `segments.map(…)` | `const block = yield* props.block` at the top of the view | a `.map` callback is a plain arrow and cannot `yield*`; a render-callback block would read it inline |

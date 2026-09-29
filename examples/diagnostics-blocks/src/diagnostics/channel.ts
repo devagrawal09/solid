@@ -3,7 +3,7 @@
  *
  * - `OBSERVE.diagnostics.subscribe()` — the structured diagnostic channel
  *   (stable codes, severity, owner path). Same events the console prints.
- * - `attribution.subscribe("hold" | "interaction" | "rerun", …)` — the
+ * - `OBSERVE.records.subscribe("hold" | "interaction" | "rerun", …)` — the
  *   attribution engine's records: what the user did, what it wrote, and what
  *   the screen was doing while it waited.
  *
@@ -147,12 +147,12 @@ export function startDiagnostics(): boolean {
     );
   });
 
-  attribution.subscribe("hold", hold => {
+  OBSERVE.records.subscribe("hold", hold => {
     const id = route(describeHold(hold));
     enqueue(() => feeds.update(id, feed => ({ ...feed, holds: tail(feed.holds, hold) })));
   });
 
-  attribution.subscribe("interaction", interaction => {
+  OBSERVE.records.subscribe("interaction", interaction => {
     const id = route(interaction.target ?? "");
     enqueue(() =>
       feeds.update(id, feed => ({ ...feed, interactions: tail(feed.interactions, interaction) }))
@@ -176,18 +176,18 @@ export function clearFeed(id: FeedId): void {
  * previous mode's chains as its own.
  */
 export function waterfallCursor(): number {
-  return attribution.waterfalls().length;
+  return attribution.history("waterfall").length;
 }
 
 /** Graph-provable sequential flight chains, filtered to one scenario. */
 export function scenarioWaterfalls(id: ScenarioId, since = 0) {
-  const chains = attribution.waterfalls();
+  const chains = attribution.history("waterfall");
   return chains
     .slice(Math.min(since, chains.length))
     .filter(chain => chain.chain.some(link => route(link.name) === id));
 }
 
-/** Re-run history for one named scope — `attribution.history()`, filtered. */
+/** Re-run history for one named scope — `attribution.history("rerun")`, filtered. */
 export function scenarioReruns(name: string) {
-  return attribution.history().filter(event => event.nodeName === name);
+  return attribution.history("rerun").filter(event => event.nodeName === name);
 }

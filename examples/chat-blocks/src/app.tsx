@@ -17,11 +17,13 @@ interface Message {
 
 let nextId = 0;
 
-// Behavior for SERVER-rendered elements (Stage 6): every code block in a
-// reply carries a copy button the server renders with `onClick={props.copy}`
-// — this function, passed as a prop. The marker in the markup names the
-// prop; delegation resolves it here at dispatch. It touches only the DOM (no
-// reactive state), so it stays a plain function rather than an `$event`.
+// Behavior for SERVER-rendered elements: every code block in a reply
+// carries a copy button the server renders with `onClick={block.onCopy}`,
+// where `block` is the `codeBlock` ATTRIBUTE slot's value — the object the fill
+// below returns. The marker in the markup names the occurrence and key; the
+// client binds this handler on every button, including blocks that streamed
+// in mid-sentence. It touches only the DOM (no reactive state), so it stays a
+// plain function rather than an `$event`.
 const copyCode = (e: MouseEvent & { currentTarget: HTMLButtonElement }) => {
   const button = e.currentTarget;
   const code = button.parentElement?.querySelector("code");
@@ -96,7 +98,7 @@ const App = $component(function* () {
               <Loading fallback={<p class="typing">▍</p>}>
                 <Welcome
                   status={p => <Status progress={p.progress} stats={p.stats} usage={p.usage} />}
-                  copy={copyCode}
+                  codeBlock={() => ({ onCopy: copyCode })}
                 />
               </Loading>
             </div>
@@ -120,7 +122,7 @@ const App = $component(function* () {
                         status={p => (
                           <Status progress={p.progress} stats={p.stats} usage={p.usage} />
                         )}
-                        copy={copyCode}
+                        codeBlock={() => ({ onCopy: copyCode })}
                       />
                     </Loading>
                   </div>

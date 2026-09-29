@@ -8,8 +8,8 @@
  * signals suite settled on after three CI flakes on fixed sleeps — see
  * `packages/signals/tests/attribution-waterfall-eval.test.ts`).
  */
-import { afterEach } from "vitest";
-import { flush } from "solid-js";
+import { afterEach, onTestFinished } from "vitest";
+import { OBSERVE, flush } from "solid-js";
 import { render } from "@solidjs/web";
 import { attribution, type RerunEvent } from "solid-js/attribution";
 import type { AttributionOptions } from "@solidjs/diagnostics";
@@ -21,10 +21,18 @@ export const BASE_OPTIONS: AttributionOptions = {
   hotTime: false,
   wideDeps: false,
   unstableMemos: false,
-  wideWrites: false,
+  fanOut: false,
   holds: false,
   longHolds: false,
-  waterfalls: false
+  waterfalls: false,
+  // Detectors upstream added after the lab was written (#3604–#3619): off
+  // for the same reason as the rest.
+  wastedRecompute: false,
+  graphGrowth: false,
+  abandonedFlights: false,
+  fallbackFlashes: false,
+  stackedHolds: false,
+  optimisticReverts: false
 };
 
 export interface Mounted {
@@ -111,7 +119,9 @@ export async function settle(): Promise<void> {
 /** Collect every re-run the engine reports for the duration of a capture. */
 export function recordRuns(): RerunEvent[] {
   const runs: RerunEvent[] = [];
-  attribution.subscribe(event => runs.push(event));
+  // Record listeners belong to the channel (upstream #3644): they outlive
+  // `attribution.disable()`, so this one ends with the test.
+  onTestFinished(OBSERVE.records.subscribe("rerun", event => void runs.push(event)));
   return runs;
 }
 

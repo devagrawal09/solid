@@ -11,7 +11,7 @@
  * The runtime says both halves out loud:
  *
  * - `SILENT_HOLD` — the write was held and the screen never answered.
- * - `attribution.interactions()` / `holds()` — the UI event (`click on
+ * - `attribution.history("interaction" | "hold")` — the UI event (`click on
  *   button#action-inc`), that it opened an action, every root write staged
  *   behind it with its before/after values, and how long the person waited.
  *

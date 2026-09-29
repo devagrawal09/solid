@@ -7,7 +7,7 @@
  * time, so the equality cutoff that would normally absorb the run never fires.
  *
  * The runtime reports that as `UNSTABLE_MEMO_OUTPUT` after four consecutive
- * equivalent runs, and `attribution.history()` names the cause of each run.
+ * equivalent runs, and `attribution.history("rerun")` names the cause of each run.
  *
  * v2 notes: built per mode (see `ResultsPanel`); the named `shipping` effect
  * stays a plain `createEffect`.

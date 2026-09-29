@@ -16,7 +16,7 @@ import { render } from "@solidjs/web";
 import { flush } from "solid-js";
 import { BRIDGE_GLOBAL, installDiagnosticsBridge } from "@solidjs/diagnostics/browser";
 import { captureBrowserArtifact, type EvaluatingPage } from "@solidjs/diagnostics/playwright";
-import { expectDiagnostic } from "@solidjs/diagnostics";
+import { ARTIFACT_FORMAT_VERSION, expectDiagnostic } from "@solidjs/diagnostics";
 import { ResultsPanel } from "../src/scenarios/tear/ResultsPanel";
 import { $, attributionOptions, mountPoint, typeInto } from "./helpers";
 
@@ -65,7 +65,7 @@ describe("the browser bridge", () => {
       { scenario: "tear/broken (page session)", attribution: attributionOptions }
     );
 
-    expect(artifact.formatVersion).toBe(4);
+    expect(artifact.formatVersion).toBe(ARTIFACT_FORMAT_VERSION);
     expect(artifact.scenario).toBe("tear/broken (page session)");
     // A real finding, produced by the app's own runtime, carried across the
     // page boundary as plain JSON.

@@ -44,7 +44,7 @@ async function drive(variant: Variant) {
       await until(() => mounted.text("#status") === "done", "the action to finish");
       await settle();
 
-      interactions = [...attribution.interactions()];
+      interactions = [...attribution.history("interaction")];
       dom = {
         status: mounted.text("#status"),
         progress: mounted.text("#progress"),
