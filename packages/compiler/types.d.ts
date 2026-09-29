@@ -60,6 +60,12 @@ export interface TransformOptions {
   builtIns?: string[];
   requireImportSource?: false | string;
   renderers?: RendererOption[];
+  /**
+   * The module the block rule imports `perform` from. Inside a JSX expression
+   * or attribute value, `yield* e` becomes `perform(e)` so the read happens in
+   * the hole's own computation. Default `"@solidjs/blocks"`.
+   */
+  blocksModule?: string;
 }
 
 export interface RendererOption {

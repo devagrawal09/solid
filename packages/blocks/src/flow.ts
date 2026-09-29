@@ -22,16 +22,21 @@ import {
   Switch as SolidSwitch,
   type Accessor
 } from "solid-js";
-import { BODY, BOUNDARY, READ, isRowBlock, rowArg, runRow } from "./runtime.js";
+import { BODY, BOUNDARY, READ, isRowBlock, rowArg, runRow, through } from "./runtime.js";
 import type { Element } from "./element.js";
-import type { Path, RowBlock, Source, View } from "./types.js";
+import type { COMPONENT, Path, RowBlock, SettledView, Source, View } from "./types.js";
+
+/** Flow controls are components (`<${For} …>` in `html`, `h(For, …)`). */
+type Branded = { readonly [COMPONENT]: true };
 
 /** Forward every prop as a getter, replacing `children` (and `fallback` when given). */
 function forward(props: any, overrides: Record<string, unknown>): any {
   const out: any = {};
   for (const key of Object.keys(props)) {
     if (key in overrides) continue;
-    Object.defineProperty(out, key, { get: () => props[key], enumerable: true });
+    // A source passed straight to a flow control (`each={todos}` in `h`, or
+    // a call `For({ each: todos, … })`) is read where the prop is read.
+    Object.defineProperty(out, key, { get: () => through(props[key]), enumerable: true });
   }
   for (const key in overrides) out[key] = overrides[key];
   return out;
@@ -61,7 +66,7 @@ function adapt(cb: unknown, args: (...raw: any[]) => unknown[], arity: number): 
 
 type EachOf<T> = T extends readonly (infer U)[] ? U : never;
 type ForProps<T extends readonly any[]> = {
-  each: T | undefined | null | false;
+  each: T | undefined | null | false | Source<T | undefined | null | false, false, never>;
   fallback?: Element;
   keyed?: boolean | ((item: EachOf<T>) => any);
 };
@@ -71,17 +76,17 @@ type ForProps<T extends readonly any[]> = {
  * with per-row state, `{function* (todo) { setup; return function* () { view } }}`.
  * The row's item is a read (`yield* todo.title`), its index a source.
  */
-export function For<T extends readonly any[], Y, VY, R>(
+function ForBlocks<T extends readonly any[], Y, VY, R>(
   props: ForProps<T> & {
     children: RowBlock<[item: Path<EachOf<T>>, index: Source<number>], Y, VY, R>;
   }
-): Element;
-export function For<T extends readonly any[]>(
+): SettledView;
+function ForBlocks<T extends readonly any[]>(
   props: ForProps<T> & {
     children: (item: Path<EachOf<T>>, index: Source<number>) => Element;
   }
-): Element;
-export function For(props: any): any {
+): SettledView;
+function ForBlocks(props: any): any {
   const keyedFalse = props.keyed === false;
   const children = props.children;
   const arity = typeof children === "function" && children.length > 1 ? 2 : 1;
@@ -101,15 +106,19 @@ export function For(props: any): any {
 
 // --- Repeat ---------------------------------------------------------------------------------------
 
-type RepeatProps = { count: number; from?: number | undefined; fallback?: Element };
+type RepeatProps = {
+  count: number | Source<number, false, never>;
+  from?: number | undefined;
+  fallback?: Element;
+};
 /** `<Repeat count={n}>{function* (index) { … }}</Repeat>`: the index is a source. */
-export function Repeat<Y, VY, R>(
+function RepeatBlocks<Y, VY, R>(
   props: RepeatProps & { children: RowBlock<[index: Source<number>], Y, VY, R> }
-): Element;
-export function Repeat(
+): SettledView;
+function RepeatBlocks(
   props: RepeatProps & { children: ((index: Source<number>) => Element) | Element }
-): Element;
-export function Repeat(props: any): any {
+): SettledView;
+function RepeatBlocks(props: any): any {
   return SolidRepeat(
     forward(props, {
       children: adapt(props.children, (index: number) => [rowArg(index, false)], 1)
@@ -119,20 +128,20 @@ export function Repeat(props: any): any {
 
 // --- Show / Match -------------------------------------------------------------------------------
 
-type Cond<T> = T | undefined | null | false;
+type Cond<T> = T | undefined | null | false | Source<T | undefined | null | false, false, never>;
 type ShowProps<T> = { when: Cond<T>; keyed?: boolean; fallback?: Element };
 
 /**
  * `<Show when={yield* user}>{u => <p>{yield* u.name}</p>}</Show>` — the
  * branch's value is a read — or a row block with its own setup.
  */
-export function Show<T, Y, VY, R>(
+function ShowBlocks<T, Y, VY, R>(
   props: ShowProps<T> & { children: RowBlock<[value: Path<NonNullable<T>>], Y, VY, R> }
-): Element;
-export function Show<T>(
+): SettledView;
+function ShowBlocks<T>(
   props: ShowProps<T> & { children: Element | ((value: Path<NonNullable<T>>) => Element) }
-): Element;
-export function Show(props: any): any {
+): SettledView;
+function ShowBlocks(props: any): any {
   const keyed = !!props.keyed;
   return SolidShow(
     forward(props, {
@@ -142,18 +151,18 @@ export function Show(props: any): any {
 }
 
 /** `<Switch>` over `<Match>`es. */
-export const Switch: (props: { fallback?: Element; children: Element }) => Element =
+export const Switch: ((props: { fallback?: Element; children: Element }) => SettledView) & Branded =
   SolidSwitch as any;
 
 type MatchProps<T> = { when: Cond<T>; keyed?: boolean };
 /** A branch of `<Switch>`; its render callback may be a row block. */
-export function Match<T, Y, VY, R>(
+function MatchBlocks<T, Y, VY, R>(
   props: MatchProps<T> & { children: RowBlock<[value: Path<NonNullable<T>>], Y, VY, R> }
-): Element;
-export function Match<T>(
+): SettledView;
+function MatchBlocks<T>(
   props: MatchProps<T> & { children: Element | ((value: Path<NonNullable<T>>) => Element) }
-): Element;
-export function Match(props: any): any {
+): SettledView;
+function MatchBlocks(props: any): any {
   const keyed = !!props.keyed;
   return SolidMatch(
     forward(props, {
@@ -169,7 +178,7 @@ export function Match(props: any): any {
  * (`<Loading fallback={…}>{UserCard({ user })}</Loading>`); it returns a
  * view without pending, so failures still have to be handled above.
  */
-export function Loading<P extends boolean = false, E = never>(props: {
+function LoadingBlocks<P extends boolean = false, E = never>(props: {
   fallback?: Element;
   on?: unknown;
   children: View<P, E> | Element;
@@ -182,7 +191,7 @@ export function Loading<P extends boolean = false, E = never>(props: {
  * failures of the children) and a `reset`. `$event` failures under it are
  * routed here.
  */
-export function Errored<P extends boolean = false, E = unknown>(props: {
+function ErroredBlocks<P extends boolean = false, E = unknown>(props: {
   fallback: Element | ((error: Accessor<E>, reset: () => void) => Element);
   children: View<P, E> | Element;
 }): View<P, never> {
@@ -206,3 +215,10 @@ export function Errored<P extends boolean = false, E = unknown>(props: {
     }
   } as any) as any;
 }
+
+export const For: typeof ForBlocks & Branded = ForBlocks as any;
+export const Repeat: typeof RepeatBlocks & Branded = RepeatBlocks as any;
+export const Show: typeof ShowBlocks & Branded = ShowBlocks as any;
+export const Match: typeof MatchBlocks & Branded = MatchBlocks as any;
+export const Loading: typeof LoadingBlocks & Branded = LoadingBlocks as any;
+export const Errored: typeof ErroredBlocks & Branded = ErroredBlocks as any;

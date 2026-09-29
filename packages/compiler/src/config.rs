@@ -93,6 +93,10 @@ pub struct TransformOptions {
     /// Default `["For", "Show", "Switch", "Match", "Loading", "Reveal", "Portal", "Repeat", "Dynamic", "Errored"]`.
     pub built_ins: Option<Vec<String>>,
     pub renderers: Option<Vec<RendererOption>>,
+    /// The module the block rule imports `perform` from (inside a JSX
+    /// expression or attribute value, `yield* e` becomes `perform(e)`).
+    /// Default `"@solidjs/blocks"`.
+    pub blocks_module: Option<String>,
 }
 
 #[napi(object)]

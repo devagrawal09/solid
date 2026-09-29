@@ -14,6 +14,7 @@
 //! revision when embedding it. The Node `transform()` interface remains the
 //! supported public contract.
 
+mod blocks_rule;
 mod compiler;
 #[cfg(feature = "node")]
 mod config;

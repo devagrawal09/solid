@@ -146,7 +146,7 @@ function readOf(x: any): unknown {
 }
 
 /** A value read through: a readable's value, else the value itself. */
-function through(v: any): any {
+export function through(v: any): any {
   return v != null && v[READ] !== undefined ? readOf(v) : v;
 }
 

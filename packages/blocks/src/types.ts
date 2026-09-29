@@ -30,6 +30,10 @@ export declare const BLOCK: unique symbol;
 export declare const PROPS: unique symbol;
 /** Phantom brand of no-JSX (`h` / `html`) output. */
 export declare const HVIEW: unique symbol;
+/** Phantom brand of `$event` handlers (a plain function is not one). */
+export declare const EVENT: unique symbol;
+/** Phantom brand of `$component`s (a plain function is not one). */
+export declare const COMPONENT: unique symbol;
 
 // --- operations ------------------------------------------------------------------
 
@@ -263,7 +267,7 @@ export type SettledView = View<false, never>;
 /** A component built by `$component`: calling it renders it and returns its view. */
 export type Component<P = {}, Pd extends boolean = boolean, E = unknown> = ({} extends P
   ? (props?: PropsInput<P>) => View<Pd, E>
-  : (props: PropsInput<P>) => View<Pd, E>) & { readonly [VIEW]?: "component" };
+  : (props: PropsInput<P>) => View<Pd, E>) & { readonly [COMPONENT]: true };
 
 /** A view generator's pending: its reads' and, for a no-JSX view, its output's. */
 export type ViewPending<VY, R> = PendingOf<VY | HOps<R>>;
@@ -294,6 +298,7 @@ export interface Block<T, P extends boolean = false, E = never> extends Source<T
 /** An `$event` handler: call it with the event. */
 export interface EventHandler<Ev = unknown, E = never> {
   (event: Ev): void;
+  readonly [EVENT]: true;
   readonly [FAILS]?: E;
 }
 

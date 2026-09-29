@@ -143,6 +143,10 @@ pub struct CompileOptions {
     pub omit_last_closing_tag: bool,
     pub built_ins: Vec<String>,
     pub renderers: Vec<Renderer>,
+    /// The module the block rule imports `perform` from: inside a JSX
+    /// expression or attribute value, `yield* e` becomes `perform(e)`.
+    /// Default `"@solidjs/blocks"`.
+    pub blocks_module: String,
 }
 
 impl Default for CompileOptions {
@@ -174,6 +178,7 @@ impl Default for CompileOptions {
             omit_last_closing_tag: true,
             built_ins: default_built_ins(),
             renderers: Vec::new(),
+            blocks_module: crate::blocks_rule::DEFAULT_BLOCKS_MODULE.into(),
         }
     }
 }
@@ -281,6 +286,11 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
     if tsrx_route {
         crate::tsrx::clear_generated_spans(&mut program, options.source_map);
     }
+
+    // The one block rule: `yield*` inside JSX becomes `perform(…)`, before
+    // any output mode decides what is dynamic.
+    crate::blocks_rule::apply(&allocator, source, &mut program, &options.blocks_module)
+        .map_err(CompileError::transform)?;
 
     match options.generate {
         Generate::Dom => {

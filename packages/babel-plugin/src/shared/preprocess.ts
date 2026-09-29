@@ -1,4 +1,5 @@
 import config from "../config";
+import { applyBlocksRule } from "./blocks-rule";
 import type * as t from "@babel/types";
 import type { NodePath } from "@babel/traverse";
 import type { BabelHubWithMetadata, PluginPass } from "../types";
@@ -29,4 +30,6 @@ export default (path: NodePath<t.Program>, state: PluginPass) => {
       return;
     }
   }
+  // The one block rule, before the JSX transform decides what is dynamic.
+  if (file.code == null || file.code.includes("yield")) applyBlocksRule(path, merged.blocksModule);
 };
