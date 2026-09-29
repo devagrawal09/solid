@@ -572,7 +572,7 @@ export const App = $component(function* () {
 import { $component, $event, $memo, $signal, attempt } from "solid-js";
 export const App = $component(function* () {
   const [id, setId] = yield* $signal(1);
-  const user = yield* $memo(function* () { const u = yield* attempt(() => load(yield* id)); return u.name; });
+  const user = yield* $memo(function* () { const i = yield* id; const u = yield* attempt(() => load(i)); return u.name; });
   const next = $event(function* () { setId(x => x + 1); });
   return function* () { return <p onClick={next}>{yield* user}</p>; };
 });

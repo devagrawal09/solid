@@ -1020,3 +1020,129 @@ fn helper_return_shapes_round_trip() {
     assert!(Shape::decode("object:a-b=accessor").is_none());
     assert!(Shape::decode("").is_none());
 }
+
+// --- render callbacks as blocks (row blocks) --------------------------------------
+
+const ROWS: &str = r#"import { $component, $signal, $event, $cleanup, For, Show } from "solid-js";
+export const List = $component(function* (props) {
+  function* comment(c) {
+    const [open, setOpen] = yield* $signal(true);
+    const toggle = $event(function* () { setOpen(o => !o); });
+    yield* $cleanup(() => log(c.id));
+    return function* () {
+      return <li onClick={toggle}>{(yield* open) ? "-" : "+"}<For each={c.kids}>{comment}</For></li>;
+    };
+  }
+  return function* () {
+    return (
+      <ul>
+        <For each={yield* props.items}>{comment}</For>
+        <For each={yield* props.items}>
+          {function* (c, i) {
+            const [n] = yield* $signal(c.id);
+            return function* () { return <b>{yield* n}{yield* i}</b>; };
+          }}
+        </For>
+        <Show when={yield* props.flag}>
+          {function* () {
+            const [x] = yield* $signal(1);
+            return function* () { return <i>{yield* x}</i>; };
+          }}
+        </Show>
+      </ul>
+    );
+  };
+});
+"#;
+
+#[test]
+fn row_blocks_lower_to_compiled_scopes() {
+    for generate in [Generate::Dom, Generate::Ssr] {
+        let out = compile_with(
+            ROWS,
+            CompileOptions {
+                generate,
+                hydratable: generate == Generate::Ssr,
+                ..CompileOptions::default()
+            },
+        );
+        let flat = flat(&out);
+        // The named row block is a `const` scope (its recursion reads it).
+        assert!(
+            flat.contains("const comment = _$$scopeCompiled(function(c) {"),
+            "{out}"
+        );
+        // Its setup lowered like a component's: direct creations, a
+        // compiled event, `$cleanup` on the row's owner.
+        assert!(
+            flat.contains("const [open, setOpen] = _$createSignal(true);"),
+            "{out}"
+        );
+        assert!(flat.contains("_$blockCleanup(() => log(c.id));"), "{out}");
+        // Inline row blocks, with the index argument and without arguments.
+        assert!(flat.contains("_$$scopeCompiled(function(c, i) {"), "{out}");
+        assert!(flat.contains("_$$scopeCompiled(function() {"), "{out}");
+        // No generator and no `$scope` constructor is left: every scope erased.
+        assert!(!flat.contains("function*"), "{out}");
+        assert!(!flat.contains("_$scopeBlock("), "{out}");
+    }
+}
+
+#[test]
+fn row_block_host_rules_are_compile_errors() {
+    let creates_in_view = r#"import { $component, $signal, For } from "solid-js";
+export const L = $component(function* () {
+  return function* () {
+    return <For each={[1]}>{function* (c) {
+      return function* () { const [x] = yield* $signal(c); return <b>{yield* x}</b>; };
+    }}</For>;
+  };
+});
+"#;
+    let error = compile(creates_in_view, &CompileOptions::default())
+        .err()
+        .expect("a creation in a row's view is refused")
+        .to_string();
+    assert!(
+        error.contains("[OP_NOT_ALLOWED] `create` is not allowed in a view"),
+        "{error}"
+    );
+    // A render argument is read in the view, not in the setup.
+    let reads_in_setup = r#"import { $component, $signal, Show } from "solid-js";
+export const L = $component(function* () {
+  return function* () {
+    return <Show when={1}>{function* (v) {
+      const n = yield* v;
+      return function* () { return <b>{n}</b>; };
+    }}</Show>;
+  };
+});
+"#;
+    let error = compile(reads_in_setup, &CompileOptions::default())
+        .err()
+        .expect("a read of a render argument in a row's setup is refused")
+        .to_string();
+    assert!(
+        error.contains("[OP_NOT_ALLOWED] `read` is not allowed in a component setup"),
+        "{error}"
+    );
+}
+
+#[test]
+fn yield_star_in_a_plain_callback_is_a_compile_error() {
+    let source = r#"import { $component, For } from "solid-js";
+export const L = $component(function* () {
+  function* comment(c) { return function* () { return <li>{c}</li>; }; }
+  return function* () {
+    return <For each={[1, 2]}>{child => yield* comment(child)}</For>;
+  };
+});
+"#;
+    let error = compile(source, &CompileOptions::default())
+        .err()
+        .expect("`yield*` in a plain arrow is refused")
+        .to_string();
+    assert!(error.contains("[YIELD_IN_CALLBACK]"), "{error}");
+    // It points at the `yield`.
+    assert!(error.contains("(5:41)"), "{error}");
+}

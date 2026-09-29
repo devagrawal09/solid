@@ -17,7 +17,7 @@ import {
   untrack,
   type Owner
 } from "./core/index.js";
-import { installGeneratorHook, type SourceAccessor } from "./signals.js";
+import { installGeneratorHook, SCOPE_CALLBACK, type SourceAccessor } from "./signals.js";
 import { installBlockRenderer } from "./block-hooks.js";
 
 /*
@@ -1313,13 +1313,92 @@ export function isBlock(value: unknown): value is AnyBlock {
 }
 
 /** @internal Run a block under a host (the host decides which operations it admits). */
-export function runBlockAs<B extends AnyBlock>(host: Host, block: B, input: unknown): unknown {
+export function runBlockAs<B extends AnyBlock>(
+  host: Host,
+  block: B,
+  input: unknown,
+  input2?: unknown
+): unknown {
   pendingHost = host;
   try {
-    return block(input);
+    return (block as any)(input, input2);
   } finally {
     pendingHost = -1;
   }
+}
+
+/**
+ * @internal A render-callback scope block (generator-blocks-v2.md, "Render
+ * callbacks as blocks"): `setup` — a block run under the component host, or
+ * the plain function the compiler erased it to — takes the flow control's
+ * render arguments (a `<For>` row's item and index, a `<Show>` / `<Match>`
+ * branch's value) instead of props. The flow control calls the result once
+ * per row / branch activation, under that row's owner: the setup runs
+ * untracked (its `$cleanup`s register on the row's owner, so they run when
+ * the row or branch is disposed) and returns its view, which is rendered
+ * like a component's (`toView` marks it a view). The result keeps the
+ * setup's arity (one argument or two): `mapArray` builds index accessors
+ * only for a callback that declares the index.
+ */
+export function scopeCallback(
+  setup: any,
+  arity: number,
+  toView: (view: any) => unknown
+): (item?: unknown, index?: unknown) => unknown {
+  const block = isBlock(setup);
+  const run = (item: unknown, index: unknown): unknown =>
+    untrack(() => {
+      const view = block ? runBlockAs(COMPONENT, setup, item, index) : setup(item, index);
+      if (typeof view !== "function") {
+        throw new TypeError(
+          __DEV__
+            ? "[SCOPE_VIEW] A render-callback block's setup must return its view: `function* (item) { …; return function* () { return <…/> } }`"
+            : "[SCOPE_VIEW]"
+        );
+      }
+      return toView(view);
+    });
+  const callback =
+    arity > 1
+      ? function (item: unknown, index: unknown) {
+          return run(item, index);
+        }
+      : function (item: unknown) {
+          return run(item, undefined);
+        };
+  (callback as any)[SCOPE_CALLBACK] = true;
+  return callback;
+}
+
+/** @internal The number of render arguments a scope setup declares (a block's body's). */
+export function blockArity(fn: any): number {
+  return isBlock(fn) ? (fn as any)[BODY].length : fn.length;
+}
+
+/** @internal A view block: rendered where it is inserted; `yield*` on it is the view. */
+export function markView(block: any): unknown {
+  block[VIEW] = true;
+  block[Symbol.iterator] = viewIterator;
+  return block;
+}
+
+/** `$(function* (row) …)` or a generator function handed to a flow control: a scope block. */
+function scopeBody(fn: unknown): unknown {
+  if (isGeneratorFunction(fn)) return scopeCallback($(fn as any), fn.length, driverView);
+  // An uncompiled `$(function* (row) { … })`: a block over a generator body
+  // with a parameter. (A parameterless block is a JSX block, rendered as a
+  // child as before.)
+  if (isBlock(fn) && !(fn as any)[VIEW]) {
+    const body = (fn as any)[BODY];
+    if (isGeneratorFunction(body) && body.length > 0)
+      return scopeCallback(fn, body.length, driverView);
+  }
+  return undefined;
+}
+
+/** The view a scope block's setup returned: a generator body, or a block. */
+function driverView(view: any): unknown {
+  return markView(isBlock(view) ? view : $(view));
 }
 
 /**
@@ -1331,8 +1410,18 @@ export function runBlockAs<B extends AnyBlock>(host: Host, block: B, input: unkn
 // half is collecting and has none yet; else the collected list. Lazy, so a
 // half that registers nothing allocates nothing.
 let cleanupSink: (() => void)[] | null | undefined = undefined;
+/**
+ * The owner cleanup a setup's `$cleanup` registers with: the core's, or the
+ * renderer's (`solid-js`' server registers its own owner's `onCleanup`, so a
+ * server render's disposal runs a setup's cleanups as it runs `onCleanup`s).
+ */
+let ownerCleanup: (fn: () => void) => unknown = cleanup;
+/** @internal */
+export function setCleanupPrimitive(fn: (fn: () => void) => unknown): void {
+  ownerCleanup = fn;
+}
 function registerCleanup(fn: () => void): void {
-  if (cleanupSink === undefined) cleanup(fn);
+  if (cleanupSink === undefined) ownerCleanup(fn);
   else if (cleanupSink === null) cleanupSink = [fn];
   else cleanupSink.push(fn);
 }
@@ -1381,7 +1470,8 @@ export function isGeneratorFunction(value: unknown): value is (...args: any[]) =
  * tracked effect (reads, writes and `$cleanup` in one pass; writes deferred
  * until flush), which returns true. Anything else returns undefined.
  */
-function generatorBody(fn: unknown, asEffect?: boolean | "settled"): unknown {
+function generatorBody(fn: unknown, asEffect?: boolean | "settled" | "scope"): unknown {
+  if (asEffect === "scope") return scopeBody(fn);
   if (!isGeneratorFunction(fn)) return undefined;
   const block = $(fn as any) as AnyBlock;
   if (!asEffect) return block;
@@ -1991,8 +2081,9 @@ export function $(
     const prevBase = tokenBase;
     const base = (tokenBase = liveTokens.length);
     try {
-      // `arguments[0]`, not a rest parameter: no array per run.
-      const result = body(arguments[0]);
+      // `arguments[0]` (and a scope block's second render argument, the
+      // row index), not a rest parameter: no array per run.
+      const result = (body as any)(arguments[0], arguments[1]);
       let value: unknown;
       if (sync) {
         if (__DEV__) verifySyncBlockResult(result);
@@ -2058,8 +2149,9 @@ export function syncBlock<Input, R>(
     const prevBase = tokenBase;
     const base = (tokenBase = liveTokens.length);
     try {
-      // `arguments[0]`, not a rest parameter: no array per run.
-      const result = body(arguments[0]);
+      // `arguments[0]` (and a scope block's second render argument, the
+      // row index), not a rest parameter: no array per run.
+      const result = (body as any)(arguments[0], arguments[1]);
       if (__DEV__) verifySyncBlockResult(result);
       if (liveTokens.length !== base) checkTokens(base);
       return result;

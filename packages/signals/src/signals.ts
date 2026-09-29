@@ -492,7 +492,7 @@ export function createSignal<T>(
 // built, so the core floor does not carry the driver (pay-for-use). The hook
 // returns the memo compute / creates the effect for a generator body, and
 // returns undefined for anything else.
-let generatorHook: ((fn: unknown, effect?: boolean | "settled") => any) | null = null;
+let generatorHook: ((fn: unknown, effect?: boolean | "settled" | "scope") => any) | null = null;
 /** @internal */
 export function installGeneratorHook(hook: NonNullable<typeof generatorHook>): void {
   generatorHook = hook;
@@ -507,6 +507,32 @@ function checkGeneratorHook(fn: unknown): void {
     throw new Error(
       "[GENERATOR_BODY] A generator body needs the block driver: build a block (`$memo`, `$effect`, `$component`, `$event`) in this app, or compile it with the Solid compiler."
     );
+}
+
+/**
+ * @internal Runtime brand of a scope block's render callback (`$scope`,
+ * or a generator render callback converted by `renderCallback`): flow
+ * controls call it even when it declares no parameter (a `<Show>` branch
+ * block), instead of rendering it as a child. Registered, so renderers
+ * that do not import the core (`@solidjs/h`) can recognize it.
+ */
+export const SCOPE_CALLBACK = Symbol.for("solid.scopeCallback");
+
+/**
+ * @internal A flow control's render callback (`<For>`, `<Show>`, `<Match>`,
+ * `<Repeat>` children), as the flow control calls it. A scope block — a
+ * generator function (`function* (row) { setup; return function* () { view } }`),
+ * a `$(function* (row) …)` block, or a compiled `$scope(…)` — runs its setup
+ * once per row / branch activation, under that row's owner, and renders the
+ * view it returns (generator-blocks-v2.md, "Render callbacks as blocks").
+ * Anything else is returned as is. The conversion lives with the block
+ * driver (installed when the first block is built), so an app that never
+ * builds a block does not retain it.
+ */
+export function renderCallback<F>(fn: F): F {
+  if (typeof fn !== "function" || (fn as any)[SCOPE_CALLBACK]) return fn;
+  if (__DEV__) checkGeneratorHook(fn);
+  return (generatorHook && generatorHook(fn, "scope")) || fn;
 }
 /** @internal `fn`, or the memo block a generator body becomes. */
 export function generatorMemo<F>(fn: F): F {

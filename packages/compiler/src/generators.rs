@@ -783,6 +783,10 @@ pub(crate) fn member_chain_root<'a, 'b>(
                     Expression::StringLiteral(_)
                     | Expression::NumericLiteral(_)
                     | Expression::Identifier(_) => {}
+                    // A key read from a plain value (`map[row.id]`, a keyed
+                    // store read by a row's own id): a static chain with no
+                    // call, evaluated once, before the read, as written.
+                    key @ Expression::StaticMemberExpression(_) if static_key_chain(key) => {}
                     _ => return None,
                 }
                 current = &member.object;
@@ -791,6 +795,50 @@ pub(crate) fn member_chain_root<'a, 'b>(
             _ => return None,
         }
         hops += 1;
+    }
+}
+
+/// The computed keys of a member chain that are themselves member chains
+/// (`map[row.id]`), moved out, outermost key last (in `member_chain_keys`
+/// order); `None` for every other hop.
+fn take_chain_keys<'a>(
+    allocator: &'a oxc_allocator::Allocator,
+    expression: &mut Expression<'a>,
+) -> Vec<Option<Expression<'a>>> {
+    let ast = AstBuilder::new(allocator);
+    let mut out = Vec::new();
+    let mut current = expression;
+    loop {
+        match current {
+            Expression::StaticMemberExpression(member) => {
+                out.push(None);
+                current = &mut member.object;
+            }
+            Expression::ComputedMemberExpression(member) => {
+                if matches!(member.expression, Expression::StaticMemberExpression(_)) {
+                    let key = std::mem::replace(&mut member.expression, ast.void_0(Span::new(0, 0)));
+                    out.push(Some(key));
+                } else {
+                    out.push(None);
+                }
+                current = &mut member.object;
+            }
+            _ => break,
+        }
+    }
+    out.reverse();
+    out
+}
+
+/// `a.b.c`: static property accesses on an identifier (a computed key of a
+/// lowerable chain).
+fn static_key_chain(expression: &Expression<'_>) -> bool {
+    match expression {
+        Expression::StaticMemberExpression(member) if !member.optional => {
+            static_key_chain(&member.object)
+        }
+        Expression::Identifier(_) => true,
+        _ => false,
     }
 }
 
@@ -1021,7 +1069,7 @@ impl<'a> VisitMut<'a> for Rewriter<'a> {
                 // object, no path array, no `perform` dispatch.
                 let path = self.plan.paths.remove(index);
                 let span = yield_expression.span;
-                let operand = yield_expression
+                let mut operand = yield_expression
                     .argument
                     .take()
                     .expect("eligibility checked the operand");
@@ -1034,8 +1082,14 @@ impl<'a> VisitMut<'a> for Rewriter<'a> {
                 // literal output off spans); the outer call keeps the yield's.
                 let synth = Span::new(0, 0);
                 let root = ast.expression_identifier(synth, root_name);
+                // Member-chain keys (`map[row.id]`) move over as they are.
+                let mut moved = take_chain_keys(self.allocator, &mut operand).into_iter();
                 let key_expressions = keys.iter().map(|key| {
-                    if let Some(text) = key.strip_prefix('"').and_then(|k| k.strip_suffix('"')) {
+                    if let Some(Some(expression)) = moved.next() {
+                        expression
+                    } else if let Some(text) =
+                        key.strip_prefix('"').and_then(|k| k.strip_suffix('"'))
+                    {
                         ast.expression_string_literal(synth, ast.str(text), None)
                     } else if let Ok(number) = key.parse::<f64>() {
                         ast.expression_numeric_literal(

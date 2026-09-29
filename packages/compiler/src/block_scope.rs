@@ -49,7 +49,9 @@ const ADAPTER_NAMES: &[&str] = &["$", "syncBlock"];
 /// Constructors whose flagged block argument the v2 client lowering may
 /// erase on the DOM side only (`$componentCompiled(fn)`, `$eventCompiled(fn)`):
 /// never scoped, so both sides reserve the same slots.
-const ERASABLE_HOSTS: &[&str] = &["$component", "$event"];
+/// (`$scope` is a render-callback block's setup, imported by the v2
+/// pre-pass as `_$scopeBlock`.)
+const ERASABLE_HOSTS: &[&str] = &["$component", "$event", "$scope", "_$scopeBlock"];
 /// The local name of the scope helper.
 pub(crate) const BLOCK_SCOPE_LOCAL: &str = "_$blockScope";
 

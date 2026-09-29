@@ -36,6 +36,9 @@ import {
   type EventRun,
   readProp,
   runBlockAs,
+  scopeCallback,
+  blockArity,
+  setCleanupPrimitive,
   Receipt,
   usePerformOp,
   viewIterator,
@@ -237,6 +240,8 @@ const primitives: {
   onSettled?: (callback: () => void | (() => void)) => void;
   /** The server's deferral gives the deferred content an id-carrying owner. */
   lazyView?: <T>(make: () => T) => () => T;
+  /** The owner cleanup `$cleanup` registers with (the server's owner). */
+  onCleanup?: (fn: () => void) => unknown;
 } = {};
 
 /** A generator body, or the block the compiler already built from it. */
@@ -246,6 +251,7 @@ function toBlock(body: unknown): any {
 /** @internal */
 export function setBlockPrimitives(p: Partial<typeof primitives>): void {
   Object.assign(primitives, p);
+  if (p.onCleanup) setCleanupPrimitive(p.onCleanup);
 }
 
 // --- operations --------------------------------------------------------------
@@ -544,6 +550,42 @@ function makeComponent(setup: any, flags: number, toView: (body: any) => unknown
   };
   (component as any)[COMPONENT_MARK] = true;
   return component;
+}
+
+// --- render-callback blocks ------------------------------------------------------
+
+/**
+ * A render-callback block (a scope): the setup takes the flow control's
+ * render arguments — a `<For>` row's item and index, a `<Show>` / `<Match>`
+ * branch's value, a `<Repeat>` index — instead of props, and returns its
+ * view, exactly as a `$component` setup does.
+ */
+export type ScopeBody<A extends readonly unknown[], Y extends SetupOp, VY extends ViewOp> = (
+  ...args: A
+) => Generator<Y, () => Generator<VY, unknown, any>, any>;
+
+/**
+ * `$scope(function* (item) { setup; return function* () { view } })` — a
+ * render callback with its own state: the setup runs once per row / branch
+ * activation under that row's owner (its `$cleanup`s run when the row or
+ * branch is disposed), and the view it returns is rendered like a component
+ * view. Flow controls accept the generator function itself (`<For each={…}>
+ * {function* (c) { … }}</For>`), and the compiler emits `$scope` for it; the
+ * explicit form exists for callbacks built outside a flow control.
+ */
+export function $scope<A extends readonly unknown[], Y extends SetupOp, VY extends ViewOp>(
+  body: ScopeBody<A, Y, VY>
+): (...args: A) => ViewOf<VY> {
+  return scopeCallback(toBlock(body), blockArity(body), view) as any;
+}
+
+/**
+ * @internal `$scope` for a setup the compiler built: a block, or the plain
+ * setup function when every operation was lowered (see `$componentCompiled`).
+ * Every view it returns is a block the compiler built.
+ */
+export function $scopeCompiled(setup: any): any {
+  return scopeCallback(setup, blockArity(setup), compiledView);
 }
 
 /** @internal Runtime brand of `$component` functions. */

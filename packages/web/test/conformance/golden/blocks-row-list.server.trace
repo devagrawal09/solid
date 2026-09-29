@@ -1,0 +1,11 @@
+## render
+read items = [{"id":1,"label":"a"},{"id":2,"label":"b"}]
+run setup a
+run setup b
+read open a = true
+read open b = true
+run cleanup a
+run cleanup b
+markup = <ul _hk=0><li _hk=3 class="row r1"><!--$-->a<!--/-->=<!--$-->open<!--/--></li><!--!$--><li _hk=4 class="row r2"><!--$-->b<!--/-->=<!--$-->open<!--/--></li></ul>
+hydration-keys = ["0","3","4"]
+serialized = []

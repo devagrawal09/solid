@@ -64,6 +64,8 @@ export {
   effectBlockCompiled,
   settledBlockCompiled,
   $componentCompiled,
+  $scope,
+  $scopeCompiled,
   $eventCompiled,
   $eventAsync,
   syncBlock,
@@ -3263,5 +3265,6 @@ setBlockPrimitives({
   createTrackedEffect,
   createEffect,
   onSettled,
-  lazyView
+  lazyView,
+  onCleanup
 });

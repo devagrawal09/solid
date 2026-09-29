@@ -16,8 +16,9 @@ import {
 import { createLoadingBoundary } from "./hydration.js";
 import { sharedConfig } from "./shared.js";
 import type { Accessor, RevealOrder } from "./signals.js";
-import type { Element as SolidElement } from "../types.js";
-import { inBlock, type View } from "@solidjs/signals";
+import type { Element as SolidElement, RowBlock } from "../types.js";
+import type { SetupOp } from "@solidjs/signals";
+import { inBlock, renderCallback, SCOPE_CALLBACK, type View } from "@solidjs/signals";
 export type { RevealOrder };
 
 type NonZeroParams<T extends (...args: any[]) => any> = Parameters<T>["length"] extends 0
@@ -60,6 +61,24 @@ export function For<T extends readonly any[], U extends SolidElement>(props: {
   keyed: (item: T[number]) => any;
   children: (item: Accessor<T[number]>, index: Accessor<number>) => U;
 }): SolidElement;
+export function For<T extends readonly any[], Y extends SetupOp, VY>(props: {
+  each: T | undefined | null | false;
+  fallback?: SolidElement;
+  keyed?: true;
+  children: RowBlock<[item: T[number], index: Accessor<number>], Y, VY>;
+}): SolidElement;
+export function For<T extends readonly any[], Y extends SetupOp, VY>(props: {
+  each: T | undefined | null | false;
+  fallback?: SolidElement;
+  keyed: false;
+  children: RowBlock<[item: Accessor<T[number]>, index: number], Y, VY>;
+}): SolidElement;
+export function For<T extends readonly any[], Y extends SetupOp, VY>(props: {
+  each: T | undefined | null | false;
+  fallback?: SolidElement;
+  keyed: (item: T[number]) => any;
+  children: RowBlock<[item: Accessor<T[number]>, index: Accessor<number>], Y, VY>;
+}): SolidElement;
 export function For<T extends readonly any[], U extends SolidElement>(props: {
   each: T | undefined | null | false;
   fallback?: SolidElement;
@@ -72,7 +91,7 @@ export function For<T extends readonly any[], U extends SolidElement>(props: {
       : { keyed: props.keyed };
   return mapArray(
     () => props.each,
-    props.children as any,
+    renderCallback(props.children) as any,
     options as any
   ) as unknown as SolidElement;
 }
@@ -87,13 +106,28 @@ export function Repeat<T extends SolidElement>(props: {
   from?: number | undefined;
   fallback?: SolidElement;
   children: ((index: number) => T) | T;
+}): SolidElement;
+export function Repeat<Y extends SetupOp, VY>(props: {
+  count: number;
+  from?: number | undefined;
+  fallback?: SolidElement;
+  children: RowBlock<[index: number], Y, VY>;
+}): SolidElement;
+export function Repeat<T extends SolidElement>(props: {
+  count: number;
+  from?: number | undefined;
+  fallback?: SolidElement;
+  children: any;
 }) {
   const options: { fallback?: Accessor<SolidElement>; from?: Accessor<number | undefined> } =
     "fallback" in props ? { fallback: () => props.fallback } : {};
   options.from = () => props.from;
   return repeat(
     () => props.count,
-    index => (typeof props.children === "function" ? props.children(index) : props.children),
+    index => {
+      const child = props.children;
+      return typeof child === "function" ? renderCallback(child)(index) : child;
+    },
     options
   ) as unknown as SolidElement;
 }
@@ -126,11 +160,23 @@ export function Show<T, F extends ConditionalRenderCallback<T>>(props: {
   fallback?: SolidElement;
   children: NonZeroParams<F>;
 }): SolidElement;
+export function Show<T, Y extends SetupOp, VY>(props: {
+  when: T | undefined | null | false;
+  keyed: true;
+  fallback?: SolidElement;
+  children: RowBlock<[item: NoInfer<NonNullable<T>>], Y, VY>;
+}): SolidElement;
+export function Show<T, Y extends SetupOp, VY>(props: {
+  when: T | undefined | null | false;
+  keyed?: false;
+  fallback?: SolidElement;
+  children: RowBlock<[item: Accessor<NoInfer<NonNullable<T>>>], Y, VY>;
+}): SolidElement;
 export function Show<T>(props: {
   when: T | undefined | null | false;
   keyed?: boolean;
   fallback?: SolidElement;
-  children: SolidElement | ((item: any) => SolidElement);
+  children: any;
 }): SolidElement {
   // The client reads `props.when` inside its conditionValue memo (child slot
   // 0), and the getter is allocation-capable: a compiled conditional prop
@@ -149,8 +195,8 @@ export function Show<T>(props: {
     () => {
       const when = conditionValue();
       if (when) {
-        const child = props.children;
-        if (typeof child === "function" && child.length > 0) {
+        const child = renderCallback(props.children);
+        if (typeof child === "function" && (child.length > 0 || (child as any)[SCOPE_CALLBACK])) {
           return props.keyed
             ? (child as any)(when as NonNullable<T>)
             : (child as any)(() => when as NonNullable<T>);
@@ -209,8 +255,8 @@ export function Switch(props: { fallback?: SolidElement; children: SolidElement 
       const sel = switchFunc()();
       if (!sel) return props.fallback;
       const [, w, mp] = sel;
-      const c = mp.children;
-      return typeof c === "function" && c.length > 0
+      const c = renderCallback(mp.children);
+      return typeof c === "function" && (c.length > 0 || (c as any)[SCOPE_CALLBACK])
         ? mp.keyed
           ? (c as any)(w)
           : (c as any)(() => w)
@@ -263,7 +309,17 @@ export function Match<T, F extends ConditionalRenderCallback<T>>(
   props: MatchProps<T, F>
 ): SolidElement;
 export function Match<T>(props: AnyMatchProps<T>): SolidElement;
-export function Match<T>(props: AnyMatchProps<T>) {
+export function Match<T, Y extends SetupOp, VY>(props: {
+  when: T | undefined | null | false;
+  keyed: true;
+  children: RowBlock<[item: NoInfer<NonNullable<T>>], Y, VY>;
+}): SolidElement;
+export function Match<T, Y extends SetupOp, VY>(props: {
+  when: T | undefined | null | false;
+  keyed?: false;
+  children: RowBlock<[item: Accessor<NoInfer<NonNullable<T>>>], Y, VY>;
+}): SolidElement;
+export function Match<T>(props: AnyMatchProps<T> | any) {
   return props as unknown as SolidElement;
 }
 

@@ -101,6 +101,14 @@ export const modes: ModeAdapter[] = [
     reference: "server/reference",
     available: () => compilerSupports("hostFusion")
   },
+  {
+    id: "server/blocks-compiled",
+    title: "blocks v2 through the Solid compiler, SSR",
+    environment: "server",
+    source: "blocks",
+    compile: { generate: "ssr", hydratable: true },
+    reference: "server/reference"
+  },
   // --- hydrate: client hydrating the matching server mode's markup ---------------
   {
     id: "hydrate/reference",
@@ -137,6 +145,15 @@ export const modes: ModeAdapter[] = [
     reference: "hydrate/reference",
     pairedWith: "server/fused",
     available: () => compilerSupports("hostFusion")
+  },
+  {
+    id: "hydrate/blocks-compiled",
+    title: "blocks v2 through the Solid compiler, hydration",
+    environment: "hydrate",
+    source: "blocks",
+    compile: { generate: "dom", hydratable: true },
+    reference: "hydrate/reference",
+    pairedWith: "server/blocks-compiled"
   }
 ];
 

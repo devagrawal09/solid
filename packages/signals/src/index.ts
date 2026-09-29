@@ -84,7 +84,9 @@ export {
   onCleanup,
   syncOnly,
   generatorMemo,
-  generatorEffect
+  generatorEffect,
+  renderCallback,
+  SCOPE_CALLBACK
 } from "./signals.js";
 export {
   $,
@@ -143,6 +145,8 @@ export {
   isComponent,
   setBlockPrimitives,
   $componentCompiled,
+  $scope,
+  $scopeCompiled,
   $eventCompiled,
   $eventAsync,
   effectBlockCompiled,
@@ -163,6 +167,7 @@ export type {
   TypedStore,
   StoreSource,
   PropsInput,
+  ScopeBody,
   Component as BlockComponent,
   BlockSetter,
   BlockStoreSetter,

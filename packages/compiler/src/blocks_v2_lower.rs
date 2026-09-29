@@ -1019,6 +1019,12 @@ impl EraseCollector<'_, '_> {
             {
                 ("$componentCompiled", true)
             }
+            // A render-callback block's setup (`$scope`): the same erasure.
+            "$scope"
+                if call.arguments.len() == 1 && returns_blocks(self.names, scoping, function) =>
+            {
+                ("$scopeCompiled", true)
+            }
             _ => return,
         };
         if !self.check(block, skip_blocks) {
@@ -1455,6 +1461,9 @@ impl<'b> Visit<'b> for RenameCollector<'_, '_> {
                 "$component" => block_function(self.names, self.scoping, call.arguments.first())
                     .filter(|(_, setup)| returns_blocks(self.names, self.scoping, setup))
                     .map(|_| "$componentCompiled"),
+                "$scope" => block_function(self.names, self.scoping, call.arguments.first())
+                    .filter(|(_, setup)| returns_blocks(self.names, self.scoping, setup))
+                    .map(|_| "$scopeCompiled"),
                 "$event" if prebuilt_block => Some("$eventCompiled"),
                 "effectBlock" if prebuilt_block => Some("effectBlockCompiled"),
                 "settledBlock" if prebuilt_block => Some("settledBlockCompiled"),

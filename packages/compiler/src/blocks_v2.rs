@@ -67,6 +67,8 @@ const BOUNDARY_SOURCES: &[&str] = &["solid-js", "@solidjs/web"];
 pub(crate) const BLOCK_LOCAL: &str = "_$$";
 const EFFECT_BLOCK_LOCAL: &str = "_$effectBlock";
 const SETTLED_BLOCK_LOCAL: &str = "_$settledBlock";
+/// The local name of `$scope`, which a render-callback block becomes.
+const SCOPE_LOCAL: &str = "_$scopeBlock";
 const VALUES_PARAM: &str = "_$v";
 
 /// The kind of a v2 block body, which decides the operations it admits.
@@ -154,6 +156,13 @@ enum Name {
     /// `onSettled(function* …)`: the plain host's run-once effect.
     OnSettled,
     Boundary,
+    /// `$scope(function* …)`: a render-callback block (a scope).
+    Scope,
+    /// `$`: the block constructor (`$(function* (row) …)` as a render callback).
+    Block,
+    /// `For` / `Show` / `Match` / `Repeat`: flow controls whose render
+    /// callback may be a block.
+    Flow,
 }
 
 /// An operation, classified from the syntax of a `yield*` operand.
@@ -218,6 +227,7 @@ pub(crate) fn transform_blocks_v2<'a>(
     program: &mut Program<'a>,
     source: &'a str,
 ) -> Result<V2Bodies, String> {
+    yield_identifier_check(program, source)?;
     if !imports_v2(program) {
         return Ok(V2Bodies::default());
     }
@@ -239,8 +249,15 @@ pub(crate) fn transform_blocks_v2<'a>(
             setters: bindings.setters,
             source,
             plan: Plan::default(),
+            named_symbols: HashSet::new(),
         };
         analysis.visit_program(program);
+        if !analysis.named_symbols.is_empty() {
+            let mut named = NamedScopes {
+                analysis: &mut analysis,
+            };
+            named.visit_program(program);
+        }
         if let Some(error) = analysis.plan.error.take() {
             return Err(error);
         }
@@ -259,6 +276,7 @@ pub(crate) fn transform_blocks_v2<'a>(
         uses_block: false,
         uses_effect_block: false,
         uses_settled_block: false,
+        uses_scope: false,
     };
     rewriter.visit_program(program);
     let mut needed = Vec::new();
@@ -271,8 +289,46 @@ pub(crate) fn transform_blocks_v2<'a>(
     if rewriter.uses_settled_block {
         needed.push(("settledBlock", SETTLED_BLOCK_LOCAL));
     }
+    if rewriter.uses_scope {
+        needed.push(("$scope", SCOPE_LOCAL));
+    }
     add_imports(allocator, program, import_span, &needed);
     Ok(rewriter.bodies)
+}
+
+/// `yield` as an identifier reference in module (strict) code: a `yield*`
+/// inside a plain arrow or function nested in a generator
+/// (`{child => yield* comment(child)}`) is not a delegation there — the
+/// parser reads `yield * comment(child)`, a multiplication by a variable
+/// named `yield`, which strict code forbids. Report it at its position
+/// instead of emitting it.
+fn yield_identifier_check(program: &Program<'_>, source: &str) -> Result<(), String> {
+    if !program.source_type.is_module() && !program.source_type.is_strict() {
+        return Ok(());
+    }
+    if !source.contains("yield") {
+        return Ok(());
+    }
+    struct Finder {
+        found: Option<Span>,
+    }
+    impl<'b> Visit<'b> for Finder {
+        fn visit_identifier_reference(&mut self, it: &IdentifierReference<'b>) {
+            if it.name == "yield" && self.found.is_none() {
+                self.found = Some(it.span);
+            }
+        }
+    }
+    let mut finder = Finder { found: None };
+    finder.visit_program(program);
+    match finder.found {
+        Some(span) => Err(diagnostic(
+            source,
+            span,
+            "[YIELD_IN_CALLBACK] `yield` outside a generator: a `yield*` inside a plain arrow or function callback (`{child => yield* row(child)}`) is not a delegation, it parses as `yield * row(child)` (a multiplication by an identifier named `yield`, which strict code forbids). A render callback that reads or renders a block is a block itself: `{function* (child) { … }}`, or pass the row block (`{row}`)",
+        )),
+        None => Ok(()),
+    }
 }
 
 /// Cheap syntactic gate: does the module import a v2 constructor, a
@@ -288,7 +344,8 @@ fn imports_v2(program: &Program<'_>) -> bool {
                 matches!(
                     specifier,
                     ImportDeclarationSpecifier::ImportSpecifier(specifier)
-                        if name_of(source, specifier.imported.name().as_str()).is_some()
+                        if name_of(source, specifier.imported.name().as_str())
+                            .is_some_and(|name| !matches!(name, Name::Block | Name::Flow))
                 )
             })
     })
@@ -311,6 +368,8 @@ fn name_of(source: &str, imported: &str) -> Option<Name> {
             "createEffect" => Name::CreateEffect,
             "$settled" => Name::Settled,
             "onSettled" => Name::OnSettled,
+            "$scope" => Name::Scope,
+            "$" => Name::Block,
             _ => return boundary(source, imported),
         };
         return Some(name);
@@ -319,8 +378,14 @@ fn name_of(source: &str, imported: &str) -> Option<Name> {
 }
 
 fn boundary(source: &str, imported: &str) -> Option<Name> {
-    (BOUNDARY_SOURCES.contains(&source) && matches!(imported, "Loading" | "Errored"))
-        .then_some(Name::Boundary)
+    if !BOUNDARY_SOURCES.contains(&source) {
+        return None;
+    }
+    match imported {
+        "Loading" | "Errored" => Some(Name::Boundary),
+        "For" | "Show" | "Match" | "Repeat" => Some(Name::Flow),
+        _ => None,
+    }
 }
 
 fn collect_names(program: &Program<'_>) -> HashMap<SymbolId, Name> {
@@ -453,6 +518,15 @@ struct Plan {
     lazy: HashSet<Span>,
     /// `onSettled(function* …)` calls, whose callee becomes `settledBlock`.
     settled: HashSet<Span>,
+    /// Render callbacks that are blocks (a flow control's `function* (row)`
+    /// child): function spans wrapped as `_$scope(_$$(fn))`.
+    scopes: HashSet<Span>,
+    /// `$(function* (row) …)` render callbacks: the `$` call is dropped (its
+    /// function becomes the scope).
+    scope_calls: HashSet<Span>,
+    /// Named row blocks (`function* row(c) { … }` passed as a render
+    /// callback): the declaration becomes `const row = _$scope(_$$(…))`.
+    named_scopes: HashSet<Span>,
     error: Option<String>,
 }
 
@@ -462,6 +536,8 @@ impl Plan {
             && self.effects.is_empty()
             && self.lazy.is_empty()
             && self.settled.is_empty()
+            && self.scopes.is_empty()
+            && self.named_scopes.is_empty()
     }
 }
 
@@ -512,6 +588,9 @@ struct Analysis<'s> {
     setters: HashSet<SymbolId>,
     source: &'s str,
     plan: Plan,
+    /// Identifiers passed as a flow control's render callback: those that
+    /// name a generator function declaration are named row blocks.
+    named_symbols: HashSet<SymbolId>,
 }
 
 impl<'b> Visit<'b> for Analysis<'_> {
@@ -520,6 +599,33 @@ impl<'b> Visit<'b> for Analysis<'_> {
             self.plan_call(call);
         }
         walk::walk_call_expression(self, call);
+    }
+
+    fn visit_jsx_element(&mut self, element: &oxc_ast::ast::JSXElement<'b>) {
+        if self.plan.error.is_none()
+            && let oxc_ast::ast::JSXElementName::IdentifierReference(tag) =
+                &element.opening_element.name
+            && resolve(self.scoping, tag).and_then(|s| self.names.get(&s)) == Some(&Name::Flow)
+        {
+            for child in &element.children {
+                if let oxc_ast::ast::JSXChild::ExpressionContainer(container) = child
+                    && let Some(expression) = container.expression.as_expression()
+                {
+                    self.plan_render_callback(expression);
+                }
+            }
+            for attribute in &element.opening_element.attributes {
+                if let oxc_ast::ast::JSXAttributeItem::Attribute(attribute) = attribute
+                    && attribute.name.get_identifier().name == "children"
+                    && let Some(oxc_ast::ast::JSXAttributeValue::ExpressionContainer(container)) =
+                        &attribute.value
+                    && let Some(expression) = container.expression.as_expression()
+                {
+                    self.plan_render_callback(expression);
+                }
+            }
+        }
+        walk::walk_jsx_element(self, element);
     }
 }
 
@@ -536,6 +642,21 @@ impl Analysis<'_> {
             self.plan.lazy.insert(call.span);
         }
         let Some(name) = name else { return };
+        // `For({ each, children: function* (row) … })`: the call form's
+        // render callback.
+        if name == Name::Flow
+            && let [Argument::ObjectExpression(object)] = call.arguments.as_slice()
+        {
+            for property in &object.properties {
+                if let ObjectPropertyKind::ObjectProperty(property) = property
+                    && !property.computed
+                    && property.key.static_name().is_some_and(|key| key == "children")
+                {
+                    self.plan_render_callback(&property.value);
+                }
+            }
+            return;
+        }
         let Some(function) = generator_argument(call) else {
             return;
         };
@@ -543,6 +664,11 @@ impl Analysis<'_> {
             Name::Component if call.arguments.len() == 1 => {
                 self.plan.wraps.push((function.span, V2Kind::Setup));
                 self.check_body(function, V2Kind::Setup);
+            }
+            // `$scope(function* (row) …)`: a render-callback block written
+            // explicitly (the call stays; its setup is wrapped).
+            Name::Scope if call.arguments.len() == 1 => {
+                self.plan_scope_setup(function);
             }
             Name::Memo | Name::CreateMemo if call.arguments.len() == 1 => {
                 self.plan.wraps.push((function.span, V2Kind::Memo));
@@ -595,11 +721,76 @@ impl Analysis<'_> {
         let mut checker = BodyChecker {
             analysis: self,
             kind,
-            props,
+            props: props.into_iter().collect(),
+            scope: false,
             getter_depth: 0,
         };
         checker.visit_function_body(body);
     }
+
+    /// A render-callback block's setup: component-setup rules, with every
+    /// parameter a render argument (a `<Show>` value accessor, a row's item
+    /// or index) that only its view reads.
+    fn plan_scope_setup(&mut self, function: &Function<'_>) {
+        if self.plan.wraps.iter().any(|(span, _)| *span == function.span) {
+            return;
+        }
+        self.plan.wraps.push((function.span, V2Kind::Setup));
+        let Some(body) = function.body.as_ref() else {
+            return;
+        };
+        let mut params = Vec::new();
+        for param in &function.params.items {
+            params.extend(
+                param
+                    .pattern
+                    .get_binding_identifiers()
+                    .iter()
+                    .filter_map(|id| id.symbol_id.get()),
+            );
+        }
+        let mut checker = BodyChecker {
+            analysis: self,
+            kind: V2Kind::Setup,
+            props: params,
+            scope: true,
+            getter_depth: 0,
+        };
+        checker.visit_function_body(body);
+    }
+
+    /// A flow control's render callback: a `function* (row) { setup; return
+    /// function* () { view } }`, a `$(function* (row) …)` block, or the name
+    /// of a generator function declared in scope (a named row block, which
+    /// may render itself). Each becomes `$scope(…)`.
+    fn plan_render_callback(&mut self, expression: &Expression<'_>) {
+        match expression.without_parentheses() {
+            Expression::FunctionExpression(function) if function.generator && !function.r#async => {
+                self.plan.scopes.insert(function.span);
+                self.plan_scope_setup(function);
+            }
+            Expression::CallExpression(call)
+                if callee_name(self.scoping, self.names, call) == Some(Name::Block)
+                    && call.arguments.len() == 1 =>
+            {
+                if let Some(function) = generator_argument(call)
+                    && !function.params.items.is_empty()
+                {
+                    self.plan.scope_calls.insert(call.span);
+                    self.plan.scopes.insert(function.span);
+                    self.plan_scope_setup(function);
+                }
+            }
+            Expression::Identifier(identifier) => {
+                // Resolved to a generator declaration after the walk.
+                if let Some(symbol) = resolve(self.scoping, identifier) {
+                    self.named_symbols.insert(symbol);
+                }
+            }
+            _ => {}
+        }
+    }
+
 
     /// The reads an effect hoists into its compute block, or `None` when the
     /// split is refused.
@@ -657,7 +848,7 @@ impl Analysis<'_> {
         })
     }
 
-    fn classify(&self, operand: &Expression<'_>, props: Option<SymbolId>) -> OpClass {
+    fn classify(&self, operand: &Expression<'_>, props: &[SymbolId], scope: bool) -> OpClass {
         match operand {
             Expression::CallExpression(call) => {
                 if let Some(name) = callee_name(self.scoping, self.names, call) {
@@ -680,7 +871,9 @@ impl Analysis<'_> {
                 OpClass::Other
             }
             Expression::Identifier(id) => {
-                if resolve(self.scoping, id).is_some_and(|s| self.accessors.contains(&s)) {
+                if resolve(self.scoping, id)
+                    .is_some_and(|s| self.accessors.contains(&s) || (scope && props.contains(&s)))
+                {
                     OpClass::StateRead
                 } else {
                     OpClass::Read
@@ -689,7 +882,7 @@ impl Analysis<'_> {
             _ => match crate::generators::member_chain_root(operand) {
                 Some(root) => {
                     let symbol = resolve(self.scoping, root);
-                    if symbol.is_some_and(|s| Some(s) == props || self.accessors.contains(&s)) {
+                    if symbol.is_some_and(|s| props.contains(&s) || self.accessors.contains(&s)) {
                         OpClass::StateRead
                     } else {
                         OpClass::Read
@@ -725,10 +918,35 @@ fn starts_uppercase(name: &str) -> bool {
     name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
 }
 
+/// The generator function declarations a render callback names: each is a
+/// named row block (planned like an inline one).
+struct NamedScopes<'x, 's> {
+    analysis: &'x mut Analysis<'s>,
+}
+
+impl<'b> Visit<'b> for NamedScopes<'_, '_> {
+    fn visit_function(&mut self, function: &Function<'b>, flags: ScopeFlags) {
+        if function.r#type == FunctionType::FunctionDeclaration
+            && function.generator
+            && !function.r#async
+            && let Some(symbol) = function.id.as_ref().and_then(|id| id.symbol_id.get())
+            && self.analysis.named_symbols.contains(&symbol)
+            && self.analysis.plan.named_scopes.insert(function.span)
+        {
+            self.analysis.plan_scope_setup(function);
+        }
+        walk::walk_function(self, function, flags);
+    }
+}
+
 struct BodyChecker<'x, 's> {
     analysis: &'x mut Analysis<'s>,
     kind: V2Kind,
-    props: Option<SymbolId>,
+    /// The setup's props binding, or a render-callback block's parameters.
+    props: Vec<SymbolId>,
+    /// A render-callback block's setup: its parameters themselves (a
+    /// `<Show>` value accessor, a row's index) are reads only its view takes.
+    scope: bool,
     /// Inside the getter-to-be of a lazy prop (a `yield*` there would move
     /// into a getter).
     getter_depth: usize,
@@ -789,7 +1007,7 @@ impl<'b> Visit<'b> for BodyChecker<'_, '_> {
         if it.delegate
             && let Some(operand) = &it.argument
         {
-            let class = self.analysis.classify(operand, self.props);
+            let class = self.analysis.classify(operand, &self.props, self.scope);
             if !class.allowed_in(self.kind) {
                 let message = format!(
                     "[OP_NOT_ALLOWED] `{}` is not allowed in a {} block: {}",
@@ -1087,7 +1305,7 @@ impl<'b> Visit<'b> for Hoister<'_, '_> {
             return;
         };
         if !matches!(
-            self.analysis.classify(operand, None),
+            self.analysis.classify(operand, &[], false),
             OpClass::Read | OpClass::StateRead
         ) {
             walk::walk_yield_expression(self, it);
@@ -1151,9 +1369,46 @@ struct Rewriter<'a> {
     uses_block: bool,
     uses_effect_block: bool,
     uses_settled_block: bool,
+    uses_scope: bool,
 }
 
 impl<'a> VisitMut<'a> for Rewriter<'a> {
+    fn visit_statement(&mut self, statement: &mut Statement<'a>) {
+        walk_mut::walk_statement(self, statement);
+        // A named row block: `function* row(c) { … }` →
+        // `const row = _$scope(_$$(function* (c) { … }))`.
+        if let Statement::FunctionDeclaration(function) = statement
+            && self.plan.named_scopes.contains(&function.span)
+        {
+            let ast = AstBuilder::new(self.allocator);
+            let span = function.span;
+            let name = function.id.as_ref().map(|id| id.name.to_string()).unwrap_or_default();
+            let taken = std::mem::replace(statement, ast.statement_empty(Span::new(0, 0)));
+            let Statement::FunctionDeclaration(mut function) = taken else {
+                unreachable!()
+            };
+            function.r#type = FunctionType::FunctionExpression;
+            function.id = None;
+            let expression = Expression::FunctionExpression(function);
+            let block = self.wrap(span, V2Kind::Setup, expression);
+            let init = self.scope(span, block);
+            let declarator = ast.variable_declarator(
+                span,
+                oxc_ast::ast::VariableDeclarationKind::Const,
+                ast.binding_pattern_binding_identifier(span, ast.ident(&name)),
+                None,
+                Some(init),
+                false,
+            );
+            *statement = Statement::VariableDeclaration(ast.alloc_variable_declaration(
+                span,
+                oxc_ast::ast::VariableDeclarationKind::Const,
+                ast.vec1(declarator),
+                false,
+            ));
+        }
+    }
+
     fn visit_expression(&mut self, expression: &mut Expression<'a>) {
         // Post-order: nested bodies and calls are rewritten first.
         walk_mut::walk_expression(self, expression);
@@ -1161,9 +1416,17 @@ impl<'a> VisitMut<'a> for Rewriter<'a> {
             Expression::FunctionExpression(function) => {
                 if let Some(kind) = self.wrap_kind(function.span) {
                     let span = function.span;
+                    let scope = self.plan.scopes.contains(&span);
                     let taken = std::mem::replace(expression, self.placeholder());
-                    *expression = self.wrap(span, kind, taken);
+                    let block = self.wrap(span, kind, taken);
+                    *expression = if scope { self.scope(span, block) } else { block };
                 }
+            }
+            Expression::CallExpression(call) if self.plan.scope_calls.contains(&call.span) => {
+                // `$(function* (row) …)`: its function is already the scope.
+                let argument = call.arguments.pop().expect("planned with one argument");
+                *expression = crate::shared::ast::argument_to_expression(argument)
+                    .expect("a function argument");
             }
             Expression::CallExpression(call) => {
                 if self.plan.lazy.contains(&call.span) {
@@ -1189,6 +1452,21 @@ impl<'a> VisitMut<'a> for Rewriter<'a> {
 impl<'a> Rewriter<'a> {
     fn placeholder(&self) -> Expression<'a> {
         AstBuilder::new(self.allocator).void_0(Span::new(0, 0))
+    }
+
+    /// `_$scope(block)`: a render-callback block.
+    /// Its span is the function's widened by one: spans key the later passes'
+    /// plans, and the function's own span is the `_$$` call's.
+    fn scope(&mut self, span: Span, block: Expression<'a>) -> Expression<'a> {
+        let ast = AstBuilder::new(self.allocator);
+        self.uses_scope = true;
+        ast.expression_call(
+            Span::new(span.start, span.end + 1),
+            ast.expression_identifier(Span::new(0, 0), ast.ident(SCOPE_LOCAL)),
+            None,
+            ast.vec1(expression_to_argument(block)),
+            false,
+        )
     }
 
     fn wrap_kind(&self, span: Span) -> Option<V2Kind> {

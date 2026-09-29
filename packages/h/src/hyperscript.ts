@@ -69,6 +69,16 @@ function wrapCallback(orig: any): any {
   return w;
 }
 
+const GENERATOR_FUNCTION = Object.getPrototypeOf(function* () {});
+const SCOPE_CALLBACK = Symbol.for("solid.scopeCallback");
+// A render callback written as a block (generator blocks v2): a generator
+// function or a `$scope(…)` callback. The flow control calls it once per
+// row / branch to run its setup; it is neither a getter nor a thunk
+// producer, so it is passed through untouched.
+function isBlockCallback(v: any): boolean {
+  return Object.getPrototypeOf(v) === GENERATOR_FUNCTION || v[SCOPE_CALLBACK] === true;
+}
+
 // Inspired by https://github.com/hyperhype/hyperscript
 function h(...rawArgs: any[]): any {
   if (rawArgs.length === 1 && Array.isArray(rawArgs[0])) return rawArgs[0];
@@ -143,6 +153,7 @@ function materialize(args: any[]): ExpandableNode | ExpandableNode[] {
         for (const k in props) {
           const v = props[k];
           if (typeof v === "function") {
+            if (isBlockCallback(v)) continue;
             if (!v.length) dynamicProperty(props, k);
             else if (!(v as any)[$ELEMENT] && !(v as any)[$WRAPPED]) {
               props[k] = wrapCallback(v);
