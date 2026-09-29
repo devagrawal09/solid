@@ -251,6 +251,60 @@ one sample). The branch's islands variants are a different architecture
 what the branch offers beyond today's hydration, and they are gated equal to A's
 DOM, but they are not the same code as A.
 
+## After merging upstream `7f9bd7a6` (2026-09-29)
+
+Branch `mergeNext`: `d3a093be` with upstream `next` @ `7f9bd7a6` merged
+(`344ed054..7f9bd7a6`, 326 upstream commits, rc.8 to past rc.9). The fork
+drift behind the numbers above is gone, so the comparison is now "upstream
+plus the branch's additions" against upstream. Same methods as sections 1
+and 2. Upstream's own app bytes were not re-measured at `7f9bd7a6` (that needs
+its Rust compiler built). The app comparison below is against the rc.9
+column above (`1a7d14fc`, about 40 commits older).
+
+**Core floor** (`scripts/vs-upstream/floor.mjs`; upstream and `d3a093be`
+signals built from `git archive` with this tree's toolchain):
+
+| tree | entry | min | gzip | gz vs upstream `7f9bd7a6` |
+| --- | --- | ---: | ---: | ---: |
+| upstream `7f9bd7a6` | dist/prod/index.js | 27,917 | 10,951 | – |
+| branch before the merge (`d3a093be`) | dist/prod/index.js | 24,594 | 9,785 | −10.6% |
+| merged | dist/prod/index.js | 28,961 | 11,431 | +4.4% |
+| merged | dist/sync/index.sync.js (async-free entry) | 16,928 | 7,007 | −36.0% |
+
+What the branch adds to the core now costs 480 B gz on the floor, on top of
+upstream. The
+async-free entry grew 681 B gz (6,326 → 7,007) with upstream's core changes.
+
+**App bytes** (`scripts/slices/measure-apps.mjs`, client JS gz; baseline =
+default build, sliced = capability linker):
+
+| example | branch before (section 1) | merged | merged + linker | merged vs before | merged vs upstream rc.9 | merged + linker vs upstream rc.9 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| todos | 29,534 | 32,925 | 32,704 | +11.5% | +3.9% | +3.2% |
+| sierpinski | 14,014 | 16,102 | 14,981 | +14.9% | +2.2% | −4.9% |
+| hackernews | 72,656 | 104,632 | 104,632 | +44.0% | +2.5% | +2.5% |
+| hackernews-spa | 54,672 | 81,754 | 81,754 | +49.5% | +1.2% | +1.2% |
+| notes | 87,067 | 117,003 | 117,003 | +34.4% | +1.2% | +1.2% |
+| chat | 62,288 | 69,989 | 69,989 | +12.4% | +3.6% | +3.6% |
+| effect | 78,925 | 82,489 | 82,489 | +4.5% | +1.6% | +1.6% |
+| migrating-element | 16,878 | 18,540 | 17,365 | +9.8% | +1.9% | −4.5% |
+| todos-blocks | 32,437 | 35,939 | 35,782 | +10.8% | – | – |
+| sync-blocks | 23,702 | 25,961 | 21,714 | +9.5% | – | – |
+
+The byte lead in section 1 came from upstream growth, and it is gone now
+that the branch carries that growth. The branch's default builds are 1–4% gz
+over upstream rc.9. The linker still slices the CSR examples it could slice
+before (sierpinski −7.0%, migrating-element −6.3% vs merged default), which
+puts those two 4–5% under rc.9. The SSR / router apps grew the most (+34% to
++50%), consistent with section 1's finding that upstream's client bundles
+carry the server-functions runtime. The linker still refuses them for the
+same reason (the virtual SSR entry has no summary). Linker decisions did not
+change.
+
+The runtime (section 3) and SSR (section 4) measurements were not re-run.
+`node scripts/ssr-redesign/measure.mjs --check` passes on the merged tree
+(every variant gates equal to A).
+
 ## Caveats
 
 - **Fork drift dominates the byte comparison.** Upstream rc.9 is 290 commits
