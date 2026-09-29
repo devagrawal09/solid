@@ -1,0 +1,45 @@
+import { lazy } from "solid-js";
+import { $component, $memo, adopt, attempt } from "@solidjs/blocks";
+import type { User } from "./Profile";
+
+const Profile = adopt(lazy(() => import("./Profile")));
+
+// this component lazy loads data and code in parallel
+export default $component(function* ProfilePage() {
+  const user = yield* $memo(function* () {
+    // simulate data loading
+    console.log("LOAD USER");
+    return yield* attempt(
+      () =>
+        new Promise<User>(resolve => {
+          setTimeout(() => resolve({ firstName: "Jon", lastName: "Snow" }), 400);
+        })
+    );
+  });
+
+  const info = yield* $memo(function* () {
+    yield* user;
+    // simulate cascading data loading
+    console.log("LOAD INFO");
+    return yield* attempt(
+      () =>
+        new Promise<string[]>(resolve => {
+          setTimeout(
+            () =>
+              resolve([
+                "Something Interesting",
+                "Something else you might care about",
+                "Or maybe not"
+              ]),
+            400
+          );
+        })
+    );
+  });
+
+  return function* () {
+    // Profile reads the user outside its own boundary: it is pending, so it
+    // is rendered in call form, and this page is pending too.
+    return <>{yield* Profile({ user, info })}</>;
+  };
+});

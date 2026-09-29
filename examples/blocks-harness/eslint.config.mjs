@@ -4,11 +4,12 @@ import tsParser from "@typescript-eslint/parser";
 import tsPlugin from "@typescript-eslint/eslint-plugin";
 import blocks from "@solidjs/eslint-plugin-blocks";
 
-export default function blocksConfig(extra = []) {
+// `files`: the block code (default `src/`).
+export default function blocksConfig(extra = [], files = ["src/**/*.{ts,tsx}"]) {
   return [
     { ignores: ["dist/**", "**/*.gen.d.ts", "node_modules/**"] },
     {
-      files: ["src/**/*.{ts,tsx}"],
+      files,
       languageOptions: {
         parser: tsParser,
         parserOptions: { ecmaFeatures: { jsx: true } },
