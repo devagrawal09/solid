@@ -23,6 +23,8 @@ import {
   flush,
   getObserver,
   getOwner,
+  isPending as solidIsPending,
+  latest as solidLatest,
   NotReadyError,
   onCleanup,
   onSettled,
@@ -54,6 +56,7 @@ import type {
   Flush,
   HoleOp,
   MemoOp,
+  Path,
   PendingOf,
   PropsOf,
   Raise,
@@ -183,6 +186,27 @@ export function read<T, P extends boolean = false, E = never>(accessor: () => T)
   return s as any;
 }
 
+/**
+ * `yield* latestOf(results)`: the latest value of a source — while a newer
+ * one is pending, the previous one (Solid's `latest`: stale while
+ * revalidating). Pending only until a first value exists.
+ */
+export function latestOf<T, P extends boolean, E>(source: Source<T, P, E>): Source<T, P, E> {
+  const get = accessor(source);
+  return asSource(() => solidLatest(get)) as any;
+}
+
+/**
+ * `yield* isPendingOf(results)`: whether a source has a newer value in
+ * flight (Solid's `isPending`). Never pending itself.
+ */
+export function isPendingOf(
+  source: Source<unknown, boolean, unknown>
+): Source<boolean, false, never> {
+  const get = accessor(source);
+  return asSource(() => solidIsPending(get)) as any;
+}
+
 /** A plain accessor for a source, to hand to code that is not a block. */
 export function accessor<T>(source: Source<T, boolean, any>): Accessor<T> {
   return typeof source === "function" ? (source as any) : () => readOf(source) as T;
@@ -256,8 +280,14 @@ export function rowArg(value: unknown, isAccessor: boolean): any {
   return makePath(value, isAccessor, []);
 }
 
-/** `yield* store.a.b` for a store this library did not create. */
-export function paths<T extends object>(store: Store<T> | T): TypedStore<T> {
+/**
+ * `yield* store.a.b` for a store this library did not create. Its coloring
+ * cannot be seen: state it when the store is async
+ * (`paths<Order[], true>(orders)`).
+ */
+export function paths<T extends object, P extends boolean = false, E = never>(
+  store: Store<T> | T
+): Path<T, P, E> {
   return makePath(store, false, []);
 }
 
@@ -433,12 +463,16 @@ export function $store<T extends object>(
 type MemoValue<R> = R extends PromiseLike<infer U> ? U : R extends AsyncIterable<infer U> ? U : R;
 type MemoPending<Y, R> =
   PendingOf<Y> extends true ? true : R extends PromiseLike<any> | AsyncIterable<any> ? true : false;
+/** A memo that returns a promise or an async iterable may fail with anything it rejects with. */
+type MemoFails<Y, R> =
+  | FailsOf<Y>
+  | (Extract<R, PromiseLike<any> | AsyncIterable<any>> extends never ? never : unknown);
 
 /** `const doubled = yield* $memo(function* () { return (yield* n) * 2 })` in a setup. */
 export function $memo<Y extends MemoOp = never, R = unknown>(
   body: () => Generator<Y, R, any>,
   options?: MemoOptions<MemoValue<R>>
-): Yieldable<Create<"memo">, Source<MemoValue<R>, MemoPending<Y, R>, FailsOf<Y>>> {
+): Yieldable<Create<"memo">, Source<MemoValue<R>, MemoPending<Y, R>, MemoFails<Y, R>>> {
   return new CreateOp("memo", () => memoOf(body, options)) as any;
 }
 

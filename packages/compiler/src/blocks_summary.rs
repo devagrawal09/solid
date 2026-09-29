@@ -247,6 +247,21 @@ impl<'a> Visit<'a> for BodyFacts<'_> {
         }
         walk::walk_call_expression(self, it);
     }
+    fn visit_return_statement(&mut self, it: &ReturnStatement<'a>) {
+        // A memo that returns what a plain function call gives it may return
+        // a promise or an async iterable (`return runEffect(…)`): it may be
+        // pending and fail with anything. (A method call — `list.filter(…)`
+        // — is taken as synchronous.)
+        if self.depth == 0
+            && let Some(Expression::CallExpression(call)) = &it.argument
+            && matches!(call.callee, Expression::Identifier(_))
+            && !matches!(callee_name(call), Some("attempt" | "raise"))
+        {
+            self.pending = true;
+            push(&mut self.fails, "*".into());
+        }
+        walk::walk_return_statement(self, it);
+    }
     fn visit_yield_expression(&mut self, it: &YieldExpression<'a>) {
         if it.delegate
             && self.depth == 0

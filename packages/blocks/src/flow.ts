@@ -180,12 +180,14 @@ function MatchBlocks(props: any): any {
  * (`<Loading fallback={…}>{UserCard({ user })}</Loading>`); it returns a
  * view without pending, so failures still have to be handled above.
  */
-function LoadingBlocks<P extends boolean = false, E = never>(props: {
+function LoadingBlocks(props: { fallback?: Element; on?: unknown; children: Element }): SettledView;
+function LoadingBlocks<P extends boolean, E>(props: {
   fallback?: Element;
   on?: unknown;
-  children: View<P, E> | Element;
-}): View<false, E> {
-  return SolidLoading(props as any) as any;
+  children: View<P, E>;
+}): View<false, E>;
+function LoadingBlocks(props: any): any {
+  return SolidLoading(props);
 }
 
 /**
@@ -193,10 +195,15 @@ function LoadingBlocks<P extends boolean = false, E = never>(props: {
  * failures of the children) and a `reset`. `$event` failures under it are
  * routed here.
  */
-function ErroredBlocks<P extends boolean = false, E = unknown>(props: {
+function ErroredBlocks(props: {
+  fallback: Element | ((error: Accessor<unknown>, reset: () => void) => Element);
+  children: Element;
+}): SettledView;
+function ErroredBlocks<P extends boolean, E>(props: {
   fallback: Element | ((error: Accessor<E>, reset: () => void) => Element);
-  children: View<P, E> | Element;
-}): View<P, never> {
+  children: View<P, E>;
+}): View<P, never>;
+function ErroredBlocks(props: any): any {
   const fallback = props.fallback as any;
   const adapted =
     typeof fallback === "function" && (isRowBlock(fallback) || fallback[BODY] !== undefined)

@@ -24,6 +24,8 @@ export {
   context,
   createContext,
   isComponent,
+  isPendingOf,
+  latestOf,
   paths,
   perform,
   raise,
