@@ -27,6 +27,11 @@
         "development": "./dist/server.dev.js",
         "default": "./dist/server.js"
       },
+      "browser": {
+        "types": "./dist/types/index.d.ts",
+        "development": "./dist/blocks.dev.js",
+        "default": "./dist/blocks.js"
+      },
       "deno": {
         "types": "./dist/types/index.d.ts",
         "development": "./dist/server.dev.js",
@@ -36,11 +41,6 @@
         "types": "./dist/types/index.d.ts",
         "development": "./dist/server.dev.js",
         "default": "./dist/server.js"
-      },
-      "browser": {
-        "types": "./dist/types/index.d.ts",
-        "development": "./dist/blocks.dev.js",
-        "default": "./dist/blocks.js"
       },
       "types": "./dist/types/index.d.ts",
       "development": "./dist/blocks.dev.js",
