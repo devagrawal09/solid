@@ -3,8 +3,10 @@
  * executed. Every `@ts-expect-error` is a rule the editor enforces; every
  * line without one must typecheck.
  */
+import { lazy } from "solid-js";
 import {
   $,
+  adopt,
   $component,
   $effect,
   $event,
@@ -355,3 +357,16 @@ export const Streamed = $component(function* () {
     return <b>{yield* typed}</b>;
   };
 });
+
+// --- adopt: a lazily loaded block component keeps its coloring ---------------------------------
+const LazyPending = adopt(lazy(() => Promise.resolve({ default: Pending })));
+// @ts-expect-error still pending: not a valid JSX element outside a Loading
+export const lazyBad = <LazyPending id="1" />;
+export const lazyOk = <Loading fallback="…">{LazyPending({ id: "1" })}</Loading>;
+export const LazyHost = $component(function* () {
+  return function* () {
+    return <div>{yield* LazyPending({ id: "1" })}</div>;
+  };
+});
+const lazyHostView: View<true, never> = LazyHost();
+void lazyHostView;

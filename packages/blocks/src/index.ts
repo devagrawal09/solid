@@ -20,6 +20,7 @@ export {
   $snapshot,
   $store,
   accessor,
+  adopt,
   attempt,
   context,
   createContext,

@@ -39,6 +39,7 @@ import {
   type Store
 } from "solid-js";
 import type {
+  COMPONENT as COMPONENT_BRAND,
   Block,
   ChildView,
   HView,
@@ -908,6 +909,29 @@ export type NoJsxViewRule<VY, R> = [R] extends [HView<any, any>]
         error: "[HVIEW_READ] a no-JSX view reads only in holes: pass the source, or a $(function* …) block, to h / html"
       ]
   : [];
+
+/**
+ * `const Page = adopt(lazy(() => import("./Page")))`: a component this
+ * library did not create (a `lazy()` chunk, a library's component), usable in
+ * call form in a hole — `{yield* Page()}` — as a `$component` is: created
+ * untracked (as a tag is), so the hole does not re-create it when what it
+ * builds changes (a `lazy` chunk landing), and its output passed on as a view.
+ * Its type is its own: a lazily loaded block component keeps its coloring.
+ * `preload` / `moduleUrl` (lazy's) are kept.
+ */
+export function adopt<T extends (props: any) => any>(
+  comp: T
+): T & { readonly [COMPONENT_BRAND]: true } {
+  const adopted: any = function (props?: object) {
+    const out = untrack(() => comp(props || {}));
+    if (typeof out === "function" && out[READ] === undefined) out[VIEW_MARK] = true;
+    return out;
+  };
+  for (const key of Object.keys(comp)) adopted[key] = (comp as any)[key];
+  adopted[COMPONENT_MARK] = true;
+  if (comp.name) Object.defineProperty(adopted, "name", { value: comp.name });
+  return adopted;
+}
 
 export function isComponent(value: unknown): boolean {
   return typeof value === "function" && (value as any)[COMPONENT_MARK] === true;

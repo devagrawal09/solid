@@ -3,7 +3,7 @@
  * rule produces (`{perform(x)}` for `{yield* x}`), so they run with or
  * without the rule; `transform.spec.tsx` covers the `yield*` spelling.
  */
-import { flush, createRoot, isPending } from "solid-js";
+import { flush, createRoot, isPending, lazy as plainLazy } from "solid-js";
 import {
   $,
   $cleanup,
@@ -19,6 +19,7 @@ import {
   $snapshot,
   $store,
   accessor,
+  adopt,
   attempt,
   createContext,
   Errored,
@@ -653,6 +654,47 @@ describe("row blocks", () => {
     flush();
     expect(root.querySelector("i")).toBe(i);
     expect(views).toBe(1);
+  });
+});
+
+describe("adopt", () => {
+  it("a lazy block component in call form is built once; its chunk and its state land in place", async () => {
+    let setups = 0;
+    let bump!: () => void;
+    const Inner = $component(function* (props: TypedProps<{ label: string }>) {
+      setups++;
+      const [n, setN] = yield* $signal(1);
+      bump = () => void setN(v => v + 1);
+      return function* () {
+        return (
+          <b>
+            {perform(props.label)}
+            {perform(n)}
+          </b>
+        );
+      };
+    });
+    let land!: (m: { default: typeof Inner }) => void;
+    const Page = adopt(plainLazy(() => new Promise<{ default: typeof Inner }>(r => (land = r))));
+    const [label, setLabel] = plainSignal("n=");
+    const App = $component(function* () {
+      return function* () {
+        return <div>{perform(Page({ label: read(label) }))}</div>;
+      };
+    });
+    mount(() => <Loading fallback={<i>wait</i>}>{App()}</Loading>);
+    expect(root.textContent).toBe("wait");
+    land({ default: Inner });
+    await settle();
+    expect(root.textContent).toBe("n=1");
+    bump();
+    flush();
+    setLabel("count ");
+    flush();
+    expect(root.textContent).toBe("count 2");
+    expect(setups).toBe(1);
+    // lazy's own properties are kept
+    expect(typeof (Page as unknown as { preload: unknown }).preload).toBe("function");
   });
 });
 
