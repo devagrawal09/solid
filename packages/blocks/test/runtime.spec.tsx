@@ -3,7 +3,7 @@
  * rule produces (`{perform(x)}` for `{yield* x}`), so they run with or
  * without the rule; `transform.spec.tsx` covers the `yield*` spelling.
  */
-import { flush, createRoot, isPending, lazy as plainLazy } from "solid-js";
+import { flush, createRoot, isPending, lazy as plainLazy, Reveal, untrack } from "solid-js";
 import {
   $,
   $cleanup,
@@ -654,6 +654,56 @@ describe("row blocks", () => {
     flush();
     expect(root.querySelector("i")).toBe(i);
     expect(views).toBe(1);
+  });
+});
+
+describe("reads from JSX positions are never a view's or a setup's own", () => {
+  it("plain Solid code reading a prop getter untracked while a child view is built (Reveal registering a Loading)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let resolve!: (v: string) => void;
+    let cardViews = 0;
+    const Card = $component(function* () {
+      const v = yield* $memo(function* () {
+        return yield* attempt(() => new Promise<string>(r => (resolve = r)));
+      });
+      return function* () {
+        cardViews++;
+        return (
+          <Loading fallback={<i>loading</i>}>
+            <b>{perform(v)}</b>
+          </Loading>
+        );
+      };
+    });
+    // a plain component that reads its prop untracked when it is created
+    let seen: unknown;
+    const Probe = (props: { value: unknown; children: unknown }) => {
+      seen = untrack(() => props.value);
+      return props.children as never;
+    };
+    const Page = $component(function* () {
+      const [order] = yield* $signal<"sequential" | "together">("sequential");
+      const [label] = yield* $signal("x");
+      return function* () {
+        return (
+          <div>
+            <Probe value={perform(label)}>{Card()}</Probe>
+            <Reveal order={perform(order)}>
+              {Card()}
+              {Card()}
+            </Reveal>
+          </div>
+        );
+      };
+    });
+    mount(Page);
+    expect(seen).toBe("x");
+    expect(root.textContent).toBe("loadingloadingloading");
+    resolve("done");
+    await settle();
+    expect(warn.mock.calls.some(c => String(c[0]).includes("VIEW_READS_OUTSIDE_JSX"))).toBe(false);
+    expect(cardViews).toBe(3);
+    warn.mockRestore();
   });
 });
 

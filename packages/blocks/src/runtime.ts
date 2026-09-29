@@ -126,6 +126,8 @@ let viewRunning = false;
  * re-run — re-creating the component — when the source resolves.
  */
 const WHOLE_VIEW = { wholeView: true };
+/** Set while a read from a JSX position (`perform`) is in progress, paths and getters included. */
+let jsxRead = false;
 /** Cleanups of the running effect run (null outside an effect). */
 let cleanupSink: (() => void)[] | null = null;
 /** Set while a memo runs after its first async `attempt`. */
@@ -135,11 +137,12 @@ function devError(code: string, message: string): Error {
   return new Error(`[${code}] ${message}`);
 }
 
-function checkRead(): void {
+function checkRead(inJsx: boolean): void {
   // A setup runs untracked. A tracked read while the host is a setup belongs
   // to a plain Solid computation the setup created (a `dynamic`, a derived
-  // store) running its first pass: that read is the computation's own.
-  if (host === SETUP && getObserver() === null)
+  // store) running its first pass: that read is the computation's own. A
+  // read from a JSX position is never the setup's (see `perform`).
+  if (!inJsx && host === SETUP && getObserver() === null)
     throw devError(
       "READ_IN_SETUP",
       "a setup creates; it does not read. Read in the view, a $memo or an $effect (or take a value with $snapshot)."
@@ -153,10 +156,20 @@ function checkRead(): void {
 
 // --- reading ------------------------------------------------------------------------
 
-/** Perform the read a readable stands for (tracked in the running computation). */
+/**
+ * Perform the read a readable stands for (tracked in the running computation).
+ * `jsxRead`: the read comes from a JSX position (`perform`, which the transform
+ * writes for a `yield*` inside JSX) — a hole, or a prop getter that whoever
+ * receives the prop reads. It is never the running view's or setup's own
+ * top-level read, even when it happens while one is on the stack: plain
+ * Solid code may read a prop getter untracked right then (a `<Reveal>`
+ * registering a nested `<Loading>` reads its `order` while the nested
+ * card's view is being built), and that read must not turn the card's view
+ * into a whole-view re-render or fail as a setup read.
+ */
 function readOf(x: any): unknown {
-  if (__DEV__) checkRead();
-  if (viewRunning && host === VIEW && getObserver() === null) throw WHOLE_VIEW;
+  if (__DEV__) checkRead(jsxRead);
+  if (!jsxRead && viewRunning && host === VIEW && getObserver() === null) throw WHOLE_VIEW;
   const r = x[READ];
   return r === PATH_READ ? readPath(x[PATH_TARGET]) : r.call(x);
 }
@@ -224,7 +237,15 @@ export function accessor<T>(source: Source<T, boolean, any>): Accessor<T> {
 export function perform<T>(target: Yieldable<any, T> | (() => T) | T): T {
   const x = target as any;
   if (x != null) {
-    if (x[READ] !== undefined) return readOf(x) as T;
+    if (x[READ] !== undefined) {
+      const prev = jsxRead;
+      jsxRead = true;
+      try {
+        return readOf(x) as T;
+      } finally {
+        jsxRead = prev;
+      }
+    }
     if (x[VIEW_MARK] === true) return x;
     if (typeof x === "function") return x();
     if (typeof x === "object" && !Array.isArray(x) && typeof x[Symbol.iterator] === "function")
@@ -799,15 +820,18 @@ function runSetup(
 ): unknown {
   const prev = host;
   const prevRunning = viewRunning;
+  const prevJsx = jsxRead;
   host = SETUP;
-  // a child's setup is not its parent view's top level
+  // a child's setup is not its parent view's top level, nor a JSX read
   viewRunning = false;
+  jsxRead = false;
   let result: unknown;
   try {
     result = drive(body(...args), SYNC_RUN);
   } finally {
     host = prev;
     viewRunning = prevRunning;
+    jsxRead = prevJsx;
   }
   return result;
 }
@@ -828,8 +852,10 @@ export function renderView(viewFn: () => Generator<unknown, unknown, unknown>): 
   if (__SERVER__) return runAs(VIEW, () => drive(viewFn(), SYNC_RUN));
   const prevRunning = viewRunning;
   const prev = host;
+  const prevJsx = jsxRead;
   viewRunning = true;
   host = VIEW;
+  jsxRead = false;
   let value: unknown;
   let whole = false;
   try {
@@ -840,6 +866,7 @@ export function renderView(viewFn: () => Generator<unknown, unknown, unknown>): 
   } finally {
     viewRunning = prevRunning;
     host = prev;
+    jsxRead = prevJsx;
   }
   if (!whole) return value;
   if (__DEV__) warnWholeView();
