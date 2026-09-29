@@ -89,6 +89,7 @@ async function startServer(dir, port, dev) {
   child.stderr.on("data", d => (log += d));
   const url = `http://127.0.0.1:${port}`;
   for (let i = 0; i < 100; i++) {
+    if (child.exitCode !== null) throw new Error(`server in ${dir} exited:\n${log}`);
     try {
       await fetch(url);
       return { url, stop: () => child.kill(), log: () => log };
@@ -155,11 +156,13 @@ async function run(dir, browser, port) {
   return { snapshots, problems };
 }
 
+// Random ports: other servers may be listening on this shared machine.
+const PORT = 20000 + Math.floor(Math.random() * 20000) * 2;
 const browser = await chromium.launch();
 let failed = false;
 try {
-  const original = await run(join(ROOT, "examples", name), browser, 4310);
-  const twin = await run(twinDir, browser, 4311);
+  const original = await run(join(ROOT, "examples", name), browser, PORT);
+  const twin = await run(twinDir, browser, PORT + 1);
   for (const [who, r] of [
     ["original", original],
     ["twin", twin]

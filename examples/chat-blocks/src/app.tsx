@@ -1,0 +1,143 @@
+// The client side of the chat (examples/chat), written with generator blocks
+// v2. This file owns the transcript state, the input, and the status ticker
+// — and that is the whole client app. The replies (the markdown, the parser
+// behind it, the canned answers) are server components; their markup
+// arrives as HTML over frame streams and never exists here as templates or
+// JSON.
+import { $cleanup, $component, $event, $settled, $signal, For, Loading } from "solid-js";
+import { dynamic } from "@solidjs/web";
+import { reply, welcome } from "~/lib/ai";
+import Status from "~/components/status";
+import "./app.css";
+
+interface Message {
+  id: number;
+  prompt: string;
+}
+
+let nextId = 0;
+
+// Behavior for SERVER-rendered elements (Stage 6): every code block in a
+// reply carries a copy button the server renders with `onClick={props.copy}`
+// — this function, passed as a prop. The marker in the markup names the
+// prop; delegation resolves it here at dispatch. It touches only the DOM (no
+// reactive state), so it stays a plain function rather than an `$event`.
+const copyCode = (e: MouseEvent & { currentTarget: HTMLButtonElement }) => {
+  const button = e.currentTarget;
+  const code = button.parentElement?.querySelector("code");
+  if (!code) return;
+  // Clipboard access can reject (unfocused window, missing permission) —
+  // the label flip is the affordance either way.
+  navigator.clipboard.writeText(code.textContent ?? "").catch(() => {});
+  button.textContent = "Copied!";
+  setTimeout(() => (button.textContent = "Copy"), 1200);
+};
+
+const App = $component(function* () {
+  const [messages, setMessages] = yield* $signal<Message[]>([]);
+  const [draft, setDraft] = yield* $signal("");
+
+  // The t=0 reply: rendered during the INITIAL document render, so the
+  // assistant is already typing as the page loads — tokens stream over the
+  // document's own response, and hydration adopts the boundary in place
+  // (zero network) and picks the generation up mid-sentence.
+  const Welcome = dynamic(() => welcome());
+
+  let transcript!: HTMLOListElement;
+  let pinned = true;
+
+  const send = $event(function* (e: SubmitEvent) {
+    e.preventDefault();
+    const prompt = (yield* draft).trim();
+    if (!prompt) return;
+    yield* setMessages(m => [...m, { id: nextId++, prompt }]);
+    yield* setDraft("");
+    pinned = true;
+  });
+  const typing = $event(function* (e: InputEvent & { currentTarget: HTMLInputElement }) {
+    yield* setDraft(e.currentTarget.value);
+  });
+
+  // Follow the stream: replies grow through server-driven morphs — HTML the
+  // browser patches in place, no client render to hook — so bottom-pinning
+  // watches the transcript's SIZE, not the component tree. Stay pinned only
+  // while the reader is already at the bottom; scrolling up to re-read wins.
+  // (The original's `onSettled(() => { …; return teardown })` — a run-once
+  // effect block with a `$cleanup`.)
+  yield* $settled(function* () {
+    const doc = document.documentElement;
+    const onScroll = () => {
+      pinned = window.innerHeight + window.scrollY >= doc.scrollHeight - 120;
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    const follow = new ResizeObserver(() => {
+      if (pinned) window.scrollTo({ top: doc.scrollHeight });
+    });
+    follow.observe(transcript);
+    yield* $cleanup(() => {
+      window.removeEventListener("scroll", onScroll);
+      follow.disconnect();
+    });
+  });
+
+  return function* () {
+    return (
+      <main class="chat">
+        <header class="masthead">
+          <h1>Solid Chat</h1>
+          <p>
+            Every reply is a <em>server component</em>: markdown rendered on the server, streamed in
+            as HTML. Ask about <b>server components</b>, <b>signals</b>, or <b>markdown</b>.
+          </p>
+        </header>
+        <ol class="transcript" ref={transcript}>
+          <li class="exchange">
+            <div class="bubble assistant">
+              <Loading fallback={<p class="typing">▍</p>}>
+                <Welcome
+                  status={p => <Status progress={p.progress} stats={p.stats} usage={p.usage} />}
+                  copy={copyCode}
+                />
+              </Loading>
+            </div>
+          </li>
+          <For each={yield* messages}>
+            {m => {
+              // One server-component call per message. The prompt is the
+              // server input; the `status` prop is a client position the
+              // server fills with two live expression args (DR-2): progress
+              // updates on every yield, stats settles when generation
+              // completes. The <Status> reading them is client code. (A
+              // plain render callback, as in the original: `m` is a plain
+              // object and the row holds no state or handler of its own.)
+              const Reply = dynamic(() => reply(m.prompt));
+              return (
+                <li class="exchange">
+                  <div class="bubble user">{m.prompt}</div>
+                  <div class="bubble assistant">
+                    <Loading fallback={<p class="typing">▍</p>}>
+                      <Reply
+                        status={p => (
+                          <Status progress={p.progress} stats={p.stats} usage={p.usage} />
+                        )}
+                        copy={copyCode}
+                      />
+                    </Loading>
+                  </div>
+                </li>
+              );
+            }}
+          </For>
+        </ol>
+        <form class="composer" onSubmit={send}>
+          <input type="text" placeholder="Ask something…" value={yield* draft} onInput={typing} />
+          <button type="submit" disabled={!(yield* draft).trim()}>
+            Send
+          </button>
+        </form>
+      </main>
+    );
+  };
+});
+
+export default App;

@@ -1,0 +1,28 @@
+{
+  "name": "chat-blocks-example",
+  "description": "The server-components chat (examples/chat) rewritten with generator blocks v2",
+  "version": "0.0.0",
+  "private": true,
+  "author": "Ryan Carniato",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "start": "node server.js",
+    "test": "vitest run --config vitest.config.ts",
+    "typecheck": "node ../../packages/typecheck/bin/solid-tsc.js --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@solidjs/web": "workspace:*",
+    "highlight.js": "^11.11.1",
+    "marked": "^12.0.2",
+    "solid-js": "workspace:*"
+  },
+  "devDependencies": {
+    "@solidjs/vite-plugin": "3.0.0-next.35",
+    "jsdom": "^25.0.1",
+    "vite": "^8.0.0",
+    "vitest": "^4.1.6"
+  }
+}
