@@ -704,10 +704,18 @@ function scopeSteps(it: Iterator<unknown>, scopeId: string, count: number) {
  * `Loading` / `Errored`.
  */
 export function lazyView<T>(make: () => T): () => T {
-  return signalsLazyView(() => {
+  const thunk = signalsLazyView(() => {
     const owner = createOwner();
     return runWithOwner(owner, make);
   });
+  // `escape` resolves a tagged thunk where it meets it: a deferred call in
+  // a view's hole (`<A /><p>{x}</p><B />`) resolves on the client in the
+  // hole's `insert`, before the view allocates anything else. Left to
+  // `ssr()` time, its owner took its id after the later holes' scopes
+  // (server `02`/`03` for A/B, client `01`/`03`). A thunk the view returns
+  // still resolves where the renderer takes it, on both sides.
+  (thunk as any).$lv = true;
+  return thunk;
 }
 
 // === Observer tracking (for async memo) ===

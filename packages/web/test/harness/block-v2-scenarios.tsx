@@ -30,6 +30,14 @@
  *   signal and a memo, and a read helper called from a memo and from the
  *   view. Compiled, every helper is a plain function on both sides, the
  *   setup and the memos lose their blocks, and hydration ids still agree.
+ * - v2-static-*: static views (`BLOCK_STATIC`, blocks-v2-performance.md
+ *   section 12). `insert` renders a view proven static once, untracked, while
+ *   hydrating too; its ids come from its `blockScope` alone, so the server
+ *   and the client must agree without the render effect it used to get:
+ *   static views nested, as siblings (mixed with a re-running view), under
+ *   `<Loading>` beside an async sibling, under `<Show>` and `<For>`, and with
+ *   components (plain, `$component` with a re-running view, a `<Show>`)
+ *   inside.
  */
 // @ts-nocheck
 import {
@@ -239,6 +247,147 @@ function V2SettledAfterComponent() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// V6. Static views under hydration (`BLOCK_STATIC`).
+const StLeaf = $component(function* (props: TypedProps<{ label: string }>) {
+  return function* () {
+    return <em>{yield* props.label}</em>;
+  };
+});
+const StInner = $component(function* () {
+  return function* () {
+    return (
+      <span>
+        in
+        <StLeaf label="leaf" />
+      </span>
+    );
+  };
+});
+const [stOuterText, setStOuterText] = createSignal("x");
+const StOuter = $component(function* (props: TypedProps<{ text: string }>) {
+  return function* () {
+    return (
+      <div>
+        <StInner />
+        <p>{yield* props.text}</p>
+        <StInner />
+      </div>
+    );
+  };
+});
+function V2StaticNested() {
+  return <StOuter text={stOuterText()} />;
+}
+
+// A view with a top-level read (not static): it keeps its render effect.
+const StDynamic = $component(function* (props: TypedProps<{ mode: string }>) {
+  return function* () {
+    const mode = yield* props.mode;
+    return mode === "a" ? <b>A</b> : <i>B</i>;
+  };
+});
+const [stMode, setStMode] = createSignal("a");
+function V2StaticSiblings() {
+  return (
+    <section>
+      <StLeaf label="1" />
+      <StInner />
+      <StDynamic mode={stMode()} />
+      t
+      <StLeaf label="2" />
+      <StOuter text="o" />
+    </section>
+  );
+}
+
+const StAsync = $component(function* () {
+  const value = yield* $memo(function* () {
+    return yield* attempt(async () => {
+      await sleep(5);
+      return isServer ? "srv" : "cli";
+    });
+  });
+  return function* () {
+    return <strong>{yield* value}</strong>;
+  };
+});
+function V2StaticUnderLoading() {
+  return (
+    <main>
+      <StLeaf label="h" />
+      <Loading fallback={<p>loading</p>}>
+        <StInner />
+        <StAsync />
+        <StLeaf label="z" />
+      </Loading>
+      <StLeaf label="t" />
+    </main>
+  );
+}
+
+const [stShow, setStShow] = createSignal(true);
+function V2StaticUnderShow() {
+  return (
+    <article>
+      <h3>s</h3>
+      <Show when={stShow()} fallback={<StLeaf label="off" />}>
+        <StInner />
+        <StLeaf label="on" />
+      </Show>
+      <footer>f</footer>
+    </article>
+  );
+}
+
+const [stItems, setStItems] = createSignal(["a", "b"]);
+const StRow = $component(function* (props: TypedProps<{ item: string }>) {
+  return function* () {
+    return (
+      <li>
+        <StLeaf label={yield* props.item} />
+        <StInner />
+      </li>
+    );
+  };
+});
+function V2StaticUnderFor() {
+  return (
+    <ul>
+      <For each={stItems()}>{item => <StRow item={item} />}</For>
+    </ul>
+  );
+}
+
+function StPlain(props: { n: string }) {
+  return <kbd>{props.n}</kbd>;
+}
+const [stInnerShow, setStInnerShow] = createSignal(true);
+const [stHostMode, setStHostMode] = createSignal("a");
+const StHost = $component(function* () {
+  return function* () {
+    return (
+      <div>
+        <StPlain n="p" />
+        <StDynamic mode={stHostMode()} />
+        <Show when={stInnerShow()}>
+          <StLeaf label="s" />
+        </Show>
+        <For each={["f1", "f2"]}>{f => <StPlain n={f} />}</For>
+        <StInner />
+      </div>
+    );
+  };
+});
+function V2StaticWithComponents() {
+  return (
+    <aside>
+      <StHost />
+      <StHost />
+    </aside>
+  );
+}
+
 export const blockV2Scenarios: Scenario[] = [
   {
     name: "v2-settled-after-hydration",
@@ -287,5 +436,56 @@ export const blockV2Scenarios: Scenario[] = [
     },
     expectedTextAfterUpdate: "dark4??",
     stableSelector: "p, b, i, u"
+  },
+  {
+    name: "v2-static-nested",
+    App: V2StaticNested,
+    expectedText: "inleafxinleaf",
+    update: () => setStOuterText("y"),
+    expectedTextAfterUpdate: "inleafyinleaf",
+    stableSelector: "div, span, em"
+  },
+  {
+    name: "v2-static-siblings",
+    App: V2StaticSiblings,
+    expectedText: "1inleafAt2inleafoinleaf",
+    update: () => setStMode("b"),
+    expectedTextAfterUpdate: "1inleafBt2inleafoinleaf",
+    stableSelector: "section, span, em, div, p"
+  },
+  {
+    name: "v2-static-under-loading",
+    App: V2StaticUnderLoading,
+    async: true,
+    expectedText: "hinleafsrvzt",
+    serverText: "h inleafsrvz t",
+    stableSelector: "main, span, em, strong"
+  },
+  {
+    name: "v2-static-under-show",
+    App: V2StaticUnderShow,
+    expectedText: "sinleafonf",
+    update: () => setStShow(false),
+    expectedTextAfterUpdate: "sofff",
+    stableSelector: "article, h3, footer"
+  },
+  {
+    name: "v2-static-under-for",
+    App: V2StaticUnderFor,
+    expectedText: "ainleafbinleaf",
+    update: () => setStItems(["a", "b", "c"]),
+    expectedTextAfterUpdate: "ainleafbinleafcinleaf",
+    stableSelector: "ul"
+  },
+  {
+    name: "v2-static-with-components",
+    App: V2StaticWithComponents,
+    expectedText: "pAsf1f2inleafpAsf1f2inleaf",
+    update: () => {
+      setStInnerShow(false);
+      setStHostMode("b");
+    },
+    expectedTextAfterUpdate: "pBf1f2inleafpBf1f2inleaf",
+    stableSelector: "aside, div, kbd, span"
   }
 ];

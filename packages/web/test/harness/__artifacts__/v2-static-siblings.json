@@ -1,0 +1,5 @@
+{
+  "name": "v2-static-siblings",
+  "shell": "<section _hk=0><!--$--><em _hk=10>1</em><!--/--><!--$--><span _hk=20>in<!--$--><em _hk=2100>leaf</em><!--/--></span><!--/--><!--$--><b _hk=30>A</b><!--/-->t<!--$--><em _hk=40>2</em><!--/--><!--$--><div _hk=50><!--$--><span _hk=5100>in<!--$--><em _hk=510100>leaf</em><!--/--></span><!--/--><p>o</p><!--$--><span _hk=5300>in<!--$--><em _hk=530100>leaf</em><!--/--></span><!--/--></div><!--/--></section>",
+  "rest": ""
+}

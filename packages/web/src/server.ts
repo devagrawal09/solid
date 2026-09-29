@@ -3946,7 +3946,9 @@ export function escape(s, attr) {
       if (src.$slot) s.$slot = true;
       return s;
     }
-    if (!attr && t === "function") return escapeLate(s);
+    // A deferred component call in a hole (`lazyView`, tagged `$lv`)
+    // resolves here, as the client's `insert` resolves it at once.
+    if (!attr && t === "function") return s.$lv ? escape(s()) : escapeLate(s);
     if (!attr && isReadOp(s)) return escapeLate(readOpThunk(s));
     if (attr) {
       // Nullish and boolean values pass through so callers can omit the
