@@ -1019,6 +1019,8 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
     (!create || bornHeld !== null || (el._statusFlags & STATUS_PENDING) !== 0);
   if (held && (!__ASYNC__ || !el._transition || hasOverride)) queuePendingNode(el);
   else if (
+    // (Async only: the async-free runtime queues every held pass above.)
+    __ASYNC__ &&
     held &&
     (activeTransition === null || isOptimisticDirty) &&
     !(el._statusFlags & (STATUS_PENDING | STATUS_UNINITIALIZED))
@@ -2232,7 +2234,9 @@ export function unflushedValue(el: Signal<any> | Computed<any>, committed = el._
   // (CONFIG_ADOPTED_UNFLUSHED): nothing flushed is staged — the committed
   // value answers (the caller's notion of committed: a store node's backing).
   // A held node: unflushed only if rewritten since the last flush (stash).
-  if (el._transition === null || el._config & CONFIG_ADOPTED_UNFLUSHED) return committed;
+  // (The async-free runtime holds nothing in a transaction.)
+  if (!__ASYNC__ || el._transition === null || el._config & CONFIG_ADOPTED_UNFLUSHED)
+    return committed;
   return el._x === null ? NOT_PENDING : el._x._flushedStaged;
 }
 /** Held nodes rewritten since the last flush (setSignal); the flush clears
@@ -2282,7 +2286,7 @@ export function resyncUnflushedCompanions(): void {
   unflushedStaged = false;
   // Length-guarded: the common flush has nothing here, and must allocate nothing.
   // Length-guarded: the common flush has nothing here and allocates nothing.
-  if (unflushedRewrites.length !== 0) {
+  if (__ASYNC__ && unflushedRewrites.length !== 0) {
     for (const el of unflushedRewrites) el._x!._flushedStaged = NOT_PENDING;
     unflushedRewrites.length = 0;
   }
