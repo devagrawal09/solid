@@ -43,27 +43,25 @@ const Story = $component(function* (props: RouteProps<Path>) {
     return yield* attempt(() => getStory(id));
   });
   return function* () {
+    const item = yield* story;
     return (
       <div class="item-view">
         <div class="item-view-header">
-          <a href={(yield* story).url} target="_blank">
-            <h1>{(yield* story).title}</h1>
+          <a href={item.url} target="_blank">
+            <h1>{item.title}</h1>
           </a>
-          {(yield* story).domain ? <span class="host">({(yield* story).domain})</span> : null}
+          {item.domain ? <span class="host">({item.domain})</span> : null}
           <p class="meta">
-            {(yield* story).points} points | by{" "}
-            <a href={`/users/${(yield* story).user}`}>{(yield* story).user}</a>{" "}
-            {(yield* story).time_ago} ago
+            {item.points} points | by <a href={`/users/${item.user}`}>{item.user}</a>{" "}
+            {item.time_ago} ago
           </p>
         </div>
         <div class="item-view-comments">
           <p class="item-view-comments-header">
-            {(yield* story).comments_count
-              ? (yield* story).comments_count + " comments"
-              : "No comments yet."}
+            {item.comments_count ? item.comments_count + " comments" : "No comments yet."}
           </p>
           <ul class="comment-children">
-            <For each={(yield* story).comments}>{c => <Comment comment={c} />}</For>
+            <For each={item.comments}>{c => <Comment comment={c} />}</For>
           </ul>
         </div>
       </div>

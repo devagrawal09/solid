@@ -34,6 +34,7 @@ mod server;
 mod spreads;
 mod store_paths;
 mod tx;
+mod views;
 
 pub use inline::{ImportedModule, island_exports};
 use oxc_allocator::Allocator;
@@ -222,6 +223,10 @@ fn prepare(original: &str, opts: &IslandOptions, components: bool) -> Option<Str
     // `<Dynamic>` over a static component: that element (before spreads,
     // which then see an intrinsic element's spread).
     let b = dynamic::rewrite(s2, f).or(b);
+    let s2 = b.as_deref().unwrap_or(s1);
+    // View reads bound to a local before the view's `return`: read at
+    // their sites.
+    let b = views::inline_view_reads(s2, f).or(b);
     let s2 = b.as_deref().unwrap_or(s1);
     let sp = spreads::rewrite(s2, f);
     let s2b = sp.as_deref().unwrap_or(s2);

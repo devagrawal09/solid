@@ -2285,6 +2285,66 @@ export const App = $component(function* (props) {
 }
 
 #[test]
+fn a_view_read_bound_to_a_local_compiles_like_the_reads_at_its_sites() {
+    let bound = run(r#"
+import { $component, $event, $signal, $memo, For } from "solid-js";
+export const App = $component(function* (props) {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  const story = yield* $memo(function* () { return { title: "t", items: [1, 2] }; });
+  return function* () {
+    const s = yield* story;
+    const count = yield* n;
+    return (
+      <div>
+        <h1>{s.title}</h1>
+        <button onClick={inc}>{count}</button>
+        <ul><For each={s.items}>{i => <li>{i}</li>}</For></ul>
+      </div>
+    );
+  };
+});
+"#);
+    let direct = run(r#"
+import { $component, $event, $signal, $memo, For } from "solid-js";
+export const App = $component(function* (props) {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  const story = yield* $memo(function* () { return { title: "t", items: [1, 2] }; });
+  return function* () {
+    return (
+      <div>
+        <h1>{(yield* story).title}</h1>
+        <button onClick={inc}>{(yield* n)}</button>
+        <ul><For each={(yield* story).items}>{i => <li>{i}</li>}</For></ul>
+      </div>
+    );
+  };
+});
+"#);
+    assert!(bound.fallback.is_none(), "{:?}", bound.fallback);
+    assert_eq!(manifest(&bound), manifest(&direct));
+    assert_eq!(bound.chunks.len(), direct.chunks.len());
+    for (a, b) in bound.chunks.iter().zip(&direct.chunks) {
+        assert_eq!(a.code, b.code);
+    }
+    // A name the view shadows, or a shorthand use, is left as written.
+    let shadowed = fallback_of(
+        r#"
+import { $component, $memo, For } from "solid-js";
+export const App = $component(function* () {
+  const story = yield* $memo(function* () { return { items: [1] }; });
+  return function* () {
+    const s = yield* story;
+    return <ul><For each={s.items}>{story => <li>{story}</li>}</For></ul>;
+  };
+});
+"#,
+    );
+    assert!(shadowed.contains("setup read `yield* story`"), "{shadowed}");
+}
+
+#[test]
 fn an_errored_around_a_tier0_islands_content_routes_its_errors_on_the_core() {
     let out = run(r#"
 import { $component, $event, $signal, Errored } from "solid-js";

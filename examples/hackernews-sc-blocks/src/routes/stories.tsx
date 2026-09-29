@@ -23,13 +23,14 @@ const Stories = $component(function* (props: RouteSectionProps) {
     return { type, page, stories: yield* attempt(() => getStories(type, page)) };
   });
   return function* () {
+    const listing = yield* feed;
     return (
       <div class="news-view">
         <div class="news-list-nav">
-          {(yield* feed).page > 1 ? (
+          {listing.page > 1 ? (
             <a
               class="page-link"
-              href={`/${(yield* feed).type}?page=${(yield* feed).page - 1}`}
+              href={`/${listing.type}?page=${listing.page - 1}`}
               aria-label="Previous Page"
             >
               {"<"} prev
@@ -39,11 +40,11 @@ const Stories = $component(function* (props: RouteSectionProps) {
               {"<"} prev
             </span>
           )}
-          <span>page {(yield* feed).page}</span>
-          {(yield* feed).stories.length >= 29 ? (
+          <span>page {listing.page}</span>
+          {listing.stories.length >= 29 ? (
             <a
               class="page-link"
-              href={`/${(yield* feed).type}?page=${(yield* feed).page + 1}`}
+              href={`/${listing.type}?page=${listing.page + 1}`}
               aria-label="Next Page"
             >
               more {">"}
@@ -55,7 +56,7 @@ const Stories = $component(function* (props: RouteSectionProps) {
           )}
         </div>
         <main class="news-list">
-          <For each={(yield* feed).stories}>
+          <For each={listing.stories}>
             {story => (
               <li class="news-item">
                 <span class="score">{story.points}</span>
