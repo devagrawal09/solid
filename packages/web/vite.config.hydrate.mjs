@@ -7,6 +7,7 @@ import solidPlugin from "@solidjs/vite-plugin";
 
 const compiler = process.env.JSX_COMPILER === "babel" ? "babel" : "native";
 import { resolve } from "path";
+import { framesFeatureSwitches, framesSetupFiles } from "./test/setup/frames-features.mjs";
 
 const rootDir = resolve(__dirname);
 
@@ -14,11 +15,15 @@ export default defineConfig({
   // hot: false — solid-refresh wraps top-level components (e.g. the shared
   // parity-harness scenarios) in HMR wrappers that add owners and break
   // hydration id parity.
-  plugins: [solidPlugin({ compiler, hot: false, solid: { dev: true, hydratable: true } })],
+  plugins: [
+    framesFeatureSwitches(),
+    solidPlugin({ compiler, hot: false, solid: { dev: true, hydratable: true } })
+  ],
   test: {
     environment: "jsdom",
     pool: "threads",
     globals: true,
+    setupFiles: framesSetupFiles(),
     include: ["test/hydration/**/*.spec.tsx"]
   },
   resolve: {
@@ -36,10 +41,7 @@ export default defineConfig({
         rootDir,
         "serialization/src/serializer-decode.ts"
       ),
-      "@solidjs/web/serialization": resolve(
-        rootDir,
-        "serialization/src/serializer.ts"
-      ),
+      "@solidjs/web/serialization": resolve(rootDir, "serialization/src/serializer.ts"),
       "@solidjs/web": resolve(rootDir, "src/index.ts")
     }
   }

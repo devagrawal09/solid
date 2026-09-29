@@ -21,6 +21,7 @@ import {
   getServerFunctionsCodec
 } from "../../server-functions/src/shared.js";
 import { REVALIDATE_HEADER } from "../../src/response.js";
+import { SINGLE_FLIGHT, featureExcluded, markFeature } from "./features.js";
 
 // EXPERIMENTAL — the frames/server-components surface ships as an
 // experimental preview, excluded from the 2.0 stability guarantee: API
@@ -509,6 +510,9 @@ export function createServerComponentHandler({
       // calls it invalidated, and the caller wants the mutation's value
       // rather than a component.
       if (response.headers.has(SINGLE_FLIGHT_HEADER)) {
+        // SINGLE_FLIGHT off: no mutation of this app refreshes frames.
+        if (!SINGLE_FLIGHT) return featureExcluded("SINGLE_FLIGHT");
+        markFeature("SINGLE_FLIGHT");
         return applyFlightResponse(response, address, binding);
       }
       const version = bump(address);

@@ -537,6 +537,117 @@ Test suites:
   - vitest: 5,912 passed. `tsrx-typecheck-projection` times out at 5 s with the debug binary under load and passes in isolation. The three block-lowering and strict fixtures whose output now shows `createPlainStore` were regenerated with their update commands.
 - `examples/todos-blocks` and `examples/sync-blocks`: `pnpm test` passes.
 
+## 8. Frames client switches
+
+The same mechanism, applied to `@solidjs/web/frames`' client (the server-components runtime). Its switches are in `packages/web/frames/src/features.ts`. Every switch is `true` in the published build. The prod client (`frames/dist/client.js`) imports them from a sibling file, `frames/dist/client.features.js`, which rollup keeps external (`framesFeaturesModule` in `packages/web/rollup.config.js`). An app bundler folds them against the published defaults, or against the module the capability linker substitutes. The dev client inlines them and is never sliced.
+
+| Switch             | Removes                                                                                                                                                        | Seams                                                                                                                                      |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `FRAGMENTS`        | Segment reveal and fallback materialization inside frames, the reveal seam (`createLoadingBoundary`), late document boundaries, and the fragment-ledger claims | `chunkToRecords` fragment/reveal, the flush's segment loop, `revealSeam`, `boundaryMayArrive`, `installRevealHook`, `claimRegionFragments` |
+| `ASSETS`           | Streamed stylesheet gates, module preloads and preload links                                                                                                   | `chunkToRecords` assets, root-asset accumulation, the flush's asset loop, the style gate                                                   |
+| `SLOT_DATA`        | `{$ref}` slot args resolved from the response's data table                                                                                                     | `#resolveArgs`, `#refsUnresolved`, `#refArgsUnchanged`                                                                                     |
+| `ASYNC_ARGS`       | `asyncArg` values read through async memos                                                                                                                     | `slotArgsProxy`                                                                                                                            |
+| `CONTAINERS`       | Container traces: the materializer install (`materializeContainerTrace`), revive, and identity probes                                                          | `setContainerTraceMaterializer`, host `revive` / `isContainer`, `slotArgsProxy`                                                            |
+| `LIVE_PROPS`       | `ctx.onUpdate` live slot props. With it off, an occurrence is re-called when its args change                                                                   | `onUpdate`, the flush's updater branch, `liveSlotProps`                                                                                    |
+| `SINGLE_FLIGHT`    | `applyFlightResponse`                                                                                                                                          | the transport's single-flight branch                                                                                                       |
+| `FULL_CODEC`       | The lazy codec loader and the response-scoped data tables                                                                                                      | host `prepareData` / `applyData` / `resolve`, `data` chunks                                                                                |
+| `HYDRATION_CLAIMS` | Scoped claim renders of hydrated slot fills                                                                                                                    | `claimRender`                                                                                                                              |
+
+The rules are the ones the signals switches follow:
+
+- A switch only removes code.
+- A feature reached with its switch off throws `[FEATURE_EXCLUDED]`. Each site is written `if (!X) return featureExcluded("X")`, so the code after the site is dead and the bundler drops it. A bare call does not work: the bundler cannot tell that `featureExcluded` never returns.
+- `markFeature` records which tests touch a feature (the census). In the published build it is a no-op.
+
+### 8.1 Proof from compiled server output
+
+What the server can put on the wire is what the client must be able to apply. So the proof reads the server graph: `proveFramesFeatures` in `packages/compiler/capabilities.js`.
+
+1. In the server build, the `solidCapabilities` plugin records each application module's final compiled output (a post transform; virtual entries are included).
+2. In `generateBundle` it writes the proof to `node_modules/.cache/solid/frames-features.json` (the `framesProof` option).
+3. The client build, run after the server build, resolves `@solidjs/web/frames`' `client.features.js` to a substitute that has the proven switches off.
+4. When there is no proof file, the client keeps the published module.
+
+The rules are conservative: a name or shape that may produce the feature keeps the switch on, and a module whose output is unknown keeps every switch on. A _server-component module_ is one whose output has a `"use server"` directive and renders markup.
+
+| Switch on when the server output has…                                                        | Switch                                        |
+| -------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| a `Loading` / `Reveal` anywhere                                                              | `FRAGMENTS`                                   |
+| a server-component module that imports CSS or calls `lazy(`                                  | `ASSETS`                                      |
+| a server-component module that takes `props` (it may be handed slots)                        | `SLOT_DATA`, `LIVE_PROPS`, `HYDRATION_CLAIMS` |
+| `asyncArg`                                                                                   | `ASYNC_ARGS`                                  |
+| a server-component module that creates a store or projection                                 | `CONTAINERS`                                  |
+| `frameTransformFlightResult` or `collectFlightData`                                          | `SINGLE_FLIGHT`                               |
+| any of `SLOT_DATA` / `ASYNC_ARGS` / `CONTAINERS` (the data table only carries their records) | `FULL_CODEC`                                  |
+
+Here is what the proof decides for the examples, running `scripts/ssr-redesign/frames-proof.mjs` over each example's `src/` compiled with `generate: "ssr"`:
+
+| Example                | Off                                                                      | Kept on, first reason                                                                                          |
+| ---------------------- | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| `hackernews`           | ASSETS, ASYNC_ARGS, CONTAINERS, SINGLE_FLIGHT                            | FRAGMENTS (`app.tsx` `Loading`); the slot trio and FULL_CODEC (`lib/views.tsx`: a server component with props) |
+| `notes`                | ASSETS, ASYNC_ARGS, CONTAINERS                                           | SINGLE_FLIGHT (`server-config.ts`), FRAGMENTS, the slot trio, FULL_CODEC                                       |
+| `chat`                 | ASSETS, SINGLE_FLIGHT                                                    | everything else (`lib/ai.tsx`: `asyncArg`, a projection, slots)                                                |
+| `hackernews-sc-blocks` | all but FRAGMENTS and SINGLE_FLIGHT (moot: it does not load this client) | —                                                                                                              |
+
+The script reads only `src/`. In a real build the plugin also sees the generated server entry. For `hackernews` (`start: {}`), that entry installs the flight transform when `serverFunctions.components` is set, which keeps `SINGLE_FLIGHT` on.
+
+Tests: `packages/compiler/__tests__/frames-features-proof.test.js` (6). It covers each rule over real `generate: "ssr"` output, unknown modules, the substitute module and its guard, and the plugin's server-to-client round trip.
+
+### 8.2 Behaviour: census differential
+
+`node packages/web/scripts/frames-differential.mjs` runs the same protocol as §3 / §7.6. The suite is every client spec that loads the frames runtime:
+
+- `test/frames-*`, `test/lifecycle-matrix`, and the preload-link specs (default config);
+- `test/hydration/adopted-*` (hydrate config);
+- the new `test/server/frames-single-flight-client.spec.tsx`, the client half of single flight against a real server response.
+
+`test/setup/frames-features.mjs` wires the census (`FRAMES_CENSUS`), the switch substitution (`FRAMES_FEATURES_OFF`) and the subset skip (`FRAMES_FEATURE_SUBSET`) into the three vitest configs. Data: [`frames-differential.json`](./core-runtime-slicing/frames-differential.json). There are 112 tests.
+
+| Configuration     | Passed | Skipped (use the feature) |            Regressions | Sensitivity |
+| ----------------- | -----: | ------------------------: | ---------------------: | ----------- |
+| −FRAGMENTS        |     98 |                        14 |                  **0** | 12 / 14     |
+| −ASSETS           |    108 |                         4 |                  **0** | 3 / 4       |
+| −SLOT_DATA        |    102 |                        10 |                  **0** | 10 / 10     |
+| −ASYNC_ARGS       |    105 |                         6 | **0** (1 skip cascade) | 6 / 6       |
+| −CONTAINERS       |    109 |                         3 |                  **0** | 3 / 3       |
+| −LIVE_PROPS       |    103 |                         9 |                  **0** | 7 / 9       |
+| −SINGLE_FLIGHT    |    111 |                         1 |                  **0** | 1 / 1       |
+| −FULL_CODEC       |    102 |                        10 |                  **0** | 10 / 10     |
+| −HYDRATION_CLAIMS |    109 |                         3 |                  **0** | 1 / 3       |
+| −all              |     72 |                        40 |                  **0** | 36 / 40     |
+
+**Skip cascade.** `adopted-fallback-residue`'s second test takes the async-arg path only when the file's first test did not run before it. With `ASYNC_ARGS` off the first test is skipped, so the second reaches the switched-off feature. It correctly throws `[FEATURE_EXCLUDED]`. The script reports such a failure as a cascade: an earlier test in the same file used the feature.
+
+**Census marks the first run missed.** The first run found five regressions, all from missing marks: late document boundaries under `FRAGMENTS`, and preload-only asset records applied straight to a frame under `ASSETS`. The marks were added; no switch semantics changed.
+
+**Sensitivity below 100%.** `HYDRATION_CLAIMS` is 1 / 3 because two of its tests pass with fresh renders instead of claims.
+
+### 8.3 Bytes
+
+`node packages/web/scripts/frames-switch-bytes.mjs` measures the published `frames/dist/client.js`. It bundles the client with rollup (node resolution, browser conditions) together with the `solid-js` / `@solidjs/web` parts it pulls in, and leaves the server-function client and the lazy codec external. It substitutes the features module the way the linker does, then applies esbuild minify and gzip. Data: [`frames-bytes.json`](./core-runtime-slicing/frames-bytes.json).
+
+| Configuration                                                       | min KB | gz KB |                    saved gz bytes |
+| ------------------------------------------------------------------- | -----: | ----: | --------------------------------: |
+| full (published)                                                    |  86.34 | 30.86 |                                 0 |
+| −FRAGMENTS                                                          |  83.95 | 30.03 |                               859 |
+| −ASSETS                                                             |  84.26 | 30.25 |                               624 |
+| −SLOT_DATA                                                          |  86.00 | 30.83 |                                40 |
+| −ASYNC_ARGS                                                         |  86.32 | 30.91 |                               −49 |
+| −CONTAINERS                                                         |  61.22 | 22.81 |                             8,243 |
+| −LIVE_PROPS                                                         |  86.14 | 30.79 |                                74 |
+| −SINGLE_FLIGHT                                                      |  85.29 | 30.50 |                               373 |
+| −FULL_CODEC                                                         |  86.21 | 30.86 | 4 (+ lazy 6.59 KB gz unreachable) |
+| −HYDRATION_CLAIMS                                                   |  85.25 | 30.52 |                               353 |
+| −all                                                                |  53.03 | 19.98 |                            11,145 |
+| hackernews' proof (−ASSETS, ASYNC_ARGS, CONTAINERS, SINGLE_FLIGHT)  |  57.51 | 21.55 |                             9,542 |
+| hackernews' proof in a real build (−ASSETS, ASYNC_ARGS, CONTAINERS) |  58.75 | 22.05 |                             9,027 |
+
+Reading the table:
+
+- **`CONTAINERS` is the large switch.** It removes `materializeContainerTrace` and the projection and store machinery it reaches in `solid-js`. The number is an upper bound: an app that hydrates projections or stores itself keeps most of that code for its own use.
+- **`FULL_CODEC` barely changes the eager bytes.** The codec already loads lazily. What the switch removes is the reachability of the 6.59 KB gz decode chunk: with it off, the chunk can no longer load.
+- **`ASYNC_ARGS` and `SLOT_DATA` save nothing or cost bytes.** The code they guard is a few lines, and the guard itself costs about 150 bytes (`featureExcluded` and its message) when no other switch pulls it in. They are kept because they are exact statements of what the wire can carry, and they cost nothing once any other switch is off.
+
 ## Reproduce
 
 ```sh
@@ -553,6 +664,12 @@ cd ../..
 node scripts/slices/measure-apps.mjs --out documentation/plans/core-runtime-slicing/apps.json
 node scripts/slices/smoke-apps.mjs             # §7: the sliced production bundles run in jsdom
 (cd packages/compiler && npx vitest run __tests__/capabilities.test.js)   # §7: the compiled-facts proof
+# §8: frames client switches (build packages/web first: frames/dist/client.features.js)
+(cd packages/web && node scripts/frames-differential.mjs --out ../../documentation/plans/core-runtime-slicing/frames-differential.json)
+(cd packages/web && node scripts/frames-switch-bytes.mjs --json ../../documentation/plans/core-runtime-slicing/frames-bytes.json \
+  --off ASSETS,ASYNC_ARGS,CONTAINERS,SINGLE_FLIGHT --off ASSETS,ASYNC_ARGS,CONTAINERS)
+node scripts/ssr-redesign/frames-proof.mjs hackernews notes chat hackernews-sc-blocks
+(cd packages/compiler && npx vitest run __tests__/frames-features-proof.test.js)
 ```
 
 For §7's "before" column, check out the base commit (`a601739a`) in a separate worktree, build it the same way, and run the same `measure-apps.mjs` there.

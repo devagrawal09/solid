@@ -1,4 +1,15 @@
 // @ts-nocheck
+// Link-time switches (features.ts): the one import of this otherwise
+// importless module — constants the app bundler folds, never shared state.
+import {
+  ASSETS,
+  FRAGMENTS,
+  FULL_CODEC,
+  LIVE_PROPS,
+  SLOT_DATA,
+  featureExcluded,
+  markFeature
+} from "./features.js";
 /**
  * Client frame runtime — the consumer side of a frame stream. A frame
  * renders server-owned content into a DOM boundary from a resident keyed
@@ -513,14 +524,18 @@ export function chunkToRecords(chunk) {
     case "html":
       return { "": { kind: "html", value: chunk.html } };
     case "fragment":
+      if (!FRAGMENTS) return featureExcluded("FRAGMENTS");
       return { [`seg:${chunk.key}`]: { kind: "html", value: chunk.html } };
     case "reveal": {
+      if (!FRAGMENTS) return featureExcluded("FRAGMENTS");
       const records = {};
       const gate = chunk.fallback ? "fallback" : "reveal";
       for (const key of chunk.keys) records[`seg:${key}:${gate}`] = true;
       return records;
     }
     case "assets":
+      if (!ASSETS) return featureExcluded("ASSETS");
+      markFeature("ASSETS");
       return { [`seg:${chunk.key}:assets`]: chunk };
     case "slot":
       // A named slot invocation: the client render function for `key` is
@@ -618,7 +633,7 @@ export function createFrameHost(options = {}) {
     }
     // Root assets reuse one key for the shell and late chunks. Accumulate
     // their arrays so frames registered later receive the full snapshot.
-    const assets = records["seg::assets"];
+    const assets = ASSETS && records["seg::assets"];
     const previous = assets && store.records["seg::assets"];
     if (!previous || previous === assets) {
       Object.assign(store.records, records);
@@ -688,6 +703,8 @@ export function createFrameHost(options = {}) {
     apply(chunk) {
       // Data payloads are response-scoped; apply immediately, no store needed.
       if (chunk.type === "data") {
+        if (!FULL_CODEC) return featureExcluded("FULL_CODEC");
+        markFeature("FULL_CODEC");
         options.applyData && options.applyData(chunk);
         return;
       }
@@ -972,7 +989,7 @@ class FrameImpl {
     // segment's placeholder into the DOM — the store-model analogue of the
     // document runtime's $dfd retry drain. Terminates because every step
     // moves a name into #revealed/#fallbackShown, bounded by the store.
-    let progressed = true;
+    let progressed = FRAGMENTS;
     while (progressed) {
       progressed = false;
       for (const key in this.#store) {
@@ -1031,19 +1048,21 @@ class FrameImpl {
 
     // Root asset records reuse a store key, so consume them by identity.
     // Styles remain owned by the reveal gate.
-    for (const key in this.#store) {
-      const record = this.#store[key];
-      if (!key.endsWith(":assets") || !record || this.#processedAssets.has(record)) {
-        continue;
+    if (ASSETS)
+      for (const key in this.#store) {
+        const record = this.#store[key];
+        if (!key.endsWith(":assets") || !record || this.#processedAssets.has(record)) {
+          continue;
+        }
+        this.#processedAssets.add(record);
+        markFeature("ASSETS");
+        if (record.modules) {
+          for (const href of record.modules) ensureModulePreload(href);
+        }
+        if (record.preloads) {
+          for (const entry of record.preloads) ensurePreload(entry);
+        }
       }
-      this.#processedAssets.add(record);
-      if (record.modules) {
-        for (const href of record.modules) ensureModulePreload(href);
-      }
-      if (record.preloads) {
-        for (const entry of record.preloads) ensurePreload(entry);
-      }
-    }
 
     this.#syncSlots();
   }
@@ -1230,8 +1249,9 @@ class FrameImpl {
         // client state on the occurrence (expansion, focus, animation)
         // follows the entity across morphs. #resolveArgs reuses/renames the
         // cached regions, so `{$frame}` args keep their live elements.
-        const update = this.#slotUpdaters.get(occurrence);
+        const update = LIVE_PROPS && this.#slotUpdaters.get(occurrence);
         if (update) {
+          markFeature("LIVE_PROPS");
           // One record shape (A5): every transport's record carries ALL of
           // the occurrence's region args as `{$frame}` refs, so the resolved
           // props are complete — a key the record omits really was removed.
@@ -1306,7 +1326,7 @@ class FrameImpl {
       // props when a re-sent record's args CHANGE, instead of being re-called
       // — the occurrence's instance (and its client state) survives the
       // change. Registration is per-invocation; a real re-call clears it.
-      onUpdate: fn => this.#slotUpdaters.set(occurrence, fn),
+      onUpdate: LIVE_PROPS ? fn => this.#slotUpdaters.set(occurrence, fn) : undefined,
       existing,
       // The range's own markers, when it has them: consumers that bind the
       // interior reactively insert before `end` and return undefined — the
@@ -1395,7 +1415,8 @@ class FrameImpl {
     const { host, id } = this.#options;
     if (host)
       for (const key in args) {
-        if (isDataRef(args[key]) && host.resolve(args[key], id) === undefined) return true;
+        if (SLOT_DATA && isDataRef(args[key]) && host.resolve(args[key], id) === undefined)
+          return true;
       }
     return false;
   }
@@ -1413,6 +1434,8 @@ class FrameImpl {
     for (const key in args) {
       const value = args[key];
       if (isDataRef(value)) {
+        if (!SLOT_DATA) return featureExcluded("SLOT_DATA");
+        markFeature("SLOT_DATA");
         // The frame's id rides along so multi-stream hosts can route the
         // ref to the right response-scoped data table. The resolution is
         // cached per occurrence so a later stream's re-sent ref can be
@@ -1492,7 +1515,7 @@ class FrameImpl {
       const vb = b[key];
       if (va === vb) continue;
       if (isFrameRef(va) && isFrameRef(vb)) continue;
-      if (isDataRef(va) && isDataRef(vb) && cache && key in cache) {
+      if (SLOT_DATA && isDataRef(va) && isDataRef(vb) && cache && key in cache) {
         const host = this.#options.host;
         const next = host ? host.resolve(vb, this.#options.id) : undefined;
         // A live CONTAINER (DR-2's container tier) must be identity-compared
@@ -1811,8 +1834,9 @@ class FrameImpl {
     // immediately — even when other prerequisites are missing — so loading
     // overlaps with the rest of the stream; #styleFlush re-runs this frame
     // when one settles. Inline styles never gate (they apply on insertion).
-    const assets = this.#store[`seg:${name}:assets`];
+    const assets = ASSETS && this.#store[`seg:${name}:assets`];
     if (assets && assets.styles) {
+      markFeature("ASSETS");
       let ready = true;
       for (const entry of assets.styles) ready = ensureStylesheet(entry, this.#styleFlush) && ready;
       if (!ready) return false;
@@ -1830,9 +1854,10 @@ class FrameImpl {
   #revealSegment(name) {
     const tpl = this.#findPlaceholder(name);
     if (!tpl) return;
+    markFeature("FRAGMENTS");
     // Inline styles ride the segment's assets record and apply just before
     // its content shows (document order: <style> precedes the template).
-    const assets = this.#store[`seg:${name}:assets`];
+    const assets = ASSETS && this.#store[`seg:${name}:assets`];
     if (assets && assets.inlineStyles) applyInlineStyles(assets.inlineStyles);
     const content = this.#store[`seg:${name}`];
     const closing = rangeClose(tpl, placeholderId(name));
@@ -1895,6 +1920,7 @@ class FrameImpl {
   #showFallback(name) {
     const tpl = this.#findPlaceholder(name);
     if (!tpl) return false;
+    markFeature("FRAGMENTS");
     const closing = rangeClose(tpl, placeholderId(name));
     if (!closing) return false;
     const fallback = tpl.content.cloneNode(true);

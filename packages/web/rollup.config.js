@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve as resolvePath } from "node:path";
+import { fileURLToPath } from "node:url";
 import nodeResolve from "@rollup/plugin-node-resolve";
 import babel from "@rollup/plugin-babel";
 import cleanup from "rollup-plugin-cleanup";
@@ -103,6 +106,52 @@ const externalizeSharedClient = {
       return { id: "@solidjs/web/server-functions/client", external: true };
     }
     return null;
+  }
+};
+
+// Frames client link-time switches (frames/src/features.ts;
+// documentation/plans/core-runtime-slicing.md, "Frames client switches").
+// The prod client must NOT fold them: the constants survive into dist so the
+// app bundler folds them — against the published defaults, or against the
+// module the capability linker substitutes (proven from the app's compiled
+// server output). So the build keeps the features module external, as
+// `./client.features.js` next to dist/client.js, and emits it with every
+// switch on and a no-op census mark. The dev build inlines it (never sliced).
+const FRAMES_FEATURES_SRC = fileURLToPath(new URL("./frames/src/features.ts", import.meta.url));
+// A bare external id, rendered as the sibling file by `output.paths`.
+const FRAMES_FEATURES_DIST = "solid-frames-client-features";
+const framesFeaturesModule = {
+  name: "frames:features-module",
+  async resolveId(source, importer, options) {
+    if (!importer || !/(^|\/)features(\.js|\.ts)?$/.test(source)) return null;
+    // Relative specifiers are checked by path (not every resolver in the
+    // chain maps `.js` to `.ts`), absolute ones by resolution.
+    const id = source.startsWith(".")
+      ? resolvePath(dirname(importer), source).replace(/\.js$/, ".ts")
+      : (await this.resolve(source, importer, { ...options, skipSelf: true }))?.id;
+    if (id !== FRAMES_FEATURES_SRC) return null;
+    return {
+      id: FRAMES_FEATURES_DIST,
+      external: true
+    };
+  },
+  generateBundle() {
+    const src = readFileSync(FRAMES_FEATURES_SRC, "utf8");
+    const switches = [...src.matchAll(/^export const (\w+) = (true|false);$/gm)].map(
+      m => `export const ${m[1]} = ${m[2]};`
+    );
+    const source = `// Link-time switches of the frames client (see frames/src/features.ts).
+// The capability linker may substitute this module (@solidjs/compiler/capabilities).
+${switches.join("\n")}
+export function featureExcluded(name) {
+  throw new Error(
+    "[FEATURE_EXCLUDED] the frames client was linked without " + name +
+      ", but this page uses it (the capability linker's proof missed a use: report the construct)."
+  );
+}
+export function markFeature() {}
+`;
+    this.emitFile({ type: "asset", fileName: "client.features.js", source });
   }
 };
 
@@ -250,7 +299,12 @@ export default [
   // The server half bundles the frame sink and its SSR pipeline.
   {
     input: "frames/src/client.ts",
-    output: { file: "frames/dist/client.js", format: "es" },
+    output: {
+      file: "frames/dist/client.js",
+      format: "es",
+      // The features module stays a sibling file (see framesFeaturesModule).
+      paths: { [FRAMES_FEATURES_DIST]: "./client.features.js" }
+    },
     external: [
       "solid-js",
       "@solidjs/web",
@@ -265,7 +319,7 @@ export default [
     // frame runtime's dev checks/warnings (marker-integrity diagnostics) do
     // not ship. The dev build below keeps them, selected via the `frames`
     // export's `development` condition — mirroring `web.js`/`dev.js`.
-    plugins: [replaceDev(false), externalizeSharedTransport]
+    plugins: [replaceDev(false), externalizeSharedTransport, framesFeaturesModule]
       .concat(plugins)
       .concat(assertFramesClientTransport)
   },

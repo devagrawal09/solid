@@ -602,6 +602,115 @@ function installDriverFor(code, id) {
   return { code: `${prefix}${code.startsWith("\n") ? "" : " "}${code}`, bodies };
 }
 
+// ---------------------------------------------------------------------------
+// Frames client switches (documentation/plans/core-runtime-slicing.md,
+// "Frames client switches"): the link-time switches of @solidjs/web/frames'
+// client (frames/src/features.ts), proven from the application's COMPILED
+// SERVER OUTPUT — what the server can put on the wire is what the client
+// must be able to apply.
+//
+// Every rule is conservative (a name or shape that MAY produce the feature
+// keeps it on) and judged per application module of the server graph:
+//
+//   FRAGMENTS        a `Loading` / `Reveal` boundary anywhere on the server
+//                    (a frame inside, or a boundary inside a frame, streams
+//                    fragments; late document boundaries ride the same
+//                    ledger)
+//   ASSETS           a server-component module importing CSS or using `lazy`
+//                    (styles / module preloads ride the frame)
+//   SLOT_DATA        a server-component module whose components take props
+//   LIVE_PROPS         (a props-taking server component may be handed slots:
+//   HYDRATION_CLAIMS   their records, live updates and claims)
+//   ASYNC_ARGS       `asyncArg`
+//   CONTAINERS       a server-component module creating a store / projection
+//   SINGLE_FLIGHT    the frames flight transform (`frameTransformFlightResult`)
+//                    or a `collectFlightData` hook
+//   FULL_CODEC       any of SLOT_DATA / ASYNC_ARGS / CONTAINERS (the data
+//                    table only ever carries their records)
+//
+// A server-component module is one whose output has a `"use server"`
+// directive and renders markup. An unknown module (no output) keeps every
+// switch on.
+const FRAMES_SWITCHES = [
+  "FRAGMENTS",
+  "ASSETS",
+  "SLOT_DATA",
+  "ASYNC_ARGS",
+  "CONTAINERS",
+  "LIVE_PROPS",
+  "SINGLE_FLIGHT",
+  "FULL_CODEC",
+  "HYDRATION_CLAIMS"
+];
+
+const USE_SERVER_RE = /(^|[{;\n]\s*)["']use server["']/;
+const MARKUP_RE =
+  /\b(ssr|_\$ssr|escape|_\$escape|ssrElement|createComponent|_\$createComponent)\s*\(|<[a-z][\w-]*[\s>]/;
+
+/**
+ * @param {object} options
+ * @param {{ rel: string, code: string | null }[]} options.modules the server
+ *   graph's application modules and their compiled output
+ * @param {boolean} [options.complete] the server graph is fully known
+ * @returns {Record<string, { on: boolean, because: string[] }>}
+ */
+function proveFramesFeatures({ modules, complete = true }) {
+  const out = {};
+  for (const f of FRAMES_SWITCHES) out[f] = { on: false, because: [] };
+  const use = (f, why) => {
+    out[f].on = true;
+    if (out[f].because.length < 8) out[f].because.push(why);
+  };
+  if (!complete) for (const f of FRAMES_SWITCHES) use(f, "server graph not fully known");
+  for (const { rel, code } of modules) {
+    if (code == null) {
+      for (const f of FRAMES_SWITCHES) use(f, `${rel}: compiled server output unknown`);
+      continue;
+    }
+    const at = re => {
+      const m = re.exec(code);
+      return m ? `${rel}:${code.slice(0, m.index).split("\n").length}` : null;
+    };
+    let w;
+    if ((w = at(/\b(Loading|Reveal)\b/))) use("FRAGMENTS", `${w}: Loading / Reveal boundary`);
+    if ((w = at(/\basyncArg\b/))) use("ASYNC_ARGS", `${w}: asyncArg`);
+    if ((w = at(/\b(frameTransformFlightResult|collectFlightData)\b/)))
+      use("SINGLE_FLIGHT", `${w}: single-flight transform`);
+    const serverComponents = USE_SERVER_RE.test(code) && MARKUP_RE.test(code);
+    if (!serverComponents) continue;
+    if (
+      (w = at(
+        /import\s*(?:[^;]*?from\s*)?["'][^"']+\.(css|scss|sass|less|styl)(\?[^"']*)?["']|\blazy\s*\(/
+      ))
+    )
+      use("ASSETS", `${w}: server component with CSS / lazy`);
+    if ((w = at(/\b(createStore|createProjection|createOptimisticStore|createMutable)\b/)))
+      use("CONTAINERS", `${w}: server component creates a store / projection`);
+    if ((w = at(/\bprops\b/)))
+      for (const f of ["SLOT_DATA", "LIVE_PROPS", "HYDRATION_CLAIMS"])
+        use(f, `${w}: server component takes props (slots possible)`);
+  }
+  for (const f of ["SLOT_DATA", "ASYNC_ARGS", "CONTAINERS"])
+    if (out[f].on) use("FULL_CODEC", `${f} (data records)`);
+  return out;
+}
+
+/** The frames client's features module with the proven switches. */
+function framesFeaturesModuleSource(features) {
+  return (
+    FRAMES_SWITCHES.map(name => `export const ${name} = ${features[name].on};`).join("\n") +
+    `
+export function featureExcluded(name) {
+  throw new Error(
+    "[FEATURE_EXCLUDED] the frames client was linked without " + name +
+      ", but this page uses it (the capability linker's proof missed a use: report the construct)."
+  );
+}
+export function markFeature() {}
+`
+  );
+}
+
 /**
  * Vite / Rollup plugin. Runs `proveGraph` over the build's entries in
  * `buildStart` and, when the graph is async-free, resolves every
@@ -638,6 +747,15 @@ function solidCapabilities(options = {}) {
   let featureDecision = null;
   const featureSlicing = options.features !== false;
   const FEATURES_ID = "\0solid-features:";
+  // Frames client switches: the server build records its application
+  // modules' compiled output and writes the proof (framesProof); the client
+  // build substitutes the frames client's features module from it.
+  const FRAMES_ID = "\0solid-frames-features";
+  const framesSlicing = options.frames !== false;
+  const framesModules = new Map();
+  let framesDecision = null;
+  const framesProofFile = root =>
+    path.resolve(root, options.framesProof ?? "node_modules/.cache/solid/frames-features.json");
   let isBuild = false;
   const writeReport = root => {
     if (!options.report || !decision) return;
@@ -675,6 +793,8 @@ function solidCapabilities(options = {}) {
     },
     async buildStart(input) {
       featureDecision = null;
+      framesModules.clear();
+      framesDecision = null;
       driverInstalls.length = 0;
       const root = config?.root ?? process.cwd();
       // The build input when it names entries (client HTML / JS inputs, an
@@ -730,6 +850,36 @@ function solidCapabilities(options = {}) {
       if (!isBuild || options.compiledFacts === false) logFeatures();
     },
     async resolveId(source, importer, resolveOptions) {
+      // The frames client's features module (frames/dist/client.features.js
+      // of @solidjs/web): the switches the server build proved.
+      if (
+        framesSlicing &&
+        isBuild &&
+        decision?.graph === "client" &&
+        importer &&
+        /(^|\/)client\.features\.js$/.test(source)
+      ) {
+        const resolved = await this.resolve(source, importer, {
+          ...resolveOptions,
+          skipSelf: true
+        });
+        if (
+          !resolved ||
+          !/[\\/]frames[\\/]dist[\\/]client\.features\.js$/.test(resolved.id) ||
+          !/^@solidjs\/web(\/frames)?$/.test(packageOf(resolved.id)?.name ?? "")
+        )
+          return null;
+        const file = framesProofFile(config?.root ?? process.cwd());
+        if (!fs.existsSync(file)) return null;
+        framesDecision = JSON.parse(fs.readFileSync(file, "utf8"));
+        const off = FRAMES_SWITCHES.filter(
+          f => framesDecision.features[f] && !framesDecision.features[f].on
+        );
+        config?.logger?.info?.(
+          `[solid:capabilities] frames client: ${off.length ? `switched off ${off.join(", ")}` : "every switch stays on"} (proof: ${path.relative(config?.root ?? process.cwd(), file)})`
+        );
+        return off.length ? FRAMES_ID : null;
+      }
       if (source === RUNTIME_PACKAGE) {
         if (!decision?.asyncFree) return null;
         return this.resolve(decision.entry, importer, { ...resolveOptions, skipSelf: true });
@@ -781,6 +931,17 @@ function solidCapabilities(options = {}) {
       order: "post",
       handler(code, id) {
         const file = stripQuery(id);
+        // Server graph: record the application modules' compiled output
+        // for the frames proof (virtual entries included — a generated
+        // server entry installs the flight transform).
+        if (
+          framesSlicing &&
+          isBuild &&
+          decision?.graph === "server" &&
+          !file.includes(`${path.sep}node_modules${path.sep}`) &&
+          (id.startsWith("\0") || id.startsWith("virtual:") || SOURCE_RE.test(file))
+        )
+          framesModules.set(displayId(config?.root ?? process.cwd(), file), code);
         if (
           id.startsWith("\0") ||
           !SOURCE_RE.test(file) ||
@@ -814,7 +975,20 @@ function solidCapabilities(options = {}) {
         return { code: installed.code, map: null };
       }
     },
+    generateBundle() {
+      if (!framesSlicing || !isBuild || decision?.graph !== "server") return;
+      const root = config?.root ?? process.cwd();
+      const modules = [...framesModules].map(([rel, code]) => ({ rel, code }));
+      const features = proveFramesFeatures({ modules });
+      const file = framesProofFile(root);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(
+        file,
+        JSON.stringify({ modules: modules.map(m => m.rel).sort(), features }, null, 2)
+      );
+    },
     load(id) {
+      if (id === FRAMES_ID) return framesFeaturesModuleSource(framesDecision.features);
       if (!id.startsWith(FEATURES_ID)) return null;
       return featuresModuleSource(decision.features, id.slice(FEATURES_ID.length));
     }
@@ -825,6 +999,9 @@ module.exports = {
   installDriverFor,
   proveGraph,
   proveFeatures,
+  proveFramesFeatures,
+  framesFeaturesModuleSource,
+  FRAMES_SWITCHES,
   solidCapabilities,
   packageOf,
   htmlEntries,

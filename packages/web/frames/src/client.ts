@@ -28,6 +28,18 @@ import {
   sharedConfig
 } from "solid-js";
 import type { Element as SolidElement } from "solid-js";
+// Link-time switches (features.ts; the capability linker substitutes the
+// module for an app whose compiled server output never uses a feature).
+import {
+  ASYNC_ARGS,
+  CONTAINERS,
+  FRAGMENTS,
+  FULL_CODEC,
+  HYDRATION_CLAIMS,
+  LIVE_PROPS,
+  featureExcluded,
+  markFeature
+} from "./features.js";
 // `insert` MUST resolve to the shared @solidjs/web instance the compiled app
 // already uses — importing it from the runtime source instead bundles a second
 // copy of `insert` and the reconcile/render machinery it drags in (~4kb the app
@@ -45,13 +57,14 @@ import { createServerComponentHandler } from "./frame-transport.js";
 // only the eager core (hooks + revive walk + the WeakSet probe); the
 // plugin object tree-shakes away.
 import {
+  isContainerTraceMarker,
   isMaterializedContainer,
   reviveContainerTraces,
   setContainerTraceMaterializer
 } from "./frame-container-plugin.js";
 import { materializeContainerTrace } from "solid-js";
 
-setContainerTraceMaterializer(materializeContainerTrace);
+if (CONTAINERS) setContainerTraceMaterializer(materializeContainerTrace);
 // This import must resolve to the SHARED built instance, not a bundled
 // copy: configuring the server-function client only counts if it's the same
 // module the compiled reference proxies call through
@@ -142,6 +155,13 @@ function tableFor(id: string) {
 function beginStream(frameId: string) {
   tables.set(frameId, undefined);
 }
+/** CONTAINERS off: a container trace in a slot record means the proof missed
+ * a store / projection crossing the border. */
+function rejectContainerTrace(value: unknown) {
+  if (isContainerTraceMarker(value)) featureExcluded("CONTAINERS");
+  return value;
+}
+
 /**
  * The app-wide shared frame host (created lazily): one chunk router with
  * per-response codec data tables.
@@ -150,15 +170,17 @@ function beginStream(frameId: string) {
 export function getFrameHost() {
   if (!sharedHost) {
     sharedHost = createFrameHost({
-      prepareData: loadCodec,
-      applyData: (c: any) => tableFor(c.id)?.apply(c),
-      resolve: (ref: any, id: string) => tableFor(id)?.resolve(ref),
+      // FULL_CODEC off: no data chunk ever arrives (the host throws
+      // [FEATURE_EXCLUDED] on one), so the codec's loader leaves the bundle.
+      prepareData: FULL_CODEC ? loadCodec : undefined,
+      applyData: FULL_CODEC ? (c: any) => tableFor(c.id)?.apply(c) : undefined,
+      resolve: FULL_CODEC ? (ref: any, id: string) => tableFor(id)?.resolve(ref) : undefined,
       // Document-face container traces ride slot records as inline literals
       // (never `{$ref}`s); this revives them into live stores at arg-read.
-      revive: reviveContainerTraces,
+      revive: CONTAINERS ? reviveContainerTraces : rejectContainerTrace,
       // Lets the record-dedupe compare identity-test containers instead of
       // probing them (a pending container's property reads throw not-ready).
-      isContainer: isMaterializedContainer,
+      isContainer: CONTAINERS ? isMaterializedContainer : undefined,
       // Behavior claims: arms document listeners for event types named by
       // `_bnd` markers. Threaded as an option because the core client entry
       // must not export the event system into tree-shaken subsets.
@@ -227,6 +249,9 @@ function hasPendingFragment(existing: Node[]) {
 }
 
 function claimRender(prefix: string, existing: Node[], render: () => any) {
+  // HYDRATION_CLAIMS off: no hydrated client component fills a slot, so
+  // there is never a server-rendered node to claim under the producer's keys.
+  if (!HYDRATION_CLAIMS) return render();
   const sc: any = sharedConfig;
   if (!sc.getNextContextId) return render();
   const registry = new Map<string, Element>();
@@ -234,7 +259,8 @@ function claimRender(prefix: string, existing: Node[], render: () => any) {
     if (n.nodeType !== 1) continue;
     gatherClaims(n as Element, registry);
   }
-  if (!registry.size && !hasPendingFragment(existing)) return render();
+  if (!registry.size && !(FRAGMENTS && hasPendingFragment(existing))) return render();
+  markFeature("HYDRATION_CLAIMS");
   const prevRegistry = sc.registry;
   const prevHydrating = sc.hydrating;
   const prevClaimRoots = sc.claimRoots;
@@ -271,7 +297,10 @@ function claimRender(prefix: string, existing: Node[], render: () => any) {
  */
 function liveSlotProps(initial: Record<string, any>, ctx: any) {
   const [args, setArgs] = createSignal(initial);
-  ctx.onUpdate((next: Record<string, any>) => setArgs(() => next));
+  ctx.onUpdate((next: Record<string, any>) => {
+    markFeature("LIVE_PROPS");
+    setArgs(() => next);
+  });
   return slotArgsProxy(args);
 }
 
@@ -311,8 +340,11 @@ function slotArgsProxy(args: () => Record<string, any>) {
         // value — its own reads carry the async semantics — and the async
         // probe below would detonate a pending one (property reads throw
         // not-ready). Mirrors the server sink's classification order.
-        if (isMaterializedContainer(v)) return v;
+        if (CONTAINERS && isMaterializedContainer(v)) return v;
         if (!isAsyncValue(v)) return v;
+        // ASYNC_ARGS off: no slot is passed an `asyncArg` (the proof).
+        if (!ASYNC_ARGS) return featureExcluded("ASYNC_ARGS");
+        markFeature("ASYNC_ARGS");
         let read = asyncReads.get(key);
         if (!read) {
           // TRANSPARENT: an adopted fill invokes during the hydrate window
@@ -462,7 +494,9 @@ function slotsFor(props: Record<string, any>) {
               // over the static args (DR-2: async values suspend at the
               // consumption read on every path).
               return v(
-                ctx.onUpdate ? liveSlotProps(slotProps, ctx) : slotArgsProxy(() => slotProps)
+                LIVE_PROPS && ctx.onUpdate
+                  ? liveSlotProps(slotProps, ctx)
+                  : slotArgsProxy(() => slotProps)
               );
             }
             return v;
@@ -662,7 +696,7 @@ function boundaryComponent(host: any, fnId: string) {
       // by name through these at dispatch/materialize time.
       props,
       ownerScope: boundaryScope(owner),
-      reveal: revealSeam(owner),
+      reveal: FRAGMENTS ? revealSeam(owner) : undefined,
       // Any apply releases the gate — content ("materialize") is the normal
       // path; an error record must release too (surfacing the frame's error
       // state beats holding a fallback forever). The error reason requires
@@ -828,9 +862,12 @@ const boundaryWaiters = new Map<string, (el?: Element) => void>();
  * fetching. So an outstanding fragment keeps the answer "not yet".
  */
 function boundaryMayArrive() {
+  if (!FRAGMENTS) return false;
   const hy = (globalThis as any)._$HY;
   if (!hy) return false;
-  return !hy.done || !!(hy.fr && hy.fr.pending());
+  const may = !hy.done || !!(hy.fr && hy.fr.pending());
+  if (may) markFeature("FRAGMENTS");
+  return may;
 }
 
 /**
@@ -844,6 +881,7 @@ function boundaryMayArrive() {
  * what just arrived.
  */
 function installRevealHook() {
+  if (!FRAGMENTS) return;
   const hy = (globalThis as any)._$HY;
   if (!hy || hy.$sc || !hy.fr) return;
   hy.$sc = true;
@@ -967,11 +1005,13 @@ function adoptBoundary(
   // be held, not landed in a range nobody owns.
   const claimedFragments = new Set<string>();
   const claimRegionFragments = (root: ParentNode) => {
+    if (!FRAGMENTS) return;
     const fr = (globalThis as any)._$HY?.fr;
     if (!fr || !fr.claim) return;
     root.querySelectorAll('template[id^="pl-"]').forEach(tpl => {
       const fragId = tpl.id.slice(3);
       if (claimedFragments.has(fragId)) return;
+      markFeature("FRAGMENTS");
       claimedFragments.add(fragId);
       fr.claim(fragId);
     });
@@ -1086,7 +1126,7 @@ function adoptBoundary(
     // counterpart above).
     props,
     ownerScope: boundaryScope(owner),
-    reveal: revealSeam(owner),
+    reveal: FRAGMENTS ? revealSeam(owner) : undefined,
     // Any apply for the currently bound address — a morph, a reveal, an
     // error record — answers an armed switch gate (see below).
     onApply: () => {

@@ -9,6 +9,8 @@
  */
 
 /** A container's border serialization: one subscribe() per consumer. */
+import { markFeature } from "./features.js";
+
 export interface ContainerTrace {
   subscribe(): AsyncIterable<any>;
   /** Whether the container's root is an array — the consumer's seed shape. */
@@ -179,6 +181,7 @@ export function envelopeContainerTraces(value) {
 // occurrences, a codec node re-resolved per record — possibly by DIFFERENT
 // copies of this module).
 function materialize(marker) {
+  markFeature("CONTAINERS");
   let value = state.materialized.get(marker.$tr);
   if (value === undefined) {
     value = state.materializeTrace(marker);
