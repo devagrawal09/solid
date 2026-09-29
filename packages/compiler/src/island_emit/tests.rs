@@ -74,7 +74,10 @@ fn toggle_is_a_tier0_island_and_comment_is_inert() {
     let chunk = &out.chunks[0].code;
     assert!(chunk.contains("@solidjs/signals/t0"), "{chunk}");
     assert!(chunk.contains("$cell(true)"), "{chunk}");
-    assert!(chunk.contains("addEventListener(\"click\""), "{chunk}");
+    // A delegated handler, and the page-level listener for its type.
+    assert!(chunk.contains(".$$click = toggle"), "{chunk}");
+    assert!(chunk.contains("$dg([\"click\"]);"), "{chunk}");
+    assert!(!chunk.contains(".addEventListener(\"click\""), "{chunk}");
     // No reactive runtime.
     assert!(!chunk.contains("createRenderEffect"), "{chunk}");
     // Server: the anchor on the first element, no markers on inert holes.
@@ -115,8 +118,8 @@ export const App = $component(function* () {
     assert!(!ca.contains("setB") && !ca.contains("$cell(2"), "{ca}");
     assert!(cb.contains("incB") && !cb.contains("incA"), "{cb}");
     assert!(!cb.contains("setA") && !cb.contains("$cell(1"), "{cb}");
-    assert_eq!(ca.matches("addEventListener").count(), 1, "{ca}");
-    assert_eq!(cb.matches("addEventListener").count(), 1, "{cb}");
+    assert_eq!(ca.matches(".$$click = ").count(), 1, "{ca}");
+    assert_eq!(cb.matches(".$$click = ").count(), 1, "{cb}");
 }
 
 /// A component in two islands (one cell shared with more components than
@@ -1071,10 +1074,10 @@ export const App = $component(function* () {
     );
     assert!(chunk.contains("$err($m"), "{chunk}");
     assert!(
-        chunk.contains("addEventListener(\"click\", reset$"),
+        chunk.contains(".$$click = reset$"),
         "{chunk}"
     );
-    // A tier-0 island under an `<Errored>` keeps its runtime (no boundary).
+    // A tier-0 island under an `<Errored>` runs on the core (error routing).
     let out = run(r#"
 import { $component, $event, $signal, Errored } from "solid-js";
 export const App = $component(function* () {
@@ -1085,8 +1088,8 @@ export const App = $component(function* () {
   };
 });
 "#);
-    assert!(manifest(&out).contains(r#""tier":0"#), "{}", manifest(&out));
-    assert!(!out.server.contains("<!--$-->"), "{}", out.server);
+    assert!(manifest(&out).contains(r#""tier":2"#), "{}", manifest(&out));
+    assert!(out.server.contains("<!--$-->"), "{}", out.server);
 }
 
 #[test]
@@ -1468,7 +1471,7 @@ export const Page = $component(function* () {
     let chunk = &out.chunks[0].code;
     assert!(chunk.contains("$p($h());"), "{chunk}");
     // Handlers stay attached as before.
-    assert!(chunk.contains("addEventListener(\"click\""), "{chunk}");
+    assert!(chunk.contains(".$$click = "), "{chunk}");
 }
 
 #[test]
@@ -1944,4 +1947,744 @@ export const App = $component(function* () {
     let m = manifest(&out);
     assert!(m.contains(r#""serialized":[]"#), "{m}");
     assert!(!out.server.contains("data-s="), "{}", out.server);
+}
+
+#[test]
+fn a_ref_assigning_a_local_joins_its_readers_island_and_a_ref_callback_activates_at_load() {
+    let out = run(r#"
+import { $component, $event, $signal } from "solid-js";
+export let seen = "none";
+export const App = $component(function* () {
+  let input;
+  const [text, setText] = yield* $signal("");
+  const read = $event(function* () { setText(input.value); });
+  return function* () {
+    return (
+      <div>
+        <input ref={input} value="abc" />
+        <button class="read" onClick={read}>read</button>
+        <p class="out">{yield* text}</p>
+        <span ref={el => { seen = el.className; }}>cb</span>
+      </div>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    assert_eq!(out.chunks.len(), 2, "{}", manifest(&out));
+    let assign = &out.chunks[0].code;
+    assert!(
+        assign.contains("typeof input === \"function\" ? $ref(input, $n2) : (input = $n2);"),
+        "{assign}"
+    );
+    assert!(
+        assign.contains(".$$click = read;"),
+        "{assign}"
+    );
+    let cb = &out.chunks[1].code;
+    assert!(
+        cb.contains("$ref(el => { seen = el.className; }, $n2);"),
+        "{cb}"
+    );
+    assert!(!cb.contains(".$$click"), "{cb}");
+    let m = manifest(&out);
+    // The assigning ref waits for the island's first event; the callback runs at load.
+    assert!(m.contains(r#""activation":"lazy""#), "{m}");
+    assert!(m.contains(r#""activation":"load""#), "{m}");
+    assert!(m.contains("`ref` callback"), "{m}");
+    // The server never renders refs.
+    assert!(!out.server.contains("ref"), "{}", out.server);
+}
+
+#[test]
+fn a_ref_in_a_live_region_runs_for_every_row_the_region_builds() {
+    let out = run(r#"
+import { $component, $event, $signal, For } from "solid-js";
+export let last;
+export const App = $component(function* () {
+  const [items, setItems] = yield* $signal([1, 2]);
+  const add = $event(function* () { setItems(l => [...l, l.length + 1]); });
+  return function* () {
+    return (
+      <div>
+        <ul><For each={yield* items}>{i => <li ref={el => { last = el; }}>{i}</li>}</For></ul>
+        <button onClick={add}>add</button>
+      </div>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    // One island: the ref's site is created by the list's builder.
+    assert_eq!(out.chunks.len(), 1, "{}", manifest(&out));
+    assert!(
+        out.chunks[0]
+            .code
+            .contains("$ref(el => { last = el; }, $x);"),
+        "{}",
+        out.chunks[0].code
+    );
+}
+
+#[test]
+fn spreads_of_props_and_object_literals_become_attributes() {
+    let out = run(r#"
+import { $component, $event, $signal } from "solid-js";
+function Button(props) {
+  return <button {...props} />;
+}
+export const App = $component(function* () {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    return (
+      <div>
+        <Button class="inc" title={"n=" + (yield* n)} onClick={inc}>+</Button>
+        <Button class="plain" disabled>static</Button>
+        <p {...{ "data-n": yield* n, id: "out" }}>{yield* n}</p>
+      </div>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let chunk = &out.chunks[0].code;
+    assert!(chunk.contains(".$$click = "), "{chunk}");
+    assert!(chunk.contains("setAttribute(\"data-n\""), "{chunk}");
+    assert!(chunk.contains("setAttribute(\"title\""), "{chunk}");
+    // The forwarded children render in the button; attributes a caller
+    // leaves out render nothing.
+    assert!(
+        out.server.contains("_$a(\"disabled\", props.disabled)"),
+        "{}",
+        out.server
+    );
+    assert!(out.server.contains("_$e(props.children)"), "{}", out.server);
+}
+
+#[test]
+fn spreads_whose_keys_are_unknown_are_refused() {
+    // An exported component's callers are outside the module.
+    let reason = fallback_of(
+        r#"
+import { $component, $event, $signal } from "solid-js";
+export function Button(props) { return <button {...props} />; }
+export const App = $component(function* () {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () { return <div><Button onClick={inc}>{yield* n}</Button></div>; };
+});
+"#,
+    );
+    assert!(reason.contains("spread"), "{reason}");
+    // A key that collides with an explicit attribute: precedence is dynamic.
+    let reason = fallback_of(
+        r#"
+import { $component } from "solid-js";
+function Button(props) { return <button class="x" {...props} />; }
+export const App = $component(function* () {
+  return function* () { return <div><Button class="y" /></div>; };
+});
+"#,
+    );
+    assert!(reason.contains("spread"), "{reason}");
+}
+
+#[test]
+fn live_show_and_for_fallbacks_are_adopted_or_built_on_the_client() {
+    let out = run(r#"
+import { $component, $event, $signal, For, Show } from "solid-js";
+export const App = $component(function* () {
+  const [items, setItems] = yield* $signal([]);
+  const [open, setOpen] = yield* $signal(false);
+  const [n, setN] = yield* $signal(0);
+  const add = $event(function* () { setItems(l => [...l, "x"]); });
+  const toggle = $event(function* () { setOpen(o => !o); });
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    return (
+      <div>
+        <ul>
+          <For each={yield* items} fallback={<li class="empty">no items {yield* n}</li>}>{item => <li>{item}</li>}</For>
+        </ul>
+        <Show when={yield* open} fallback="closed"><p>open</p></Show>
+        <button onClick={add} /><button onClick={toggle} /><button onClick={inc} />
+      </div>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let chunk = &out
+        .chunks
+        .iter()
+        .map(|c| c.code.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    // The list's fallback is a builder with its own live hole.
+    assert!(chunk.contains("$listf("), "{chunk}");
+    assert!(
+        chunk.contains("<li class=\\\"empty\\\">no items <!--$--><!--/--></li>"),
+        "{chunk}"
+    );
+    // The string fallback is a text node.
+    assert!(chunk.contains("$showf("), "{chunk}");
+    assert!(
+        chunk.contains("(_, $e) => $e || document.createTextNode(\"closed\")"),
+        "{chunk}"
+    );
+    // Helpers without a fallback are not shipped.
+    assert!(!chunk.contains("const $show ="), "{chunk}");
+    assert!(!chunk.contains("const $list ="), "{chunk}");
+    // The server renders the fallback between the region's markers.
+    assert!(out.server.contains("<!--$-->"), "{}", out.server);
+}
+
+#[test]
+fn a_loading_the_client_creates_over_async_state_is_a_client_pending_boundary() {
+    let out = run(r#"
+import { $component, $event, $memo, $signal, attempt, For, Loading } from "solid-js";
+const Info = $component(function* (props) {
+  return function* () { return <b>{props.id}:{yield* props.info}</b>; };
+});
+export const App = $component(function* () {
+  const [ids, setIds] = yield* $signal([1]);
+  const [v, setV] = yield* $signal(0);
+  const info = yield* $memo(function* () {
+    const x = yield* v;
+    return yield* attempt(() => fetch("/x?" + x));
+  });
+  const add = $event(function* () { setIds(l => [...l, l.length + 1]); });
+  const bump = $event(function* () { setV(x => x + 1); });
+  return function* () {
+    return (
+      <div>
+        <ul>
+          <For each={yield* ids}>{id => <li><Loading fallback={<em>wait</em>}><Info id={id} info={info} /></Loading></li>}</For>
+        </ul>
+        <button onClick={add} /><button onClick={bump} />
+      </div>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains("a client pending boundary"), "{m}");
+    let chunk = &out.chunks[0].code;
+    assert!(
+        chunk.contains("createLoadingBoundary as $$createLoadingBoundary"),
+        "{chunk}"
+    );
+    assert!(chunk.contains("$ld($m"), "{chunk}");
+    // The row template carries the boundary's region.
+    assert!(chunk.contains("<li><!--$--><b>"), "{chunk}");
+    // The server marks it too.
+    assert!(out.server.contains("<li><!--$-->${Info("), "{}", out.server);
+}
+
+#[test]
+fn a_loading_over_content_that_cannot_be_pending_is_pass_through() {
+    let out = run(r#"
+import { $component, $event, $signal, Loading, Show } from "solid-js";
+export const App = $component(function* () {
+  const [open, setOpen] = yield* $signal(false);
+  const [n, setN] = yield* $signal(0);
+  const toggle = $event(function* () { setOpen(o => !o); });
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    return (
+      <div>
+        <Show when={yield* open}><section><Loading fallback={<em>never</em>}><p>{yield* n}</p></Loading></section></Show>
+        <button onClick={toggle} /><button onClick={inc} />
+      </div>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains(r#""tier":1"#), "{m}");
+    for c in &out.chunks {
+        assert!(!c.code.contains("$ld"), "{}", c.code);
+    }
+    // A key that changes while pending re-shows the fallback: not compiled.
+    let reason = fallback_of(
+        r#"
+import { $component, $event, $signal, Loading } from "solid-js";
+export const App = $component(function* () {
+  const [k, setK] = yield* $signal(0);
+  const inc = $event(function* () { setK(x => x + 1); });
+  return function* () {
+    return <div><Loading on={yield* k} fallback="…"><button onClick={inc}>{yield* k}</button></Loading></div>;
+  };
+});
+"#,
+    );
+    assert!(reason.contains("<Loading on"), "{reason}");
+}
+
+// --- view statements, Switch / Match, Dynamic, Portal, For index, SVG, error routing ----
+
+#[test]
+fn view_statements_that_read_no_live_state_run_where_the_view_renders() {
+    let out = run(r#"
+import { $component, $event, $signal } from "solid-js";
+export const App = $component(function* (props) {
+  const [n, setN] = yield* $signal(0);
+  return function* () {
+    const label = "items: " + props.title;
+    const step = 2;
+    const bump = () => setN(x => x + step);
+    return <div><h1>{label}</h1><button onClick={bump}>{yield* n}</button></div>;
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    // The server computes the local where the view renders.
+    assert!(
+        out.server.contains("let label = \"items: \""),
+        "{}",
+        out.server
+    );
+    // Client code that uses a view local gets it.
+    let chunk = &out.chunks[0].code;
+    assert!(chunk.contains("step"), "{chunk}");
+    assert!(!chunk.contains("label"), "{chunk}");
+    let m = manifest(&out);
+    assert!(m.contains(r#""tier":0"#), "{m}");
+}
+
+#[test]
+fn a_view_statement_that_reads_live_state_or_returns_early_is_refused() {
+    let live = fallback_of(
+        r#"
+import { $component, $event, $signal } from "solid-js";
+export const App = $component(function* () {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    const doubled = (yield* n) * 2;
+    return <button onClick={inc}>{doubled}</button>;
+  };
+});
+"#,
+    );
+    assert!(live.contains("reads live state (`n`)"), "{live}");
+    let early = fallback_of(
+        r#"
+import { $component, $event, $signal } from "solid-js";
+export const App = $component(function* (props) {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    if (props.hidden) return <p>hidden</p>;
+    return <button onClick={inc}>{yield* n}</button>;
+  };
+});
+"#,
+    );
+    assert!(early.contains("returns early"), "{early}");
+}
+
+#[test]
+fn handlers_of_solids_delegated_events_are_delegated() {
+    let out = run(r#"
+import { $component, $event, $signal, For } from "solid-js";
+export const App = $component(function* () {
+  const [items, setItems] = yield* $signal([1]);
+  const [n, setN] = yield* $signal(0);
+  const add = $event(function* () { setItems(l => [...l, l.length + 1]); });
+  const bump = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    return (
+      <div>
+        <button class="add" onClick={add} onFocus={bump} on:my-event={bump}>{yield* n}</button>
+        <input onInput={bump} />
+        <ul><For each={yield* items}>{i => <li onClick={bump}>{i}</li>}</For></ul>
+      </div>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let chunk = &out.chunks[0].code;
+    // Solid's delegated events: a property on the node, one page-level
+    // listener per type registered at activation (sorted, once).
+    assert!(chunk.contains(".$$click = add;"), "{chunk}");
+    assert!(chunk.contains(".$$input = bump;"), "{chunk}");
+    assert_eq!(chunk.matches("$dg([\"click\", \"input\"]);").count(), 1, "{chunk}");
+    assert_eq!(chunk.matches("const $dg = ").count(), 1, "{chunk}");
+    // Rows the island builds bind theirs the same way.
+    assert_eq!(chunk.matches(".$$click = bump;").count(), 1, "{chunk}");
+    // Other events keep a listener on the element (as in Solid).
+    assert!(chunk.contains(".addEventListener(\"focus\", bump);"), "{chunk}");
+    assert!(chunk.contains(".addEventListener(\"my-event\", bump);"), "{chunk}");
+    assert!(!chunk.contains(".addEventListener(\"click\""), "{chunk}");
+    // The dispatcher resumes above a Solid root that already walked the
+    // event, and stops at `stopPropagation`.
+    assert!(chunk.contains("e._$SOLID_EVENT_OWNER"), "{chunk}");
+    assert!(chunk.contains("if (e.cancelBubble) return;"), "{chunk}");
+    // No delegated handler, no helper.
+    let focus_only = run(r#"
+import { $component, $event, $signal } from "solid-js";
+export const App = $component(function* () {
+  const [n, setN] = yield* $signal(0);
+  const bump = $event(function* () { setN(x => x + 1); });
+  return function* () { return <input onFocus={bump} value={yield* n} />; };
+});
+"#);
+    let chunk = &focus_only.chunks[0].code;
+    assert!(!chunk.contains("$dg"), "{chunk}");
+}
+
+#[test]
+fn a_view_read_bound_to_a_local_compiles_like_the_reads_at_its_sites() {
+    let bound = run(r#"
+import { $component, $event, $signal, $memo, For } from "solid-js";
+export const App = $component(function* (props) {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  const story = yield* $memo(function* () { return { title: "t", items: [1, 2] }; });
+  return function* () {
+    const s = yield* story;
+    const count = yield* n;
+    return (
+      <div>
+        <h1>{s.title}</h1>
+        <button onClick={inc}>{count}</button>
+        <ul><For each={s.items}>{i => <li>{i}</li>}</For></ul>
+      </div>
+    );
+  };
+});
+"#);
+    let direct = run(r#"
+import { $component, $event, $signal, $memo, For } from "solid-js";
+export const App = $component(function* (props) {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  const story = yield* $memo(function* () { return { title: "t", items: [1, 2] }; });
+  return function* () {
+    return (
+      <div>
+        <h1>{(yield* story).title}</h1>
+        <button onClick={inc}>{(yield* n)}</button>
+        <ul><For each={(yield* story).items}>{i => <li>{i}</li>}</For></ul>
+      </div>
+    );
+  };
+});
+"#);
+    assert!(bound.fallback.is_none(), "{:?}", bound.fallback);
+    assert_eq!(manifest(&bound), manifest(&direct));
+    assert_eq!(bound.chunks.len(), direct.chunks.len());
+    for (a, b) in bound.chunks.iter().zip(&direct.chunks) {
+        assert_eq!(a.code, b.code);
+    }
+    // A name the view shadows, or a shorthand use, is left as written.
+    let shadowed = fallback_of(
+        r#"
+import { $component, $memo, For } from "solid-js";
+export const App = $component(function* () {
+  const story = yield* $memo(function* () { return { items: [1] }; });
+  return function* () {
+    const s = yield* story;
+    return <ul><For each={s.items}>{story => <li>{story}</li>}</For></ul>;
+  };
+});
+"#,
+    );
+    assert!(shadowed.contains("setup read `yield* story`"), "{shadowed}");
+}
+
+#[test]
+fn an_errored_around_a_tier0_islands_content_routes_its_errors_on_the_core() {
+    let out = run(r#"
+import { $component, $event, $signal, Errored } from "solid-js";
+export const App = $component(function* () {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    return (
+      <div>
+        <Errored fallback={(err) => <p class="err">{err().message}</p>}>
+          <button onClick={inc}>{yield* n}</button>
+        </Errored>
+      </div>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains(r#""tier":2"#), "{m}");
+    assert!(m.contains("client error routing"), "{m}");
+    let chunk = &out.chunks[0].code;
+    assert!(chunk.contains("$err("), "{chunk}");
+    assert!(out.server.contains("<!--$-->"), "{}", out.server);
+}
+
+#[test]
+fn svg_inside_a_live_region_parses_under_its_wrapper() {
+    let out = run(r#"
+import { $component, $event, $signal, For } from "solid-js";
+const Dot = $component(function* (props) {
+  return function* () { return <circle cx={props.p} r="1" class={yield* props.hot} />; };
+});
+export const App = $component(function* () {
+  const [pts, setPts] = yield* $signal([1]);
+  const [hot, setHot] = yield* $signal("a");
+  const add = $event(function* () { setPts(l => [...l, l.length + 1]); });
+  const heat = $event(function* () { setHot(h => h + "a"); });
+  return function* () {
+    return (
+      <div>
+        <svg viewBox="0 0 10 10">
+          <For each={yield* pts}>{p => <Dot p={p} hot={hot} />}</For>
+        </svg>
+        <button onClick={add} /><button onClick={heat} />
+      </div>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let chunk = &out.chunks[0].code;
+    assert!(
+        chunk.contains(r#"$tplw("<circle r=\"1\"></circle>", "svg")"#),
+        "{chunk}"
+    );
+    // An SVG element's class is an attribute (its `className` is not a string).
+    assert!(chunk.contains(r#"setAttribute("class", v)"#), "{chunk}");
+    assert!(!chunk.contains("className"), "{chunk}");
+}
+
+#[test]
+fn a_live_switch_is_one_region_over_its_matches() {
+    let out = run(r#"
+import { $component, $event, $signal, Match, Switch } from "solid-js";
+export const App = $component(function* () {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    return (
+      <div>
+        <Switch fallback={<p class="many">many</p>}>
+          <Match when={(yield* n) === 0}><p class="zero">zero</p></Match>
+          <Match when={(yield* n) === 1}>{v => <p class="one">one {String(v())}</p>}</Match>
+        </Switch>
+        <button onClick={inc} />
+      </div>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let chunk = &out.chunks[0].code;
+    assert!(chunk.contains("$sw("), "{chunk}");
+    let m = manifest(&out);
+    assert!(m.contains(r#""tier":1"#), "{m}");
+    // The server renders the chosen branch between one marker pair.
+    assert!(
+        out.server.contains("<!--$-->${_$e((() => { let $w; if"),
+        "{}",
+        out.server
+    );
+}
+
+#[test]
+fn an_inert_switch_renders_on_the_server_only() {
+    let out = run(r#"
+import { $component, $event, $signal, Match, Switch } from "solid-js";
+export const App = $component(function* (props) {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    return (
+      <div>
+        <button onClick={inc}>{yield* n}</button>
+        <Switch><Match when={props.kind === "a"}><p>a</p></Match><Match when={props.kind === "b"}><p>b</p></Match></Switch>
+      </div>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    assert!(
+        !out.chunks[0].code.contains("$sw("),
+        "{}",
+        out.chunks[0].code
+    );
+    let m = manifest(&out);
+    assert!(m.contains(r#""tier":0"#), "{m}");
+}
+
+#[test]
+fn for_rows_with_an_index_or_by_position_own_signals() {
+    let keyed = run(r#"
+import { $component, $event, $signal, For } from "solid-js";
+export const App = $component(function* () {
+  const [l, setL] = yield* $signal(["a"]);
+  const add = $event(function* () { setL(x => ["z", ...x]); });
+  return function* () {
+    return <div><ul><For each={yield* l}>{(item, i) => <li>{i()}: {item}</li>}</For></ul><button onClick={add} /></div>;
+  };
+});
+"#);
+    assert!(keyed.fallback.is_none(), "{:?}", keyed.fallback);
+    let chunk = &keyed.chunks[0].code;
+    assert!(chunk.contains("$listi("), "{chunk}");
+    assert!(chunk.contains("createSignal as $S"), "{chunk}");
+    let unkeyed = run(r#"
+import { $component, $event, $signal, For } from "solid-js";
+export const App = $component(function* () {
+  const [l, setL] = yield* $signal(["a"]);
+  const add = $event(function* () { setL(x => ["z", ...x]); });
+  return function* () {
+    return <div><ul><For each={yield* l} keyed={false}>{(item, i) => <li>{i}: {item()}</li>}</For></ul><button onClick={add} /></div>;
+  };
+});
+"#);
+    assert!(unkeyed.fallback.is_none(), "{:?}", unkeyed.fallback);
+    let chunk = &unkeyed.chunks[0].code;
+    assert!(chunk.contains("$listu("), "{chunk}");
+    // The server passes an item accessor and a number index.
+    assert!(unkeyed.server.contains(", 1)}"), "{}", unkeyed.server);
+}
+
+#[test]
+fn a_static_dynamic_is_the_element_it_names() {
+    let out = run(r#"
+import { $component, $event, $signal, Dynamic } from "solid-js";
+const Card = $component(function* (props) {
+  return function* () { return <section class="card">{props.children}</section>; };
+});
+export const App = $component(function* () {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    return (
+      <div>
+        <Dynamic component="h2" class="t">title</Dynamic>
+        <Dynamic component={Card}><button onClick={inc}>{yield* n}</button></Dynamic>
+      </div>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    assert!(
+        out.server.contains(r#"<h2 class="t">title</h2>"#),
+        "{}",
+        out.server
+    );
+    let reason = fallback_of(
+        r#"
+import { $component, Dynamic } from "solid-js";
+export const App = $component(function* (props) {
+  return function* () { return <Dynamic component={props.as}>x</Dynamic>; };
+});
+"#,
+    );
+    assert!(reason.contains("<Dynamic>"), "{reason}");
+}
+
+#[test]
+fn a_portal_is_built_on_the_client_and_mounted() {
+    let out = run(r#"
+import { $component, $event, $signal, Portal } from "solid-js";
+export const App = $component(function* () {
+  const [n, setN] = yield* $signal(0);
+  const inc = $event(function* () { setN(x => x + 1); });
+  return function* () {
+    return (
+      <div>
+        <button onClick={inc}>inc</button>
+        <Portal><p class="modal">count {yield* n}</p></Portal>
+      </div>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    // The server renders nothing for it.
+    assert!(!out.server.contains("modal"), "{}", out.server);
+    let chunk = &out.chunks[0].code;
+    assert!(chunk.contains("$portal(document.body, ($e) =>"), "{chunk}");
+    let m = manifest(&out);
+    assert!(m.contains(r#""activation":"load""#), "{m}");
+    assert!(m.contains(r#""tier":1"#), "{m}");
+}
+
+#[test]
+fn two_islands_with_sites_under_one_element_each_bind_their_own() {
+    let out = run(r#"
+import { $component, $event, $signal, Show } from "solid-js";
+export const App = $component(function* () {
+  const [a, setA] = yield* $signal(0);
+  const [b, setB] = yield* $signal(0);
+  const [on, setOn] = yield* $signal(false);
+  const incA = $event(function* () { setA(x => x + 1); });
+  const incB = $event(function* () { setB(x => x + 1); });
+  const toggle = $event(function* () { setOn(o => !o); });
+  return function* () {
+    return (
+      <div>
+        <p title={yield* b}>{yield* a} and {yield* b}<Show when={yield* on}><i>on</i></Show></p>
+        <button onClick={incA} /><button onClick={incB} /><button onClick={toggle} />
+      </div>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    assert_eq!(out.chunks.len(), 3, "{}", manifest(&out));
+    for c in &out.chunks {
+        let own: Vec<&str> = ["a", "b", "on"]
+            .into_iter()
+            .filter(|n| {
+                c.code.contains(&format!("const {n} = ")) || c.code.contains(&format!("[{n}, "))
+            })
+            .collect();
+        assert_eq!(own.len(), 1, "{}", c.code);
+        let n = own[0];
+        // Only its own cell is read.
+        for other in ["a", "b", "on"].into_iter().filter(|x| *x != n) {
+            assert!(!c.code.contains(&format!("({other})")), "{}", c.code);
+            assert!(!c.code.contains(&format!("=> {other}()")), "{}", c.code);
+        }
+    }
+}
+
+#[test]
+fn structure_over_server_data_inside_fresh_content_is_built_by_the_client() {
+    let out = run(r#"
+import { $component, $event, $signal, For, Show } from "solid-js";
+const Tag = $component(function* (props) {
+  return function* () {
+    return <em><Show when={props.item.hot}><i>hot</i></Show></em>;
+  };
+});
+export const App = $component(function* () {
+  const [l, setL] = yield* $signal([{ id: 1, big: true, hot: true }]);
+  const add = $event(function* () { setL(x => [...x, { id: x.length + 1, big: true, hot: false }]); });
+  return function* () {
+    return (
+      <div>
+        <ul><For each={yield* l}>{item => <li><Show when={item.big}><b>big</b></Show><Tag item={item} /></li>}</For></ul>
+        <button onClick={add} />
+      </div>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let chunk = &out.chunks[0].code;
+    // Both Shows (the row's own, and the one in the component a row
+    // renders) are regions the row's builder creates.
+    assert_eq!(chunk.matches("$show(").count(), 2, "{chunk}");
+    assert!(chunk.contains("() => item$"), "{chunk}");
+    // The server marks them for adoption.
+    assert!(out.server.contains("<li><!--$-->"), "{}", out.server);
 }

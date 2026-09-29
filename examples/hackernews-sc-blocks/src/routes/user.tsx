@@ -16,21 +16,22 @@ const User = $component(function* (props: RouteProps<Path>) {
     return yield* attempt(() => getUser(id));
   });
   return function* () {
+    const profile = yield* user;
     return (
       <div class="user-view">
-        <h1>User : {(yield* user).id}</h1>
+        <h1>User : {profile.id}</h1>
         <ul class="meta">
           <li>
-            <span class="label">Created:</span> {(yield* user).created}
+            <span class="label">Created:</span> {profile.created}
           </li>
           <li>
-            <span class="label">Karma:</span> {(yield* user).karma}
+            <span class="label">Karma:</span> {profile.karma}
           </li>
-          {(yield* user).about ? <li innerHTML={(yield* user).about} class="about" /> : null}
+          {profile.about ? <li innerHTML={profile.about} class="about" /> : null}
         </ul>
         <p class="links">
-          <a href={`https://news.ycombinator.com/submitted?id=${(yield* user).id}`}>submissions</a>{" "}
-          | <a href={`https://news.ycombinator.com/threads?id=${(yield* user).id}`}>comments</a>
+          <a href={`https://news.ycombinator.com/submitted?id=${profile.id}`}>submissions</a> |{" "}
+          <a href={`https://news.ycombinator.com/threads?id=${profile.id}`}>comments</a>
         </p>
       </div>
     );

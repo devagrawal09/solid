@@ -61,6 +61,21 @@ pub(crate) struct Refs {
 /// Globals whose value differs between the server and the client.
 const ENV_GLOBALS: &[&str] = &["window", "document", "navigator", "Intl"];
 
+impl Refs {
+    /// Union with another expression's references.
+    pub(crate) fn join(&mut self, o: Refs) {
+        self.syms.extend(o.syms);
+        self.props.extend(o.props);
+        self.props_bare |= o.props_bare;
+        self.calls.extend(o.calls);
+        self.has_jsx |= o.has_jsx;
+        self.prevent_default |= o.prevent_default;
+        self.refreshed.extend(o.refreshed);
+        self.yielded.extend(o.yielded);
+        self.env.extend(o.env);
+    }
+}
+
 struct Walker<'m, 'a> {
     m: &'m Model<'a>,
     props: Option<SymbolId>,
@@ -284,6 +299,12 @@ pub(crate) enum SiteKind {
     /// An island frame's driver (index in `Analysis::frames`): its span is
     /// the frame region; it refetches the region when its arguments change.
     Frame(usize),
+    /// `ref={…}` on an intrinsic element: client code that receives the
+    /// element when the island activates (or its fresh content is built).
+    Ref,
+    /// `<Portal>`: content the client always builds (the server renders
+    /// nothing), appended to its mount when the island activates.
+    Portal,
 }
 
 // `expr` / `regions` complete the site record for consumers of the analysis.
@@ -297,6 +318,11 @@ pub(crate) struct Site<'a> {
     pub regions: Vec<usize>,
     /// `Show` / `For`: the render callback's parameter (`item => …`).
     pub param: Option<SymbolId>,
+    /// `For`: the callback's index parameter (an accessor for keyed rows, a
+    /// number for `keyed={false}` rows).
+    pub param2: Option<SymbolId>,
+    /// `<For keyed={false}>`: rows by position, the item an accessor.
+    pub unkeyed: bool,
 }
 
 pub(crate) struct Call<'a> {
@@ -313,7 +339,7 @@ pub(crate) struct CompFacts<'a> {
     pub calls: Vec<Call<'a>>,
     pub providers: Vec<(SymbolId, Option<&'a Expression<'a>>)>,
     /// Boundaries (`Loading` / `Errored`) with their enclosing regions.
-    pub boundaries: Vec<(String, Vec<usize>)>,
+    pub boundaries: Vec<(String, Vec<usize>, Span)>,
     pub issues: Vec<String>,
     /// Refs per setup item (init / body).
     pub item_refs: Vec<Refs>,
@@ -324,6 +350,11 @@ pub(crate) struct CompFacts<'a> {
     /// The router layout renders its outlet (`props.children` of its
     /// render callback).
     pub outlet: bool,
+    /// `<Loading on={…}>` keys.
+    pub boundary_on: Vec<Refs>,
+    /// Render-callback parameters of `<Match>` branches (the `when` accessor)
+    /// with the `when` expression's references.
+    pub extra_params: Vec<(SymbolId, Refs)>,
 }
 
 struct ViewWalk<'m, 'a> {
@@ -352,6 +383,8 @@ impl<'a> ViewWalk<'_, 'a> {
             refs,
             regions: self.regions.clone(),
             param: None,
+            param2: None,
+            unkeyed: false,
         });
         i
     }
@@ -552,8 +585,9 @@ impl<'a> ViewWalk<'_, 'a> {
                                 refs,
                             );
                         }
-                        AttrVal::Expr(_) if a.name == "ref" => {
-                            self.f.issues.push("`ref` attribute".into())
+                        AttrVal::Expr(e) if a.name == "ref" => {
+                            let refs = refs_expr(self.m, self.props, e);
+                            self.site(SiteKind::Ref, e.span(), Some(e), refs);
                         }
                         AttrVal::Expr(e) if jsx::static_child(e).is_none() => {
                             let refs = refs_expr(self.m, self.props, e);
@@ -594,16 +628,48 @@ impl<'a> ViewWalk<'_, 'a> {
                             self.f.issues.push(format!("<{name} {}>", a.name));
                         }
                     }
+                    // `<For keyed={false}>`: rows by position (item accessor,
+                    // index number); a key function is not compiled.
+                    let unkeyed = name == "For"
+                        && match jsx::attr(&attrs, "keyed").map(|a| &a.value) {
+                            None | Some(AttrVal::True) => false,
+                            Some(AttrVal::Expr(e))
+                                if matches!(e.without_parentheses(), Expression::BooleanLiteral(b) if !b.value) =>
+                            {
+                                true
+                            }
+                            Some(AttrVal::Expr(e))
+                                if matches!(e.without_parentheses(), Expression::BooleanLiteral(_)) =>
+                            {
+                                false
+                            }
+                            Some(_) => {
+                                self.f
+                                    .issues
+                                    .push("<For keyed={…}> other than true / false".into());
+                                false
+                            }
+                        };
                     if let Some(s) = site {
                         self.regions.push(s);
-                        // The render callback's parameter carries the input.
+                        self.f.sites[s].unkeyed = unkeyed;
+                        // The render callback's parameters carry the input.
                         if let Ok(kids) = jsx::children(&el.children)
                             && let [Child::Expr(e)] = kids.as_slice()
                             && let Some(f) = FnRef::from_expr(e)
-                            && let Some(p) = f.params().items.first()
-                            && let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &p.pattern
                         {
-                            self.f.sites[s].param = id.symbol_id.get();
+                            let id_of = |i: usize| {
+                                f.params().items.get(i).and_then(|p| match &p.pattern {
+                                    oxc_ast::ast::BindingPattern::BindingIdentifier(id) => {
+                                        id.symbol_id.get()
+                                    }
+                                    _ => None,
+                                })
+                            };
+                            self.f.sites[s].param = id_of(0);
+                            if name == "For" {
+                                self.f.sites[s].param2 = id_of(1);
+                            }
                         }
                     }
                     if let Some(fb) = jsx::attr(&attrs, "fallback") {
@@ -615,7 +681,15 @@ impl<'a> ViewWalk<'_, 'a> {
                     }
                 }
                 "Loading" | "Errored" => {
-                    self.f.boundaries.push((name.clone(), self.regions.clone()));
+                    self.f
+                        .boundaries
+                        .push((name.clone(), self.regions.clone(), el.span));
+                    // `<Loading on={key}>` shows its fallback again when the
+                    // key changes while pending: checked for live reads below.
+                    if let Some(AttrVal::Expr(e)) = jsx::attr(&attrs, "on").map(|a| &a.value) {
+                        let refs = refs_expr(self.m, self.props, e);
+                        self.f.boundary_on.push(refs);
+                    }
                     if let Some(fb) = jsx::attr(&attrs, "fallback") {
                         // A boundary's fallback is server HTML in islands
                         // mode (rendered in the shell, or streamed over the
@@ -630,6 +704,119 @@ impl<'a> ViewWalk<'_, 'a> {
                     }
                     self.kids(&el.children);
                 }
+                "Switch" => {
+                    // One region: the first `<Match>` whose `when` is truthy
+                    // (or the fallback). Its site reads every `when` (a
+                    // later one only when the earlier ones are falsy).
+                    let kids = match jsx::children(&el.children) {
+                        Ok(k) => k,
+                        Err(e) => {
+                            self.f.issues.push(e);
+                            return;
+                        }
+                    };
+                    let mut matches = Vec::new();
+                    for k in &kids {
+                        match k {
+                            Child::Element(m)
+                                if matches!(jsx::tag_of(self.m, &m.opening_element.name), Tag::Builtin(ref b) if b == "Match") =>
+                            {
+                                matches.push(*m);
+                            }
+                            _ => self
+                                .f
+                                .issues
+                                .push("a <Switch> child other than a <Match>".into()),
+                        }
+                    }
+                    for a in &attrs {
+                        if a.name != "fallback" {
+                            self.f.issues.push(format!("<Switch {}>", a.name));
+                        }
+                    }
+                    let mut refs = Refs::default();
+                    let mut whens = Vec::new();
+                    for (i, mel) in matches.iter().enumerate() {
+                        let Ok(mattrs) = jsx::attrs(mel) else {
+                            self.f.issues.push("JSX spread attribute".into());
+                            continue;
+                        };
+                        for a in &mattrs {
+                            if a.name != "when" && a.name != "keyed" {
+                                self.f.issues.push(format!("<Match {}>", a.name));
+                            }
+                        }
+                        match jsx::attr(&mattrs, "when").map(|a| &a.value) {
+                            Some(AttrVal::Expr(e)) => {
+                                let mut r = refs_expr(self.m, self.props, e);
+                                if i > 0 {
+                                    for x in &mut r.syms {
+                                        x.1 = true;
+                                    }
+                                    for x in &mut r.props {
+                                        x.1 = true;
+                                    }
+                                }
+                                whens.push(Some(r.clone()));
+                                refs.join(r);
+                            }
+                            _ => {
+                                self.f
+                                    .issues
+                                    .push("<Match> without an expression `when`".into());
+                                whens.push(None);
+                            }
+                        }
+                    }
+                    let s = self.site(SiteKind::Show, el.span, None, refs);
+                    self.regions.push(s);
+                    for (mel, r) in matches.iter().zip(whens) {
+                        if let (Some(r), Ok(kids)) = (r, jsx::children(&mel.children))
+                            && let [Child::Expr(e)] = kids.as_slice()
+                            && let Some(f) = FnRef::from_expr(e)
+                            && let Some(p) = f.params().items.first()
+                            && let oxc_ast::ast::BindingPattern::BindingIdentifier(id) = &p.pattern
+                            && let Some(sym) = id.symbol_id.get()
+                        {
+                            self.f.extra_params.push((sym, r));
+                        }
+                        self.render_children(mel);
+                    }
+                    if let Some(fb) = jsx::attr(&attrs, "fallback") {
+                        self.attr_jsx(&fb.value);
+                    }
+                    self.regions.pop();
+                }
+                "Portal" => {
+                    // Built on the client (the server renders nothing): an
+                    // always-live site whose content is fresh.
+                    for a in &attrs {
+                        if a.name != "mount" {
+                            self.f.issues.push(format!("<Portal {}>", a.name));
+                        }
+                    }
+                    let (expr, refs) = match jsx::attr(&attrs, "mount").map(|a| &a.value) {
+                        Some(AttrVal::Expr(e)) => (Some(*e), refs_expr(self.m, self.props, e)),
+                        None => (None, Refs::default()),
+                        Some(_) => {
+                            self.f.issues.push("<Portal mount> that is not an expression".into());
+                            (None, Refs::default())
+                        }
+                    };
+                    let s = self.site(SiteKind::Portal, el.span, expr, refs);
+                    self.regions.push(s);
+                    self.kids(&el.children);
+                    self.regions.pop();
+                }
+                "Dynamic" => self.f.issues.push(
+                    "<Dynamic> over a component the compiler cannot resolve statically (a string tag, or a component bound at the module's top level, is compiled as that element)"
+                        .into(),
+                ),
+                "Match" => self.f.issues.push("<Match> outside a <Switch>".into()),
+                "Index" => self
+                    .f
+                    .issues
+                    .push("<Index> (Solid 2 has `<For keyed={false}>`)".into()),
                 other => {
                     self.f
                         .issues
@@ -783,6 +970,10 @@ pub(crate) struct Analysis<'a> {
     pub frames: Vec<super::frames::Frame<'a>>,
     /// Server calls over client inputs that are not frames, with the reason.
     pub frame_rejects: Vec<super::frames::Reject>,
+    /// `<Loading>` elements (component, span start) the client may create
+    /// (inside a live region, or in a component rendered inside one) over
+    /// content that reads async state: client pending boundaries.
+    pub pending_boundaries: HashSet<(usize, u32)>,
 }
 
 impl<'a> Analysis<'a> {
@@ -964,9 +1155,13 @@ pub(crate) fn analyze_file<'a>(
                 refs: rw.out,
                 regions: vec![],
                 param: None,
+                param2: None,
+                unkeyed: false,
             });
-            w.f.issues
-                .push("statements before the view's return".into());
+            w.f.issues.push(
+                "a statement before the view's return that returns early (a conditional view)"
+                    .into(),
+            );
         }
         let mut item_refs = Vec::new();
         for (ii, item) in c.setup.iter().enumerate() {
@@ -988,7 +1183,9 @@ pub(crate) fn analyze_file<'a>(
                         expr: None,
                         refs: r.clone(),
                         regions: vec![],
-                param: None,
+                        param: None,
+                        param2: None,
+                        unkeyed: false,
                     });
                     r
                 }
@@ -1031,7 +1228,9 @@ pub(crate) fn analyze_file<'a>(
                 continue;
             };
             let Some(init) = &d.init else { continue };
-            let Some(callee) = model_call_callee(m, init) else { continue };
+            let Some(callee) = model_call_callee(m, init) else {
+                continue;
+            };
             for s in symbols {
                 opaque.push((*s, callee.clone()));
             }
@@ -1102,6 +1301,7 @@ pub(crate) fn analyze_file<'a>(
         env_sites: HashMap::new(),
         frames: Vec::new(),
         frame_rejects: Vec::new(),
+        pending_boundaries: HashSet::new(),
     };
     loop {
         let mut changed = false;
@@ -1146,7 +1346,16 @@ pub(crate) fn analyze_file<'a>(
                 let site = &a.facts[ci].sites[si];
                 let Some(p) = site.param else { continue };
                 let v = a.av_of(ci, &site.refs.clone());
-                let v = if site.kind == SiteKind::For {
+                // A row's index, and an unkeyed row's item (an accessor over
+                // the list's position), change with the list.
+                if let Some(q) = site.param2 {
+                    let iv = Av {
+                        reads: v.reads.clone(),
+                        writes: BTreeSet::new(),
+                    };
+                    changed |= a.sym_av.entry(q).or_default().join(&iv);
+                }
+                let v = if site.kind == SiteKind::For && !site.unkeyed {
                     Av {
                         reads: store_keys(m, &a, &v.reads),
                         writes: BTreeSet::new(),
@@ -1156,6 +1365,15 @@ pub(crate) fn analyze_file<'a>(
                         reads: v.reads,
                         writes: BTreeSet::new(),
                     }
+                };
+                changed |= a.sym_av.entry(p).or_default().join(&v);
+            }
+            for pi in 0..a.facts[ci].extra_params.len() {
+                let (p, r) = a.facts[ci].extra_params[pi].clone();
+                let v = a.av_of(ci, &r);
+                let v = Av {
+                    reads: v.reads,
+                    writes: BTreeSet::new(),
                 };
                 changed |= a.sym_av.entry(p).or_default().join(&v);
             }
@@ -1262,10 +1480,14 @@ pub(crate) fn analyze_file<'a>(
         for s in &a.facts[ci].sites {
             let v = a.av_of(ci, &s.refs);
             match s.kind {
-                SiteKind::Handler(_) => a.written.extend(v.writes),
+                SiteKind::Handler(_) | SiteKind::Ref => a.written.extend(v.writes),
                 // A view expression that references a setter (other than as
                 // a prop of a module component, which flows) hands it out.
-                SiteKind::Text | SiteKind::Attr(_) | SiteKind::Show | SiteKind::For => {
+                SiteKind::Text
+                | SiteKind::Attr(_)
+                | SiteKind::Show
+                | SiteKind::For
+                | SiteKind::Portal => {
                     a.escaped_writes.extend(v.writes.iter().copied());
                     a.written.extend(v.writes);
                 }
@@ -1331,6 +1553,57 @@ pub(crate) fn analyze_file<'a>(
     // --- frames (compiler-derived server components) ------------------------------------
     super::frames::detect(m, &mut a, filename);
 
+    // View statements run once where the view first renders: sound only when
+    // they read no live state (a live read would re-run the whole view).
+    for (ci, c) in m.comps.iter().enumerate() {
+        // Functions (events, local functions) are values here: calling one
+        // later is not a read of the view.
+        let fns: HashSet<SymbolId> = c
+            .setup
+            .iter()
+            .filter(|it| match it {
+                Item::Event { .. } => true,
+                Item::Local {
+                    decl: LocalDecl::Func(_),
+                    ..
+                } => true,
+                Item::Local {
+                    decl: LocalDecl::Var(d),
+                    ..
+                } => d
+                    .init
+                    .as_ref()
+                    .is_some_and(|i| FnRef::from_expr(i).is_some()),
+                _ => false,
+            })
+            .flat_map(|it| it.declares())
+            .collect();
+        for ii in &c.view_items {
+            if matches!(
+                &c.setup[*ii],
+                Item::Local {
+                    decl: LocalDecl::Func(_),
+                    ..
+                }
+            ) || matches!(&c.setup[*ii], Item::Local { decl: LocalDecl::Var(d), .. } if d.init.as_ref().is_some_and(|i| FnRef::from_expr(i).is_some()))
+            {
+                continue;
+            }
+            let mut r = a.facts[ci].item_refs[*ii].clone();
+            r.syms.retain(|(s, _)| !fns.contains(s));
+            let (reads, _) = a.live_reads(ci, &r);
+            if let Some(k) = reads.iter().next() {
+                let name = match &m.comps[k.0].setup[k.1] {
+                    Item::Cell { name, .. } | Item::Memo { name, .. } => name.clone(),
+                    _ => "?".into(),
+                };
+                a.facts[ci].issues.push(format!(
+                    "a statement before the view's return reads live state (`{name}`): the whole view would re-run (read it in the markup, or in a memo)"
+                ));
+            }
+        }
+    }
+
     // --- sites and union-find ----------------------------------------------------------
     let mut index: HashMap<Key, usize> = HashMap::new();
     let mut elems: Vec<Elem> = Vec::new();
@@ -1370,7 +1643,7 @@ pub(crate) fn analyze_file<'a>(
             let s = &a.facts[ci].sites[si];
             let (reads, _) = a.live_reads(ci, &s.refs);
             let touches: BTreeSet<Key> = match s.kind {
-                SiteKind::Handler(_) | SiteKind::Effect(..) => {
+                SiteKind::Handler(_) | SiteKind::Effect(..) | SiteKind::Ref => {
                     let v = a.av_of(ci, &s.refs);
                     v.reads
                         .union(&v.writes)
@@ -1382,8 +1655,10 @@ pub(crate) fn analyze_file<'a>(
             };
             // A frame a handler refreshes belongs to that handler's island
             // (it addresses the region), even with no live arguments.
-            let always = matches!(s.kind, SiteKind::Handler(_) | SiteKind::Effect(..))
-                || matches!(s.kind, SiteKind::Frame(fi) if !a.frames[fi].refreshers.is_empty());
+            let always = matches!(
+                s.kind,
+                SiteKind::Handler(_) | SiteKind::Effect(..) | SiteKind::Ref | SiteKind::Portal
+            ) || matches!(s.kind, SiteKind::Frame(fi) if !a.frames[fi].refreshers.is_empty());
             // A view site reading the client environment is client-live:
             // the server's value is not final.
             let env = if always {
@@ -1405,6 +1680,55 @@ pub(crate) fn analyze_file<'a>(
             for k in touches {
                 union(&mut parent, e, index[&k]);
             }
+        }
+    }
+    // Structure inside content the client may create (a live region's
+    // content, or a component rendered inside one): the client builds it, so
+    // it is a region of its own even over server data (its input then never
+    // changes). It joins the enclosing region's island below.
+    loop {
+        let mut fresh: HashSet<usize> = HashSet::new();
+        for ci in 0..n {
+            for call in &a.facts[ci].calls {
+                if call.regions.iter().any(|r| a.site_live[ci][*r])
+                    && let Tag::Comp(k) = call.tag
+                {
+                    fresh.insert(k);
+                }
+            }
+        }
+        loop {
+            let before = fresh.len();
+            for c in fresh.clone() {
+                for call in &a.facts[c].calls {
+                    if let Tag::Comp(k) = call.tag {
+                        fresh.insert(k);
+                    }
+                }
+            }
+            if fresh.len() == before {
+                break;
+            }
+        }
+        let mut changed = false;
+        for ci in 0..n {
+            for si in 0..a.facts[ci].sites.len() {
+                let s = &a.facts[ci].sites[si];
+                if a.site_live[ci][si] || !matches!(s.kind, SiteKind::Show | SiteKind::For) {
+                    continue;
+                }
+                if fresh.contains(&ci) || s.regions.iter().any(|r| a.site_live[ci][*r]) {
+                    a.site_live[ci][si] = true;
+                    let e = elems.len();
+                    elems.push(Elem::Site(ci, si));
+                    parent.push(e);
+                    site_index.insert((ci, si), e);
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
         }
     }
     for (k, deps) in a.memo_deps.clone() {
@@ -1451,6 +1775,47 @@ pub(crate) fn analyze_file<'a>(
             union(&mut parent, w[0], w[1]);
         }
     }
+    // A live site inside a live region is created (and bound) by the
+    // region's builder: it belongs to the region's island.
+    for ci in 0..n {
+        for si in 0..a.facts[ci].sites.len() {
+            let Some(&e) = site_index.get(&(ci, si)) else {
+                continue;
+            };
+            for r in a.facts[ci].sites[si].regions.clone() {
+                if let Some(&er) = site_index.get(&(ci, r)) {
+                    union(&mut parent, e, er);
+                }
+            }
+        }
+    }
+    // `ref={x}` assigns a setup local: the island is the one whose code
+    // reads that local (its handlers, effects, other refs).
+    for (ci, c) in m.comps.iter().enumerate() {
+        for si in 0..a.facts[ci].sites.len() {
+            let site = &a.facts[ci].sites[si];
+            if site.kind != SiteKind::Ref {
+                continue;
+            }
+            let Some(target) = site.expr.and_then(|e| ref_target(m, c, e)) else {
+                continue;
+            };
+            let Some(&e) = site_index.get(&(ci, si)) else {
+                continue;
+            };
+            for sj in 0..a.facts[ci].sites.len() {
+                if sj == si {
+                    continue;
+                }
+                let Some(&ej) = site_index.get(&(ci, sj)) else {
+                    continue;
+                };
+                if sym_closure(m, &a.facts[ci], ci, &a.facts[ci].sites[sj].refs).contains(&target) {
+                    union(&mut parent, e, ej);
+                }
+            }
+        }
+    }
     // A component whose setup has side-effect statements must run them
     // once: all of its live parts form one island.
     for (ci, c) in m.comps.iter().enumerate() {
@@ -1468,6 +1833,44 @@ pub(crate) fn analyze_file<'a>(
         }
     }
 
+    // Client pending boundaries: a `<Loading>` the client can create (its
+    // component's live region, or a component rendered inside a live region
+    // anywhere) whose content reads async state (a live async memo, an
+    // optimistic / projected cell, through memos).
+    let mut fresh_comps: HashSet<usize> = HashSet::new();
+    for ci in 0..n {
+        for call in &a.facts[ci].calls {
+            if call.regions.iter().any(|r| a.site_live[ci][*r])
+                && let Tag::Comp(k) = call.tag
+            {
+                fresh_comps.insert(k);
+            }
+        }
+    }
+    loop {
+        let before = fresh_comps.len();
+        for c in fresh_comps.clone() {
+            for call in &a.facts[c].calls {
+                if let Tag::Comp(k) = call.tag {
+                    fresh_comps.insert(k);
+                }
+            }
+        }
+        if fresh_comps.len() == before {
+            break;
+        }
+    }
+    for ci in 0..n {
+        for (b, regions, span) in &a.facts[ci].boundaries {
+            if b != "Loading" {
+                continue;
+            }
+            let fresh = fresh_comps.contains(&ci) || regions.iter().any(|r| a.site_live[ci][*r]);
+            if fresh && content_reads_async(m, &a, ci, *span) {
+                a.pending_boundaries.insert((ci, span.start));
+            }
+        }
+    }
     // Dominance over the render sites of this module: `dominated[c]` =
     // scopes rendered only under c. An export is another render site, in
     // another module: the instances it renders are that module's (its own
@@ -1539,7 +1942,10 @@ pub(crate) fn analyze_file<'a>(
                 let Elem::Site(ci, si) = elems[*e] else {
                     continue;
                 };
-                if !matches!(a.facts[ci].sites[si].kind, SiteKind::Show | SiteKind::For) {
+                if !matches!(
+                    a.facts[ci].sites[si].kind,
+                    SiteKind::Show | SiteKind::For | SiteKind::Portal
+                ) {
                     continue;
                 }
                 // Components rendered inside this live region.
@@ -1673,6 +2079,7 @@ pub(crate) fn analyze_file<'a>(
         let mut events = BTreeSet::new();
         let mut window_events = BTreeSet::new();
         let mut hot = false;
+        let mut load_why: Vec<String> = Vec::new();
         let mut prevent_default = false;
         let mut env_why: Vec<String> = Vec::new();
         for (c, s) in &sites {
@@ -1720,6 +2127,18 @@ pub(crate) fn analyze_file<'a>(
                     prevent_default |= site.refs.prevent_default
                         || handler_prevents(m, a.sym_av_event(*c, &site.refs));
                 }
+                SiteKind::Portal => {
+                    t1.push(format!(
+                        "`{}`: <Portal> (content the client builds)",
+                        m.comps[*c].name
+                    ));
+                    bump(&mut own, *c, 1);
+                    hot = true;
+                    load_why.push(format!(
+                        "`{}`: a <Portal> (the server renders nothing; the client builds it at load)",
+                        m.comps[*c].name
+                    ));
+                }
                 SiteKind::Show | SiteKind::For => {
                     t1.push(format!(
                         "`{}`: <{}> over a live input (dynamic structure)",
@@ -1742,6 +2161,23 @@ pub(crate) fn analyze_file<'a>(
                     match settled_listener(m, *c, *ii) {
                         Some(evs) if *settled => window_events.extend(evs),
                         _ => hot = true,
+                    }
+                }
+                // A ref callback runs when the element is created: today's
+                // hydration runs it at load, so the island activates at load.
+                // A ref that only assigns a setup local its island's code
+                // reads can wait for the island's first event.
+                SiteKind::Ref => {
+                    if site
+                        .expr
+                        .and_then(|e| ref_target(m, &m.comps[*c], e))
+                        .is_none()
+                    {
+                        hot = true;
+                        load_why.push(format!(
+                            "`{}`: a `ref` callback (runs when the element is created: at load)",
+                            m.comps[*c].name
+                        ));
                     }
                 }
                 SiteKind::Text | SiteKind::Attr(_) => {
@@ -1770,7 +2206,8 @@ pub(crate) fn analyze_file<'a>(
         }
         for c in &members {
             for (ii, item) in m.comps[*c].setup.iter().enumerate() {
-                if matches!(item, Item::Memo { is_async: true, .. }) && !a.live.contains(&(*c, ii)) {
+                if matches!(item, Item::Memo { is_async: true, .. }) && !a.live.contains(&(*c, ii))
+                {
                     continue;
                 }
                 let r = &a.facts[*c].item_refs[ii];
@@ -1794,22 +2231,59 @@ pub(crate) fn analyze_file<'a>(
             }
         }
         for c in &members {
-            for (b, regions) in &a.facts[*c].boundaries {
+            for r in &a.facts[*c].boundary_on {
+                if !a.live_reads(*c, r).0.is_empty() {
+                    unsupported.push(format!(
+                        "`{}`: <Loading on={{…}}> over live state (a key change while pending re-shows the fallback)",
+                        m.comps[*c].name
+                    ));
+                }
+            }
+            for (b, regions, span) in &a.facts[*c].boundaries {
+                if b == "Loading" {
+                    // A `<Loading>` the client may create (fresh content) over
+                    // content that reads async state is a client pending
+                    // boundary (the full core); over content that cannot be
+                    // pending on the client it is pass-through.
+                    if a.pending_boundaries.contains(&(*c, span.start)) {
+                        t2.push(format!(
+                            "`{}`: <Loading> the client creates over async state (a client pending boundary)",
+                            m.comps[*c].name
+                        ));
+                        bump(&mut own, *c, 2);
+                    }
+                    continue;
+                }
                 if regions.iter().any(|r| a.site_live[*c][*r]) {
+                    // An `<Errored>` there is a client error boundary around
+                    // the content the client adopts or creates.
                     t2.push(format!(
                         "`{}`: <{b}> inside a live region",
                         m.comps[*c].name
                     ));
                     bump(&mut own, *c, 2);
-                    // An `<Errored>` there is a client error boundary around
-                    // the content the client adopts or creates; a `<Loading>`
-                    // would need a client pending fallback: not compiled yet.
-                    if b == "Loading" {
-                        unsupported.push(format!(
-                            "`{}`: <Loading> inside a live region (no client pending fallback yet)",
-                            m.comps[*c].name
-                        ));
-                    }
+                    continue;
+                }
+                // Around the island's live content (its sites, or a member
+                // it renders): a throw there must reach its fallback. Only
+                // the core routes errors (the kernel and the t0 helper let a
+                // throw escape), so the group runs on it with a client error
+                // boundary there.
+                let inside = |sp: Span| span.start <= sp.start && sp.end <= span.end;
+                let wraps_sites = sites
+                    .iter()
+                    .any(|(c2, s2)| c2 == c && inside(a.facts[*c2].sites[*s2].span));
+                let wraps_members = a.facts[*c].calls.iter().any(|call| {
+                    inside(call.span)
+                        && matches!(call.tag, Tag::Comp(k) if members.contains(&k)
+                            || reach(k, &a.facts).iter().any(|x| members.contains(x)))
+                });
+                if wraps_sites || wraps_members {
+                    t2.push(format!(
+                        "`{}`: <Errored> around the island's live content (client error routing: the full core)",
+                        m.comps[*c].name
+                    ));
+                    bump(&mut own, *c, 2);
                 }
             }
             for item in &m.comps[*c].setup {
@@ -1860,6 +2334,7 @@ pub(crate) fn analyze_file<'a>(
         };
         let mut why = why;
         why.extend(env_why);
+        why.extend(load_why);
         let mut own_tiers: Vec<(usize, u8)> = members.iter().map(|c| (*c, own[c])).collect();
         own_tiers.sort();
         for (c, s) in &sites {
@@ -2164,4 +2639,120 @@ pub(crate) fn base36(mut n: usize) -> String {
     }
     s.reverse();
     String::from_utf8(s).unwrap()
+}
+
+/// The setup local a `ref={x}` assigns (an identifier declared by a setup
+/// `let` / `const` / `var` whose value is not a function), if any.
+pub(crate) fn ref_target(
+    m: &Model<'_>,
+    c: &super::model::Comp<'_>,
+    e: &Expression<'_>,
+) -> Option<SymbolId> {
+    let s = m.symbol_of_expr(e)?;
+    c.setup.iter().find_map(|it| match it {
+        Item::Local {
+            decl: LocalDecl::Var(d),
+            symbols,
+            ..
+        } if symbols.contains(&s)
+            && d.init
+                .as_ref()
+                .is_none_or(|i| FnRef::from_expr(i).is_none()) =>
+        {
+            Some(s)
+        }
+        _ => None,
+    })
+}
+
+/// Symbols a site reaches: its own references and, transitively, those of
+/// the setup items declaring them.
+pub(crate) fn sym_closure(
+    m: &Model<'_>,
+    f: &CompFacts<'_>,
+    ci: usize,
+    r: &Refs,
+) -> HashSet<SymbolId> {
+    let c = &m.comps[ci];
+    let mut seen: HashSet<SymbolId> = HashSet::new();
+    let mut stack: Vec<SymbolId> = r.syms.iter().map(|x| x.0).collect();
+    while let Some(s) = stack.pop() {
+        if !seen.insert(s) {
+            continue;
+        }
+        if let Some(ii) = c.setup.iter().position(|it| it.declares().contains(&s)) {
+            stack.extend(f.item_refs[ii].syms.iter().map(|x| x.0));
+        }
+    }
+    seen
+}
+
+/// An async key: a live async memo, or an optimistic / projected cell.
+fn is_async_key(m: &Model<'_>, k: Key) -> bool {
+    matches!(
+        &m.comps[k.0].setup[k.1],
+        Item::Memo { is_async: true, .. }
+            | Item::Cell {
+                host: CellHost::Optimistic,
+                ..
+            }
+    )
+}
+
+/// Does the content of the element spanning `span` in component `ci` read
+/// an async key (its sites, and the components it renders, with their
+/// setups; through memos)?
+fn content_reads_async(m: &Model<'_>, a: &Analysis<'_>, ci: usize, span: Span) -> bool {
+    let inside = |sp: Span| span.start <= sp.start && sp.end <= span.end;
+    let mut reads: BTreeSet<Key> = BTreeSet::new();
+    for s in &a.facts[ci].sites {
+        if inside(s.span) && !matches!(s.kind, SiteKind::Handler(_)) {
+            reads.extend(a.av_of(ci, &s.refs).reads);
+        }
+    }
+    let mut stack: Vec<usize> = a.facts[ci]
+        .calls
+        .iter()
+        .filter(|c| inside(c.span))
+        .filter_map(|c| match c.tag {
+            Tag::Comp(k) => Some(k),
+            _ => None,
+        })
+        .collect();
+    let mut seen = HashSet::new();
+    while let Some(c) = stack.pop() {
+        if !seen.insert(c) {
+            continue;
+        }
+        for s in &a.facts[c].sites {
+            if !matches!(s.kind, SiteKind::Handler(_)) {
+                reads.extend(a.av_of(c, &s.refs).reads);
+            }
+        }
+        for (ii, it) in m.comps[c].setup.iter().enumerate() {
+            if !matches!(it, Item::Event { .. }) {
+                reads.extend(a.av_of(c, &a.facts[c].item_refs[ii]).reads);
+            }
+        }
+        for call in &a.facts[c].calls {
+            if let Tag::Comp(k) = call.tag {
+                stack.push(k);
+            }
+        }
+    }
+    // Through memos.
+    let mut seen = BTreeSet::new();
+    let mut stack: Vec<Key> = reads.into_iter().collect();
+    while let Some(k) = stack.pop() {
+        if !seen.insert(k) {
+            continue;
+        }
+        if is_async_key(m, k) {
+            return true;
+        }
+        if let Some(d) = a.memo_deps.get(&k) {
+            stack.extend(d.iter().copied());
+        }
+    }
+    false
 }

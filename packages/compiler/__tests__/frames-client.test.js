@@ -297,3 +297,136 @@ describe("islands entry with frames", () => {
     }
   });
 });
+
+// --- disposal of swapped-out islands ------------------------------------------------------
+
+const KERNEL = path.resolve(__dirname, "../../signals/dist/islands/kernel.js");
+
+// A tier-1 island that runs a timer (started at load, stopped by its
+// `$cleanup`), keyed by its anchor's `data-k`.
+const TICKER = `
+import { $component, $event, $signal, $settled, $cleanup } from "solid-js";
+export const Ticker = $component(function* (props) {
+  const [n, setN] = yield* $signal(0);
+  const tick = $event(function* () { setN(x => x + 1); });
+  yield* $settled(function* () {
+    const id = setInterval(tick, 4);
+    yield* $cleanup(() => { clearInterval(id); self.cleanups.push(props.name); });
+  });
+  return function* () { return <p class="ticker">{yield* n}</p>; };
+});
+`;
+
+async function tickerChunk() {
+  const out = compileIslands(TICKER, { filename: "ticker.tsx", keyedState: true });
+  const [island] = out.manifest.islands;
+  expect(island.tier).toBe(1);
+  const dir = path.join(__dirname, ".frames-tmp");
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `ticker-${process.pid}.mjs`);
+  fs.writeFileSync(
+    file,
+    out.chunks[0].code.replace('"@solidjs/signals/kernel"', JSON.stringify(KERNEL))
+  );
+  try {
+    const chunk = await import(file);
+    return { chunk, id: island.id };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const tickerHtml = (id, key, name) =>
+  `<p data-i="${id}" data-k="${key}" data-s='${JSON.stringify({ [id]: { name } })}' class="ticker">0</p>`;
+
+/** The entry's activation (`$sd`): the root disposer kept on the anchor. */
+function activateKept(chunk, el, id, st) {
+  (el.$i ||= {})[id] = 1;
+  const d = chunk.activate(el, st);
+  if (typeof d === "function") (el.$d ||= {})[id] = d;
+  chunk.flush();
+}
+
+const wait = ms => new Promise(r => setTimeout(r, ms));
+
+describe("disposal of swapped-out islands", () => {
+  beforeEach(() => {
+    self.cleanups = [];
+  });
+
+  test("a refetch disposes the old island (cleanup, timer) and its keyed state transplants", async () => {
+    const { morph, dispose } = await load();
+    const { chunk, id } = await tickerChunk();
+    const acts = [];
+    self.$SI = {
+      act: (el, i, st) =>
+        Promise.resolve().then(() => {
+          activateKept(chunk, el, i, st);
+          acts.push([i, el.getAttribute("data-k"), st]);
+        })
+    };
+    document.body.innerHTML = `<ul data-f="Lake-1"><li>${tickerHtml(id, "7", "A")}</li></ul>`;
+    const region = document.querySelector("ul");
+    const old = region.querySelector("p");
+    activateKept(chunk, old, id);
+    await wait(40);
+    const ticked = Number(old.textContent);
+    expect(ticked).toBeGreaterThan(0);
+    // The lake refetches: the server's HTML starts the ticker at 0 again.
+    morph(region, `<ul data-f="Lake-1"><li>${tickerHtml(id, "7", "A")}</li></ul>`);
+    // The old island is disposed: its cleanup ran, once, and its timer stopped.
+    expect(self.cleanups).toEqual(["A"]);
+    expect(old.$d).toBe(null);
+    const frozen = old.textContent;
+    await wait(30);
+    expect(old.textContent).toBe(frozen);
+    // The keyed island's state moved to its new anchor, which ticks on.
+    const next = region.querySelector("p");
+    expect(next).not.toBe(old);
+    expect(acts.length).toBe(1);
+    expect(acts[0][0]).toBe(id);
+    expect(acts[0][1]).toBe("7");
+    expect(acts[0][2][0]).toBeGreaterThanOrEqual(ticked);
+    await wait(30);
+    expect(Number(next.textContent)).toBeGreaterThan(acts[0][2][0]);
+    // Disposing the new one (as a later swap would) stops it too.
+    dispose([region]);
+    expect(self.cleanups).toEqual(["A", "A"]);
+    const last = next.textContent;
+    await wait(20);
+    expect(next.textContent).toBe(last);
+  });
+
+  test("a navigation disposes the islands of the outlet it replaces", async () => {
+    const { navigate, invalidate } = await load();
+    const { chunk, id } = await tickerChunk();
+    invalidate();
+    global.fetch = vi.fn(async () => ({
+      ok: true,
+      text: async () => `<div data-f="About-1">about</div>`
+    }));
+    history.replaceState(null, "", "/");
+    self.$SI = { links: () => {} };
+    document.body.innerHTML = `<!--o--><div data-f="Home-1">${tickerHtml(id, "1", "home")}</div><!--/o-->`;
+    const p = document.querySelector("p");
+    activateKept(chunk, p, id);
+    await wait(20);
+    await navigate([[["/about"], "About-1", () => []]], "/about");
+    expect(document.querySelector("[data-f]").textContent).toBe("about");
+    expect(self.cleanups).toEqual(["home"]);
+    const frozen = p.textContent;
+    await wait(20);
+    expect(p.textContent).toBe(frozen);
+  });
+
+  test("a tier-0 island keeps no disposer; disposing its subtree is harmless", async () => {
+    const { dispose } = await load();
+    const { chunk, flush, id } = await toggleChunk();
+    document.body.innerHTML = `<ul>${toggleHtml(id, "1")}</ul>`;
+    const a = document.querySelector("[data-i]");
+    expect(chunk.activate(a)).toBeUndefined();
+    flush();
+    expect(a.$d).toBeUndefined();
+    expect(() => dispose([document.querySelector("ul")])).not.toThrow();
+  });
+});

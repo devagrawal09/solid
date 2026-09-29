@@ -99,7 +99,9 @@ describe("islandsEntry", () => {
     expect(s).toContain(
       'import { activate as a0, flush as f0 } from "virtual:solid-islands/chunk/i0"'
     );
-    expect(s).toContain(`for (const el of document.querySelectorAll('[data-i~="i0"]')) a0(el);`);
+    expect(s).toContain(
+      `for (const el of document.querySelectorAll('[data-i~="i0"]')) $sd(el, "i0", a0(el));`
+    );
     expect(s).toContain("f0();");
     expect(s).not.toContain("const L =");
   });

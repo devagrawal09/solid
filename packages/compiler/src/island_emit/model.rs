@@ -153,7 +153,10 @@ impl<'a> Item<'a> {
     /// accessor.
     pub(crate) fn store_like(&self) -> bool {
         match self {
-            Item::Cell { host: CellHost::Store, .. } => true,
+            Item::Cell {
+                host: CellHost::Store,
+                ..
+            } => true,
             Item::Cell { ctor, .. } => matches!(
                 ctor.as_str(),
                 "createOptimisticStore" | "createProjection" | "createStore" | "createPlainStore"
@@ -207,8 +210,15 @@ pub(crate) struct Comp<'a> {
     pub replace: Span,
     pub props: Option<SymbolId>,
     pub setup: Vec<Item<'a>>,
-    /// Statements in the view before its `return` (reads the whole view depends on).
+    /// Statements in the view before its `return` that the compiler does
+    /// not model (an early `return`: a conditional view).
     pub view_stmts: Vec<&'a Statement<'a>>,
+    /// Setup items read from statements in the view before its `return`:
+    /// they run where the view first renders (the server, or a fresh
+    /// instance's activation), which is the view's semantics as long as
+    /// they read no live state (checked by the analysis: the view would
+    /// re-run).
+    pub view_items: Vec<usize>,
     pub view: Option<&'a Expression<'a>>,
     pub issues: Vec<String>,
     /// Per-island prefetch override from a `// @island-prefetch <policy>`
@@ -763,6 +773,7 @@ fn read_component_expr<'a>(
         props: f.params.items.first().and_then(|p| single_id(&p.pattern)),
         setup: Vec::new(),
         view_stmts: Vec::new(),
+        view_items: Vec::new(),
         view: None,
         issues: Vec::new(),
         prefetch: None,
@@ -821,15 +832,46 @@ fn read_view<'a>(m: &Model<'a>, comp: &mut Comp<'a>, view: FnRef<'a>) {
             && let Some(arg) = &r.argument
         {
             comp.view = Some(arg);
-        } else {
+        } else if has_return(s) {
             comp.view_stmts.push(s);
+        } else {
+            let before = comp.setup.len();
+            read_setup_statement(m, comp, s);
+            for (i, it) in comp.setup.iter().enumerate().skip(before) {
+                if !matches!(
+                    it,
+                    Item::Local { .. } | Item::Context { .. } | Item::Stmt { .. }
+                ) {
+                    comp.issues.push(format!(
+                        "reactive primitive created in the view (`{}`)",
+                        short(m.text(it.span()))
+                    ));
+                }
+                comp.view_items.push(i);
+            }
         }
     }
     if comp.view.is_none() {
         comp.issues
             .push(format!("`{}`: the view has no final `return`", comp.name));
     }
-    let _ = m;
+}
+
+/// A `return` of the statement's own function (not of a nested one).
+fn has_return(s: &Statement<'_>) -> bool {
+    use oxc_ast_visit::{Visit, walk};
+    struct R(bool);
+    impl<'a> Visit<'a> for R {
+        fn visit_return_statement(&mut self, r: &oxc_ast::ast::ReturnStatement<'a>) {
+            self.0 = true;
+            walk::walk_return_statement(self, r);
+        }
+        fn visit_function(&mut self, _: &Function<'a>, _: oxc_semantic::ScopeFlags) {}
+        fn visit_arrow_function_expression(&mut self, _: &ArrowFunctionExpression<'a>) {}
+    }
+    let mut r = R(false);
+    r.visit_statement(s);
+    r.0
 }
 
 /// A plain function component: allowed when its body is locals plus a
@@ -850,6 +892,7 @@ fn read_plain_component<'a>(
         props: f.params().items.first().and_then(|p| single_id(&p.pattern)),
         setup: Vec::new(),
         view_stmts: Vec::new(),
+        view_items: Vec::new(),
         view: None,
         issues: Vec::new(),
         prefetch: None,
