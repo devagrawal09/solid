@@ -201,6 +201,24 @@ describe("h argument shapes", () => {
     expect(root.querySelector("b")!.textContent).toBe("Grace");
   });
 
+  it("h([a, b]) is a fragment", () => {
+    const App = $component(function* () {
+      const [count, setCount] = yield* $signal(1);
+      const inc = $event(function* () {
+        setCount(c => c + 1);
+      });
+      return function* () {
+        return h([h("b", count), h("button", { onClick: inc }, "+")]);
+      };
+    });
+    dispose = render(App, root);
+    flush();
+    expect(root.innerHTML).toBe("<b>1</b><button>+</button>");
+    root.querySelector("button")!.click();
+    flush();
+    expect(root.innerHTML).toBe("<b>2</b><button>+</button>");
+  });
+
   it("a prop holding an array or a store is passed as it is", () => {
     let seen: unknown;
     const Child = $component(function* (props: TypedProps<{ list: string[] }>) {

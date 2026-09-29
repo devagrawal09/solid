@@ -52,6 +52,8 @@ type OpsOfOutput<R> = R extends View<infer P, infer E> | HView<infer P, infer E>
   : never;
 
 export interface BlocksH {
+  /** A fragment: `h([a, b, c])`. It carries its holes' pending / failures. */
+  <const C extends readonly Hole[]>(children: C): HViewOf<C[number]>;
   <
     Tag extends keyof Intrinsic,
     const A extends HAttributes<Tag> & NotCallable,

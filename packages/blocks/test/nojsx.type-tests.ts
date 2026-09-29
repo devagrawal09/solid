@@ -98,6 +98,12 @@ render(() => Loading({ children: Pending() }), root);
 export const handled = h("div", Loading({ fallback: "…", children: Pending() }));
 const handledOut: HView<false, never> = handled;
 void handledOut;
+// a fragment, h([a, b]), carries its holes' pending
+const fragmentOut: HView<true, never> = h([h("i", "x"), h(Pending, {})]);
+void fragmentOut;
+// @ts-expect-error a pending fragment is not settled
+const fragmentSettled: HView<false, never> = h([h("i", "x"), h(Pending, {})]);
+void fragmentSettled;
 
 // row blocks in h
 export const Rows = $component(function* () {
