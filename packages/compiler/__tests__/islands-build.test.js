@@ -4,7 +4,12 @@
 // (src/island_emit/tests.rs); behavior is proven in the web package's
 // conformance islands mode and the ssr-redesign browser gate.
 const { compileIslands } = require("../index.js");
-const { islandsEntry, IslandsCompiler, bundledIslandSizes } = require("../islands-build.js");
+const {
+  islandsEntry,
+  hostModule,
+  IslandsCompiler,
+  bundledIslandSizes
+} = require("../islands-build.js");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -97,6 +102,40 @@ describe("islandsEntry", () => {
     expect(s).toContain(`for (const el of document.querySelectorAll('[data-i~="i0"]')) a0(el);`);
     expect(s).toContain("f0();");
     expect(s).not.toContain("const L =");
+  });
+
+  test("a page mixing the core with lower tiers installs the page-flush host", () => {
+    const HOST = '"virtual:solid-islands/host"';
+    // Only the lower tiers: no host.
+    const low = islandsEntry({ islands: [island, { ...island, id: "i1", tier: 1 }] });
+    expect(low).not.toContain(HOST);
+    // Only the core: no host.
+    const core = islandsEntry({ islands: [{ ...island, tier: 2, activation: "load" }] });
+    expect(core).not.toContain(HOST);
+    // A core island at load: imported statically, before any activation.
+    const hot = islandsEntry({
+      islands: [island, { ...island, id: "i1", tier: 2, activation: "load" }]
+    });
+    expect(hot.startsWith(`import ${HOST};\n`)).toBe(true);
+    // A lazy core island (tier 1 bound to the core by `tier1Core`): loaded with its chunk.
+    const lazy = islandsEntry({
+      islands: [island, { ...island, id: "i1", tier: 1, runtime: "@solidjs/signals" }]
+    });
+    expect(lazy).toContain(
+      `"i1": [() => Promise.all([import("virtual:solid-islands/chunk/i1"), import(${HOST})]).then(m => m[0])`
+    );
+    expect(lazy).toContain(`"i0": [() => import("virtual:solid-islands/chunk/i0")`);
+    // A hydrated fallback module runs on the core too.
+    const hydrated = islandsEntry({
+      islands: [island],
+      hydrate: [{ module: "/app.tsx", export: "App" }]
+    });
+    expect(hydrated.startsWith(`import ${HOST};\n`)).toBe(true);
+    expect(hostModule({ core: "c", host: "h" })).toBe(
+      'import { host } from "h";\n' +
+        'import { createRoot, createSignal, createRenderEffect, createEffect, flush } from "c";\n' +
+        "host({ createRoot, createSignal, createRenderEffect, createEffect, flush });\n"
+    );
   });
 
   test("hot islands activate at load even in auto mode", () => {

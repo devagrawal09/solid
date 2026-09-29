@@ -49,6 +49,10 @@
       "types": "./dist/types/kernel/t0.d.ts",
       "default": "./dist/islands/t0.js"
     },
+    "./host": {
+      "types": "./dist/types/kernel/host.d.ts",
+      "default": "./dist/islands/host.js"
+    },
     "./capabilities.json": "./capabilities.json",
     "./attribution": {
       "types": "./dist/types/attribution.d.ts",

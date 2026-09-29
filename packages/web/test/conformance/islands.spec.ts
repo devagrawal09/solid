@@ -27,6 +27,7 @@ import * as web from "@solidjs/web";
 import { describe, expect, test } from "vitest";
 import * as kernel from "../../../signals/src/kernel/index.js";
 import * as t0 from "../../../signals/src/kernel/t0.js";
+import { host } from "../../../signals/src/kernel/host.js";
 import { evaluate } from "./harness/module.js";
 import { mode } from "./harness/modes.js";
 import { observeClient } from "./harness/runner.js";
@@ -36,8 +37,10 @@ import { scenarios as registered } from "./scenarios/index.js";
 // Islands-only scenarios: their oracle is the reference source run here
 // (they carry no golden and join no other mode).
 import { islandsScenarios } from "./scenarios/islands.js";
+// Cross-runtime flush order (islands on different tiers, one event).
+import { islandsTierScenarios } from "./scenarios/islands-tiers.js";
 
-const scenarios = [...registered, ...islandsScenarios];
+const scenarios = [...registered, ...islandsScenarios, ...islandsTierScenarios];
 
 const require = createRequire(import.meta.url);
 const stream = require("../../../compiler/islands-stream.js") as {
@@ -146,7 +149,12 @@ function tracedT0(recorder: Recorder) {
   };
 }
 
-const compileFor = (source: string, minTier = 0, modules: Record<string, string> = {}) =>
+const compileFor = (
+  source: string,
+  minTier = 0,
+  modules: Record<string, string> = {},
+  extra: Record<string, unknown> = {}
+) =>
   compiler.compileIslands(source, {
     filename: "/scenario/app.jsx",
     // Cross-module: the imported modules' sources (as the bundler plugin
@@ -161,11 +169,12 @@ const compileFor = (source: string, minTier = 0, modules: Record<string, string>
     minTier,
     t0Module: RUNTIMES.t0,
     kernelModule: RUNTIMES.kernel,
-    coreModule: RUNTIMES.core
+    coreModule: RUNTIMES.core,
+    ...extra
   });
 
 async function runIslands(scenario: Scenario, source: string, minTier: number) {
-  const out = compileFor(source, minTier, scenario.modules);
+  const out = compileFor(source, minTier, scenario.modules, scenario.islandsOptions);
   if (out.fallback) throw new Error(`falls back: ${out.fallback}`);
   // One recorder for the whole page: the server keeps rendering while the
   // steps run (streamed boundaries settle on the server, and an `<Errored>`
@@ -220,6 +229,9 @@ async function runIslands(scenario: Scenario, source: string, minTier: number) {
       if (/^l\d/.test((n as Comment).data)) return true;
     return false;
   };
+  // A page mixing the core with the lower tiers hands its flush to the core
+  // (the entry does this in islands-build.js): one batch per page flush.
+  let unhost: (() => void) | null = null;
   // Islands a `manualActivation` scenario's steps have activated so far.
   const manual = scenario.manualActivation ? new Set<string>() : null;
   /** Activate every anchor not yet active (the entry's scan, at load and on each landing). */
@@ -243,8 +255,12 @@ async function runIslands(scenario: Scenario, source: string, minTier: number) {
     recorder.raw("## mount");
     for (const island of out.manifest.islands) {
       const code = out.chunks.find(c => c.id === island.id)!.code;
-      const rt: any = island.tier === 0 ? t0i : island.tier === 1 ? kernel : solid;
-      const probeRt: any = island.tier === 2 ? solid : kernel;
+      // The runtime the chunk imports (`tier1Core` binds tier 1 to the core).
+      const on =
+        (island as any).runtime ??
+        RUNTIMES[island.tier === 0 ? "t0" : island.tier === 1 ? "kernel" : "core"];
+      const rt: any = on === RUNTIMES.t0 ? t0i : on === RUNTIMES.kernel ? kernel : solid;
+      const probeRt: any = on === RUNTIMES.core ? solid : kernel;
       const chunk = evaluate(code, {
         [RUNTIMES.t0]: t0i,
         [RUNTIMES.kernel]: kernel,
@@ -252,6 +268,7 @@ async function runIslands(scenario: Scenario, source: string, minTier: number) {
         conformance: { h: probe(recorder, probeRt), NotFound, Forbidden }
       });
       tiers.push(island.tier);
+      if (rt === solid && !unhost) unhost = host(solid as any);
       if (rt.flush) flushers.add(() => rt.flush());
       groups.push({ island, chunk });
     }
@@ -313,6 +330,7 @@ async function runIslands(scenario: Scenario, source: string, minTier: number) {
   } finally {
     container.remove();
     await drain();
+    unhost?.();
   }
 }
 
@@ -338,12 +356,26 @@ describe("compiled islands reproduce the oracle", () => {
   for (const scenario of candidates) {
     const source = ((scenario.sources as Record<string, string | undefined>).islands ??
       scenario.sources.blocks)!;
-    const probe = compileFor(source, 0, scenario.modules);
+    const probe = compileFor(source, 0, scenario.modules, scenario.islandsOptions);
     if (probe.fallback) {
       test.skip(`${scenario.name} — falls back to hydration: ${probe.fallback}`, () => {});
       continue;
     }
     const tiers = probe.manifest.islands.map(i => i.tier);
+    if (scenario.islandTiers || scenario.islandIds)
+      test(`${scenario.name}: the compiler places the islands as intended`, () => {
+        const find = (key: string) => {
+          const found = probe.manifest.islands.filter(
+            (i: any) => i.root === key || i.cells.includes(key)
+          );
+          expect(found.length, `one island for ${key}`).toBe(1);
+          return found[0];
+        };
+        for (const [key, tier] of Object.entries(scenario.islandTiers ?? {}))
+          expect(find(key).tier, `tier of ${key}`).toBe(tier);
+        for (const [key, id] of Object.entries(scenario.islandIds ?? {}))
+          expect(find(key).id, `id of ${key}`).toBe(id);
+      });
     const chosen = tiers.length ? `tier ${Math.max(...tiers)}` : "no islands (inert)";
     // A load-time effect writes after the server render (as it does after
     // hydration): the server markup is the pre-effect state.

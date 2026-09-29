@@ -26,7 +26,9 @@ const islandsBuild = await import(pathToFileURL(join(ROOT, "packages/compiler/is
 export const ISLAND_RUNTIMES = {
   t0: join(ROOT, "packages/signals/src/kernel/t0.ts"),
   kernel: join(ROOT, "packages/signals/src/kernel/index.ts"),
-  core: "@solidjs/signals"
+  core: "@solidjs/signals",
+  // The page-flush host (a page mixing the core with the lower tiers).
+  host: join(ROOT, "packages/signals/src/kernel/host.ts")
 };
 /** One islands compiler per variant: the server and client builds share its module ids. */
 export function islandsCompiler({ minTier = 0, tier1Core = false } = {}) {

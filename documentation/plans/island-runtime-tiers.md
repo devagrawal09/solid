@@ -8,7 +8,7 @@ This builds on [ssr-hydration-redesign.md](./ssr-hydration-redesign.md) (compile
 
 The redesign's compiled islands left one cost standing: **the runtime is the whole remaining JS.** HN's Toggle island shipped 9.6 KB gz of signals core to toggle one boolean (redesign doc, open question 4). This study gives each island the smallest runtime its graph allows, chosen by the compiler:
 
-- **Tier 0: no reactive runtime.** Cells become slots; each view hole becomes a (compute, apply) pair on the cells it reads; a ~0.3 KB gz helper keeps the core's batching contract.
+- **Tier 0: no reactive runtime.** Cells become slots; each view hole becomes a (compute, apply) pair on the cells it reads; a ~0.3 KB gz helper keeps the core's batching contract (~0.5 KB gz since it joins the page flush, [section 7](#7-cross-runtime-flush)).
 - **Tier 1: a 2.1 KB gz kernel** (signal, memo, render/user effect, cleanup, root, untrack, flush) that reproduces the core's scheduling event for event on the subset it supports.
 - **Tier 2: the full core,** for async, transitions, optimistic writes, stores.
 
@@ -60,7 +60,7 @@ The rules are joins over the block facts the redesign's linker already has (gene
 | no memo, no effect (`$effect`, `createEffect`, `onSettled`, `onMount`), no `onCleanup` | creations and load-time effects |
 | no async, optimistic or store cell, no `attempt` / `action` / `refresh` / transition, no `Loading` / `Errored` | the tier-2 list below |
 
-Under these conditions the dependency graph is fixed at compile time: each hole's read set is exactly the cells it names, forever. So the compiler emits each cell as a slot and each hole as `(compute, apply)` registered on its cells, seeded with the server-rendered value (activation computes nothing). What is left of the runtime is the core's **batching contract**, which is observable and is kept by a 0.3 KB gz helper (`packages/signals/src/kernel/t0.ts`):
+Under these conditions the dependency graph is fixed at compile time: each hole's read set is exactly the cells it names, forever. So the compiler emits each cell as a slot and each hole as `(compute, apply)` registered on its cells, seeded with the server-rendered value (activation computes nothing). What is left of the runtime is the core's **batching contract**, which is observable and is kept by a 0.3 KB gz helper (0.5 KB with the page flush of section 7) (`packages/signals/src/kernel/t0.ts`):
 - a write stages the value; an updater sees the staged value; a handler's read sees the committed value until the flush; an equal write is a no-op;
 - the flush runs on a microtask (or an explicit `flush()`); it commits, computes every hole of every changed cell once, **in the core's heap order** (cells in first-write order, each cell's holes in creation order, each hole once), then applies them in that order.
 
@@ -216,11 +216,54 @@ Tier 2 on HN is the redesign's own P1-static (`P1-eager` / `P1-lazy`, `toggle.is
 1. **Memo folding into tier 0.** A memo with unconditional reads, owned by one island (sync's Converter: `fahrenheit`, `label`), is a derived slot recomputed before the holes with its own cut-off. The classifier flags such groups ("memo folding candidate"). The order rule needs a height notion (a memo's holes run after the memo), which the t0 helper does not have yet.
 2. **Over-approximated tier 0 for conditional reads.** A hole `c() ? x() : y()` can be recomputed whenever any of `c`, `x`, `y` changes; the DOM is the same (apply compares), but compute runs and reads differ from the core's, which is observable in traces. Is "same DOM, more computes" an acceptable contract for tier 0?
 3. **Lists without a graph.** T0\* shows what a list-aware tier 0 would buy on todos (a keyed list, two branches, four derived values). Can the compiler emit that safely from blocks (immutable items, keyed rows, derived values folded), or is the kernel the right floor for lists?
-4. **Cross-runtime ordering.** Tier-0 islands and a kernel flush on separate microtasks, where the core would update all of them in one flush. Groups share no state, so no reactive read can tell; a `MutationObserver` can see the record order change. A page-level `flush()` must also reach every runtime on the page (the compiler would route it).
+4. **Cross-runtime ordering.** Resolved, see [7. Cross-runtime flush](#7-cross-runtime-flush): separate microtasks *were* observable (an effect reading another island's DOM saw it stale, and `$flush()` reached one runtime); every runtime on a page now flushes as one batch in the core's phase order. What remains is the emitter's per-element listeners under trusted events (one flush per listener callback, on any runtime).
 5. **Stores at tier 1.** The kernel has no stores, so any `$store` island is tier 2 (sync's App). Lowering store paths to per-path signals when the compiler knows every path (the store-summary facts) would let many store islands drop to tier 1. How much of the store semantics (proxies, reconcile, projections) must come along?
 6. **Context at tier 1.** The kernel has no context; the prototype resolves context values statically (the linker knows each provider). Dynamic context (a provider whose value is chosen at run time, or a component used under several providers) needs either a kernel context or tier 2.
 7. **Lazy activation latency.** The first-interaction numbers for lazy variants are dominated by fetching and compiling the chunk, and vary between runs more than any other number here; the redesign's prefetch policy question applies unchanged.
 8. **Dev builds.** A dev build should run every tier's island on the core (or both, comparing) so a misclassified island shows up; the kernel has no diagnostics.
+
+## 7. Cross-runtime flush
+
+Status: 2026-09-29. Answers open question 4.
+
+**The contract.** Islands on different runtimes never share a cell, but one event can reach several of them (nested anchors, two islands of one component on one anchor, a `window` listener), and an effect in one island can read another island's DOM (text, layout). In a single-runtime Solid app the event's writes land in **one flush**: every runtime's computes, then every render effect (DOM write), then every user effect (each effect's previous cleanup first). The page must keep that order whichever tiers its islands run on: every runtime on a page flushes as one batch, phase by phase, and `flush()` / `$flush()` in any island drains the page.
+
+**Before: it was observable.** Each runtime flushed on its own microtask, in the order of their first writes. When the island with the user effect wrote first (the inner handler runs first as the event bubbles), its whole flush, user effects included, ran before the other runtime applied its DOM. The conformance scenarios in `packages/web/test/conformance/scenarios/islands-tiers.ts` (run by `islands.spec.ts` at the compiler's tiers, which each scenario asserts from the manifest, raised to tier 1, and raised to tier 2 as the control, against the same source run on one core) diverged exactly there. Their steps never call `ctx.flush()` between the event and the observation: `ctx.settle()` lets the runtimes' microtasks run in their natural order.
+
+| Scenario (compiler's tiers) | Before | First diverging step: oracle ‖ split runtimes |
+| --- | --- | --- |
+| `outer-reads-inner` (inner t0, outer kernel effect); `-core` (outer on the core, `tier1Core`) | equal | the t0 island wrote first, so its microtask ran first |
+| `inner-reads-outer` (outer t0, inner kernel effect) | **diverges** | "click inner": `read b, read b, read a = 2, value effect b = 20, value effect sees outer = "2"` ‖ `read b, read b, value effect b = 20, value effect sees outer = "1", read a = 2` |
+| `inner-reads-outer-core` (inner on the core, `tier1Core`) | **diverges** | same step, same lines |
+| `inner-reads-outer-tier2` (inner at tier 2: a store) | **diverges**, at its tiers and with t0 raised to the kernel (kernel + core) | same step, same lines |
+| `same-anchor` (one component, two cells: t0 and kernel islands on one anchor) | **diverges** | both clicks: `read a = 2, value effect sees a = "2"` ‖ `value effect sees a = "1", read a = 2` |
+| `window-sibling` (t0 button, kernel `window` listener) | equal | the target's (t0) handler runs first |
+| `activate-kernel-first`, `activate-t0-first`, `first-event` (t0 activates on the click: activate, flush, replay), `first-event-kernel` | **diverge** | every click after activation: `value effect sees outer = "2"` ‖ `"1"` (the activation order does not matter, the write order does) |
+| `flush-in-handler` (inner t0 writes; the outer kernel handler writes, `$flush()`es, reads the inner DOM) | **diverges** | "click inner": `read a = 2, read b = 20, read b = 20, value effect sees inner = "2", value handler sees inner = "2"` ‖ `read b = 20, read b = 20, value effect sees inner = "1", value handler sees inner = "1", read a = 2` (`$flush()` reached one runtime) |
+| `async-continuations` (an async `$event` in each island; both flights settle in one step) | **diverges** when the kernel island's continuation writes first | `read a = 2, value effect sees inner = "2"` ‖ `value effect sees inner = "1", read a = 2`; equal when the t0 continuation writes first |
+
+10 of the 13 scenarios diverged (11 of their 78 test cases). On one runtime (everything raised to tier 1, or to tier 2) all were already equal: the divergence is exactly "a runtime with user effects flushes before another runtime's pending DOM writes".
+
+**The fix: a page flush** (`packages/signals/src/kernel/page.ts`). One object per page on `globalThis[Symbol.for("solid.page")]`, created by whichever runtime loads first (every bundled copy speaks the same protocol). Each runtime registers a *part* with three phases: `h` (heap + commit: the computes), `r` (render effects; for t0, the hole applies), `u` (user effects). A write lists its runtime's part (in first-schedule order) and queues one page microtask; the page flush runs rounds of `h` for every listed part, then `r` for every part, then `u` for every part, while any part scheduled again. For islands at the same height that is the core's heap order (the core inserts nodes in write order), so the compute trace matches too, not only the DOM. `t0.flush()` and the kernel's `flush()` are the page's flush. A lone kernel runs the loop it always ran; its part keeps the core's "scheduled = heap not empty" decision after the heap (an extra round re-runs the empty heap and moves its `min`, which read-time pulls observe: seed 18457 of the differential caught that in a first version).
+
+**The core as host** (`packages/signals/src/kernel/host.ts`, exported as `@solidjs/signals/host`). The core's scheduler is not changed. `host(core)` builds, from the core's public API only, an `equals: false` signal and two effects in a root: a part scheduling writes the signal (so the core's heap meets the parts where it meets that write), the render effect's compute runs every listed part's `h` and its effect half their `r`, the user effect runs their `u`, all inside the core's own flush and in its phase order; the page's flush becomes `core.flush`. The islands entry (`packages/compiler/islands-build.js`) installs it only on a page that mixes the core (tier-2 islands, tier 1 under `tier1Core`, or a hydrated fallback module) with t0 / kernel islands: `import "virtual:solid-islands/host"` before any activation when a core island activates at load (or a module hydrates), else loaded with the first lazy core island's chunk (`Promise.all([chunk, host])`). The virtual module imports the five core exports by name; core chunks import them anyway. A kernel + core page (recommendation 3 avoids it, but the harness produces it by raising t0 to the kernel next to a tier-2 island) works the same way: the kernel is a part inside the core's flush.
+
+**After.** Every scenario equals the oracle at the compiler's tiers, raised to tier 1, and at the tier-2 control (`islands.spec.ts`: 161 of 161; the conformance suite: 273 passed, 22 skipped). `packages/signals/tests/kernel/page.test.ts` checks the phase order against one core running both islands (t0 + kernel and t0 + core, both write orders), that `t0.flush()` and the kernel's `flush()` drain the page, and that the host takes the page over and uninstalls. The kernel differential passes 20,000 programs (and 50,000 in one runtime). In Chromium (`node scripts/island-tiers/native-event.mjs`), the t0 + kernel page now reads what one kernel running both islands reads, in every mode; it read the stale `"1"` in every mode before (`KERNEL_DIR=<the old kernel/t0>`).
+
+**Cost** (esbuild minify, gzip -9, as `scripts/island-tiers/sizes.mjs`):
+
+| | before | after |
+| --- | ---: | ---: |
+| t0 helper, all exports | 364 B gz (611 min) | **479 B gz** (817 min) |
+| t0 helper, `cell` + `hole` + `set` (a Toggle) | 345 B gz | 455 B gz |
+| kernel, all exports | 2173 B gz | 2348 B gz |
+| kernel, signal + render effect + root | 2048 B gz | 2212 B gz |
+| host (mixed pages only): alone · on top of the core's five exports the core chunks share | – | 382 · 249 B gz |
+| core (`@solidjs/signals`) | unchanged; treeshake floors unchanged | |
+
+HN's tier-0 page goes from 0.6 to 0.7 KB gz eager in the browser gate (`measure.mjs --check`: every variant `gate ok`).
+
+**Left open: per-element listeners under trusted events.** The page flush makes one batch per microtask checkpoint. A script-dispatched event (`el.click()`, the loader's replay) runs all its listeners without a checkpoint: one batch. A trusted (user) event runs a microtask checkpoint after **each listener callback**, and island chunks attach one listener per element (`el.addEventListener("click", h)`, `island_emit/client.rs`), so a real click reaching two nested islands flushes once per listener: the inner island's effect runs before the outer island's handler has written. That does not depend on tiers: one kernel running both islands does the same (`native-event.mjs`, "one kernel · per-element · trusted" reads `"1"`). The single-runtime oracle is right only because Solid delegates (`delegateEvents`: one document listener runs every handler on the path, then one flush). The fix belongs to the emitter, not the runtimes: register island handlers as delegated handlers (e.g. `$n.$$click = h`, with one page-level listener per event type, which the loader's capture listener can share, walking from the target up as Solid's `eventHandler` does and honouring `stopPropagation`), so that one listener runs every island's handlers for an event and the page flushes once after it. The "delegated · trusted" rows of `native-event.mjs` show the result (`"2"`).
 
 ## Defects found
 
@@ -237,13 +280,15 @@ node scripts/island-tiers/sizes.mjs                                       # runt
 (cd packages/signals && pnpm exec vitest run tests/kernel)                # kernel contract + 400 random programs
 (cd packages/signals && KERNEL_DIFF_SEEDS=20000 pnpm exec vitest run tests/kernel/differential.test.ts)
 (cd packages/web && pnpm exec vitest run test/conformance/tiers.spec.ts)  # conformance: kernel + activation stand-ins
+(cd packages/web && pnpm exec vitest run test/conformance/islands.spec.ts -t islands-tiers)  # cross-runtime flush (section 7)
+node scripts/island-tiers/native-event.mjs                                # the same in Chromium: trusted vs script events, per-element vs delegated
 node scripts/ssr-redesign/measure.mjs --apps hn,todos-local,todos --only A,P1-eager,P1-lazy,T1-eager,T1-lazy,T0-eager,T0-lazy,T2-eager,T2-lazy,T0*-eager,A-lazy --check
 node scripts/ssr-redesign/measure.mjs --apps hn,todos-local,todos --only A,P1-eager,P1-lazy,T1-eager,T1-lazy,T0-eager,T0-lazy,T2-eager,T2-lazy,T0*-eager,A-lazy --reps 7 --cpu 1,4 --out documentation/plans/island-runtime-tiers/results-1.json   # and -2
 node scripts/island-tiers/report.mjs                                      # the tables above
 ```
 
 Files:
-- kernel and tier-0 helper: `packages/signals/src/kernel/{index,t0}.ts`; tests `packages/signals/tests/kernel/`;
+- kernel and tier-0 helper: `packages/signals/src/kernel/{index,t0}.ts`; the page flush and the core host `packages/signals/src/kernel/{page,host}.ts`; tests `packages/signals/tests/kernel/`;
 - HN activation: `scripts/ssr-redesign/apps/hn/islands-static/` (`toggle.island.ts` is tiers 1 and 2 by alias, `toggle.t0.ts` tier 0, `client-{eager,lazy}{,-t0}.ts`);
 - todos-local: `scripts/ssr-redesign/apps/todos-local/` (`app.tsx` the program, `islands.ts` tiers 1 and 2 by alias, `islands-t0.ts` T0\*, `client-lazy.ts` the loader with the group's handler map);
-- conformance: `packages/web/test/conformance/{tiers.spec.ts,scenarios/tiers.ts,tiers/activations.ts}`.
+- conformance: `packages/web/test/conformance/{tiers.spec.ts,scenarios/tiers.ts,tiers/activations.ts}`; cross-runtime flush `scenarios/islands-tiers.ts` (run by `islands.spec.ts`).

@@ -23,6 +23,21 @@ const { compileIslands, islandExports } = require("./index.js");
 const PREFETCH = ["load", "idle", "visible", "intent", "interaction"];
 const ENTRY = "virtual:solid-islands";
 const CHUNK = "virtual:solid-islands/chunk/";
+const HOST = "virtual:solid-islands/host";
+
+/**
+ * The page-flush host module (island-runtime-tiers.md, "Cross-runtime
+ * flush"): installs the core as the page's flush host, with the core's own
+ * exports (named, so the bundle keeps only these five).
+ */
+function hostModule({ core = "@solidjs/signals", host = "@solidjs/signals/host" } = {}) {
+  const J = JSON.stringify;
+  return (
+    `import { host } from ${J(host)};\n` +
+    `import { createRoot, createSignal, createRenderEffect, createEffect, flush } from ${J(core)};\n` +
+    `host({ createRoot, createSignal, createRenderEffect, createEffect, flush });\n`
+  );
+}
 
 /**
  * The client entry module for a page's islands.
@@ -40,6 +55,15 @@ const CHUNK = "virtual:solid-islands/chunk/";
  * network: downgrade prefetch to "interaction" under saveData / 2g (default true)
  * chunk: id → import specifier
  * hooks: { before, after } code run around the load-time work (timing hooks)
+ * core: the core's module specifier (default "@solidjs/signals"): an island
+ *   whose manifest `runtime` is it (tier 2, or tier 1 under `tier1Core`) runs
+ *   on the core
+ * host: the page-flush host module to import when the page mixes the core
+ *   with the lower tiers (default HOST, the virtual module `hostModule()`
+ *   serves): it makes the core run the t0 / kernel flushes inside its own, so
+ *   every runtime on the page flushes as one batch. Imported statically when
+ *   a core island activates at load (or a module hydrates), else loaded with
+ *   the first lazy core island's chunk.
  */
 function islandsEntry({
   islands,
@@ -54,12 +78,19 @@ function islandsEntry({
   web = "@solidjs/web",
   streams = false,
   sizeOf = i => String(i.size || 0),
-  verify = false
+  verify = false,
+  core = "@solidjs/signals",
+  host = HOST
 } = {}) {
   const J = JSON.stringify;
   const eager = islands.filter(i => mode === "eager" || i.activation === "load");
   const lazy = islands.filter(i => !eager.includes(i));
-  let s = "";
+  // Cross-runtime flush (island-runtime-tiers.md): a page mixing the core
+  // with t0 / kernel islands hands the page flush to the core.
+  const onCore = i => i.tier >= 2 || i.runtime === core;
+  const mixed = (hydrate.length > 0 || islands.some(onCore)) && islands.some(i => !onCore(i));
+  const hostEager = mixed && (hydrate.length > 0 || eager.some(onCore));
+  let s = hostEager ? `import ${J(host)};\n` : "";
   eager.forEach((i, n) => {
     s += `import { activate as a${n}${i.tier ? `, flush as f${n}` : ""} } from ${J(chunk(i.id))};\n`;
   });
@@ -84,7 +115,13 @@ function islandsEntry({
     // L[id] = [import, events handled, window events]; A[id] = activated anchors.
     const table = lazy
       .map(i => {
-        const row = [`() => import(${J(chunk(i.id))})`, J(i.events)];
+        const load = `import(${J(chunk(i.id))})`;
+        const row = [
+          mixed && !hostEager && onCore(i)
+            ? `() => Promise.all([${load}, import(${J(host)})]).then(m => m[0])`
+            : `() => ${load}`,
+          J(i.events)
+        ];
         if (wins.length) row.push(J(i.windowEvents || []));
         if (budget != null) row.push(sizeOf(i));
         return `${J(i.id)}: [${row.join(", ")}]`;
@@ -443,7 +480,7 @@ function solidIslands(options = {}) {
       collected = collectWithDedupe(compiler, path.resolve(config.root, root), tier1Core);
     },
     resolveId(id) {
-      if (id === ENTRY || id === ENTRY + "/auto") return "\0" + id;
+      if (id === ENTRY || id === ENTRY + "/auto" || id === HOST) return "\0" + id;
       if (id.startsWith(CHUNK)) return "\0" + id + ".ts";
       return null;
     },
@@ -452,6 +489,7 @@ function solidIslands(options = {}) {
       const rootFile = path.resolve(config.root, root);
       collected ||= collectWithDedupe(compiler, rootFile, tier1Core);
       if (id === "\0" + ENTRY + "/auto") return `import { start } from "${ENTRY}";\nstart();\n`;
+      if (id === "\0" + HOST) return hostModule(pageRuntimes(runtimes));
       if (id === "\0" + ENTRY) {
         // Every construct that falls back is named (whole-module tier-2
         // hydration instead of fine-grained islands).
@@ -471,7 +509,8 @@ function solidIslands(options = {}) {
           // server, the chunks' source bytes.
           sizeOf: config.command === "build" ? sizePlaceholder : undefined,
           verify: verifying(),
-          hydrate: fallbackRoots(collected, rootFile, rootExport, mount)
+          hydrate: fallbackRoots(collected, rootFile, rootExport, mount),
+          core: pageRuntimes(runtimes).core
         });
       }
       const chunkId = id.slice(("\0" + CHUNK).length, -3);
@@ -527,7 +566,12 @@ function collectWithDedupe(compiler, rootFile, tier1Core) {
 }
 
 function resolveRuntimes(r) {
-  return { t0: r.t0, kernel: r.kernel, core: r.core };
+  return { t0: r.t0, kernel: r.kernel, core: r.core, host: r.host };
+}
+
+/** The core and host specifiers the entry and the host module use (compiler defaults). */
+function pageRuntimes(r = {}) {
+  return { core: r.core || "@solidjs/signals", host: r.host || "@solidjs/signals/host" };
 }
 
 /** esbuild plugin (the measurement harness). */
@@ -556,6 +600,12 @@ function esbuildIslands({
       }));
       b.onLoad({ filter: /.*/, namespace: "solid-islands" }, args => {
         const c = get();
+        if (args.path === HOST)
+          return {
+            contents: hostModule(pageRuntimes(compiler.options.runtimes)),
+            loader: "js",
+            resolveDir: path.dirname(root)
+          };
         if (args.path === ENTRY)
           return {
             contents: islandsEntry({
@@ -567,7 +617,8 @@ function esbuildIslands({
               network,
               hooks,
               streams: c.streams,
-              hydrate: fallbackRoots(c, root, rootExport, mount)
+              hydrate: fallbackRoots(c, root, rootExport, mount),
+              core: pageRuntimes(compiler.options.runtimes).core
             }),
             loader: "js",
             resolveDir: path.dirname(root),
@@ -589,6 +640,7 @@ function esbuildIslands({
 
 module.exports = {
   islandsEntry,
+  hostModule,
   IslandsCompiler,
   solidIslands,
   esbuildIslands,
@@ -596,5 +648,6 @@ module.exports = {
   bundledIslandSizes,
   PREFETCH,
   ENTRY,
-  CHUNK
+  CHUNK,
+  HOST
 };

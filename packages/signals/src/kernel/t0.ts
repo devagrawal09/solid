@@ -18,7 +18,14 @@
  *
  * Holes are created with their server-rendered value, so activation computes
  * and writes nothing.
+ *
+ * The flush is the page's (page.ts): a write schedules this helper's part,
+ * and one page flush runs it together with every other runtime on the page
+ * (commit + compute with the others' computes, apply with their render
+ * effects, before any user effect), as the core would in one flush.
  */
+import { join, page, type Part } from "./page.js";
+
 const NOT = {};
 
 export interface Cell<T = any> {
@@ -30,10 +37,11 @@ interface Hole {
   c: () => any;
   a: (v: any, prev: any) => void;
   v: any;
+  n?: any; // computed, not yet applied
 }
 
 let queue: Cell[] = [];
-let scheduled = false;
+let run: Hole[] = [];
 
 export function cell<T>(v: T): Cell<T> {
   return { v, p: NOT, h: [] };
@@ -49,10 +57,7 @@ export function set<T>(c: Cell<T>, v: T | ((prev: T) => T)): T {
   if (v === cur) return v;
   if (c.p === NOT) queue.push(c);
   c.p = v;
-  if (!scheduled) {
-    scheduled = true;
-    queueMicrotask(flush);
-  }
+  join(part);
   return v;
 }
 
@@ -64,25 +69,33 @@ export function hole<T>(
   initial: T
 ): void {
   const h: Hole = { c: compute, a: apply, v: initial };
-  for (let i = 0; i < cells.length; i++) cells[i].h.push(h);
+  for (const c of cells) c.h.push(h);
 }
 
+const part: Part = {
+  // commit, then compute every hole reading a changed cell (with the page's computes)
+  h() {
+    for (const c of queue) {
+      c.v = c.p as any;
+      c.p = NOT;
+      for (const h of c.h) run.includes(h) || run.push(h);
+    }
+    queue = [];
+    for (const h of run) h.n = h.c();
+  },
+  // then apply them in that order (with the page's render effects)
+  r() {
+    const r = run;
+    run = [];
+    for (const h of r) {
+      const prev = h.v;
+      h.a((h.v = h.n), prev);
+    }
+  },
+  u() {}
+};
+
+/** Flush the page: this helper's writes and every other runtime's. */
 export function flush(): void {
-  if (!scheduled) return;
-  scheduled = false;
-  const q = queue;
-  queue = [];
-  const run: Hole[] = [];
-  for (let i = 0; i < q.length; i++) {
-    const c = q[i];
-    c.v = c.p as any;
-    c.p = NOT;
-    for (let j = 0; j < c.h.length; j++) if (!run.includes(c.h[j])) run.push(c.h[j]);
-  }
-  const values = run.map(h => h.c());
-  for (let i = 0; i < run.length; i++) {
-    const h = run[i],
-      prev = h.v;
-    h.a((h.v = values[i]), prev);
-  }
+  page.f();
 }

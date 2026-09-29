@@ -167,6 +167,18 @@ export interface Scenario {
    * of islands that share a component.
    */
   manualActivation?: boolean;
+  /**
+   * Islands mode only: extra `compileIslands` options (e.g. `tier1Core`).
+   */
+  islandsOptions?: Record<string, unknown>;
+  /**
+   * Islands mode only: the tier the compiler must choose for each island,
+   * keyed by the island's root component or by one of its cells
+   * (`Component.cell`). Asserted against the manifest.
+   */
+  islandTiers?: Record<string, number>;
+  /** Islands mode only: the id each island must get (same keys as `islandTiers`). */
+  islandIds?: Record<string, string>;
 }
 
 /** What one mode observed for one scenario. */

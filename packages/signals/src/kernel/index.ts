@@ -18,7 +18,8 @@
  *   rewind and read-time pull as core/heap.ts), then commits staged values
  *   and the deferred ("zombie") disposals of re-run owners, then runs the
  *   render-effect queue, then the user-effect queue, and loops while work
- *   was scheduled; flushes are scheduled on a microtask;
+ *   was scheduled; flushes are scheduled on a microtask, through the page
+ *   (page.ts), so every runtime on the page flushes as one batch;
  * - dependency links are alien-signals style (in-place reuse, so subscriber
  *   order, and therefore heap order, matches the core's);
  * - memos cut off on `===` (or `equals`), effects never do;
@@ -36,6 +37,8 @@
  * (no status / boundary routing, no reactivity halt); a memo created with no
  * owner is not auto-disposed when unobserved; dev diagnostics are absent.
  */
+
+import { join, page, type Part } from "./page.js";
 
 // --- node shapes ----------------------------------------------------------------
 // Short field names keep the minified kernel small (property names are not
@@ -98,8 +101,6 @@ const CHECK = 1,
 
 let context: Owner | null = null;
 let tracking = false;
-let scheduled = false;
-let running = false;
 let pending: Src[] = [];
 let queues: [(() => void)[], (() => void)[]] = [[], []];
 const eq = (a: any, b: any) => a === b;
@@ -466,10 +467,34 @@ function write(el: Src, v: any) {
 }
 
 // --- scheduling ---------------------------------------------------------------------
+// The flush is the page's (page.ts): one batch with every other runtime on
+// the page, phase by phase. A lone kernel runs exactly the loop it always
+// did: heap + commit, render effects, user effects, again while scheduled.
+// While the heap drains, scheduling is decided after it (as the core's
+// `scheduled = heap not empty`): effects it queues run in this round, and an
+// extra round would run the heap again, which moves its `min` (observable
+// through read-time pulls).
+let draining = false;
+const part: Part = {
+  h() {
+    draining = true;
+    try {
+      runHeap();
+      commit();
+      if (!heapEmpty()) {
+        runHeap();
+        commit();
+      }
+    } finally {
+      draining = false;
+    }
+    if (!heapEmpty()) join(part);
+  },
+  r: () => runQueue(0),
+  u: () => runQueue(1)
+};
 function schedule() {
-  if (scheduled) return;
-  scheduled = true;
-  if (!running) queueMicrotask(flush);
+  if (!draining) join(part);
 }
 function enqueue(type: number, fn: () => void) {
   queues[type - 1].push(fn);
@@ -492,22 +517,6 @@ function runQueue(i: 0 | 1) {
   if (!q.length) return;
   queues[i] = [];
   for (let j = 0; j < q.length; j++) q[j]();
-}
-function drain() {
-  running = true;
-  try {
-    runHeap();
-    commit();
-    if (!heapEmpty()) {
-      runHeap();
-      commit();
-    }
-    scheduled = !heapEmpty();
-    runQueue(0);
-    runQueue(1);
-  } finally {
-    running = false;
-  }
 }
 
 // --- public API (the core's names and call shapes) -----------------------------------------
@@ -586,6 +595,5 @@ export function untrack<T>(fn: () => T): T {
 }
 
 export function flush(): void {
-  if (running) return;
-  while (scheduled) drain();
+  page.f();
 }

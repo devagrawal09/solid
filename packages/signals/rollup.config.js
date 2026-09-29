@@ -139,9 +139,13 @@ const syncDev = {
 // Island runtime tiers (documentation/plans/island-runtime-tiers.md): the
 // tier-1 kernel (`@solidjs/signals/kernel`, the core's API subset) and the
 // tier-0 batching helper (`@solidjs/signals/t0`), standalone modules that
-// compiled island chunks import (packages/compiler `compileIslands`).
+// compiled island chunks import (packages/compiler `compileIslands`), and the
+// page-flush host bridge (`@solidjs/signals/host`: the core runs the page's
+// t0 / kernel flushes inside its own; the islands entry installs it on pages
+// that mix the core with the lower tiers). They share the page protocol
+// (src/kernel/page.ts) as a common chunk.
 const islandRuntimes = {
-  input: { kernel: "src/kernel/index.ts", t0: "src/kernel/t0.ts" },
+  input: { kernel: "src/kernel/index.ts", t0: "src/kernel/t0.ts", host: "src/kernel/host.ts" },
   output: { dir: "dist/islands", format: "esm", entryFileNames: "[name].js" },
   plugins: [flags(false, false), ts("dist/islands")]
 };

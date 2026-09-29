@@ -9,6 +9,8 @@ export interface IslandInfo {
   members: string[];
   /** Runtime tier the chunk is bound to (0: t0 helper, 1: kernel, 2: core). */
   tier: 0 | 1 | 2;
+  /** The runtime module the chunk imports (the manifest's `runtime`). */
+  runtime?: string;
   events: string[];
   windowEvents: string[];
   activation: "lazy" | "load";
@@ -47,13 +49,20 @@ export interface IslandsEntryOptions {
   sizeOf?: (island: IslandInfo) => string;
   /** The dev verifier: check every anchor's server markup against its island's addresses. */
   verify?: boolean;
+  /** The core's module specifier (default "@solidjs/signals"). */
+  core?: string;
+  /**
+   * The page-flush host module imported when the page mixes the core with
+   * t0 / kernel islands (default `HOST`, served by the plugins).
+   */
+  host?: string;
 }
 
 /** The page's client entry module source (exports `start()`). */
 export function islandsEntry(options: IslandsEntryOptions): string;
 
 export interface IslandsCompilerOptions {
-  runtimes?: { t0?: string; kernel?: string; core?: string };
+  runtimes?: { t0?: string; kernel?: string; core?: string; host?: string };
   tier1Core?: boolean;
   minTier?: 0 | 1 | 2;
   debug?: boolean;
@@ -103,7 +112,7 @@ export interface SolidIslandsOptions {
   overrides?: Record<string, PrefetchPolicy>;
   budget?: number;
   network?: boolean;
-  runtimes?: { t0?: string; kernel?: string; core?: string };
+  runtimes?: { t0?: string; kernel?: string; core?: string; host?: string };
   /** Bind tier-1 islands to the core when the page loads it anyway ("auto"). */
   tier1Core?: boolean | "auto";
   /** Export of the root module hydrated when it falls back (default "App"). */
@@ -135,3 +144,7 @@ export function esbuildIslands(options: {
 export const PREFETCH: PrefetchPolicy[];
 export const ENTRY: string;
 export const CHUNK: string;
+/** The virtual page-flush host module (installs the core as the page's flush host). */
+export const HOST: string;
+/** The host module's source for the given core and host specifiers. */
+export function hostModule(options?: { core?: string; host?: string }): string;
