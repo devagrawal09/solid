@@ -30,6 +30,45 @@ const HOST = "virtual:solid-islands/host";
 const NAV = "virtual:solid-frames/nav";
 const ARGS = "?solid-frames-args";
 const FRAMES_CLIENT = "@solidjs/compiler/frames-client";
+const SERVER_FUNCTIONS = "@solidjs/web/server-functions";
+// A module whose first statement is the `"use server"` directive.
+const USE_SERVER = /^(?:\s|\/\/[^\n]*\n|\/\*[\s\S]*?\*\/)*(["'])use server\1/;
+
+/** A server function's build-stable id: `<name>-<hash of its module path>`. */
+function serverFunctionId(name, file, root) {
+  const rel = path.relative(root, file).split(path.sep).join("/");
+  let h = 0x811c9dc5;
+  for (let i = 0; i < rel.length; i++) h = Math.imul(h ^ rel.charCodeAt(i), 0x01000193) >>> 0;
+  return `${name}-${h.toString(36)}`;
+}
+
+/**
+ * A `"use server"` module in the client build: a client reference per
+ * server function (island code calling one reaches it over HTTP; with
+ * refreshed frames, one request brings them back — frames-client's call).
+ */
+function serverModuleClient(names, file, root) {
+  let s = `import { serverFunction as $sf } from ${JSON.stringify(FRAMES_CLIENT)};\n`;
+  for (const n of names)
+    s += `export const ${n} = $sf(${JSON.stringify(serverFunctionId(n, file, root))});\n`;
+  return s;
+}
+
+/** …and in the server build: each registered for HTTP dispatch under the same id. */
+function serverModuleRegistrations(names, file, root) {
+  let s = `\nimport { registerServerReference as $$rsr } from ${JSON.stringify(SERVER_FUNCTIONS)};\n`;
+  for (const n of names) s += `$$rsr(${JSON.stringify(serverFunctionId(n, file, root))}, ${n});\n`;
+  return s;
+}
+
+/** An island chunk's relative imports, resolved against its module (chunks are virtual). */
+function absoluteImports(code, file) {
+  if (!file) return code;
+  return code.replace(/(\bfrom\s*["'])(\.{1,2}\/[^"']+)(["'])/g, (m, a, spec, b) => {
+    const target = resolveRelative(file, spec);
+    return target ? a + target + b : m;
+  });
+}
 
 /**
  * The page-flush host module (island-runtime-tiers.md, "Cross-runtime
@@ -739,8 +778,11 @@ function solidIslands(options = {}) {
       const chunkId = id.slice(("\0" + CHUNK).length, -3);
       const code = collected.chunks.get(chunkId);
       if (code == null) this.error(`[solid-islands] unknown island chunk ${chunkId}`);
-      // Chunks are plain JavaScript (the compiler erases TypeScript).
-      return code;
+      // Chunks are plain JavaScript (the compiler erases TypeScript); their
+      // relative imports (server function references) resolve against the
+      // island's module.
+      const island = collected.islands.find(i => i.id === chunkId);
+      return absoluteImports(code, island && island.file);
     },
     generateBundle(_, bundle) {
       if (collected && (collected.frames.length || collected.candidates.length))
@@ -761,6 +803,21 @@ function solidIslands(options = {}) {
     async transform(code, id, opts) {
       if (id.endsWith(ARGS)) return null;
       const file = id.split("?")[0];
+      if (
+        /\.[cm]?[jt]sx?$/.test(file) &&
+        !exclude.test(file) &&
+        !file.startsWith("\0") &&
+        USE_SERVER.test(code)
+      ) {
+        const names = compiler.summary(file, code).serverFunctions || [];
+        return {
+          code:
+            opts && opts.ssr
+              ? code + serverModuleRegistrations(names, file, config.root)
+              : serverModuleClient(names, file, config.root),
+          map: null
+        };
+      }
       if (!matches(file) || file.startsWith("\0")) return null;
       const ssr = !!(opts && opts.ssr);
       const out = compiler.compileFile(file, code);
@@ -914,6 +971,10 @@ module.exports = {
   navModule,
   routeTable,
   framesReport,
+  serverFunctionId,
+  serverModuleClient,
+  serverModuleRegistrations,
+  absoluteImports,
   NAV,
   ARGS,
   hostModule,

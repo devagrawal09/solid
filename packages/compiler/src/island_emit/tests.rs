@@ -1811,7 +1811,7 @@ fn an_island_frames_driver_refetches_the_region_through_the_lazy_applier() {
     let chunk = &out.chunks[0].code;
     // The region is addressed statically; its content is not walked.
     assert!(
-        chunk.contains("$hole([q], () => {\nconst s = q.v;\nreturn JSON.stringify([s]);\n}, v => { $frame($n"),
+        chunk.contains("$fa0 = () => {\nconst s = q.v;\nreturn JSON.stringify([s]);\n};\n$hole([q], $fa0, v => { $frame($fe0, v); });"),
         "{chunk}"
     );
     assert!(
@@ -1846,4 +1846,51 @@ fn keyed_state_seeds_cells_and_exposes_them_on_the_anchor() {
     let plain = run(TOGGLE);
     assert!(plain.chunks[0].code.contains("export function activate($a) {"));
     assert!(!plain.chunks[0].code.contains("$st"));
+}
+
+#[test]
+fn a_mutation_then_a_refresh_of_a_frame_is_one_flight() {
+    let out = run_frames(r#"
+import { $component, $event, $memo, attempt, For, refresh } from "solid-js";
+import { getComments, addComment } from "../lib/hn";
+export const Thread = $component(function* (props) {
+  const comments = yield* $memo(function* () {
+    const id = yield* props.id;
+    return yield* attempt(() => getComments(id));
+  });
+  const add = $event(function* () {
+    yield* attempt(() => addComment(props.id, "hi"));
+    refresh(comments);
+  });
+  return function* () {
+    return (
+      <section>
+        <button onClick={add}>add</button>
+        <ul class="comments"><For each={yield* comments}>{c => <li>{c.text}</li>}</For></ul>
+      </section>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert!(m.contains(r#""driver":"island""#), "{m}");
+    // The refresh is the frames applier's, not the core's: no tier 2.
+    assert!(!m.contains(r#""tier":2"#), "{m}");
+    let chunk = &out.chunks[0].code;
+    // The region and its arguments are named for the handler.
+    assert!(chunk.contains("const $fe0 = $n"), "{chunk}");
+    assert!(
+        chunk.contains("$fa0 = () => {\nconst id = $d[\"id\"];\nreturn JSON.stringify([id]);\n}"),
+        "{chunk}"
+    );
+    // The server call carries the frame; the refresh then finds it fresh.
+    assert!(
+        chunk.contains("(await $fcall(addComment, [$d[\"id\"], \"hi\"], [[$fe0, $fa0()]]))"),
+        "{chunk}"
+    );
+    assert!(chunk.contains("$frefresh($fe0, $fa0());"), "{chunk}");
+    assert!(chunk.contains(r#"import { addComment } from "../lib/hn";"#), "{chunk}");
+    // Nothing on the client drives the arguments: no refetch hole.
+    assert!(!chunk.contains("$frame("), "{chunk}");
 }

@@ -155,13 +155,22 @@ impl<'a> Visit<'a> for Walker<'_, 'a> {
     fn visit_call_expression(&mut self, c: &CallExpression<'a>) {
         if let Some(n) = self.m.runtime_name(&c.callee) {
             if n == "refresh" {
+                // `refresh(x)` re-runs x's source (a write, for liveness);
+                // it does not read x's value.
+                let mut plain = true;
                 for a in &c.arguments {
-                    if let Some(s) = a.as_expression().and_then(|e| self.m.symbol_of_expr(e)) {
-                        self.out.refreshed.push(s);
+                    match a.as_expression().and_then(|e| self.m.symbol_of_expr(e)) {
+                        Some(s) => self.out.refreshed.push(s),
+                        None => plain = false,
                     }
                 }
+                self.out.calls.push(n.to_string());
+                if plain {
+                    return;
+                }
+            } else {
+                self.out.calls.push(n.to_string());
             }
-            self.out.calls.push(n.to_string());
         }
         walk::walk_call_expression(self, c);
     }
@@ -1371,7 +1380,10 @@ pub(crate) fn analyze_file<'a>(
                 }
                 _ => reads,
             };
-            let always = matches!(s.kind, SiteKind::Handler(_) | SiteKind::Effect(..));
+            // A frame a handler refreshes belongs to that handler's island
+            // (it addresses the region), even with no live arguments.
+            let always = matches!(s.kind, SiteKind::Handler(_) | SiteKind::Effect(..))
+                || matches!(s.kind, SiteKind::Frame(fi) if !a.frames[fi].refreshers.is_empty());
             // A view site reading the client environment is client-live:
             // the server's value is not final.
             let env = if always {
@@ -1402,6 +1414,26 @@ pub(crate) fn analyze_file<'a>(
         for d in deps {
             if a.live.contains(&d) {
                 union(&mut parent, index[&k], index[&d]);
+            }
+        }
+    }
+    // A refreshed frame joins the island of the handlers that refresh it.
+    for fi in 0..a.frames.len() {
+        let fr = &a.frames[fi];
+        let Some(fsite) = fr.site else { continue };
+        let Some(&fe) = site_index.get(&(fr.comp, fsite)) else {
+            continue;
+        };
+        for ci in 0..n {
+            for (si, s) in a.facts[ci].sites.iter().enumerate() {
+                if !matches!(s.kind, SiteKind::Handler(_)) {
+                    continue;
+                }
+                let hits = s.refs.refreshed.iter().any(|x| fr.refreshers.contains(x) || Some(*x) == fr.memo_sym)
+                    || s.refs.syms.iter().any(|(x, _)| fr.refreshers.contains(x));
+                if hits && let Some(&he) = site_index.get(&(ci, si)) {
+                    union(&mut parent, fe, he);
+                }
             }
         }
     }
@@ -1662,7 +1694,16 @@ pub(crate) fn analyze_file<'a>(
                 }
             }
             let calls: Vec<&String> = site.refs.calls.iter().collect();
+            let frames_only = !site.refs.refreshed.is_empty()
+                && site
+                    .refs
+                    .refreshed
+                    .iter()
+                    .all(|s| a.frames.iter().any(|f| f.memo_sym == Some(*s)));
             for name in &calls {
+                if name.as_str() == "refresh" && frames_only {
+                    continue;
+                }
                 if matches!(
                     name.as_str(),
                     "attempt" | "action" | "refresh" | "startTransition" | "createAsync"
@@ -1732,8 +1773,16 @@ pub(crate) fn analyze_file<'a>(
                 if matches!(item, Item::Memo { is_async: true, .. }) && !a.live.contains(&(*c, ii)) {
                     continue;
                 }
-                for (sym, _) in &a.facts[*c].item_refs[ii].syms {
+                let r = &a.facts[*c].item_refs[ii];
+                // A refresh of frames only refetches their regions (the
+                // frames applier), not the core's `refresh`.
+                let frames_only = !r.refreshed.is_empty()
+                    && r.refreshed.iter().all(|s| a.frames.iter().any(|f| f.memo_sym == Some(*s)));
+                for (sym, _) in &r.syms {
                     if let Some(n) = m.runtime.get(sym) {
+                        if frames_only && n == "refresh" {
+                            continue;
+                        }
                         core_refs.insert(n.clone());
                     }
                 }

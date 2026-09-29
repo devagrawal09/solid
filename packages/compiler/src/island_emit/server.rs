@@ -973,6 +973,11 @@ impl<'x, 'a> Se<'x, 'a> {
             regs.push(format!(
                 "{sid}: _$fget(_$fcsr(_$frsr({sid}, async (...$a) => _$fres(await $$frame{fi}(...$a)))))"
             ));
+            // The frames a single-flight request may render (frames-server.mjs).
+            let _ = writeln!(
+                out,
+                "(globalThis[Symbol.for(\"solid.frames\")] ||= new Set()).add({sid});"
+            );
         }
         let _ = writeln!(
             out,

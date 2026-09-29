@@ -41,6 +41,9 @@
     "./frames-client": {
       "types": "./frames-client.d.ts",
       "default": "./frames-client.mjs"
+    },
+    "./frames-server": {
+      "default": "./frames-server.mjs"
     }
   },
   "files": [
@@ -58,7 +61,8 @@
     "islands-stream.js",
     "islands-stream.d.ts",
     "frames-client.mjs",
-    "frames-client.d.ts"
+    "frames-client.d.ts",
+    "frames-server.mjs"
   ],
   "scripts": {
     "build": "napi build --release --strip --manifest-path ./Cargo.toml",

@@ -225,6 +225,71 @@ export function navigate(routes, href, { push = true } = {}) {
   );
 }
 
+// --- mutations: single flight ------------------------------------------------------------
+
+let flight = 0;
+
+/**
+ * A server function's client reference: a `"use server"` module's export
+ * in the client build (the islands plugin generates these).
+ */
+export function serverFunction(id) {
+  const f = (...args) => call(f, args);
+  f.$sid = id;
+  return f;
+}
+
+/**
+ * A server call from island code. With `frames` (`[[region, args]]`: the
+ * island frames the calling event refreshes — the compiler's refresh facts)
+ * they ride the call's response: the server runs the function, renders each
+ * frame with its arguments (the single-flight hook, frames-server.mjs), and
+ * the response carries the value and the frames' HTML (JSON, the
+ * server-functions' `{ value, data }` envelope). Each frame morphs in place;
+ * the event's `refresh` of it is then a no-op.
+ */
+export async function call(fn, args, frames = []) {
+  if (!fn || !fn.$sid) return fn(...args);
+  const n = ++flight;
+  const headers = { "content-type": "application/json", "x-server-function-format": "8" };
+  const ids = frames.map(([el, a]) => [el.getAttribute("data-f"), a]);
+  if (frames.length) {
+    headers["x-single-flight"] = "true";
+    headers["x-solid-frames"] = JSON.stringify(ids);
+  }
+  const r = await fetch(endpoint + "/data/" + encodeURIComponent(fn.$sid), {
+    method: "POST",
+    headers,
+    body: JSON.stringify(args)
+  });
+  const format = r.headers.get("x-server-function-format");
+  const body = format === "8" ? await r.json() : format === "9" || r.status === 204 ? undefined : null;
+  if (!r.ok || r.headers.has("x-server-function-error"))
+    throw new Error("[solid-frames] " + fn.$sid + ": " + ((body && body.message) || r.status));
+  if (body === null)
+    throw new Error("[solid-frames] " + fn.$sid + ": a result that needs the server-functions codec");
+  if (!frames.length) return body;
+  // The envelope's data is per single-flight source (the unnamed hook: "true").
+  const data = body.data && (body.data.true || body.data);
+  frames.forEach(([el, a], i) => {
+    const h = data && data[ids[i][0] + " " + a];
+    if (h == null || !el.isConnected) return;
+    const u = frameUrl(ids[i][0], a);
+    cache.delete(u);
+    cache.set(u, Promise.resolve(h));
+    el.$fl = n;
+    morph(el, h);
+  });
+  return body.value;
+}
+
+/** `refresh(memo)` of an island frame: refetch its region unless this event's call brought it back. */
+export function refresh(el, args) {
+  if (el.$fl === flight) return;
+  cache.delete(frameUrl(el.getAttribute("data-f"), args));
+  return frame(el, args);
+}
+
 /** Load a route's frame ahead of a navigation (link intent). */
 export function prefetch(routes, href) {
   const r = resolve(routes, new URL(href, location.href));

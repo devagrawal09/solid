@@ -62,6 +62,11 @@ pub(crate) struct Frame<'a> {
     /// Setup items of `comp` the region needs (the frame function
     /// evaluates them), the memo excluded.
     pub items: BTreeSet<usize>,
+    /// The memo's binding.
+    pub memo_sym: Option<SymbolId>,
+    /// `$event`s (their bindings) whose bodies `refresh(memo)`: a mutation
+    /// followed by a refresh rides one request (single flight).
+    pub refreshers: Vec<SymbolId>,
 }
 
 pub(crate) struct Reject {
@@ -217,6 +222,7 @@ pub(crate) fn detect<'a>(m: &Model<'a>, a: &mut Analysis<'a>, filename: Option<&
                 is_async: true,
                 name,
                 prefer_client,
+                sym,
                 ..
             } = item
             else {
@@ -628,6 +634,20 @@ pub(crate) fn detect<'a>(m: &Model<'a>, a: &mut Analysis<'a>, filename: Option<&
                 tainted: sf.tainted,
                 site: None,
                 items,
+                memo_sym: Some(*sym),
+                refreshers: {
+                    let mut out = Vec::new();
+                    for (cj, cc) in m.comps.iter().enumerate() {
+                        for (ij, it) in cc.setup.iter().enumerate() {
+                            if let Item::Event { sym: e, .. } = it
+                                && a.facts[cj].item_refs[ij].refreshed.contains(sym)
+                            {
+                                out.push(*e);
+                            }
+                        }
+                    }
+                    out
+                },
             });
         }
     }
@@ -639,7 +659,9 @@ pub(crate) fn detect<'a>(m: &Model<'a>, a: &mut Analysis<'a>, filename: Option<&
         .map(|f| (f.comp, f.memo))
         .collect();
     if !framed.is_empty() {
-        a.live = a.written.clone();
+        // A refreshed memo is written; framed, it is still not live (its
+        // region is refetched, never computed on the client).
+        a.live = a.written.iter().filter(|k| !framed.contains(k)).copied().collect();
         loop {
             let mut changed = false;
             for (k, deps) in &a.memo_deps {
@@ -659,6 +681,7 @@ pub(crate) fn detect<'a>(m: &Model<'a>, a: &mut Analysis<'a>, filename: Option<&
             if fr.route {
                 continue;
             }
+            // Its drivers, now that the memo is out of the live set.
             let c = &m.comps[fr.comp];
             let mut r = Refs::default();
             for s in &fr.pre {

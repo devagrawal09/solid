@@ -226,6 +226,9 @@ struct Ce<'x, 'a> {
     transplant: Option<Vec<String>>,
     /// An island frame's driver is emitted (`$frame`).
     frame_driver: bool,
+    /// Frames the `$event` being translated refreshes (single flight: its
+    /// server calls carry them).
+    flight: Vec<usize>,
 }
 
 const HELPERS: &[(&str, &str)] = &[
@@ -394,6 +397,7 @@ pub(crate) fn emit_group<'a>(
         prop_paths: HashMap::new(),
         transplant: opts.keyed_state.then(Vec::new),
         frame_driver: false,
+        flight: Vec::new(),
     };
     ce.run()
 }
@@ -556,6 +560,36 @@ impl<'a> Env<'a> for CEnv<'_, '_, 'a> {
                                 .first()
                                 .and_then(|a| a.as_expression())
                                 .ok_or("attempt without a function")?;
+                            // A server call in an event that refreshes
+                            // frames: the frames ride its response (single
+                            // flight).
+                            if !self.ce.flight.is_empty()
+                                && let Some(fr) = FnRef::from_expr(f)
+                                && let Some(body) = fr.concise().or_else(|| match fr.statements() {
+                                    [Statement::ReturnStatement(r)] => r.argument.as_ref(),
+                                    _ => None,
+                                })
+                                && let Some(call) = call_of(body)
+                                && self
+                                    .ce
+                                    .m
+                                    .symbol_of_expr(&call.callee)
+                                    .is_some_and(|s| self.ce.m.server_fns.contains_key(&s))
+                            {
+                                let callee = tx.expr(self, &call.callee)?;
+                                let args = self.args(tx, call)?;
+                                let flight: Vec<String> = self
+                                    .ce
+                                    .flight
+                                    .iter()
+                                    .map(|fi| format!("[$fe{fi}, $fa{fi}()]"))
+                                    .collect();
+                                self.uses.borrow_mut().helpers.insert("$fcall");
+                                return Ok(format!(
+                                    "(await $fcall({callee}, [{args}], [{}]))",
+                                    flight.join(", ")
+                                ));
+                            }
                             let f = tx.expr(self, f)?;
                             return Ok(format!("(await ({f})())"));
                         }
@@ -632,6 +666,22 @@ impl<'a> Env<'a> for CEnv<'_, '_, 'a> {
     }
     fn call(&self, tx: &Tx<'_, 'a>, c: &'a CallExpression<'a>) -> R<Option<String>> {
         if let Some(n) = self.ce.m.runtime_name(&c.callee) {
+            // `refresh(memo)` of an island frame: refetch its region (a
+            // no-op when this event's server call already brought it back).
+            if n == "refresh"
+                && let [arg] = c.arguments.as_slice()
+                && let Some(s) = arg.as_expression().and_then(|e| self.ce.m.symbol_of_expr(e))
+                && let Some(fi) = self.ce.a.frames.iter().position(|f| f.memo_sym == Some(s) && !f.route)
+            {
+                if !self.ce.frame_in_group(fi) {
+                    return Err(format!(
+                        "`refresh({})`: the frame is not in this island",
+                        self.ce.m.sym_name(s)
+                    ));
+                }
+                self.uses.borrow_mut().helpers.insert("$frefresh");
+                return Ok(Some(format!("$frefresh($fe{fi}, $fa{fi}())")));
+            }
             if n == "$event" {
                 let Some(f) = c
                     .arguments
@@ -1227,13 +1277,17 @@ impl<'x, 'a> Ce<'x, 'a> {
             v.push_str("} catch (err) { $e.push(\"the static walk failed: \" + err.message); }\nreturn $e;\n}\n");
             out.push_str(&v);
         }
+        let fm = js_str(&self.opts.frames_module);
         if self.frame_driver {
             // The frames applier loads on a frame's first refetch.
-            let _ = writeln!(
-                out,
-                "const $frame = (e, v) => import({}).then(m => m.frame(e, v));",
-                js_str(&self.opts.frames_module)
-            );
+            let _ = writeln!(out, "const $frame = (e, v) => import({fm}).then(m => m.frame(e, v));");
+        }
+        if self.helpers.contains("$frefresh") {
+            let _ = writeln!(out, "const $frefresh = (e, v) => import({fm}).then(m => m.refresh(e, v));");
+        }
+        if self.helpers.contains("$fcall") {
+            // A server call carrying the frames its event refreshes.
+            let _ = writeln!(out, "const $fcall = (f, a, fl) => import({fm}).then(m => m.call(f, a, fl));");
         }
         // Keyed state: `activate(anchor, state)` seeds the cells and applies
         // every hole; the anchor exposes the current values.
@@ -1786,7 +1840,18 @@ impl<'x, 'a> Ce<'x, 'a> {
                         .calls
                         .iter()
                         .any(|c| c == "attempt");
-                    let f = self.translate(inst, &none, |tx, env| tx.func(env, *body, asy))?;
+                    // The island frames this event refreshes (single flight).
+                    self.flight = self
+                        .a
+                        .frames
+                        .iter()
+                        .enumerate()
+                        .filter(|(fi, f)| f.refreshers.contains(sym) && self.frame_in_group(*fi))
+                        .map(|(fi, _)| fi)
+                        .collect();
+                    let f = self.translate(inst, &none, |tx, env| tx.func(env, *body, asy));
+                    self.flight.clear();
+                    let f = f?;
                     format!("const {} = {f};", self.insts[inst].names[sym].0)
                 }
                 Item::Effect { body, settled, .. } => {
@@ -3204,19 +3269,35 @@ impl<'x, 'a> Ce<'x, 'a> {
         let site = fr.site.ok_or("frame driver site")?;
         let r = self.a.facts[comp].sites[site].refs.clone();
         let cells = self.cells_of_refs(inst, &r);
+        // The region and its arguments, named: handlers that refresh the
+        // frame use them too.
+        self.bucket(inst)
+            .seq
+            .push(Seq::Line(format!("const $fe{fi} = {var}, $fa{fi} = {compute};")));
+        if fr.drivers.is_empty() {
+            // Nothing on the client changes its arguments: only refreshes.
+            return Ok(());
+        }
         self.frame_driver = true;
         let line = if self.tier == 0 {
             format!(
-                "$hole([{}], {compute}, v => {{ $frame({var}, v); }});",
+                "$hole([{}], $fa{fi}, v => {{ $frame($fe{fi}, v); }});",
                 cells.iter().cloned().collect::<Vec<_>>().join(", ")
             )
         } else {
             format!(
-                "{{ let $k = 1; $E({compute}, v => {{ if ($k) {{ $k = 0; return; }} $frame({var}, v); }}); }}"
+                "{{ let $k = 1; $E($fa{fi}, v => {{ if ($k) {{ $k = 0; return; }} $frame($fe{fi}, v); }}); }}"
             )
         };
         self.bucket(inst).seq.push(Seq::Line(line));
         Ok(())
+    }
+
+    /// Is frame `fi`'s driver site in this island?
+    fn frame_in_group(&self, fi: usize) -> bool {
+        let fr = &self.a.frames[fi];
+        fr.site
+            .is_some_and(|s| self.a.group_of_site.get(&(fr.comp, s)) == Some(&self.gi))
     }
 
     fn cells_of(&self, inst: usize, e: &Expression<'a>) -> BTreeSet<String> {
