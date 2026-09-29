@@ -731,11 +731,7 @@ difference is in the uncompiled rendering path — pinned, not fixed here.
   `@solidjs/h` pipeline) re-renders the pre-write value after an awaited write;
   the same event on the driver under the compiler matches the oracle (section
   10). Not investigated further.
-- A `$memo` imported from `@solidjs/signals` in a `solid-js` app, compiled with
-  `hostFusion`, fuses to `@solidjs/signals`' `createMemo`; uncompiled it would
-  use the primitive `solid-js` registered (hydration-aware) if any `solid-js`
-  block constructor ran first. Import block constructors from `solid-js` in
-  `solid-js` apps.
+- ~~A `$memo` imported from `@solidjs/signals` in a hydrating `solid-js` app fused to the non-hydration primitive.~~ Resolved: hydrating builds re-source hydration-aware names imported from `@solidjs/signals` to `solid-js` (`packages/compiler/src/hydration_imports.rs`).
 - `examples/sync-blocks`'s async-free assertion needs its typed summary
   (`pnpm test` runs `pnpm summary` first; a bare `vitest run` fails that one
   test, before and after this work).

@@ -40,6 +40,7 @@ mod strict;
 mod store_handles;
 mod compiled_facts;
 mod store_forms;
+mod hydration_imports;
 mod sync_actions;
 mod memo_fusion;
 mod store_scalars;

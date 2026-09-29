@@ -337,6 +337,13 @@ fn compile_inner(source: &str, options: &CompileOptions) -> Result<CompileOutput
 
     // Before JSX lowering: `yield*` reads inside JSX expression containers
     // must be ordinary calls by the time the JSX transform classifies them.
+    // Hydrating builds: names `solid-js` overrides with hydration-aware
+    // implementations come from `solid-js`, never the low-level core (see
+    // `hydration_imports.rs`). First, so every later pass — and the
+    // primitives the v2 lowering fuses to — sees the right source.
+    if options.hydratable && matches!(options.generate, Generate::Dom | Generate::Ssr) {
+        crate::hydration_imports::resource_hydration_imports(&allocator, &mut program);
+    }
     // Strict (non-generator) `$(fn)` markers go first, so the generator pass
     // only ever sees authored generator blocks.
     let mut strict_blocks = None;
