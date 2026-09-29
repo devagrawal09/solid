@@ -120,6 +120,7 @@ export {
   blockCleanup,
   asyncBody,
   AsyncRun,
+  EventRun,
   readAccessor,
   readSelected,
   installBlockDriver
@@ -143,6 +144,7 @@ export {
   setBlockPrimitives,
   $componentCompiled,
   $eventCompiled,
+  $eventAsync,
   effectBlockCompiled,
   settledBlockCompiled,
   withReceipts,

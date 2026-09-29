@@ -32,6 +32,8 @@ import {
   outsideBlock,
   dispatchBlock,
   dispatchFused,
+  dispatchAsync,
+  type EventRun,
   readProp,
   runBlockAs,
   Receipt,
@@ -477,6 +479,17 @@ export function $eventCompiled(body: unknown): any {
   const owner = getOwner();
   if (isBlock(body)) return (event: unknown) => dispatchBlock(body, event, owner);
   return (event: unknown) => dispatchFused(body as (event: unknown) => unknown, event, owner);
+}
+
+/**
+ * @internal `$event` for a body the compiler compiled to an `async function`
+ * (it waits) with every other operation erased: dispatched by
+ * `dispatchAsync`, the handler contract without the driver's result promise
+ * (a handler returns nothing; see "compiled async events" in generator.ts).
+ */
+export function $eventAsync(body: (event: any, run: EventRun) => unknown): any {
+  const owner = getOwner();
+  return (event: unknown) => dispatchAsync(body, event, owner);
 }
 
 // --- $component ----------------------------------------------------------------

@@ -205,8 +205,16 @@ v2 forms into `$(function* …)` blocks, which that pass lowers to call form (`y
   of a `$signal` / `$memo` accessor or a props path is a read setup may not do;
 - in memo and event bodies an `attempt` may be async, so on the server a body that
   attempts stays a generator for the runtime driver; on the client it compiles to an
-  `async function` run by `asyncBody` when every other operation is erased (else the
-  generator is restored exactly). Effect, setup and view bodies lower fully.
+  `async function` run by `asyncBody` (a memo) or `$eventAsync` (an event) when every
+  other operation is erased (else the generator is restored exactly). Effect, setup and
+  view bodies lower fully.
+- async timing contract: a compiled async body is exact where its result is observable
+  and lean where it is not. A memo's result (`asyncBody`) settles in the driver's
+  microtask, level for level. An event handler returns nothing, so the driver's result
+  promise only ever reaches the dispatcher's rejection routing: `$eventAsync` keeps the
+  synchronous segment, the job of every continuation and write, the boundary a failure
+  reaches and the unhandled rejection without one, but routes a failure after a wait in
+  the job the body fails in (n + 1 reactions earlier than the driver, for n waits).
 
 After lowering, the proof-driven host fusion runs on the v2 bodies by default (a `$memo`
 in a setup is `createMemo(fn)`, a split effect's compute a plain function, a view hole
@@ -219,12 +227,12 @@ escapes), a split effect whose `$cleanup`s are top-level statements becomes
 operation left lose their block (`$eventCompiled(fn)`, `$componentCompiled(fn)`), and a
 module whose every block is lowered and proven synchronous imports `syncBlock` instead
 of `$`, so it does not retain the generator driver. The same pass compiles memo and
-event bodies that wait to `async function`s (`asyncBody`), setup context reads and
+event bodies that wait to `async function`s (`asyncBody`, `$eventAsync`), setup context reads and
 module-local helper generators that only read contexts to direct `readContext` calls,
 `$settled` / `onSettled(function* …)` bodies to `onSettled(fn)`, and the view reads the
 fusion left (attribute holes, prop getters) to `readAccessor` / `readSelected` — plain
 calls inside the computations the JSX transform creates. `hostFusion: false` turns all
-of it off. See [blocks-v2-performance.md](./blocks-v2-performance.md), sections 9–10.
+of it off. See [blocks-v2-performance.md](./blocks-v2-performance.md), sections 9–14.
 
 ## Build plan
 

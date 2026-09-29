@@ -73,7 +73,8 @@
 //!    the bodies that called a helper lose their block like any other.
 //! 6. **Async bodies.** A memo / event body the generator pass compiled to an
 //!    `async function` (`generators.rs`, "async v2 bodies") is erased like a
-//!    synchronous one — `$event(_$$(fn))` → `$eventCompiled(_$asyncBody(fn))`,
+//!    synchronous one — `$event(_$$(fn))` → `$eventAsync(fn)` (dispatched
+//!    without the result promise a handler never exposes),
 //!    `createMemo(_$$(fn))` → `createMemo(_$asyncBody(fn))` — when the same
 //!    body check passes; otherwise its generator is restored exactly
 //!    (`restore_async_generators`) and the driver runs it as before.
@@ -824,6 +825,9 @@ struct ErasePlan {
     /// An erased async body: `_$$(async fn)` → `_$asyncBody(fn)`: block span
     /// → the `asyncBody` local.
     async_blocks: HashMap<Span, String>,
+    /// An erased async event: `$event(_$$(async fn))` → `$eventAsync(fn)`:
+    /// call span → the `$eventAsync` local.
+    async_events: HashMap<Span, String>,
 }
 
 fn erase_blocks<'a>(
@@ -855,7 +859,8 @@ fn erase_blocks<'a>(
         collector.visit_program(program);
         collector.plan
     };
-    if plan.fusion.blocks.is_empty() && plan.async_blocks.is_empty() {
+    if plan.fusion.blocks.is_empty() && plan.async_blocks.is_empty() && plan.async_events.is_empty()
+    {
         return;
     }
     if !plan.fusion.path_reads.is_empty() {
@@ -876,6 +881,7 @@ fn erase_blocks<'a>(
         setups,
         settled,
         async_blocks,
+        async_events,
     } = plan;
     EraseRewriter {
         allocator,
@@ -884,6 +890,7 @@ fn erase_blocks<'a>(
         setups,
         settled,
         async_blocks,
+        async_events,
     }
     .visit_program(program);
     FusionRewriter {
@@ -964,11 +971,15 @@ impl EraseCollector<'_, '_> {
             if !self.check_async(block) {
                 return;
             }
-            let local = self.imports.local(&source, "asyncBody");
-            self.plan.async_blocks.insert(block.span, local);
             if event {
-                let local = self.imports.local(&source, "$eventCompiled");
-                self.plan.events.insert(call.span, local);
+                // `$event(_$$(async fn))` → `$eventAsync(fn)`: a handler's
+                // result is never observed, so the dispatch path skips the
+                // result promise `asyncBody` rebuilds for a memo.
+                let local = self.imports.local(&source, "$eventAsync");
+                self.plan.async_events.insert(call.span, local);
+            } else {
+                let local = self.imports.local(&source, "asyncBody");
+                self.plan.async_blocks.insert(block.span, local);
             }
             return;
         }
@@ -1121,6 +1132,7 @@ struct EraseRewriter<'a> {
     setups: HashMap<Span, String>,
     settled: HashMap<Span, String>,
     async_blocks: HashMap<Span, String>,
+    async_events: HashMap<Span, String>,
 }
 
 impl<'a> VisitMut<'a> for EraseRewriter<'a> {
@@ -1134,6 +1146,18 @@ impl<'a> VisitMut<'a> for EraseRewriter<'a> {
             .or_else(|| self.setups.remove(&span))
             .or_else(|| self.async_blocks.remove(&span))
         {
+            call.callee = ast.expression_identifier(call.callee.span(), ast.ident(&local));
+        } else if let Some(local) = self.async_events.remove(&span) {
+            // `$event(_$$(async fn))` → `$eventAsync(fn)`.
+            if let Some(Argument::CallExpression(block)) = call.arguments.first_mut()
+                && !block.arguments.is_empty()
+            {
+                let mut function = block.arguments.remove(0);
+                if let Argument::FunctionExpression(function) = &mut function {
+                    event_attempts(self.allocator, function);
+                }
+                call.arguments = ast.vec1(function);
+            }
             call.callee = ast.expression_identifier(call.callee.span(), ast.ident(&local));
         } else if let Some(local) = self.settled.remove(&span) {
             // `settledBlock(_$$(fn))` → `onSettled(fn')`; the `_$$` wrapper
@@ -1159,6 +1183,119 @@ impl<'a> VisitMut<'a> for EraseRewriter<'a> {
             call.arguments = ast.vec_from_array([compute, half]);
             call.callee = ast.expression_identifier(call.callee.span(), ast.ident(&local));
         }
+    }
+}
+
+/// An erased async event body (`$eventAsync`, whose run is an `EventRun`):
+/// each lowered attempt `(_$a.t(ARGS) ? _$a.r(await _$a.p) : _$a.v)` drops
+/// `r` (an event run is never superseded: it runs with no owner), and, when
+/// ARGS is one parameterless, non-async arrow with an expression body and no
+/// user `try` encloses the attempt at the body's own depth, the arrow is
+/// inlined: `((_$a.q(), _$a.u(EXPR)) ? await _$a.p : _$a.v)`. A throw from
+/// EXPR then reaches the wrapper's `catch` (`_$a.x`) with nothing run in
+/// between, where the run restores the guard and unwraps it as `t` would.
+fn event_attempts<'a>(allocator: &'a Allocator, function: &mut Function<'a>) {
+    let Some(body) = function.body.as_mut() else {
+        return;
+    };
+    // The wrapper: `try { BODY } catch (_$e) { … } finally { … }`.
+    let Some(Statement::TryStatement(wrapper)) = body.statements.first_mut() else {
+        return;
+    };
+    let mut rewriter = EventAttempts {
+        allocator,
+        try_depth: 0,
+    };
+    for statement in wrapper.block.body.iter_mut() {
+        rewriter.visit_statement(statement);
+    }
+}
+
+struct EventAttempts<'a> {
+    allocator: &'a Allocator,
+    try_depth: usize,
+}
+
+impl<'a> EventAttempts<'a> {
+    fn is_run_call(expression: &Expression<'_>, name: &str) -> bool {
+        matches!(expression, Expression::CallExpression(call)
+            if matches!(&call.callee, Expression::StaticMemberExpression(member)
+                if member.property.name == name
+                    && matches!(&member.object, Expression::Identifier(object)
+                        if object.name == crate::generators::ASYNC_RUN_PARAM)))
+    }
+
+    /// The expression of `() => EXPR` (not async, no parameters).
+    fn inlinable(arguments: &oxc_allocator::Vec<'a, Argument<'a>>) -> bool {
+        matches!(arguments.as_slice(), [Argument::ArrowFunctionExpression(arrow)]
+            if arrow.is_expression()
+                && !arrow.r#async
+                && arrow.params.items.is_empty()
+                && arrow.params.rest.is_none())
+    }
+}
+
+impl<'a> VisitMut<'a> for EventAttempts<'a> {
+    fn visit_function(&mut self, _: &mut Function<'a>, _: ScopeFlags) {}
+    fn visit_arrow_function_expression(
+        &mut self,
+        _: &mut oxc_ast::ast::ArrowFunctionExpression<'a>,
+    ) {
+    }
+    fn visit_class(&mut self, _: &mut oxc_ast::ast::Class<'a>) {}
+
+    fn visit_try_statement(&mut self, it: &mut oxc_ast::ast::TryStatement<'a>) {
+        self.try_depth += 1;
+        walk_mut::walk_try_statement(self, it);
+        self.try_depth -= 1;
+    }
+
+    fn visit_expression(&mut self, expression: &mut Expression<'a>) {
+        walk_mut::walk_expression(self, expression);
+        let Expression::ParenthesizedExpression(parenthesized) = expression else {
+            return;
+        };
+        let Expression::ConditionalExpression(conditional) = &mut parenthesized.expression else {
+            return;
+        };
+        if !Self::is_run_call(&conditional.test, "t")
+            || !Self::is_run_call(&conditional.consequent, "r")
+        {
+            return;
+        }
+        // `_$a.r(await _$a.p)` → `await _$a.p`.
+        if let Expression::CallExpression(resume) = &mut conditional.consequent
+            && resume.arguments.len() == 1
+            && let Some(awaited) = argument_to_expression(resume.arguments.pop().expect("one"))
+        {
+            conditional.consequent = awaited;
+        }
+        if self.try_depth > 0 {
+            return;
+        }
+        let Expression::CallExpression(test) = &mut conditional.test else {
+            return;
+        };
+        if !Self::inlinable(&test.arguments) {
+            return;
+        }
+        let Some(Argument::ArrowFunctionExpression(arrow)) = test.arguments.pop() else {
+            return;
+        };
+        let ast = AstBuilder::new(self.allocator);
+        let synth = Span::new(0, 0);
+        let value = arrow.unbox().body.into_expression();
+        let guard = crate::generators::run_call(self.allocator, synth, "q", ast.vec());
+        let used = crate::generators::run_call(
+            self.allocator,
+            synth,
+            "u",
+            ast.vec1(expression_to_argument(value)),
+        );
+        conditional.test = ast.expression_parenthesized(
+            synth,
+            ast.expression_sequence(synth, ast.vec_from_array([guard, used])),
+        );
     }
 }
 

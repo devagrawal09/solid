@@ -904,6 +904,100 @@ The compiled `helpers` cell's memo is now
 Not done: `yield* k.d` inside another helper (a member operand is not a
 helper yield the lowering takes), nested objects (`k.a.b`), and facts for
 helpers that stay generators.
+## 14. Async event handlers (2026-09-29)
+
+Baseline: `experiment/iterable-signals` at `0f1747be`, runtime and compiler
+snapshotted as `asyncBase` / `asyncBase-compiler`. Section 11 left compiled
+async `$event` handlers at 1.47× handwritten (`asyncEvent`: 1,630k vs 1,111k
+Ir/op at n=300).
+
+**Timing contract: exact where observable.** A handler returns nothing
+(`$eventCompiled` / `dispatchFused` return `undefined`), so the driver's result
+promise, which section 11 rebuilt level by level, is consumed only by the
+dispatcher's rejection routing. On the dispatch path the body's outcome is
+enough:
+
+| observable | `$eventAsync` vs the driver |
+| --- | --- |
+| synchronous segment: reads, writes, a sync throw routed (or rethrown) synchronously, an attempt returning a plain value never suspending | same |
+| the job each continuation and each write after a wait runs in; what renders; writes under a pending async memo (transition) | same |
+| the boundary that catches a failure after a wait; a rejected returned thenable, sync or after a wait | same |
+| no boundary: an unhandled rejection with the failure as reason | same reason; the rejected promise is the body's own (discarded) one, not the routing reaction's |
+| *when* a failure after n waits reaches the boundary | in the job the body fails in, not n + 1 reactions later |
+
+A memo's result is observed (the memo adopts it), and `asyncBody` still gives
+it the driver's microtask timing exactly. A direct caller of `asyncBody(fn)`
+keeps it too.
+
+**What changed.**
+
+- Compiler (`blocks_v2_lower.rs`, `event_attempts`): an erased async event is
+  `$eventAsync(async function (e, _$a) { … })`, not
+  `$eventCompiled(asyncBody(…))`. Its body drops `_$a.r(…)` (identity: an event
+  run has no owner, so it is never superseded), and an `attempt(() => EXPR)`
+  that no user `try` encloses is inlined as `(_$a.q(), _$a.u(EXPR))`: no
+  closure per dispatch. A throw from EXPR reaches the wrapper's `catch`
+  (`_$a.x`) with nothing run in between; `x` restores the guard and unwraps
+  the `StatusError` there, as `t` would have. Inside a user `try` the arrow is
+  kept (the user's `catch` must see the unwrapped error).
+- Runtime (`generator.ts`, "compiled async events"): `EventRun` (outcome only:
+  no result levels, no staleness) and `dispatchAsync` (the `dispatchFused`
+  contract: no owner context, failures to the boundary above the creation
+  owner). After a wait, `f` routes the failure itself (or rethrows it, so the
+  discarded promise rejects unhandled) and routes a returned thenable's
+  rejection after adopting it.
+- Attempts (memo and event): the strict-guard bracket and the thenable probe's
+  untrack bracket are skipped when they would change nothing (guard down, not
+  tracking, no external untrack, no strict-read label); the probe no longer
+  allocates a closure per call.
+- `dispatchFused` / `dispatchAsync` call `runWithOwner(null, …)` through a
+  helper: the closure in the dispatcher allocated its context on every
+  dispatch, also on the usual path that never creates it.
+
+**Instructions per op** (n=300; `compare.mjs --runtimes asyncBase+asyncBase-compiler,current`):
+
+| cell | handwritten | compiled, before | compiled, now | now vs handwritten |
+| --- | ---: | ---: | ---: | ---: |
+| asyncEvent update | 1,111k | 1,630k | **1,186k (−27.3%)** | 1.07× |
+| event update | 872k | 895k | 887k (−0.9%) | 1.02× |
+| async update (memos) | 45,516k | 46,248k | 46,287k (+0.1%) | 1.02× |
+
+Steps, measured by editing the compiled `asyncEvent` module (same runtime):
+the `EventRun` dispatch without the promise chain 1,630k → 1,326k; the probe
+without its closure → 1,316k; the attempt without its brackets → 1,236k; inlined attempts, no `r` →
+1,189k; no closure context in the dispatcher, constructor-assigned run fields →
+1,186k. What is left over a plain `async` handler (1,112k): the handler
+contract (the dispatcher, the run object: ~34k), the wrapper's
+`try` / `catch` / `finally` with `x` / `f` and the attempt's bookkeeping
+(~26k), and `q` / `u` (~14k).
+
+**Tests.** `block-async-compiled.test.ts`, "`$eventAsync`: the dispatch path"
+and "inline attempts": each program against the driver — the synchronous
+segment; continuations, writes and renders stamped with a microtask clock over
+three waits; writes after a wait under a pending async memo; failures after one
+and two waits and rejected returned thenables (sync and after a wait) caught by
+the same boundary; the body's own promise rejecting with the failure when no
+boundary exists; no owner context, also when dispatched from inside one;
+inline attempts resuming in the driver's microtasks, and lowering / restoring
+the guard (also when the expression throws a `StatusError`, which reaches the
+dispatcher unwrapped). The microtask-by-microtask `asyncBody` tests are
+unchanged. Compiler: `blocks_v2_lower` tests pin the new event shape (inlined,
+and kept inside a user `try`); `treeshake.test.ts` pins that `$eventAsync`
+retains neither the driver nor `perform`.
+
+**Evaluated and not done.**
+
+- Reusing one run object per handler instead of one per dispatch: the object
+  is ~10% of what is left, and a shared run is not exact — a `return v` inside
+  a user `try` / `finally` whose `finally` waits lets another run's
+  continuation interleave before this run's `f`.
+- Dropping the wrapper `try` / `finally` when nothing can throw before the
+  first wait: routing a later failure then needs a `then` on the body's
+  promise (a promise and a reaction per dispatch), more than the `try` costs
+  (~11k in total with `x` / `f`).
+- A native-`Promise` fast path for the thenable test (`instanceof Promise`):
+  `instanceof` runs a proxy's `getPrototypeOf` trap outside the probe's
+  brackets; the bracket skip above gets the same win exactly.
 
 ## Evaluated and not done
 
@@ -938,8 +1032,8 @@ helpers that stay generators.
   (typed-props proxy chains, generator delegation per `yield*`).
 - Compiled v2 is within 0.94–1.07× plain Solid on every cell except views
   that re-run (1.15×: the view's own render effect) and handlers that wait
-  (1.47×: the handler contract, the run object and the driver-identical
-  promise chain; section 11). `blocks-effect`'s compiled mode
+  (1.07×: the handler contract, the run object and the wrapper `try`; section
+  14 — was 1.47× with the driver-identical promise chain of section 11). `blocks-effect`'s compiled mode
   now equals handwritten Solid.
 - In the conformance matrix, `blocks-async-event`'s uncompiled mode (the
   `@solidjs/h` pipeline) re-renders the pre-write value after an awaited write;

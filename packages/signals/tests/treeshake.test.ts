@@ -345,7 +345,7 @@ describe("pay-for-use tree-shaking (#2883)", () => {
     // compiled-only constructors, the path readers, the compiled view reads
     // and async bodies (documentation/plans/blocks-v2-performance.md §10).
     const { code } = await bundleFixture(
-      `export { createSignal, createRoot, syncBlock, $componentCompiled, $eventCompiled, readPath1, readPathN, readValue, readAccessor, readSelected, readContext, asyncBody } from "sigsrc";`
+      `export { createSignal, createRoot, syncBlock, $componentCompiled, $eventCompiled, $eventAsync, readPath1, readPathN, readValue, readAccessor, readSelected, readContext, asyncBody } from "sigsrc";`
     );
     for (const marker of [
       "function drive(",

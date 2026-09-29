@@ -219,7 +219,7 @@ export const C = $component(function* () {
     // no block, no driver.
     assert!(
         flat.contains(
-            "const save = _$$eventCompiled(_$asyncBody(async function(_$i, _$a) { try { const r = _$a.t(() => fetch(\"/x\")) ? _$a.r(await _$a.p) : _$a.v; setN(r); } catch (_$e) { _$a.x(_$e); } finally { _$a.f(); } }));"
+            "const save = _$$eventAsync(async function(_$i, _$a) { try { const r = (_$a.q(), _$a.u(fetch(\"/x\"))) ? await _$a.p : _$a.v; setN(r); } catch (_$e) { _$a.x(_$e); } finally { _$a.f(); } });"
         ),
         "{out}"
     );
@@ -408,11 +408,14 @@ fn async_bodies_are_async_functions_or_stay_with_the_driver() {
         flat.contains("const looped = _$createMemo(_$$(function* () {"),
         "{out}"
     );
-    // An event: `try` around an attempt is fine (no run is ever superseded),
-    // `raise` is a `throw`, `return v` reports through the run.
+    // An event (`$eventAsync`): `try` around an attempt is fine (no run is
+    // ever superseded, so no `_$a.r`), `raise` is a `throw`, `return v`
+    // reports through the run; an attempt inside a user `try` keeps its
+    // arrow (a throw from it must be unwrapped before the `catch` sees it),
+    // one outside is inlined (`_$a.q(), _$a.u(EXPR)`).
     assert!(
         flat.contains(
-            "const erased = _$$eventCompiled(_$asyncBody(async function(e, _$a) { try { const v = n(); try { const r = _$a.t(() => save(v, e)) ? _$a.r(await _$a.p) : _$a.v; setN(r); } catch (err) { throw err; } return _$a.ret(v); } catch (_$e) { _$a.x(_$e); } finally { _$a.f(); } }));"
+            "const erased = _$$eventAsync(async function(e, _$a) { try { const v = n(); try { const r = _$a.t(() => save(v, e)) ? await _$a.p : _$a.v; setN(r); } catch (err) { throw err; } return _$a.ret(v); } catch (_$e) { _$a.x(_$e); } finally { _$a.f(); } });"
         ),
         "{out}"
     );
@@ -420,7 +423,7 @@ fn async_bodies_are_async_functions_or_stay_with_the_driver() {
     // synchronous event's, before and after the wait.
     assert!(
         flat.contains(
-            "const flushed = _$$eventCompiled(_$asyncBody(async function(_$i, _$a) { try { setN(1); _$flush(); const r = _$a.t(() => save(1)) ? _$a.r(await _$a.p) : _$a.v; setN(r); _$flush(); } catch (_$e) { _$a.x(_$e); } finally { _$a.f(); } }));"
+            "const flushed = _$$eventAsync(async function(_$i, _$a) { try { setN(1); _$flush(); const r = (_$a.q(), _$a.u(save(1))) ? await _$a.p : _$a.v; setN(r); _$flush(); } catch (_$e) { _$a.x(_$e); } finally { _$a.f(); } });"
         ),
         "{out}"
     );
@@ -444,9 +447,7 @@ fn async_bodies_are_async_functions_or_stay_with_the_driver() {
     );
     let ssr_flat = self::flat(&ssr);
     assert!(
-        ssr_flat.contains(
-            "const erased = _$$eventCompiled(_$asyncBody(async function(e, _$a) {"
-        ),
+        ssr_flat.contains("const erased = _$$eventAsync(async function(e, _$a) {"),
         "{ssr}"
     );
     assert!(

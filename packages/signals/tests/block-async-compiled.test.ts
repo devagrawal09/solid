@@ -12,6 +12,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   $,
   $eventCompiled,
+  $eventAsync,
+  EventRun,
   asyncBody,
   attempt,
   createContext,
@@ -22,6 +24,7 @@ import {
   createSignal,
   createStore,
   flush,
+  getOwner,
   perform,
   readAccessor,
   readContext,
@@ -32,6 +35,8 @@ import {
   resetErrorHalt,
   setContext
 } from "../src/index.js";
+import { blockGuard, setBlockGuard } from "../src/core/core.js";
+import { StatusError } from "../src/core/error.js";
 
 afterEach(() => resetErrorHalt());
 
@@ -601,5 +606,412 @@ describe("asyncBody: several suspensions, microtask for microtask", () => {
     );
     expect(traces[1]).toEqual(traces[0]);
     expect(traces[0].at(-1)).toBe("value b:34");
+  });
+});
+
+/**
+ * The dispatch path: `$eventAsync` (what the compiler emits for an async
+ * `$event` body) runs the body without the result promise `asyncBody`
+ * rebuilds, because a handler returns nothing — the driver's result promise
+ * is only ever consumed by the dispatcher's rejection routing. Everything
+ * else a program can observe — the synchronous segment, the job each
+ * continuation (and each write) runs in, what renders, which boundary
+ * catches a failure, a failure with no boundary — matches the driver.
+ */
+describe("$eventAsync: the dispatch path", () => {
+  /**
+   * A microtask clock: `log` stamps each entry with the segment and the
+   * microtask since `start` (the clock runs for 20 microtasks, so a macrotask
+   * can follow).
+   */
+  function clocked() {
+    const events: string[] = [];
+    let clock = 0;
+    let segment = -1;
+    const loop = () => {
+      if (++clock < 20) queueMicrotask(loop);
+    };
+    return {
+      events,
+      log: (e: string) => void events.push(`${e}@${segment}.${clock}`),
+      start() {
+        segment++;
+        clock = 0;
+        queueMicrotask(loop);
+      }
+    };
+  }
+
+  it("the synchronous segment: a sync failure throws, a plain attempt never suspends", () => {
+    const logs = [false, true].map(compiledForm => {
+      const log: string[] = [];
+      const handler = createRoot(() =>
+        compiledForm
+          ? $eventAsync(async function (e: any, _$a) {
+              try {
+                log.push(`start ${e}`);
+                if (e === "fail") throw new Bad("sync");
+                const v = _$a.t(() => 5) ? _$a.r(await _$a.p) : _$a.v;
+                log.push(`value ${v}`);
+              } catch (_$e) {
+                _$a.x(_$e);
+              } finally {
+                _$a.f();
+              }
+            })
+          : $eventCompiled(
+              $(function* (e: any) {
+                log.push(`start ${e}`);
+                if (e === "fail") throw new Bad("sync");
+                const v = yield* attempt(() => 5);
+                log.push(`value ${v}`);
+              })
+            )
+      ) as Handler;
+      expect(() => handler("fail")).toThrow(Bad);
+      expect(handler("go")).toBeUndefined();
+      log.push("after");
+      return log;
+    });
+    expect(logs[1]).toEqual(logs[0]);
+    expect(logs[0]).toEqual(["start fail", "start go", "value 5", "after"]);
+  });
+
+  it("continuations and their writes run in the driver's jobs, and render the same", async () => {
+    const traces = await Promise.all(
+      [false, true].map(async compiledForm => {
+        const c = clocked();
+        const w = [deferred<number>(), deferred<number>(), deferred<number>()];
+        const [n, setN] = createSignal(0);
+        let handler!: Handler;
+        createRoot(() => {
+          handler = compiledForm
+            ? $eventAsync(async function (_$i, _$a) {
+                try {
+                  for (let i = 0; i < 3; i++) {
+                    const v = (_$a.t(() => w[i].promise) ? _$a.r(await _$a.p) : _$a.v) as number;
+                    c.log(`resumed ${v}`);
+                    setN(v);
+                    c.log(`wrote ${n()}`);
+                  }
+                } catch (_$e) {
+                  _$a.x(_$e);
+                } finally {
+                  _$a.f();
+                }
+              })
+            : $eventCompiled(
+                $(function* () {
+                  for (let i = 0; i < 3; i++) {
+                    const v = (yield* attempt(() => w[i].promise)) as number;
+                    c.log(`resumed ${v}`);
+                    setN(v);
+                    c.log(`wrote ${yield* n}`);
+                  }
+                })
+              );
+          createRenderEffect(
+            () => n(),
+            v => c.log(`render ${v}`)
+          );
+        });
+        flush();
+        c.start();
+        handler(undefined);
+        for (let i = 0; i < 3; i++) {
+          await tick();
+          c.start();
+          w[i].resolve(i + 1);
+          await tick();
+          flush();
+        }
+        return c.events;
+      })
+    );
+    expect(traces[1]).toEqual(traces[0]);
+    expect(traces[0].filter(e => e.startsWith("render")).length).toBe(4);
+  });
+
+  it("writes after a wait behave the same under a pending async memo (transition)", async () => {
+    const traces = await Promise.all(
+      [false, true].map(async compiledForm => {
+        const log: string[] = [];
+        const wait = deferred<number>();
+        const loads: ReturnType<typeof deferred<string>>[] = [];
+        const [id, setId] = createSignal(0);
+        let handler!: Handler;
+        createRoot(() => {
+          const data = createMemo(() => {
+            const k = id();
+            const d = deferred<string>();
+            loads.push(d);
+            return d.promise.then(v => `${k}:${v}`);
+          });
+          handler = compiledForm
+            ? $eventAsync(async function (_$i, _$a) {
+                try {
+                  const v = (_$a.t(() => wait.promise) ? _$a.r(await _$a.p) : _$a.v) as number;
+                  setId(v);
+                  log.push(`wrote ${v}`);
+                } catch (_$e) {
+                  _$a.x(_$e);
+                } finally {
+                  _$a.f();
+                }
+              })
+            : $eventCompiled(
+                $(function* () {
+                  const v = (yield* attempt(() => wait.promise)) as number;
+                  setId(v);
+                  log.push(`wrote ${v}`);
+                })
+              );
+          createRenderEffect(
+            () => [id(), data()],
+            v => void log.push(`render ${JSON.stringify(v)}`)
+          );
+        });
+        flush();
+        loads[0].resolve("a");
+        await tick();
+        flush();
+        handler(undefined);
+        wait.resolve(1);
+        await tick();
+        flush();
+        log.push(`pending id ${id()}`);
+        loads[1].resolve("b");
+        await tick();
+        flush();
+        return log;
+      })
+    );
+    expect(traces[1]).toEqual(traces[0]);
+    expect(traces[0].at(-1)).toBe('render [1,"1:b"]');
+  });
+
+  it("a failure after one or two waits, or a rejected returned thenable, reaches the boundary", async () => {
+    type Case = "one" | "two" | "returned" | "returned sync";
+    const cases: Case[] = ["one", "two", "returned", "returned sync"];
+    for (const which of cases) {
+      const results = await Promise.all(
+        [false, true].map(async compiledForm => {
+          const w = [deferred<number>(), deferred<number>()];
+          let handler!: Handler;
+          const rejected = () => Promise.reject(new Bad(which));
+          const view = createRoot(() =>
+            createErrorBoundary(
+              () => {
+                handler = compiledForm
+                  ? $eventAsync(async function (_$i, _$a) {
+                      try {
+                        if (which === "returned sync") return _$a.ret(rejected());
+                        _$a.t(() => w[0].promise) ? _$a.r(await _$a.p) : _$a.v;
+                        if (which === "returned") return _$a.ret(rejected());
+                        if (which === "two") _$a.t(() => w[1].promise) ? _$a.r(await _$a.p) : _$a.v;
+                      } catch (_$e) {
+                        _$a.x(_$e);
+                      } finally {
+                        _$a.f();
+                      }
+                    })
+                  : $eventCompiled(
+                      $(function* () {
+                        if (which === "returned sync") return rejected();
+                        yield* attempt(() => w[0].promise);
+                        if (which === "returned") return rejected();
+                        if (which === "two") yield* attempt(() => w[1].promise);
+                      })
+                    );
+                return "content";
+              },
+              error => `caught:${(error() as Error).message}`
+            )
+          );
+          handler(undefined);
+          if (which === "one") w[0].reject(new Bad(which));
+          else w[0].resolve(0);
+          await tick();
+          if (which === "two") w[1].reject(new Bad(which));
+          await tick();
+          flush();
+          return view();
+        })
+      );
+      expect(results).toEqual([`caught:${which}`, `caught:${which}`]);
+    }
+  });
+
+  it("with no boundary, a failure after a wait rejects unhandled, as the driver's routing does", async () => {
+    // The dispatcher discards the body's own promise: rejecting it is the
+    // driver's unhandled rejection (same reason, raised earlier).
+    const d = deferred<number>();
+    const body = async function (_$i: unknown, _$a: EventRun) {
+      try {
+        _$a.t(() => d.promise) ? _$a.r(await _$a.p) : _$a.v;
+      } catch (_$e) {
+        _$a.x(_$e);
+      } finally {
+        _$a.f();
+      }
+    };
+    const run = new EventRun(null);
+    const settled = body(undefined, run);
+    expect(run.s).toBe(false);
+    const error = new Bad("unhandled");
+    d.reject(error);
+    await expect(settled).rejects.toBe(error);
+    // A body that completes normally leaves nothing to report.
+    const ok = new EventRun(null);
+    const done = deferred<number>();
+    const fine = (async function (_$i: unknown, _$a: EventRun) {
+      try {
+        _$a.t(() => done.promise) ? _$a.r(await _$a.p) : _$a.v;
+      } catch (_$e) {
+        _$a.x(_$e);
+      } finally {
+        _$a.f();
+      }
+    })(undefined, ok);
+    done.resolve(1);
+    await expect(fine).resolves.toBeUndefined();
+  });
+
+  it("runs with no owner context, also when dispatched from inside an owner", () => {
+    const owners: unknown[] = [];
+    const handler = createRoot(() =>
+      $eventAsync(async function (_$i, _$a) {
+        try {
+          owners.push(getOwner());
+        } catch (_$e) {
+          _$a.x(_$e);
+        } finally {
+          _$a.f();
+        }
+      })
+    ) as Handler;
+    handler(undefined);
+    createRoot(() => handler(undefined));
+    expect(owners).toEqual([null, null]);
+  });
+});
+
+describe("$eventAsync: inline attempts", () => {
+  // `(_$a.q(), _$a.u(EXPR))` is `_$a.t(() => EXPR)` without the closure:
+  // the compiler emits it for an attempt no user `try` encloses.
+  it("waits and resumes like the driver", async () => {
+    const traces = await Promise.all(
+      [false, true].map(async compiledForm => {
+        const log: string[] = [];
+        const w = [deferred<number>(), deferred<number>()];
+        const [n, setN] = createSignal(0);
+        const handler = createRoot(() =>
+          compiledForm
+            ? $eventAsync(async function (_$i, _$a) {
+                try {
+                  const a = (_$a.q(), _$a.u(w[0].promise)) ? await _$a.p : _$a.v;
+                  setN(a as number);
+                  log.push(`a ${a}`);
+                  const b = (_$a.q(), _$a.u(7)) ? await _$a.p : _$a.v;
+                  log.push(`b ${b}`);
+                  const c = (_$a.q(), _$a.u(w[1].promise)) ? await _$a.p : _$a.v;
+                  log.push(`c ${c}`);
+                } catch (_$e) {
+                  _$a.x(_$e);
+                } finally {
+                  _$a.f();
+                }
+              })
+            : $eventCompiled(
+                $(function* () {
+                  const a = yield* attempt(() => w[0].promise);
+                  setN(a as number);
+                  log.push(`a ${a}`);
+                  const b = yield* attempt(() => 7);
+                  log.push(`b ${b}`);
+                  const c = yield* attempt(() => w[1].promise);
+                  log.push(`c ${c}`);
+                })
+              )
+        ) as Handler;
+        handler(undefined);
+        log.push("dispatched");
+        w[0].resolve(1);
+        queueMicrotask(() => log.push("marker"));
+        await tick();
+        log.push(`n ${n()}`);
+        w[1].resolve(2);
+        queueMicrotask(() => log.push("marker"));
+        await tick();
+        return log;
+      })
+    );
+    expect(traces[1]).toEqual(traces[0]);
+    expect(traces[0]).toEqual(["dispatched", "a 1", "b 7", "marker", "n 1", "c 2", "marker"]);
+  });
+
+  it("lowers the guard for the expression and restores it, also when it throws (unwrapped)", () => {
+    const seen: boolean[] = [];
+    const cause = new Bad("inside");
+    const results = [false, true].map(compiledForm => {
+      const handler = createRoot(() =>
+        compiledForm
+          ? $eventAsync(async function (e: any, _$a) {
+              try {
+                (_$a.q(),
+                _$a.u(
+                  (seen.push(blockGuard),
+                  e === "throw"
+                    ? (() => {
+                        throw new StatusError(null, cause);
+                      })()
+                    : 1)
+                ))
+                  ? await _$a.p
+                  : _$a.v;
+              } catch (_$e) {
+                _$a.x(_$e);
+              } finally {
+                _$a.f();
+              }
+            })
+          : $eventCompiled(
+              $(function* (e: any) {
+                yield* attempt(() => {
+                  seen.push(blockGuard);
+                  if (e === "throw") throw new StatusError(null, cause);
+                  return 1;
+                });
+              })
+            )
+      ) as Handler;
+      const out: unknown[] = [];
+      for (const guard of [false, true]) {
+        for (const e of ["ok", "throw"]) {
+          const prev = setBlockGuard(guard);
+          try {
+            handler(e);
+            out.push("ok");
+          } catch (error) {
+            out.push(error);
+          }
+          out.push(`guard ${blockGuard}`);
+          setBlockGuard(prev);
+        }
+      }
+      return out;
+    });
+    expect(results[1]).toEqual(results[0]);
+    expect(results[0]).toEqual([
+      "ok",
+      "guard false",
+      cause,
+      "guard false",
+      "ok",
+      "guard true",
+      cause,
+      "guard true"
+    ]);
+    expect(seen).toEqual([false, false, false, false, false, false, false, false]);
   });
 });

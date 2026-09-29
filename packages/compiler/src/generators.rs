@@ -1144,7 +1144,8 @@ impl<'a> VisitMut<'a> for Rewriter<'a> {
 // "compiled async bodies"): `t` runs the attempt as the driver does and
 // awaits only a thenable, `r` refuses to continue a superseded run, `ret`
 // and `x` report a run that never waited synchronously. `blocks_v2_lower.rs`
-// then either erases the block (`asyncBody(fn)`) — when every other
+// then either erases the block (`asyncBody(fn)`; an event's `$eventAsync(fn)`,
+// whose run is an `EventRun`, see `event_attempts`) — when every other
 // operation is erased, the proof a synchronous body needs to lose its block
 // — or restores the generator exactly (`restore_async_generator`), so a body
 // this pass compiles never runs with its block.
@@ -1161,7 +1162,7 @@ pub(crate) const ASYNC_INPUT_PARAM: &str = "_$i";
 /// The catch parameter of an async v2 body's wrapper.
 pub(crate) const ASYNC_ERROR_PARAM: &str = "_$e";
 
-fn run_member<'a>(allocator: &'a Allocator, name: &str) -> Expression<'a> {
+pub(crate) fn run_member<'a>(allocator: &'a Allocator, name: &str) -> Expression<'a> {
     let ast = AstBuilder::new(allocator);
     let synth = Span::new(0, 0);
     Expression::StaticMemberExpression(ast.alloc_static_member_expression(
@@ -1172,7 +1173,7 @@ fn run_member<'a>(allocator: &'a Allocator, name: &str) -> Expression<'a> {
     ))
 }
 
-fn run_call<'a>(
+pub(crate) fn run_call<'a>(
     allocator: &'a Allocator,
     span: Span,
     name: &str,

@@ -1,8 +1,8 @@
 import { markAsyncCapability } from "./core/dev.js";
 import { $REFRESH, STATUS_ERROR } from "./core/constants.js";
 import { unwrapStatusError } from "./core/error.js";
-import { blockGuard } from "./core/core.js";
-import { flush } from "./core/scheduler.js";
+import { blockGuard, strictRead, tracking } from "./core/core.js";
+import { flush, GlobalQueue } from "./core/scheduler.js";
 import {
   cleanup,
   createOwner,
@@ -1461,7 +1461,7 @@ export function dispatchBlock<B extends AnyBlock>(
 export function dispatchFused<E>(fn: (event: E) => unknown, event: E, owner: Owner | null): void {
   let result: unknown;
   try {
-    result = getOwner() === null ? fn(event) : runWithOwner(null, () => fn(event));
+    result = getOwner() === null ? fn(event) : withoutOwner1(fn, event);
   } catch (error) {
     if (!reportBlockError(owner, error)) throw error;
     return;
@@ -1475,6 +1475,18 @@ export function dispatchFused<E>(fn: (event: E) => unknown, event: E, owner: Own
   }
 }
 
+/**
+ * `runWithOwner(null, () => fn(a, b))`, in a function of its own: a closure
+ * in the dispatcher would allocate its context on every dispatch, also on
+ * the usual path (already no owner) that never creates it.
+ */
+function withoutOwner<A, B>(fn: (a: A, b: B) => unknown, a: A, b: B): unknown {
+  return runWithOwner(null, () => fn(a, b));
+}
+function withoutOwner1<A>(fn: (a: A) => unknown, a: A): unknown {
+  return runWithOwner(null, () => fn(a));
+}
+
 // --- compiled async bodies ----------------------------------------------------------
 //
 // The client lowering compiles a memo or event body that waits (`yield*
@@ -1483,14 +1495,17 @@ export function dispatchFused<E>(fn: (event: E) => unknown, event: E, owner: Own
 // read is a direct accessor call or a path read, every write a setter call —
 // the conditions under which a synchronous body loses its block):
 //
-//   $event(function* (e) { const id = yield* props.id; yield* attempt(() => save(id)); })
+//   $memo(function* () { const id = yield* props.id; return yield* attempt(() => load(id)); })
 //   // →
-//   $eventCompiled(asyncBody(async function (e, _$a) {
+//   createMemo(asyncBody(async function (_$i, _$a) {
 //     try {
 //       const id = readValue(props.id);
-//       _$a.t(() => save(id)) ? _$a.r(await _$a.p) : _$a.v;
+//       return _$a.ret(_$a.t(() => load(id)) ? _$a.r(await _$a.p) : _$a.v);
 //     } catch (_$e) { _$a.x(_$e); } finally { _$a.f(); }
 //   }));
+//
+// (An event body takes the same shape, run by `$eventAsync` instead: see
+// "compiled async events" below.)
 //
 // Each `yield* attempt(run, ...errors)` becomes `(_$a.t(run, ...errors) ?
 // _$a.r(await _$a.p) : _$a.v)`: `t` runs `run` as the driver does (a
@@ -1534,6 +1549,35 @@ export function dispatchFused<E>(fn: (event: E) => unknown, event: E, owner: Own
 // the `finally` reports; `x` records a failure instead of rethrowing, so the
 // async function's own promise never rejects (nothing observes it).
 
+/**
+ * Run an attempt's callback as the driver does: with the strict guard
+ * lowered, a synchronous `StatusError` unwrapped to its cause. (With the
+ * guard already down, the bracket changes nothing and is skipped.)
+ */
+function attemptValue(run: () => unknown): unknown {
+  try {
+    return blockGuard ? readGuarded(run) : run();
+  } catch (error) {
+    throw unwrapStatusError(error);
+  }
+}
+
+/**
+ * Whether an attempt's value is a thenable, by the driver's probe
+ * (untracked, guard lowered). In the usual context of a compiled async body
+ * (guard down, not tracking, no external untrack, no strict-read label) the
+ * probe's brackets change nothing and are skipped.
+ */
+function attemptThenable(value: unknown): boolean {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    (blockGuard || tracking || GlobalQueue._externalUntrack !== null || (__DEV__ && strictRead)
+      ? isThenableValue(value)
+      : typeof (value as any).then === "function")
+  );
+}
+
 /** @internal One run of a compiled async block body (see above). */
 export class AsyncRun {
   /** Still in the synchronous first segment (no suspension yet). */
@@ -1555,13 +1599,8 @@ export class AsyncRun {
   private fail: ((error: unknown) => void) | undefined = undefined;
   /** `attempt(run)`: true when the result is a thenable to await (`p`). */
   t(run: () => unknown): boolean {
-    let value: unknown;
-    try {
-      value = readGuarded(run);
-    } catch (error) {
-      throw unwrapStatusError(error);
-    }
-    if (isThenableValue(value)) {
+    const value = attemptValue(run);
+    if (attemptThenable(value)) {
       if (this.s) {
         this.s = false;
         if (getOwner()) cleanup(() => (this.stale = true));
@@ -1629,6 +1668,153 @@ export function asyncBody<I, R>(
     if (run.threw) throw run.error;
     return run.value as R;
   };
+}
+
+// --- compiled async events -----------------------------------------------------------
+//
+// `$event` bodies that wait are compiled like memo bodies (above), but the
+// compiler hands them to `$eventAsync(fn)` instead of `$eventCompiled(
+// asyncBody(fn))`. An event handler returns nothing: the only consumer of the
+// driver's result promise on the dispatch path is `dispatchBlock` /
+// `dispatchFused`'s rejection handler, which routes a failure to the nearest
+// boundary (or rethrows it as an unhandled rejection). So the dispatch path
+// needs the body's outcome, not the promise chain `AsyncRun` rebuilds:
+//
+// - never waited: exactly `dispatchFused` of `asyncBody(fn)` — a failure is
+//   routed (or thrown) synchronously, a returned thenable's rejection routed;
+// - waited: when the body settles (`f`, in the job it returns in), a failure
+//   is routed to the boundary, or rethrown so that the async function's own
+//   (discarded) promise rejects unhandled, as the driver's routing reaction
+//   does; a returned thenable is adopted and its rejection routed.
+//
+// What differs from the driver is only *when* a failure after a wait reaches
+// the boundary: in the job the body fails in, instead of n + 1 reactions later
+// (n suspensions). Nothing else can observe the result promise: the handler
+// returns `undefined`, the run is never superseded (it runs with no owner, so
+// it registers no staleness), and every write, read and attempt runs in the
+// same job as on the driver.
+//
+// The compiler also drops `_$a.r(…)` from an event body (identity: never
+// stale) and, for an `attempt(() => EXPR)` no user `try` encloses, inlines
+// the arrow as `(_$a.q(), _$a.u(EXPR))` — no closure per dispatch; see `q`.
+
+/** @internal One dispatch of a compiled async event body (see above). */
+export class EventRun {
+  // (Fields assigned in the constructor: one allocation per dispatch, no
+  // per-field define.)
+  /** The owner whose boundary receives a failure. */
+  declare readonly o: Owner | null;
+  /** Still in the synchronous first segment (no suspension yet). */
+  declare s: boolean;
+  /** The pending thenable of the last `t`, awaited by the body. */
+  declare p: unknown;
+  /** The plain value of the last `t`. */
+  declare v: unknown;
+  /** The body's outcome: the returned value, or the thrown error. */
+  declare value: unknown;
+  declare threw: boolean;
+  declare error: unknown;
+  /**
+   * An inline attempt's expression is running: 1, or 2 when `q` lowered the
+   * strict guard (restored by `u`, or by `x` when the expression throws).
+   */
+  declare k: number;
+  constructor(owner: Owner | null) {
+    this.o = owner;
+    this.s = true;
+    this.p = undefined;
+    this.v = undefined;
+    this.value = undefined;
+    this.threw = false;
+    this.error = undefined;
+    this.k = 0;
+  }
+  /** `attempt(run)`: true when the result is a thenable to await (`p`). */
+  t(run: () => unknown): boolean {
+    return this.w(attemptValue(run));
+  }
+  /**
+   * `attempt(() => EXPR)` inlined as `(_$a.q(), _$a.u(EXPR))` — no closure
+   * per dispatch — where no user `try` encloses the attempt, so a throw
+   * from EXPR reaches the body's own `catch` (`x`) next: `q` lowers the
+   * guard, `u` restores it and is `t`'s result for EXPR's value.
+   */
+  q(): void {
+    if (blockGuard) {
+      setBlockGuard(false);
+      this.k = 2;
+    } else this.k = 1;
+  }
+  u(value: unknown): boolean {
+    if (this.k === 2) setBlockGuard(true);
+    this.k = 0;
+    return this.w(value);
+  }
+  private w(value: unknown): boolean {
+    if (attemptThenable(value)) {
+      this.s = false;
+      this.p = value;
+      return true;
+    }
+    this.v = value;
+    return false;
+  }
+  /** Resume after an await (an event run is never superseded). */
+  r<T>(value: T): T {
+    return value;
+  }
+  /** `return value`: the outcome. */
+  ret(value: unknown): undefined {
+    this.value = value;
+    return undefined;
+  }
+  /** The body's `catch`: the outcome is a failure. */
+  x(error: unknown): void {
+    if (this.k) {
+      // Thrown by an inline attempt's expression: what `t` would throw.
+      if (this.k === 2) setBlockGuard(true);
+      this.k = 0;
+      error = unwrapStatusError(error);
+    }
+    this.threw = true;
+    this.error = error;
+  }
+  /** The body's `finally`: after a wait, route the outcome's failure. */
+  f(): void {
+    if (this.s) return;
+    if (this.threw) {
+      if (!reportBlockError(this.o, this.error)) throw this.error;
+    } else if (isThenableValue(this.value)) {
+      const value = this.value;
+      routeRejection(new Promise(adopt => adopt(value)), this.o);
+    }
+  }
+}
+
+function routeRejection(result: PromiseLike<unknown>, owner: Owner | null): void {
+  result.then(undefined, error => {
+    if (!reportBlockError(owner, error)) throw error;
+  });
+}
+
+/**
+ * @internal Dispatch an event to a compiled async body (`$eventAsync`): the
+ * handler contract of `dispatchFused` (no owner context, failures routed to
+ * the boundary above `owner`) without the result promise nobody observes.
+ */
+export function dispatchAsync<E>(
+  body: (event: E, run: EventRun) => unknown,
+  event: E,
+  owner: Owner | null
+): void {
+  const run = new EventRun(owner);
+  // (An async function never throws synchronously.)
+  if (getOwner() === null) body(event, run);
+  else withoutOwner(body, event, run);
+  if (!run.s) return;
+  if (run.threw) {
+    if (!reportBlockError(owner, run.error)) throw run.error;
+  } else if (isThenableValue(run.value)) routeRejection(run.value as PromiseLike<unknown>, owner);
 }
 
 // --- compiled reads -------------------------------------------------------------------
@@ -2418,7 +2604,13 @@ function isOp(value: unknown): value is Op {
 // as the core's `handleAsync` probes a computation's result — the probe is
 // not a dependency of the block.
 function probe<T>(run: () => T): T {
-  return readGuarded(() => untrack(run));
+  // `readGuarded(() => untrack(run))`, without the closure.
+  const prevGuard = setBlockGuard(false);
+  try {
+    return untrack(run);
+  } finally {
+    setBlockGuard(prevGuard);
+  }
 }
 
 const PLAIN = 0;
@@ -2460,12 +2652,20 @@ function isAsyncIterator(value: unknown): boolean {
 }
 
 function isThenableValue(value: unknown): boolean {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    probe(() => typeof (value as any).then === "function")
-  );
+  if (value === null || typeof value !== "object") return false;
+  // The probe without a closure per call: the value travels through
+  // `probed`, read once (as the base of `.then`) before any user code — a
+  // `then` getter — can run and re-enter.
+  const prev = probed;
+  probed = value;
+  try {
+    return probe(readThen);
+  } finally {
+    probed = prev;
+  }
 }
+let probed: any;
+const readThen = () => typeof probed.then === "function";
 
 /**
  * Dev verification of BLOCK_SYNC: the probes production skips, run as a

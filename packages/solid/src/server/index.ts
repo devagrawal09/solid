@@ -19,6 +19,7 @@ export {
   settledBlockCompiled,
   $componentCompiled,
   $eventCompiled,
+  $eventAsync,
   syncBlock,
   installBlockDriver,
   blockCleanup,
