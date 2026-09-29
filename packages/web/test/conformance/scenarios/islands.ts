@@ -867,8 +867,119 @@ export const App = $component(function* () {
   ]
 };
 
+/**
+ * Two islands sharing a component (`Badge` reads `count` and toggles `dark`):
+ * `i0` = {count} over Page, AddToCart, Badge; `i1` = {dark} over Page, Badge.
+ * Each chunk must carry only its own island's cells, handlers and holes: a
+ * second copy of the other island's cell would go out of phase with it once
+ * the islands activate at different times. The islands activate from the
+ * steps, in both orders (`manualActivation`), with clicks in between; every
+ * step's DOM must equal the oracle's (`islands.spec.ts` runs the chosen tier
+ * and the tier-2 control).
+ */
+const sharedMember = (name: string, first: "i0" | "i1"): Scenario => {
+  const activate = (id: string, what: string) => ({
+    name: `activate ${id} (${what})`,
+    run: (ctx: any) => {
+      ctx.activate?.(id);
+      ctx.flush();
+      ctx.html();
+    }
+  });
+  const add = step("add (count island)", ctx => ctx.click(".add"));
+  const badge = step("click the badge (dark island)", ctx => ctx.click(".badge"));
+  const i0 = activate("i0", "count");
+  const i1 = activate("i1", "dark");
+  return {
+    name,
+    covers: [
+      "a component in two islands: each chunk carries only its island's cells, handlers and holes",
+      `islands activating at different times (${first} first), with writes in between`
+    ],
+    entry: { component: "App" },
+    manualActivation: true,
+    sources: {
+      reference: `
+import { createSignal } from "solid-js";
+function AddToCart(props) {
+  return <button class="add" onClick={() => props.setCount(c => c + 1)}>Add {props.name}</button>;
+}
+function Badge(props) {
+  return (
+    <span class={{ badge: true, dark: props.dark() }} onClick={() => props.setDark(d => !d)}>
+      {props.count()} items
+    </span>
+  );
+}
+function Product(props) {
+  return <article><h2>{props.title}</h2></article>;
+}
+export function App() {
+  const [count, setCount] = createSignal(0);
+  const [dark, setDark] = createSignal(false);
+  return (
+    <div class={{ page: true, dark: dark() }}>
+      <header><Badge count={count} dark={dark} setDark={setDark} /></header>
+      <Product title="Mug" />
+      <footer><AddToCart name="Mug" setCount={setCount} /></footer>
+    </div>
+  );
+}
+`,
+      islands: `
+import { $component, $event, $signal } from "solid-js";
+const AddToCart = $component(function* (props) {
+  const add = $event(function* () { props.setCount(c => c + 1); });
+  return function* () {
+    return <button class="add" onClick={add}>Add {yield* props.name}</button>;
+  };
+});
+const Badge = $component(function* (props) {
+  const flip = $event(function* () { props.setDark(d => !d); });
+  return function* () {
+    return (
+      <span class={{ badge: true, dark: yield* props.dark }} onClick={flip}>
+        {yield* props.count} items
+      </span>
+    );
+  };
+});
+const Product = $component(function* (props) {
+  return function* () {
+    return <article><h2>{yield* props.title}</h2></article>;
+  };
+});
+export const App = $component(function* () {
+  const [count, setCount] = yield* $signal(0);
+  const [dark, setDark] = yield* $signal(false);
+  return function* () {
+    return (
+      <div class={{ page: true, dark: yield* dark }}>
+        <header><Badge count={count} dark={dark} setDark={setDark} /></header>
+        <Product title="Mug" />
+        <footer><AddToCart name="Mug" setCount={setCount} /></footer>
+      </div>
+    );
+  };
+});
+`
+    },
+    steps: [
+      { name: "initial", run: ({ html }) => html() },
+      ...(first === "i0"
+        ? [i0, add, i1, badge, add, badge, add]
+        : [i1, badge, i0, add, badge, add, badge])
+    ]
+  };
+};
+
+export const islandsSharedMember = sharedMember("islands-shared-member", "i0");
+export const islandsSharedMemberReversed = sharedMember("islands-shared-member-reversed", "i1");
+
 export const islandsScenarios = [
   islandsList,
+  islandsSharedMember,
+  islandsSharedMemberReversed,
   islandsStream,
   islandsStore,
   islandsAsync,

@@ -109,6 +109,74 @@ export const App = $component(function* () {
     assert!(out.fallback.is_none(), "{:?}", out.fallback);
     assert_eq!(out.chunks.len(), 2, "{}", manifest(&out));
     assert!(out.server.contains("data-i=\"i0 i1\""), "{}", out.server);
+    // Each chunk carries only its own cell, handler and hole.
+    let (ca, cb) = (&out.chunks[0].code, &out.chunks[1].code);
+    assert!(ca.contains("incA") && !ca.contains("incB"), "{ca}");
+    assert!(!ca.contains("setB") && !ca.contains("$cell(2"), "{ca}");
+    assert!(cb.contains("incB") && !cb.contains("incA"), "{cb}");
+    assert!(!cb.contains("setA") && !cb.contains("$cell(1"), "{cb}");
+    assert_eq!(ca.matches("addEventListener").count(), 1, "{ca}");
+    assert_eq!(cb.matches("addEventListener").count(), 1, "{cb}");
+}
+
+/// A component in two islands (one cell shared with more components than
+/// the other) gets, in each chunk, only that island's cells, handlers and
+/// holes: a second copy of the other island's cell would go out of phase
+/// with it once the islands activate at different times.
+#[test]
+fn a_component_in_two_islands_gets_only_each_islands_sites() {
+    let out = run(r#"
+import { $component, $event, $signal } from "solid-js";
+const AddToCart = $component(function* (props) {
+  const add = $event(function* () { props.setCount(c => c + 1); });
+  return function* () {
+    return <form class="add" onSubmit={add}><button>Add {props.name}</button></form>;
+  };
+});
+const CartBadge = $component(function* (props) {
+  const flip = $event(function* () { props.setDark(d => !d); });
+  return function* () {
+    return <span class={{ badge: true, dark: yield* props.dark }} onClick={flip}>{yield* props.count} items</span>;
+  };
+});
+const Product = $component(function* (props) {
+  return function* () {
+    return <article><h2>{yield* props.item.title}</h2></article>;
+  };
+});
+export const Page = $component(function* (props) {
+  const [count, setCount] = yield* $signal(0);
+  const [dark, setDark] = yield* $signal(false);
+  return function* () {
+    return (
+      <div class={{ page: true, dark: yield* dark }}>
+        <header><CartBadge count={count} dark={dark} setDark={setDark} /></header>
+        <Product item={props.item} />
+        <footer><AddToCart name={props.item.title} setCount={setCount} /></footer>
+      </div>
+    );
+  };
+});
+"#);
+    assert!(out.fallback.is_none(), "{:?}", out.fallback);
+    let m = manifest(&out);
+    assert_eq!(out.chunks.len(), 2, "{m}");
+    assert!(m.contains(r#""events":["submit"]"#), "{m}");
+    assert!(m.contains(r#""events":["click"]"#), "{m}");
+    let i0 = &out.chunks.iter().find(|c| c.id == "i0").expect("i0").code;
+    let i1 = &out.chunks.iter().find(|c| c.id == "i1").expect("i1").code;
+    // i0 = {count}: the submit handler and the count text hole only.
+    assert!(i0.contains("setCount") && i0.contains("\"submit\""), "{i0}");
+    assert!(!i0.contains("dark"), "{i0}");
+    assert!(!i0.contains("setDark"), "{i0}");
+    assert!(!i0.contains("classList.toggle(\"dark\""), "{i0}");
+    assert!(!i0.contains("\"click\""), "{i0}");
+    // i1 = {dark}: the click handler and the two `dark` class holes only.
+    assert!(i1.contains("setDark") && i1.contains("\"click\""), "{i1}");
+    assert_eq!(i1.matches("classList.toggle(\"dark\"").count(), 2, "{i1}");
+    assert!(!i1.contains("count"), "{i1}");
+    assert!(!i1.contains("setCount"), "{i1}");
+    assert!(!i1.contains("\"submit\""), "{i1}");
 }
 
 #[test]

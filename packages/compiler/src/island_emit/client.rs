@@ -148,7 +148,8 @@ struct Scope {
 enum Slot<'a> {
     Elem(&'a JSXElement<'a>, usize),
     Text,
-    Hole(&'a Expression<'a>, usize, bool),
+    /// (expression, instance, live, bound by this island)
+    Hole(&'a Expression<'a>, usize, bool, bool),
     Region(&'a JSXElement<'a>, usize, bool),
     Opaque(Option<usize>, Option<usize>),
     /// An `<Errored>` around the island's live content (tier 2): its content
@@ -1164,29 +1165,67 @@ impl<'x, 'a> Ce<'x, 'a> {
         format!("{}{}", self.m.sym_name(s), self.insts[inst].suffix)
     }
 
-    /// Items of a component the island's client code needs (transitively).
-    fn needed_items(&self, comp: usize) -> BTreeSet<usize> {
+    /// Items of a component the island's client code needs (transitively):
+    /// what the group's own sites reference, plus what the component's
+    /// inert holes, calls and providers may touch. A cell (or memo) of
+    /// another island is never one of them: that island owns it, and a
+    /// second copy here would go out of phase with it.
+    fn needed_items(&self, comp: usize) -> R<BTreeSet<usize>> {
         let c = &self.m.comps[comp];
         let f = &self.a.facts[comp];
+        let owner: HashMap<SymbolId, usize> = c
+            .setup
+            .iter()
+            .enumerate()
+            .flat_map(|(i, it)| it.declares().into_iter().map(move |s| (s, i)))
+            .collect();
+        let foreign = |i: usize| {
+            self.a.live.contains(&(comp, i))
+                && self.a.group_of_key.get(&(comp, i)) != Some(&self.gi)
+        };
         let mut syms: Vec<SymbolId> = Vec::new();
         let mut need: BTreeSet<usize> = BTreeSet::new();
         for (ci, si) in &self.g.sites {
-            if *ci == comp {
-                syms.extend(f.sites[*si].refs.syms.iter().map(|x| x.0));
-                if let SiteKind::Effect(ii, _) = f.sites[*si].kind {
-                    need.insert(ii);
+            if *ci != comp {
+                continue;
+            }
+            let site = &f.sites[*si];
+            for (s, _) in &site.refs.syms {
+                // The partitioner joins a site with every live cell it
+                // touches: one that reads two islands' cells merged them.
+                if let Some(i) = owner.get(s)
+                    && foreign(*i)
+                {
+                    return Err(format!(
+                        "`{}`: `{}` (in island `{}`) is read by a site of island `{}` (not merged)",
+                        c.name,
+                        self.m.sym_name(*s),
+                        self.a.groups[self.a.group_of_key[&(comp, *i)]].id,
+                        self.g.id
+                    ));
                 }
+                syms.push(*s);
+            }
+            if let SiteKind::Effect(ii, _) = site.kind {
+                need.insert(ii);
             }
         }
         // Everything any client-rendered expression of the view may touch
         // (inert holes inside fresh regions, props of inlined children,
-        // provider values): the view's sites and calls.
+        // provider values): the view's inert sites and calls.
         // A member component may be inlined into fresh region content (a
         // row), where all its holes are computed; the root's inert holes
         // matter only inside its own live regions.
         let all = comp != self.g.root;
-        for s in &f.sites {
-            if all || s.regions.iter().any(|r| self.a.site_live[comp][*r]) {
+        for (si, s) in f.sites.iter().enumerate() {
+            if self.a.site_live[comp][si] {
+                continue;
+            }
+            let in_region = s
+                .regions
+                .iter()
+                .any(|r| self.a.group_of_site.get(&(comp, *r)) == Some(&self.gi));
+            if all || in_region {
                 syms.extend(s.refs.syms.iter().map(|x| x.0));
             }
         }
@@ -1218,31 +1257,25 @@ impl<'x, 'a> Ce<'x, 'a> {
             }
         }
         let mut stack: Vec<usize> = need.iter().copied().collect();
-        let owner: HashMap<SymbolId, usize> = c
-            .setup
-            .iter()
-            .enumerate()
-            .flat_map(|(i, it)| it.declares().into_iter().map(move |s| (s, i)))
-            .collect();
         for s in syms {
-            if let Some(i) = owner.get(&s) {
+            if let Some(i) = owner.get(&s)
+                && !foreign(*i)
+            {
                 stack.push(*i);
             }
         }
         while let Some(i) = stack.pop() {
-            if !need.insert(i) && !stack.is_empty() {
-                // already processed
-            }
+            need.insert(i);
             for (s, _) in &f.item_refs[i].syms {
                 if let Some(j) = owner.get(s)
                     && !need.contains(j)
+                    && !foreign(*j)
                 {
                     stack.push(*j);
                 }
             }
-            need.insert(i);
         }
-        need
+        Ok(need)
     }
 
     fn evaluable(&self, comp: usize, r: &super::graph::Refs, depth: u32) -> bool {
@@ -1278,7 +1311,7 @@ impl<'x, 'a> Ce<'x, 'a> {
     fn setup(&mut self, inst: usize) -> R<()> {
         let comp = self.insts[inst].comp;
         let c = &self.m.comps[comp];
-        let need = self.needed_items(comp);
+        let need = self.needed_items(comp)?;
         let t0 = self.tier == 0;
         // Declare names (and kinds) for every item first: bodies may refer
         // to later items (hoisted functions, events used by earlier locals).
@@ -1882,8 +1915,10 @@ impl<'x, 'a> Ce<'x, 'a> {
                 self.flatten(&kids, inst, out)
             }
             None => {
-                let live = self.a.is_live_site(self.insts[inst].comp, e.span().start);
-                out.push(Slot::Hole(e, inst, live));
+                let comp = self.insts[inst].comp;
+                let live = self.a.is_live_site(comp, e.span().start);
+                let mine = !self.site_other(comp, e.span().start, "a hole")?;
+                out.push(Slot::Hole(e, inst, live, mine));
                 Ok(())
             }
         }
@@ -1913,18 +1948,19 @@ impl<'x, 'a> Ce<'x, 'a> {
                         continue;
                     }
                     let comp = self.insts[inst].comp;
-                    let live = self.site_live(comp, e.span().start);
+                    let live = self.in_fallback || self.a.is_live_site(comp, e.span().start);
+                    let mine = !self.site_other(comp, e.span().start, "a hole")?;
                     let refs = super::graph::refs_expr(self.m, self.m.comps[comp].props, e);
                     if refs.has_jsx {
-                        if live {
+                        if live && mine {
                             return Err(
                                 "a live expression producing JSX (use <Show> / <For>)".into()
                             );
                         }
-                        out.push(Slot::Opaque(None, Some(0)));
+                        out.push(Slot::Opaque(None, Some(usize::from(live))));
                         continue;
                     }
-                    out.push(Slot::Hole(e, inst, live));
+                    out.push(Slot::Hole(e, inst, live, mine));
                 }
                 Child::Element(el) => self.flatten_el(el, inst, out)?,
                 Child::Fragment(f) => {
@@ -1979,11 +2015,27 @@ impl<'x, 'a> Ce<'x, 'a> {
             Tag::Builtin(b) if b == "Show" || b == "For" => {
                 let attrs = jsx::attrs(el)?;
                 let input = if b == "Show" { "when" } else { "each" };
-                let live = match jsx::attr(&attrs, input).map(|a| &a.value) {
-                    Some(AttrVal::Expr(e)) => self.a.is_live_site(comp, e.span().start),
-                    _ => false,
+                let (live, mine) = match jsx::attr(&attrs, input).map(|a| &a.value) {
+                    Some(AttrVal::Expr(e)) => (
+                        self.a.is_live_site(comp, e.span().start),
+                        !self.site_other(comp, e.span().start, &format!("a <{b}>"))?,
+                    ),
+                    _ => (false, true),
                 };
-                if live {
+                if live && !mine {
+                    // Another island's region: its DOM is that island's. A
+                    // site or member of this island inside it is a
+                    // partition the union-find should have merged.
+                    if self.span_has_group_sites(comp, el.span)
+                        || jsx::children(&el.children).is_ok_and(|ks| self.kids_render_members(&ks))
+                    {
+                        return Err(format!(
+                            "`{}`: island sites inside another island's <{b}> (not merged)",
+                            self.m.comps[comp].name
+                        ));
+                    }
+                    out.push(Slot::Opaque(None, Some(1)));
+                } else if live {
                     out.push(Slot::Region(el, inst, true));
                 } else {
                     if self.span_has_group_sites(comp, el.span) {
@@ -2351,7 +2403,7 @@ impl<'x, 'a> Ce<'x, 'a> {
         match s {
             Slot::Elem(..) => (Some(1), Some(0)),
             Slot::Text => (Some(0), Some(0)),
-            Slot::Hole(_, _, live) => (Some(0), Some(usize::from(*live))),
+            Slot::Hole(_, _, live, _) => (Some(0), Some(usize::from(*live))),
             Slot::Region(_, _, live) => (None, Some(usize::from(*live))),
             Slot::Opaque(e, p) => (*e, *p),
             // Its content's elements, in place; one marker pair around it.
@@ -2373,7 +2425,7 @@ impl<'x, 'a> Ce<'x, 'a> {
     /// Inert-hole placeholders (`<!--!-->`, fresh content) a slot holds.
     fn placeholders(&self, s: &Slot<'a>) -> usize {
         match s {
-            Slot::Hole(_, _, false) => 1,
+            Slot::Hole(_, _, false, _) => 1,
             Slot::Boundary(_, _, bi) => self.bounds[*bi]
                 .1
                 .iter()
@@ -2491,8 +2543,10 @@ impl<'x, 'a> Ce<'x, 'a> {
                     }
                     self.element(el, inst, &var)?;
                 }
-                Slot::Hole(e, inst, live) => {
-                    if sole {
+                Slot::Hole(e, inst, live, mine) => {
+                    if live && !mine {
+                        // Another island's hole (its marker pair is counted).
+                    } else if sole {
                         let el_var = parent.clone().unwrap();
                         self.text_hole(e, inst, live, TextTarget::Sole(el_var))?;
                     } else if live {
@@ -2565,9 +2619,31 @@ impl<'x, 'a> Ce<'x, 'a> {
         Ok(())
     }
 
-    /// A live hole or attribute (or any, inside a client-built fallback).
+    /// A live hole or attribute this island binds: its site is in the
+    /// group (or any, inside a client-built fallback).
     fn site_live(&self, comp: usize, start: u32) -> bool {
-        self.in_fallback || self.a.is_live_site(comp, start)
+        self.in_fallback || self.site_group(comp, start) == Some(self.gi)
+    }
+
+    /// The group of the live site at `start` in `comp` (None: inert).
+    fn site_group(&self, comp: usize, start: u32) -> Option<usize> {
+        let si = *self.a.facts[comp].site_at.get(&start)?;
+        self.a.group_of_site.get(&(comp, si)).copied()
+    }
+
+    /// A live site of another island. The partitioner keeps such a site
+    /// out of this island's code; inside content this island creates
+    /// (fresh region rows, a client-built fallback) it would have to be
+    /// computed here, over the other island's cells: refused.
+    fn site_other(&self, comp: usize, start: u32, what: &str) -> R<bool> {
+        let other = matches!(self.site_group(comp, start), Some(g) if g != self.gi);
+        if other && (self.scopes[self.cur].builder || self.in_fallback) {
+            return Err(format!(
+                "`{}`: {what} of another island inside content this island creates",
+                self.m.comps[comp].name
+            ));
+        }
+        Ok(other)
     }
 
     /// An `<Errored>` over live content whose sites belong to this group
@@ -2781,6 +2857,9 @@ impl<'x, 'a> Ce<'x, 'a> {
                 continue;
             };
             if jsx::is_event_attr(&at.name) {
+                if self.site_other(comp, e.span().start, "a handler")? {
+                    continue;
+                }
                 let h = self.expr(inst, &none, e)?;
                 let ev = jsx::event_name(&at.name);
                 self.bucket(inst)
@@ -2789,6 +2868,9 @@ impl<'x, 'a> Ce<'x, 'a> {
                 continue;
             }
             if jsx::static_child(e).is_some() || at.name == "ref" {
+                continue;
+            }
+            if self.site_other(comp, e.span().start, "an attribute")? {
                 continue;
             }
             let live = self.site_live(comp, e.span().start);

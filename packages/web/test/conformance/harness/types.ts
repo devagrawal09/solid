@@ -86,6 +86,13 @@ export interface DriverContext {
   /** Dispose the mounted root (its cleanups are traced). */
   dispose(): void;
   environment: Environment;
+  /**
+   * Islands mode only, for a scenario with `manualActivation`: activate the
+   * island group `id` on every anchor not yet active (as the loader does on
+   * the group's first event). Absent in the other modes: steps call it as
+   * `ctx.activate?.(id)`.
+   */
+  activate?(id: string): void;
 }
 
 export interface Step {
@@ -154,6 +161,12 @@ export interface Scenario {
    * relatively (by specifier), for the compiler's cross-module inlining.
    */
   modules?: Record<string, string>;
+  /**
+   * Islands mode only: no island activates at mount; the steps activate
+   * them one at a time (`ctx.activate(id)`), to drive the activation order
+   * of islands that share a component.
+   */
+  manualActivation?: boolean;
 }
 
 /** What one mode observed for one scenario. */

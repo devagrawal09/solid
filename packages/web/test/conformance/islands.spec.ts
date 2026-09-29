@@ -220,9 +220,12 @@ async function runIslands(scenario: Scenario, source: string, minTier: number) {
       if (/^l\d/.test((n as Comment).data)) return true;
     return false;
   };
+  // Islands a `manualActivation` scenario's steps have activated so far.
+  const manual = scenario.manualActivation ? new Set<string>() : null;
   /** Activate every anchor not yet active (the entry's scan, at load and on each landing). */
   const activateAll = () => {
     for (const { island, chunk } of groups) {
+      if (manual && !manual.has(island.id)) continue;
       const anchors: Node[] =
         island.anchor === "comment"
           ? commentAnchors(container, island.id)
@@ -288,7 +291,14 @@ async function runIslands(scenario: Scenario, source: string, minTier: number) {
         el.click();
       },
       observe: (label, value) => recorder.push("value", label, value),
-      dispose: disposeAll
+      dispose: disposeAll,
+      activate(id) {
+        if (!manual) throw new Error(`${scenario.name} does not set manualActivation`);
+        if (!groups.some(g => g.island.id === id)) throw new Error(`no island ${id}`);
+        manual.add(id);
+        activateAll();
+        flush();
+      }
     };
     for (const step of scenario.steps) {
       if (step.environments && !step.environments.includes("client")) continue;
