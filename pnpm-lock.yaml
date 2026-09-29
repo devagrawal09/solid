@@ -140,6 +140,37 @@ importers:
         specifier: ^4.1.6
         version: 4.1.6(@types/node@25.6.0)(@vitest/coverage-v8@4.1.6)(jsdom@25.0.1)(vite@7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0))
 
+  examples/attribution-lab-blocks:
+    dependencies:
+      '@solidjs/web':
+        specifier: workspace:*
+        version: link:../../packages/web
+      solid-js:
+        specifier: workspace:*
+        version: link:../../packages/solid
+    devDependencies:
+      '@solidjs/diagnostics':
+        specifier: workspace:*
+        version: link:../../packages/diagnostics
+      '@solidjs/vite-plugin':
+        specifier: 3.0.0-next.35
+        version: 3.0.0-next.35(@solidjs/web@packages+web)(@testing-library/jest-dom@6.9.1)(solid-js@packages+solid)(vite@7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0))
+      '@types/node':
+        specifier: ^25.6.0
+        version: 25.6.0
+      jsdom:
+        specifier: ^25.0.1
+        version: 25.0.1
+      typescript:
+        specifier: ^6.0.2
+        version: 6.0.3
+      vite:
+        specifier: ^7.0.0
+        version: 7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0)
+      vitest:
+        specifier: ^4.1.6
+        version: 4.1.6(@types/node@25.6.0)(@vitest/coverage-v8@4.1.6)(jsdom@25.0.1)(vite@7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0))
+
   examples/chat:
     dependencies:
       '@solidjs/web':
@@ -162,7 +193,63 @@ importers:
         specifier: ^8.0.0
         version: 8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0)
 
+  examples/chat-blocks:
+    dependencies:
+      '@solidjs/web':
+        specifier: workspace:*
+        version: link:../../packages/web
+      highlight.js:
+        specifier: ^11.11.1
+        version: 11.11.1
+      marked:
+        specifier: ^12.0.2
+        version: 12.0.2
+      solid-js:
+        specifier: workspace:*
+        version: link:../../packages/solid
+    devDependencies:
+      '@solidjs/vite-plugin':
+        specifier: 3.0.0-next.35
+        version: 3.0.0-next.35(@solidjs/web@packages+web)(@testing-library/jest-dom@6.9.1)(solid-js@packages+solid)(vite@8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0))
+      jsdom:
+        specifier: ^25.0.1
+        version: 25.0.1
+      vite:
+        specifier: ^8.0.0
+        version: 8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0)
+      vitest:
+        specifier: ^4.1.6
+        version: 4.1.6(@types/node@25.6.0)(@vitest/coverage-v8@4.1.6)(jsdom@25.0.1)(vite@8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0))
+
   examples/diagnostics:
+    dependencies:
+      '@solidjs/web':
+        specifier: workspace:*
+        version: link:../../packages/web
+      solid-js:
+        specifier: workspace:*
+        version: link:../../packages/solid
+    devDependencies:
+      '@solidjs/diagnostics':
+        specifier: workspace:*
+        version: link:../../packages/diagnostics
+      '@solidjs/vite-plugin':
+        specifier: 3.0.0-next.35
+        version: 3.0.0-next.35(@solidjs/web@packages+web)(@testing-library/jest-dom@6.9.1)(solid-js@packages+solid)(vite@8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0))
+      jsdom:
+        specifier: ^25.0.1
+        version: 25.0.1
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vite:
+        specifier: ^8.0.0
+        version: 8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0)
+      vitest:
+        specifier: ^4.1.6
+        version: 4.1.6(@types/node@25.6.0)(@vitest/coverage-v8@4.1.6)(jsdom@25.0.1)(vite@8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0))
+
+  examples/diagnostics-blocks:
     dependencies:
       '@solidjs/web':
         specifier: workspace:*
@@ -215,6 +302,37 @@ importers:
         specifier: ^7.0.0
         version: 7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0)
 
+  examples/effect-blocks:
+    dependencies:
+      effect:
+        specifier: ^3.22.0
+        version: 3.22.1
+    devDependencies:
+      '@solidjs/vite-plugin':
+        specifier: 3.0.0-next.35
+        version: 3.0.0-next.35(@solidjs/web@packages+web)(@testing-library/jest-dom@6.9.1)(solid-js@packages+solid)(vite@7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0))
+      '@solidjs/web':
+        specifier: workspace:*
+        version: link:../../packages/web
+      '@types/node':
+        specifier: ^25.6.0
+        version: 25.6.0
+      jsdom:
+        specifier: ^25.0.1
+        version: 25.0.1
+      solid-js:
+        specifier: workspace:*
+        version: link:../../packages/solid
+      typescript:
+        specifier: ^6.0.2
+        version: 6.0.3
+      vite:
+        specifier: ^7.0.0
+        version: 7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0)
+      vitest:
+        specifier: ^4.1.6
+        version: 4.1.6(@types/node@25.6.0)(@vitest/coverage-v8@4.1.6)(jsdom@25.0.1)(vite@7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0))
+
   examples/hackernews:
     dependencies:
       '@solidjs/router':
@@ -234,6 +352,31 @@ importers:
         specifier: ^8.0.0
         version: 8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0)
 
+  examples/hackernews-blocks:
+    dependencies:
+      '@solidjs/router':
+        specifier: 2.0.0-next.13
+        version: 2.0.0-next.13(@solidjs/web@packages+web)(solid-js@packages+solid)
+      '@solidjs/web':
+        specifier: workspace:*
+        version: link:../../packages/web
+      solid-js:
+        specifier: workspace:*
+        version: link:../../packages/solid
+    devDependencies:
+      '@solidjs/vite-plugin':
+        specifier: 3.0.0-next.35
+        version: 3.0.0-next.35(@solidjs/web@packages+web)(@testing-library/jest-dom@6.9.1)(solid-js@packages+solid)(vite@8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0))
+      jsdom:
+        specifier: ^25.0.1
+        version: 25.0.1
+      vite:
+        specifier: ^8.0.0
+        version: 8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0)
+      vitest:
+        specifier: ^4.1.6
+        version: 4.1.6(@types/node@25.6.0)(@vitest/coverage-v8@4.1.6)(jsdom@25.0.1)(vite@8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0))
+
   examples/hackernews-spa:
     dependencies:
       '@solidjs/router':
@@ -252,6 +395,31 @@ importers:
       vite:
         specifier: ^8.0.0
         version: 8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0)
+
+  examples/hackernews-spa-blocks:
+    dependencies:
+      '@solidjs/router':
+        specifier: 2.0.0-next.13
+        version: 2.0.0-next.13(@solidjs/web@packages+web)(solid-js@packages+solid)
+      '@solidjs/web':
+        specifier: workspace:*
+        version: link:../../packages/web
+      solid-js:
+        specifier: workspace:*
+        version: link:../../packages/solid
+    devDependencies:
+      '@solidjs/vite-plugin':
+        specifier: 3.0.0-next.35
+        version: 3.0.0-next.35(@solidjs/web@packages+web)(@testing-library/jest-dom@6.9.1)(solid-js@packages+solid)(vite@8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0))
+      jsdom:
+        specifier: ^25.0.1
+        version: 25.0.1
+      vite:
+        specifier: ^8.0.0
+        version: 8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0)
+      vitest:
+        specifier: ^4.1.6
+        version: 4.1.6(@types/node@25.6.0)(@vitest/coverage-v8@4.1.6)(jsdom@25.0.1)(vite@8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0))
 
   examples/islands:
     devDependencies:
@@ -289,6 +457,33 @@ importers:
         specifier: ^7.0.0
         version: 7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0)
 
+  examples/migrating-element-blocks:
+    devDependencies:
+      '@solidjs/vite-plugin':
+        specifier: 3.0.0-next.35
+        version: 3.0.0-next.35(@solidjs/web@packages+web)(@testing-library/jest-dom@6.9.1)(solid-js@packages+solid)(vite@7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0))
+      '@solidjs/web':
+        specifier: workspace:*
+        version: link:../../packages/web
+      '@types/node':
+        specifier: ^25.6.0
+        version: 25.6.0
+      jsdom:
+        specifier: ^25.0.1
+        version: 25.0.1
+      solid-js:
+        specifier: workspace:*
+        version: link:../../packages/solid
+      typescript:
+        specifier: ^6.0.2
+        version: 6.0.3
+      vite:
+        specifier: ^7.0.0
+        version: 7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0)
+      vitest:
+        specifier: ^4.1.6
+        version: 4.1.6(@types/node@25.6.0)(@vitest/coverage-v8@4.1.6)(jsdom@25.0.1)(vite@7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0))
+
   examples/notes:
     dependencies:
       '@solidjs/router':
@@ -317,6 +512,40 @@ importers:
         specifier: ^8.0.0
         version: 8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0)
 
+  examples/notes-blocks:
+    dependencies:
+      '@solidjs/router':
+        specifier: 2.0.0-next.13
+        version: 2.0.0-next.13(@solidjs/web@packages+web)(solid-js@packages+solid)
+      '@solidjs/web':
+        specifier: workspace:*
+        version: link:../../packages/web
+      date-fns:
+        specifier: ^3.6.0
+        version: 3.6.0
+      marked:
+        specifier: ^12.0.2
+        version: 12.0.2
+      solid-js:
+        specifier: workspace:*
+        version: link:../../packages/solid
+      unstorage:
+        specifier: ^1.17.5
+        version: 1.17.5
+    devDependencies:
+      '@solidjs/vite-plugin':
+        specifier: 3.0.0-next.35
+        version: 3.0.0-next.35(@solidjs/web@packages+web)(@testing-library/jest-dom@6.9.1)(solid-js@packages+solid)(vite@8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0))
+      jsdom:
+        specifier: ^25.0.1
+        version: 25.0.1
+      vite:
+        specifier: ^8.0.0
+        version: 8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0)
+      vitest:
+        specifier: ^4.1.6
+        version: 4.1.6(@types/node@25.6.0)(@vitest/coverage-v8@4.1.6)(jsdom@25.0.1)(vite@8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0))
+
   examples/rendering:
     devDependencies:
       '@solidjs/vite-plugin':
@@ -341,6 +570,36 @@ importers:
         specifier: ^7.0.0
         version: 7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0)
 
+  examples/rendering-blocks:
+    devDependencies:
+      '@solidjs/vite-plugin':
+        specifier: 3.0.0-next.35
+        version: 3.0.0-next.35(@solidjs/web@packages+web)(@testing-library/jest-dom@6.9.1)(solid-js@packages+solid)(vite@7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0))
+      '@solidjs/web':
+        specifier: workspace:*
+        version: link:../../packages/web
+      '@types/node':
+        specifier: ^25.6.0
+        version: 25.6.0
+      jsdom:
+        specifier: ^25.0.1
+        version: 25.0.1
+      rimraf:
+        specifier: ^3.0.2
+        version: 3.0.2
+      solid-js:
+        specifier: workspace:*
+        version: link:../../packages/solid
+      typescript:
+        specifier: ^6.0.2
+        version: 6.0.3
+      vite:
+        specifier: ^7.0.0
+        version: 7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0)
+      vitest:
+        specifier: ^4.1.6
+        version: 4.1.6(@types/node@25.6.0)(@vitest/coverage-v8@4.1.6)(jsdom@25.0.1)(vite@7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0))
+
   examples/sierpinski:
     devDependencies:
       '@solidjs/vite-plugin':
@@ -361,6 +620,33 @@ importers:
       vite:
         specifier: ^7.0.0
         version: 7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0)
+
+  examples/sierpinski-blocks:
+    devDependencies:
+      '@solidjs/vite-plugin':
+        specifier: 3.0.0-next.35
+        version: 3.0.0-next.35(@solidjs/web@packages+web)(@testing-library/jest-dom@6.9.1)(solid-js@packages+solid)(vite@7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0))
+      '@solidjs/web':
+        specifier: workspace:*
+        version: link:../../packages/web
+      '@types/node':
+        specifier: ^25.6.0
+        version: 25.6.0
+      jsdom:
+        specifier: ^25.0.1
+        version: 25.0.1
+      solid-js:
+        specifier: workspace:*
+        version: link:../../packages/solid
+      typescript:
+        specifier: ^6.0.2
+        version: 6.0.3
+      vite:
+        specifier: ^7.0.0
+        version: 7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0)
+      vitest:
+        specifier: ^4.1.6
+        version: 4.1.6(@types/node@25.6.0)(@vitest/coverage-v8@4.1.6)(jsdom@25.0.1)(vite@7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0))
 
   examples/sync-blocks:
     devDependencies:

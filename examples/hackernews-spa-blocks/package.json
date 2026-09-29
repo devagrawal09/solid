@@ -1,0 +1,27 @@
+{
+  "name": "hackernews-spa-blocks-example",
+  "description": "The SSR-SPA HackerNews baseline (examples/hackernews-spa) rewritten with generator blocks v2",
+  "version": "0.0.0",
+  "private": true,
+  "author": "Ryan Carniato",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "start": "node server.js",
+    "test": "vitest run --config vitest.config.ts",
+    "typecheck": "node ../../packages/typecheck/bin/solid-tsc.js --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@solidjs/router": "2.0.0-next.13",
+    "@solidjs/web": "workspace:*",
+    "solid-js": "workspace:*"
+  },
+  "devDependencies": {
+    "@solidjs/vite-plugin": "3.0.0-next.35",
+    "jsdom": "^25.0.1",
+    "vite": "^8.0.0",
+    "vitest": "^4.1.6"
+  }
+}
