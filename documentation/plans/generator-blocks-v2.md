@@ -92,6 +92,45 @@ Props: `$component(function* (props: TypedProps<{ id: string }>) …)` or
 `$component<{ id: string }>()(function* (props) …)` (TypeScript cannot take `P`
 explicitly while inferring the rest, microsoft/TypeScript#26242).
 
+### Render callbacks as blocks (row blocks)
+
+A render callback of `For`, `Show`, `Match` or `Repeat` may be a block with its own
+setup and view, the way a child component would be — so per-row state does not need a
+component:
+
+```tsx
+<For each={comments}>
+  {function* (c) {
+    const [open, setOpen] = yield* $signal(true);
+    const toggle = $event(function* () { setOpen(o => !o); });
+    return function* () {
+      return <li onClick={toggle}>{c.text} {(yield* open) ? "[-]" : "[+]"}</li>;
+    };
+  }}
+</For>
+```
+
+Three spellings, one meaning: a bare `function*`, `$(function* …)`, or a **named row
+block** declared in the setup and passed by name (`function* comment(c) { … }` …
+`<For each={c.comments}>{comment}</For>`), which may render itself recursively.
+`$scope(function* (item, index) { … })` builds the same callback explicitly. The setup
+runs once per row (per `Show` / `Match` branch activation), receives the item and the
+index, and creates; its `$cleanup`s run when the row is disposed (on the server too:
+the server registers `onCleanup`); the view is tracked like a component view. Uncompiled,
+`renderCallback` recognizes a generator function or a `SCOPE_CALLBACK`-marked callback;
+plain callbacks are unchanged.
+
+Types: the flow controls accept `RowBlock<[item, index], SetupOps, ViewOps>` after their
+plain overloads. The setup may only create and the view may only read (host rules as
+for components). A row's pending / failures propagate into its own view, and a flow
+control renders settled rows only: an unsettled row view is a type error
+(`[UNSETTLED_ROW]`), handled with `Loading` / `Errored` inside the row. Creation outside
+the setup is a type error and, compiled, `[OP_NOT_ALLOWED]`.
+
+`{child => yield* comment(child)}` is a compile error (`[YIELD_IN_CALLBACK]`): in a plain
+arrow it is not a delegation but `yield * comment(child)`. Pass the block (`{comment}`)
+or write the callback as a block.
+
 ### Effects
 
 `$effect` source may read after writing (writes are deferred until flush, so a later
@@ -203,6 +242,12 @@ v2 forms into `$(function* …)` blocks, which that pass lowers to call form (`y
   / `$store` / `$memo` / `$effect` calls create, `$cleanup` / `$flush` / `raise` /
   `attempt` are themselves, a call of a `$signal` / `$store` setter writes, and a read
   of a `$signal` / `$memo` accessor or a props path is a read setup may not do;
+- a render callback that is a block (bare `function*`, `$(…)`, or a named row block
+  referenced as a callback) becomes `$scope(…)`, which the lowering turns into
+  `$scopeCompiled(setup)`; a named row block becomes
+  `const name = _$scopeBlock(_$$(function* …))` so its recursive uses share it. For the
+  islands compiler a row block is a *scope*: the partitioner treats it as a component
+  (ssr-hydration-redesign.md, "Scopes");
 - in memo and event bodies an `attempt` may be async, so on the server a body that
   attempts stays a generator for the runtime driver; on the client it compiles to an
   `async function` run by `asyncBody` (a memo) or `$eventAsync` (an event) when every

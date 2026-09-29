@@ -501,7 +501,7 @@ What the numbers say:
 
 Updated for [Islands for real apps](#islands-for-real-apps): stores, optimistic stores, projections, live async memos, actions, `refresh`, async `$event`s, component call forms, helper generators, factories and components from other modules, a live `Show` with a render callback and an `<Errored>` around or inside live content no longer fall back.
 
-- **Not modeled yet:** a `Loading` *inside* a live region (content the client creates under it needs a client pending fallback); a live keyed `Show` with a render callback; view statements before the return; JSX produced by a live expression (use `Show` / `For`); a live `Show` / `For` with a fallback; a live `For` with an index, or rows that are not one element; SVG / MathML inside live regions; `ref`, spreads (also in call forms), `Index` / `Switch` / `Match` / `Dynamic` / `Portal`, member-expression tags; island sites under a `Show` / `For` over server data; recursion inside an island; a member component also rendered outside its island's root; a context an island reads with no provider inside it when a provider's value holds reactive state (otherwise its value at the island's root is serialized: `"$ctx:Name"` in `data-s`, checked JSON-plain on the server); module-level reactive state, or module-level mutable state two islands share; an element address that needs a path past two variable-size regions; serialized values on a comment anchor; an async memo whose value is not the result of its one final `attempt` (not adoptable); a derived cell (projection) that reads reactive state (its adoption would not subscribe); a `yield*` read of a value computed by a function from a module the compiler does not see (its reactive state is invisible).
+- **Not modeled yet:** a `Loading` *inside* a live region (content the client creates under it needs a client pending fallback); a live keyed `Show` with a render callback; view statements before the return; JSX produced by a live expression (use `Show` / `For`); a live `Show` / `For` with a fallback; a live `For` with an index, or rows that are not one element; SVG / MathML inside live regions; `ref`, spreads (also in call forms), `Index` / `Switch` / `Match` / `Dynamic` / `Portal`, member-expression tags; island sites under a `Show` / `For` over server data and recursion inside an island, except as [Scopes](#scopes-component-boundaries-do-not-matter) supports them; a member component also rendered outside its island's root; a context an island reads with no provider inside it when a provider's value holds reactive state (otherwise its value at the island's root is serialized: `"$ctx:Name"` in `data-s`, checked JSON-plain on the server); module-level reactive state, or module-level mutable state two islands share; an element address that needs a path past two variable-size regions; serialized values on a comment anchor; an async memo whose value is not the result of its one final `attempt` (not adoptable); a derived cell (projection) that reads reactive state (its adoption would not subscribe); a `yield*` read of a value computed by a function from a module the compiler does not see (its reactive state is invisible).
 - **Semantics to know:** side-effect statements in the setup of an *inert* component run on the server only (hydration would re-run them on the client); a setter stored in a module binding is reachable through the island chunk's exports, not through the module's own (empty) client export; a boundary's fallback is server HTML (its handlers are not island sites); an `<Errored>` routes the client errors of the **tier-2** islands in its content to its fallback (a client boundary), while tier-0 / tier-1 islands under it keep their runtime and a throw in their holes escapes (the kernel and the t0 helper have no error routing).
 
 ### Not done
@@ -625,6 +625,45 @@ Reading the tables:
 - Navigation and route-level clustering (design above).
 - The t0 helper and the kernel route no errors: tier-0/1 islands under an `<Errored>` keep their runtime and do not show its fallback on a client error.
 - Store serialization is pruned to top-level keys (not paths or rows).
+
+## Scopes: component boundaries do not matter
+
+Status: 2026-09-29 (branch `scopeBlocks`). The same logic written as one component or as five compiles to the same islands partition and the same output. Code: `packages/compiler/src/island_emit/scopes.rs` (new), `graph.rs`, `client.rs`, `server.rs`, `store_paths.rs`, `mod.rs`.
+
+### Partition on scopes
+
+Before the partitioner runs, the islands source is normalized to **scopes** (the unit that creates cells and encloses sites), in `prepare()` after imports, call forms and factory calls are inlined:
+
+1. **Row blocks become scope components.** A render callback that is a block (a bare `function*`, `$(function* …)`, or a named row block declared in the setup and passed by name, possibly recursively — see generator-blocks-v2.md, "Render callbacks as blocks") becomes a synthesized `$component` named `Host$name` (named) or `Host$For` / `Host$Show` (inline), whose captures are props and whose parameter is its item prop. Its setup runs once per row, its view is the row.
+2. **Keyed stores split per row** (`split_keyed_stores`, `store_paths::row_keyed_uses`): a `$store` map whose *every* read and write is `map[row.id]` with `row` the same row scope's item becomes a cell per row (`closed$key`), initialized from the map at that key. Any other access — a key read from the DOM (`dataset.id`), another row's key, the whole map — keeps the store whole and shared. When the split leaves the map written by nothing, the client holds it as its initial value (no live store, any tier).
+3. **Helper generators inline** (`inline_helpers`): a helper declared in a setup whose body is one `return` of an expression, called only as `yield* helper(plain args)`, is replaced at each site by its expression (parameters substituted). Others stay and are reported by the model.
+4. **Branch sinking** (`sink_into_branches`, analysis-guided on the first pass's probe): an island whose state and sites all sit in one `Show` branch over server data is rooted at the branch, which becomes a `Host$Show` scope with a children slot. This is what makes one component's toggle state a per-branch island as a `Toggle` child component would be.
+
+The partitioner then roots an island at the nearest scope that creates its cells and encloses its sites (dominance over the render graph), as it did for components. Two dominance rules changed: **an export is not a render site** here (another module's render sites are that module's own compile; `exported` stays in the model for the summary), and **a scope may render itself** (a recursive row is dominated by whoever renders its first instance).
+
+**Recursion inside an island.** Lifted state read by a recursive child (the thread under one `closed` signal) is one island over the thread. The server marks the recursion's rows as a *structural region* (a `Show` / `For` over server data holding island content: markers, as a live region has); the client adopts them with `Slot::Struct` and one row function per recursive scope that calls itself for its own rows (`$rows`). The recursion is refused — with that reason in the manifest — when it goes through another component, sits inside a live region, is not in a `<For>`, or passes props that change per level.
+
+Other changes: a prop that a member only forwards to another island's component is not bound (used-props fixpoint); a server-authoritative async memo read by an island root is serialized (`__SERVER_MEMO_i__`); `$list` / `$show` run rows created after activation under the island's owner so they are disposed with it (a leak fix; chunks with lists grow by ~94 bytes).
+
+### Results
+
+| Source | Partition | chunk bytes | server module bytes |
+| --- | --- | ---: | ---: |
+| `apps/hn-blocks/story.tsx` (Toggle + Comment components) | one tier-0 island per toggle (`Toggle`), nothing serialized | 689 | 6,201 |
+| `apps/hn-blocks/story-single.tsx` (one component, named recursive row block) | one tier-0 island per toggle (`StoryPage$comment$Show`), nothing serialized | **689 (identical)** | 6,084 |
+| `apps/hn-blocks/story-keyed.tsx` (a keyed `closed` store in the page) | per-row tier-0 islands, cell `closed$key` serialized per row | 861 | 6,280 |
+| keyed, handler reads its key from `dataset.id` | one shared tier-2 island at `StoryPage` (the store) | 2,972 | 6,124 |
+| keyed + a filter signal every row reads | one shared tier-1 island at `StoryPage` (filter) + per-row keyed tier-0 islands | 1,651 + 861 | 6,577 |
+
+`measure.mjs --apps hn --check`: `C-single-eager` and `C-single-lazy` (new variants over `story-single.tsx`) pass the gate against today's page with identity kept: 188.3 KB gz HTML, 0.7 KB gz JS (+0.5 KB lazy), the same as `C-eager` / `C-lazy`.
+
+**Manifest changes for existing sources:** none. Against the base compiler, the manifests and server modules of `examples/todos-blocks/src/app.tsx`, `apps/todos-local-blocks/app.tsx` and `apps/hn-blocks/story.tsx` are byte-identical (default and `minTier: 2`); HN's chunk is identical, and the list chunks of the todos apps grow 94 bytes (13,905 → 13,999 and 7,716 → 7,810 raw) for the owner fix above.
+
+### Supported and falling back
+
+Supported, in addition to "Supported constructs": row blocks (bare, `$(…)`, named and recursive) as scopes with per-row islands; state in one branch of a `Show` over server data; exported children of lifted state (one island at the parent); lifted state read by a recursive child (one island, structural regions); keyed stores split per row; single-expression helper generators.
+
+Still falling back or shared, with the reason: a recursion through another component, in a live region, outside a `<For>`, or with per-level props (manifest reason); a keyed store accessed at any key other than the row's own (shared, sound); a helper generator with statements, non-plain arguments or non-call uses (kept; the model reports it if it matters); view statements before the return (handled separately).
 
 ## Defects found
 
