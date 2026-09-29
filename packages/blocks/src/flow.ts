@@ -30,15 +30,25 @@ import type { COMPONENT, Path, RowBlock, SettledView, Source, View } from "./typ
 type Branded = { readonly [COMPONENT]: true };
 
 /** Forward every prop as a getter, replacing `children` (and `fallback` when given). */
-function forward(props: any, overrides: Record<string, unknown>): any {
+function forward(props: any, adaptChildren: (children: unknown) => unknown): any {
   const out: any = {};
   for (const key of Object.keys(props)) {
-    if (key in overrides) continue;
+    if (key === "children") continue;
     // A source passed straight to a flow control (`each={todos}` in `h`, or
     // a call `For({ each: todos, … })`) is read where the prop is read.
     Object.defineProperty(out, key, { get: () => through(props[key]), enumerable: true });
   }
-  for (const key in overrides) out[key] = overrides[key];
+  // Children stay as lazy as they were written: JSX element children are a
+  // getter the flow control reads when (and each time) it renders the branch
+  // — reading it here would build the content once, eagerly, outside the
+  // branch; a render callback is a plain value, adapted once.
+  const d = Object.getOwnPropertyDescriptor(props, "children");
+  if (d && d.get) {
+    Object.defineProperty(out, "children", {
+      get: () => adaptChildren(props.children),
+      enumerable: true
+    });
+  } else if (d) out.children = adaptChildren(d.value);
   return out;
 }
 
@@ -88,19 +98,17 @@ function ForBlocks<T extends readonly any[]>(
 ): SettledView;
 function ForBlocks(props: any): any {
   const keyedFalse = props.keyed === false;
-  const children = props.children;
-  const arity = typeof children === "function" && children.length > 1 ? 2 : 1;
   return SolidFor(
-    forward(props, {
-      children: adapt(
+    forward(props, children =>
+      adapt(
         children,
         (item: any, index: any) => [
           rowArg(item, keyedFalse),
           rowArg(index, typeof index === "function")
         ],
-        arity
+        typeof children === "function" && children.length > 1 ? 2 : 1
       )
-    })
+    )
   );
 }
 
@@ -120,9 +128,7 @@ function RepeatBlocks(
 ): SettledView;
 function RepeatBlocks(props: any): any {
   return SolidRepeat(
-    forward(props, {
-      children: adapt(props.children, (index: number) => [rowArg(index, false)], 1)
-    })
+    forward(props, children => adapt(children, (index: number) => [rowArg(index, false)], 1))
   );
 }
 
@@ -144,9 +150,7 @@ function ShowBlocks<T>(
 function ShowBlocks(props: any): any {
   const keyed = !!props.keyed;
   return SolidShow(
-    forward(props, {
-      children: adapt(props.children, (value: any) => [rowArg(value, !keyed)], 1)
-    })
+    forward(props, children => adapt(children, (value: any) => [rowArg(value, !keyed)], 1))
   );
 }
 
@@ -165,9 +169,7 @@ function MatchBlocks<T>(
 function MatchBlocks(props: any): any {
   const keyed = !!props.keyed;
   return SolidMatch(
-    forward(props, {
-      children: adapt(props.children, (value: any) => [rowArg(value, !keyed)], 1)
-    })
+    forward(props, children => adapt(children, (value: any) => [rowArg(value, !keyed)], 1))
   );
 }
 

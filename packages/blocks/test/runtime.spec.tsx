@@ -611,6 +611,45 @@ describe("row blocks", () => {
   });
 });
 
+describe("flow controls keep children lazy", () => {
+  it("element children are built when (and each time) the branch shows", () => {
+    let built = 0;
+    const node = document.createElement("b");
+    const [which, setWhich] = plainSignal("a");
+    const App = $component(function* () {
+      const make = (label: string) => {
+        built++;
+        return <i>{label}</i>;
+      };
+      return function* () {
+        return (
+          <div>
+            <Show when={which() === "a"}>
+              <p>{node}</p>
+            </Show>
+            <Show when={which() === "b"}>
+              <s>{node}</s>
+            </Show>
+            <Show when={which() === "c"}>{make("c")}</Show>
+          </div>
+        );
+      };
+    });
+    mount(App);
+    // the shared node sits in the branch that shows (built lazily, not by
+    // every Show at creation)
+    expect(root.querySelector("p")!.firstChild).toBe(node);
+    expect(built).toBe(0);
+    setWhich("b");
+    flush();
+    expect(root.querySelector("s")!.firstChild).toBe(node);
+    setWhich("c");
+    flush();
+    expect(built).toBe(1);
+    expect(root.textContent).toBe("c");
+  });
+});
+
 describe("hole blocks", () => {
   it("$() is a fine-grained child and readable with yield*", () => {
     let set!: (v: number) => void;
