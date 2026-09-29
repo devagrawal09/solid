@@ -18,6 +18,7 @@ execFileSync(
   { cwd: pkg, stdio: "inherit" }
 );
 execFileSync(process.execPath, ["./scripts/mangle-props.mjs", "dist/prod"], { cwd: pkg, stdio: "inherit" });
+execFileSync(process.execPath, ["./scripts/inline-features.mjs", "dist/prod"], { cwd: pkg, stdio: "inherit" });
 if (args.snapshot) {
   const dest = join(ROOT, "node_modules/.cache/blocks-v2/runtimes", args.snapshot);
   rmSync(dest, { recursive: true, force: true });

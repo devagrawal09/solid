@@ -10,3 +10,4 @@ const cwd = join(ROOT, "packages/signals");
 const run = (cmd, args) => execFileSync(cmd, args, { cwd, stdio: "inherit" });
 run("npx", ["rollup", "-c", "rollup.oracle.config.js"]);
 run("node", ["./scripts/mangle-props.mjs", "dist/oracle"]);
+run("node", ["./scripts/inline-features.mjs", "dist/oracle"]);

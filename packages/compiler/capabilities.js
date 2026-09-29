@@ -460,6 +460,10 @@ async function proveGraph({
 // compiled output requests the seams (`noThrow`, effect `equals`,
 // `statusFree`) that the authored source never names, so it stays on unless
 // the build says its compiler passes emit none (`compiledSeams: false`).
+// A module of a published @solidjs/signals tree (the trees
+// scripts/inline-features.mjs inlines the switches into).
+const RUNTIME_TREE_RE = /[\\/]dist[\\/](prod|observe|sync)[\\/].*\.js$/;
+
 const FEATURE_SWITCHES = [
   "OPTIMISTIC",
   "VERDICTS",
@@ -585,6 +589,25 @@ function featuresModuleSource(features, tier) {
       features[name].on && !(tier === "sync" && (name === "OPTIMISTIC" || name === "VERDICTS"));
     return `export const ${name} = ${on};`;
   }).join("\n");
+}
+
+// The marker scripts/inline-features.mjs (packages/signals) leaves on every
+// inlined switch test in the published trees: `/* @solid-feature STORES */ true`.
+// Keep the spelling in sync with that script.
+const FEATURE_MARKER = "@solid-feature";
+const FEATURE_LITERAL_RE = /\/\* @solid-feature ([A-Z_]+) \*\/ true\b/g;
+
+/** A runtime tree module with the marked literals of every switch the proof
+ * turned off rewritten to `false`, or null when nothing changes. */
+function sliceFeatureLiterals(code, features) {
+  if (!code.includes(FEATURE_MARKER)) return null;
+  let changed = false;
+  const out = code.replace(FEATURE_LITERAL_RE, (literal, name) => {
+    if (!features[name] || features[name].on) return literal;
+    changed = true;
+    return `/* ${FEATURE_MARKER} ${name} */ false`;
+  });
+  return changed ? out : null;
 }
 
 /**
@@ -779,6 +802,30 @@ function solidCapabilities(options = {}) {
       `[solid:capabilities] ${decision.graph} runtime slice${facts}: ${off.length ? `switched off ${off.join(", ")}` : "every feature switch stays on"}`
     );
   };
+  // Build: prove the switches from every application module's compiled
+  // output (the code this bundle includes), once per build. Awaited only
+  // from runtime modules (the features module and the runtime tree), which
+  // application code imports but never the reverse, so waiting on the
+  // application modules' transforms cannot wait on itself.
+  const refineFeatures = async ctx => {
+    if (!isBuild || options.compiledFacts === false || !proofInputs?.entries.length) return;
+    featureDecision ??= (async () => {
+      const refined = await proveGraph({
+        ...proofInputs,
+        compiledSeams: options.compiledSeams !== false,
+        resolve: resolverOf(ctx),
+        load: async id => (await ctx.load({ id }))?.code ?? null
+      });
+      decision.features = refined.features;
+      decision.facts = refined.facts;
+      // What kept the graph from being fully known for the feature
+      // proof (the async reasons above are the buildStart proof's).
+      decision.featureGaps = refined.reasons.filter(r => r.kind === "graph");
+      writeReport(proofInputs.root);
+      logFeatures();
+    })();
+    await featureDecision;
+  };
   // Resolution for the proof: skip this plugin (its own resolveId awaits
   // the proof).
   const resolverOf = ctx => async (source, importer) => {
@@ -904,29 +951,7 @@ function solidCapabilities(options = {}) {
         resolved &&
         /[\\/]dist[\\/](prod|observe|sync)[\\/]core[\\/]features\.js$/.exec(resolved.id);
       if (!tier || packageOf(resolved.id)?.name !== RUNTIME_PACKAGE) return null;
-      // Build: prove the switches from every application module's compiled
-      // output (the code this bundle includes). The runtime's features
-      // module is imported only by runtime modules, never by application
-      // code, so waiting here for the application modules' transforms
-      // cannot wait on itself.
-      if (isBuild && options.compiledFacts !== false && proofInputs?.entries.length) {
-        featureDecision ??= (async () => {
-          const refined = await proveGraph({
-            ...proofInputs,
-            compiledSeams: options.compiledSeams !== false,
-            resolve: resolverOf(this),
-            load: async id => (await this.load({ id }))?.code ?? null
-          });
-          decision.features = refined.features;
-          decision.facts = refined.facts;
-          // What kept the graph from being fully known for the feature
-          // proof (the async reasons above are the buildStart proof's).
-          decision.featureGaps = refined.reasons.filter(r => r.kind === "graph");
-          writeReport(proofInputs.root);
-          logFeatures();
-        })();
-        await featureDecision;
-      }
+      await refineFeatures(this);
       if (FEATURE_SWITCHES.every(f => decision.features[f].on)) return null;
       return FEATURES_ID + tier[1];
     },
@@ -993,10 +1018,27 @@ function solidCapabilities(options = {}) {
         JSON.stringify({ modules: modules.map(m => m.rel).sort(), features }, null, 2)
       );
     },
-    load(id) {
+    async load(id) {
       if (id === FRAMES_ID) return framesFeaturesModuleSource(framesDecision.features);
-      if (!id.startsWith(FEATURES_ID)) return null;
-      return featuresModuleSource(decision.features, id.slice(FEATURES_ID.length));
+      if (id.startsWith(FEATURES_ID))
+        return featuresModuleSource(decision.features, id.slice(FEATURES_ID.length));
+      // The runtime tree's own modules carry the switches inlined as marked
+      // literals (scripts/inline-features.mjs): rewrite the ones the proof
+      // turned off. In `load`, ahead of any plugin that could re-print the
+      // module and drop the marker comments.
+      if (!featureSlicing || !decision?.features || id.startsWith("\0")) return null;
+      if (stripQuery(id) !== id || !RUNTIME_TREE_RE.test(id)) return null;
+      if (packageOf(id)?.name !== RUNTIME_PACKAGE) return null;
+      await refineFeatures(this);
+      if (FEATURE_SWITCHES.every(f => decision.features[f].on)) return null;
+      let code;
+      try {
+        code = fs.readFileSync(id, "utf8");
+      } catch {
+        return null;
+      }
+      const sliced = sliceFeatureLiterals(code, decision.features);
+      return sliced === null ? null : { code: sliced, map: null };
     }
   };
 }
@@ -1011,5 +1053,6 @@ module.exports = {
   solidCapabilities,
   packageOf,
   htmlEntries,
-  FEATURE_SWITCHES
+  FEATURE_SWITCHES,
+  sliceFeatureLiterals
 };

@@ -520,3 +520,52 @@ export function createHashFilter() {
     expect(plugin.transform.handler.call({ warn() {} }, FILTER, "\0virtual:x.ts")).toBeNull();
   });
 });
+
+// The published trees carry the feature switches as marked literals
+// (packages/signals/scripts/inline-features.mjs): the linker rewrites the
+// literals of every switch the proof turned off, in each tree module's load.
+describe("marked feature literals", () => {
+  const { sliceFeatureLiterals, solidCapabilities } = require("../capabilities.js");
+  const DIST = path.join(REPO, "packages/signals/dist/prod");
+
+  test("sliceFeatureLiterals rewrites only the switches that are off", () => {
+    const code =
+      "if (/* @solid-feature STORES */ true && x) a();\nconst it = /* @solid-feature ITERABLE */ true;\n";
+    expect(sliceFeatureLiterals(code, { STORES: { on: false }, ITERABLE: { on: true } })).toBe(
+      "if (/* @solid-feature STORES */ false && x) a();\nconst it = /* @solid-feature ITERABLE */ true;\n"
+    );
+    // Nothing off, no marker, an unknown switch: no rewrite.
+    expect(sliceFeatureLiterals(code, { STORES: { on: true }, ITERABLE: { on: true } })).toBeNull();
+    expect(sliceFeatureLiterals("const a = true;", { STORES: { on: false } })).toBeNull();
+    expect(
+      sliceFeatureLiterals("/* @solid-feature NOPE */ true", { STORES: { on: false } })
+    ).toBeNull();
+  });
+
+  test.skipIf(!fs.existsSync(path.join(DIST, "core/features.js")))(
+    "the plugin's load rewrites the dist tree's marked literals for a signals-only graph",
+    async () => {
+      const p = project({
+        "src/main.js": `import { createSignal, createMemo } from "@solidjs/signals";\nconst [a] = createSignal(1);\nexport const m = createMemo(() => a() * 2);\n`
+      });
+      const plugin = solidCapabilities();
+      plugin.configResolved({ root: p.root, command: "build" });
+      const ctx = {
+        resolve: async (source, importer) => {
+          const id = await p.resolve(source, importer);
+          return id ? { id, external: false } : null;
+        }
+      };
+      await plugin.buildStart.call(ctx, { input: [path.join(p.root, "src/main.js")] });
+      const heap = path.join(DIST, "core/heap.js");
+      const published = fs.readFileSync(heap, "utf8");
+      expect(published).toMatch(/\/\* @solid-feature STORES \*\/ true/);
+      const loaded = await plugin.load.call(ctx, heap);
+      expect(loaded.code).toMatch(/\/\* @solid-feature STORES \*\/ false/);
+      expect(loaded.code).not.toMatch(/@solid-feature [A-Z_]+ \*\/ true/);
+      // Application modules and virtual ids are not touched.
+      expect(await plugin.load.call(ctx, path.join(p.root, "src/main.js"))).toBeNull();
+      expect(await plugin.load.call(ctx, "\0virtual:x")).toBeNull();
+    }
+  );
+});

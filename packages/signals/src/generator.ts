@@ -141,10 +141,20 @@ export const BLOCK_NOTHROW = 2;
  * block once, untracked, instead of in a computation that could never re-run. */
 export const BLOCK_STATIC = 4;
 
+/**
+ * Whether any block was ever built (set by the one-time install of `$` and
+ * `syncBlock`, the only two sites that brand a block). Renderers call
+ * `isBlock` / `blockFlags` on every function child and handler they see; in an
+ * app that never builds a block, this flag answers without the symbol-keyed
+ * property miss on each function (a prototype-chain walk the handwritten
+ * create path paid per JSX hole).
+ */
+let blocksBuilt = false;
+
 /** The metadata flags a block was created with (0 for an unannotated block,
  * or for a value that is not a block). */
 export function blockFlags(value: unknown): number {
-  return typeof value === "function" ? ((value as any)[FLAGS] ?? 0) : 0;
+  return blocksBuilt && typeof value === "function" ? ((value as any)[FLAGS] ?? 0) : 0;
 }
 /** Phantom metadata slot — never present at runtime. */
 export declare const META: unique symbol;
@@ -1309,7 +1319,7 @@ let currentHost: Host = REACTIVE;
 let pendingHost: Host | -1 = -1;
 
 export function isBlock(value: unknown): value is AnyBlock {
-  return typeof value === "function" && (value as any)[BLOCK] === true;
+  return blocksBuilt && typeof value === "function" && (value as any)[BLOCK] === true;
 }
 
 /** @internal Run a block under a host (the host decides which operations it admits). */
@@ -2000,6 +2010,7 @@ export type StrictCallback<Input, R> = ((input: Input) => R) & { readonly [STRIC
 export function installBlockDriver(): void {
   if (generatorHookInstalled) return;
   generatorHookInstalled = true;
+  blocksBuilt = true;
   installGeneratorHook(generatorBody);
   // Renderers reach blocks through block-hooks.ts (install-on-use): a
   // block exists from here on, so its render / dispatch / deferred-view
@@ -2134,6 +2145,7 @@ export function syncBlock<Input, R>(
 ): Block<R, any, never, any, any, Input> {
   if (!syncRuntimeInstalled) {
     syncRuntimeInstalled = true;
+    blocksBuilt = true;
     // As in `$`: renderers reach blocks through block-hooks.ts, and the
     // store's path tokens are only reachable once a block exists. (No
     // generator-body hook: that is the driver.)

@@ -7,9 +7,13 @@ import { ROOT } from "../track-a/compile.mjs";
 const here = dirname(fileURLToPath(import.meta.url));
 // Long enough that the measured window is past JIT tier-up: with
 // `--single-threaded` optimizing compiles run on the main thread and count.
+// 300 update ops was not: a late TurboFan compile of `read` (~10 ms, ~50M
+// Ir) landed inside the memo/update window on one runtime and not on another
+// with byte-identical code (--trace-opt; +47% on that cell). At 3000 the
+// update windows of the handwritten memo / event cells are compile-free.
 export const WARMUP = {
   mount: Number(process.env.BV2_WARMUP_MOUNT ?? 60),
-  update: Number(process.env.BV2_WARMUP_UPDATE ?? 300)
+  update: Number(process.env.BV2_WARMUP_UPDATE ?? 3000)
 };
 
 /** Resolve a runtime name: a snapshot under node_modules/.cache/blocks-v2/runtimes,
@@ -20,6 +24,20 @@ export function runtimePath(name) {
   return `node_modules/.cache/blocks-v2/runtimes/${name}/index.js`;
 }
 
+// A fixed young generation (MB per semi-space). V8 otherwise grows the
+// semi-spaces adaptively from the heap's history, so the same code settles
+// at a different scavenge rate depending on what the process did before the
+// window, even on how the runtime was loaded (a tree with vs without a
+// `"type": "module"` package.json: 11 vs 6 scavenges per 200 create/mount
+// ops, ±4% Ir/op on byte-identical code). Pinned, the scavenge count follows
+// the bytes allocated. `BV2_SEMI_SPACE=adaptive` restores V8's sizing
+// (numbers recorded before this pin used it).
+const SEMI_SPACE = process.env.BV2_SEMI_SPACE ?? "8";
+const GC_FLAGS =
+  SEMI_SPACE === "adaptive"
+    ? []
+    : [`--min-semi-space-size=${SEMI_SPACE}`, `--max-semi-space-size=${SEMI_SPACE}`];
+
 export function ir(module, mode, ops, n) {
   return new Promise((resolve, reject) => {
     const child = spawn("valgrind", [
@@ -29,6 +47,7 @@ export function ir(module, mode, ops, n) {
       process.execPath,
       "--predictable",
       "--single-threaded",
+      ...GC_FLAGS,
       join(here, "worker.mjs"),
       pathToFileURL(module).href,
       mode,

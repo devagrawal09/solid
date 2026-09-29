@@ -115,11 +115,21 @@ describe("link-time feature switches", () => {
       });
     });
 
-    it("the core imports the switches instead of folding them at library build time", () => {
+    // scripts/inline-features.mjs: the switch tests are marked literals (the
+    // capability linker rewrites the ones it turns off), never folded at
+    // library build time and never an imported binding (a module-cell load
+    // per test when the tree is loaded unbundled).
+    it("the trees carry the switches as marked literals, not folded or imported", () => {
       for (const tier of ["prod", "observe", "sync"]) {
-        expect(read(`${tier}/core/core.js`)).toMatch(/from "\.\/features\.js"/);
-        expect(read(`${tier}/signals.js`)).toMatch(/from "\.\/core\/features\.js"/);
+        const core = read(`${tier}/core/core.js`);
+        const signals = read(`${tier}/signals.js`);
+        expect(core).toMatch(/import "\.\/features\.js";/);
+        expect(signals).toMatch(/import "\.\/core\/features\.js";/);
+        expect(core).not.toMatch(/import \{[^}]*\} from "\.\/features\.js"/);
+        expect(signals).not.toMatch(/import \{[^}]*\} from "\.\/core\/features\.js"/);
+        expect(core).toMatch(/\/\* @solid-feature [A-Z_]+ \*\/ (true|false)/);
       }
+      expect(read("prod/signals.js")).toMatch(/\/\* @solid-feature ITERABLE \*\/ true/);
     });
   });
 });

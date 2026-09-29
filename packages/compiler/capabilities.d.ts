@@ -83,6 +83,17 @@ export function proveGraph(options: {
 
 export const FEATURE_SWITCHES: readonly FeatureSwitch[];
 
+/**
+ * A module of a published @solidjs/signals tree with the marked switch
+ * literals (`/* @solid-feature NAME *\/ true`, left by the package's
+ * scripts/inline-features.mjs) of every switch that is off rewritten to
+ * `false`; null when nothing changes.
+ */
+export function sliceFeatureLiterals(
+  code: string,
+  features: Record<string, { on: boolean }>
+): string | null;
+
 export function proveFeatures(options: {
   libraries: Map<string, { manifest: any; names: Set<string> }>;
   complete: boolean;
