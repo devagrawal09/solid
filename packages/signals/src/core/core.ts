@@ -460,8 +460,10 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   // the block. The block driver re-raises the guard when it resumes. Not
   // dev-only: the driver raises the guard and store proxies answer it with
   // path tokens in every tier, so a production run must lower it too.
+  // Read-only unless a block raised it: the store stays off the path of an
+  // app that never runs a block.
   const prevBlockGuard = blockGuard;
-  blockGuard = false;
+  if (prevBlockGuard) blockGuard = false;
   if (__DEV__) {
     prevStrictRead = strictRead;
     strictRead = false;
@@ -596,7 +598,7 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   } finally {
     tracking = prevTracking;
     latestReadActive = prevLatestRead;
-    blockGuard = prevBlockGuard;
+    if (prevBlockGuard) blockGuard = true;
     if (__DEV__) strictRead = prevStrictRead;
     if (isStaleEffect) stale = prevStale;
     // Consume the missed-wake latch (#3037, set by insertSubs): a dep write
@@ -1299,6 +1301,22 @@ export function ext(el: { _x: NodeExtension | null }): NodeExtension {
 }
 
 /**
+ * An effect's compiled seams (COMPILED_SEAMS): `noThrow` with `sync` (the
+ * status-free pair) and an `equals` cut-off (compiler memo fusion: a memo
+ * fused into its only reader keeps its cut-off). Out of line, behind one
+ * test: createEffectNode is inlined into every render effect's creation
+ * site, where its bytecode size counts against V8's inlining budget (the
+ * handwritten create path, vs-upstream-v2.md).
+ */
+function effectSeams(self: Computed<any>, options: NodeOptions<any>): void {
+  if (options.sync && options.noThrow) self._config |= CONFIG_NOTHROW;
+  if (options.equals) {
+    self._equals = options.equals;
+    self._config |= CONFIG_EFFECT_EQUALS;
+  }
+}
+
+/**
  * Build an Effect node with all effect-specific fields baked into a single object literal,
  * so V8 sees the full hidden class shape at construction time. Effects always run in lazy
  * mode (recompute is called explicitly by `effect()`), so we hardcode the lazy bits and skip
@@ -1324,7 +1342,6 @@ export function createEffectNode<T>(
           (transparent ? CONFIG_TRANSPARENT : 0) |
           (options?.ownedWrite ? CONFIG_OWNED_WRITE : 0) |
           (options?.sync ? CONFIG_SYNC : 0) |
-          (COMPILED_SEAMS && options?.noThrow ? CONFIG_NOTHROW : 0) |
           (options?._extraConfig ?? 0) |
           (SNAPSHOTS && snapshotCaptureActive && ownerInSnapshotScope(context)
             ? CONFIG_IN_SNAPSHOT_SCOPE
@@ -1371,7 +1388,6 @@ export function createEffectNode<T>(
           (transparent ? CONFIG_TRANSPARENT : 0) |
           (options?.ownedWrite ? CONFIG_OWNED_WRITE : 0) |
           (options?.sync ? CONFIG_SYNC : 0) |
-          (COMPILED_SEAMS && options?.noThrow ? CONFIG_NOTHROW : 0) |
           (options?._extraConfig ?? 0) |
           (SNAPSHOTS && snapshotCaptureActive && ownerInSnapshotScope(context)
             ? CONFIG_IN_SNAPSHOT_SCOPE
@@ -1420,10 +1436,7 @@ export function createEffectNode<T>(
   // `equals`: an equality cut-off for the effect phase (compiled memo
   // fusion — a memo inlined into its only reader keeps its cut-off here).
   if (__TEST__ && (options?.equals || options?.noThrow)) markFeature("COMPILED_SEAMS");
-  if (COMPILED_SEAMS && options?.equals) {
-    self._equals = options.equals;
-    self._config |= CONFIG_EFFECT_EQUALS;
-  }
+  if (COMPILED_SEAMS && options) effectSeams(self, options);
   if (__ORACLE__ && (options as any)?.oracle) self._oracle = (options as any).oracle;
   setupComputedNode(self, lazyOptions);
   return self;

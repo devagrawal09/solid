@@ -150,6 +150,11 @@ export interface AccessorIterable<T> {
 }
 export type SourceAccessor<T> = Refreshable<Accessor<T>> & AccessorIterable<T>;
 
+// A module constant: `Symbol.iterator` is a global lookup plus a property
+// load in every accessor's bytecode (accessor() is inlined into each
+// primitive's creation site, where its size counts against V8's budget).
+const ITERATOR = Symbol.iterator;
+
 export function accessor<T>(node: any): SourceAccessor<T> {
   const fn = read.bind(null, node) as SourceAccessor<T>;
   (fn as any)[$REFRESH] = node;
@@ -157,7 +162,7 @@ export function accessor<T>(node: any): SourceAccessor<T> {
   // bound functions share one shape.
   // Generator-free slice (core/features.ts ITERABLE off): no block yields an
   // accessor, so accessors carry only the refresh brand.
-  if (ITERABLE) (fn as any)[Symbol.iterator] = __TEST__ ? censusAccessorIterator : accessorIterator;
+  if (ITERABLE) (fn as any)[ITERATOR] = __TEST__ ? censusAccessorIterator : accessorIterator;
   return fn;
 }
 
@@ -590,7 +595,12 @@ export function createMemo<T>(
   compute: ComputeFunction<undefined | NoInfer<T>, T>,
   options?: MemoOptions<T>
 ): SourceAccessor<T> {
-  return accessor<T>(computed<T>(generatorMemo(compute) as any, options));
+  // generatorMemo, inlined: createMemo's size counts against the inlining
+  // budget of every component that creates a memo.
+  if (__DEV__) checkGeneratorHook(compute);
+  return accessor<T>(
+    computed<T>(((generatorHook && generatorHook(compute)) || compute) as any, options)
+  );
 }
 
 /**

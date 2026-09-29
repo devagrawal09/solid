@@ -154,7 +154,12 @@ let blocksBuilt = false;
 /** The metadata flags a block was created with (0 for an unannotated block,
  * or for a value that is not a block). */
 export function blockFlags(value: unknown): number {
-  return blocksBuilt && typeof value === "function" ? ((value as any)[FLAGS] ?? 0) : 0;
+  // Kept tiny (V8 always inlines a function this small, outside the caller's
+  // inlining budget): the probe itself lives in flagsOf.
+  return blocksBuilt ? flagsOf(value) : 0;
+}
+function flagsOf(value: unknown): number {
+  return typeof value === "function" ? ((value as any)[FLAGS] ?? 0) : 0;
 }
 /** Phantom metadata slot — never present at runtime. */
 export declare const META: unique symbol;
@@ -1319,7 +1324,11 @@ let currentHost: Host = REACTIVE;
 let pendingHost: Host | -1 = -1;
 
 export function isBlock(value: unknown): value is AnyBlock {
-  return blocksBuilt && typeof value === "function" && (value as any)[BLOCK] === true;
+  // Tiny for the same reason as blockFlags.
+  return blocksBuilt && isBranded(value);
+}
+function isBranded(value: unknown): boolean {
+  return typeof value === "function" && (value as any)[BLOCK] === true;
 }
 
 /** @internal Run a block under a host (the host decides which operations it admits). */
