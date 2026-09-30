@@ -496,7 +496,13 @@ describe("pay-for-use tree-shaking (#2883)", () => {
     // lane posture, `on` re-arms, parked wakes and joins): this harness does
     // not inline the imported switch constants, ~6 B per site; an app build
     // folds them (core-runtime-slicing.md, "The try rule").
-    expect(minifiedBytes).toBeLessThan(27_300);
+    // CONSCIOUS BUMP (hot-path parity with upstream, vs-upstream-v2.md):
+    // 27,274 → 27,331. The status-free dispatch moves from its own test at
+    // the top of recompute into the lane-posture chain (a `statusFree`
+    // helper, +66 B), so a recompute without the proof pays no test for it;
+    // effect options moving out of createEffectNode (`effectOptions`) took
+    // 9 B off.
+    expect(minifiedBytes).toBeLessThan(27_350);
     expect(retainedFrom(retained, ["core/status-free.ts"])).toEqual([]);
   });
 
@@ -557,7 +563,8 @@ describe("pay-for-use tree-shaking (#2883)", () => {
     // over the floor) when it landed. MERGE (upstream `next` 0bf57589,
     // 2026-09-29): 29,536 — the floor's growth (see above) plus the same
     // +2,290 B module.
-    expect(minifiedBytes).toBeLessThan(29_600);
+    // Hot-path parity (see the floor above): 29,564 → 29,616.
+    expect(minifiedBytes).toBeLessThan(29_650);
   });
 
   it("renderer block entry points do not retain the block runtime (install-on-use)", async () => {

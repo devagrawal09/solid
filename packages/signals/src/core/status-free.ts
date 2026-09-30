@@ -56,7 +56,6 @@ import {
   STATUS_UNINITIALIZED
 } from "./constants.js";
 import {
-  blockGuard,
   context,
   currentOptimisticLane,
   ext,
@@ -83,7 +82,6 @@ import { deleteFromHeap, enqueueSub, insertIntoHeapHeight, queueFor } from "./he
 import { devTrackHeldPending } from "./invariants.js";
 import {
   activeTransition,
-  bumpNotifyEpoch,
   clock,
   currentTransition,
   GlobalQueue,
@@ -181,10 +179,10 @@ function threw(el: Computed<any>, e: unknown): void {
  */
 export function recomputeStatusFree(el: Computed<any>, create: boolean): boolean {
   if (!eligible(el, create)) return false;
-  bumpNotifyEpoch();
+  // (recompute, the only caller, has bumped the notify epoch and fired the
+  // attribution start before dispatching here.)
   const isEffect = (el as any)._type;
   let devChanged = false;
-  if (__OBSERVE__ && attrHooks !== null) attrHooks.recomputeStart(el, create);
   if (!create) {
     deleteFromHeap(el, queueFor(el));
     if (__DEV__) clearSignals(el);

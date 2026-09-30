@@ -37,7 +37,6 @@ import {
   CONFIG_EFFECT_EQUALS,
   CONFIG_ORACLE_DIRECT,
   CONFIG_ORACLE_DETACHED,
-  CONFIG_STATUS_FREE,
   CONFIG_SYNC,
   CONFIG_TRANSPARENT,
   defaultContext,
@@ -281,17 +280,21 @@ export function clearSnapshots(): void {
   snapshotCaptureActive = false;
 }
 
-export function recompute(el: Computed<any>, create: boolean = false): void {
-  // Status-free path (Track A stage 1): both proofs present and the path is
-  // installed (status-free.ts, pulled in by compiled `$` output). The hook
-  // declines outside the plain world; then the full path below runs.
-  if (
-    COMPILED_SEAMS &&
-    (el._config & CONFIG_STATUS_FREE) === CONFIG_STATUS_FREE &&
+/** The lane chain's derived-override test in `recompute`, widened to the
+ * status-free candidates (CONFIG_NOTHROW, COMPILED_SEAMS only). */
+const DERIVED_OVERRIDE_OR_NOTHROW = CONFIG_DERIVED_OVERRIDE | (COMPILED_SEAMS ? CONFIG_NOTHROW : 0);
+
+/** The status-free run of a CONFIG_NOTHROW node, when it also carries
+ * CONFIG_SYNC and the path is installed; false when the full path must run. */
+function statusFree(el: Computed<any>, create: boolean): boolean {
+  return (
+    (el._config & CONFIG_SYNC) !== 0 &&
     GlobalQueue._recomputeStatusFree !== null &&
     GlobalQueue._recomputeStatusFree(el, create)
-  )
-    return;
+  );
+}
+
+export function recompute(el: Computed<any>, create: boolean = false): void {
   // §12d: any recompute can clean a marked subscriber — invalidate skips.
   bumpNotifyEpoch();
   const isEffect = (el as any)._type;
@@ -307,32 +310,51 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   // Optimistic state and its lanes ride transactions: async capabilities.
   let isOptimisticDirty = __ASYNC__ && OPTIMISTIC && !!(el._flags & REACTIVE_OPTIMISTIC_DIRTY);
   let lane: OptimisticLane | null | false = null;
+  // Status-free path (Track A stage 1): both proofs present (CONFIG_SYNC and
+  // CONFIG_NOTHROW) and the path installed (status-free.ts, pulled in by
+  // compiled `$` output). The hook declines outside the plain world, having
+  // done nothing; then the full path below runs. Dispatched from inside the
+  // lane-posture chain, whose derived-override test is widened to the
+  // CONFIG_NOTHROW bit: a pass over a node without the proof pays no test of
+  // its own (the handwritten update paths, vs-upstream-v2.md). Nothing above
+  // this point has an effect the status-free run repeats (it leaves the epoch
+  // bump and the attribution start to this function).
   if (!__ASYNC__ || !OPTIMISTIC) {
     // No lanes exist in the async-free or the optimistic-free runtime.
+    if (COMPILED_SEAMS && el._config & CONFIG_NOTHROW && statusFree(el, create)) return;
   } else if (isOptimisticDirty) {
     lane = GlobalQueue._recomputeLane!(el, true);
     // `false` = wake-only lane demotion: recompute plain so a mid-tick
     // latest()/isPending() pull stages instead of direct-committing (#3009).
     // The predicate lives with the engine (recomputeLane).
     if (lane === false) isOptimisticDirty = false;
-  } else if (el._config & CONFIG_DERIVED_OVERRIDE) {
-    // Lanes stage (#3479): a pass over a live lane member carrying a derived
-    // override is the lane's pass whatever channel dirtied it (a boundary
-    // reset, an unrelated sync write) — its inputs serve the lane's view, so
-    // its result is the lane's and belongs in the override slot. Run plain,
-    // A18's sync twin below read that re-derived lane view as a differing
-    // truth (a fresh array), superseded the override and demoted the lane;
-    // the lane's next pass then dropped the staged "truth" and left the node
-    // flagged superseded with nothing to serve (fuzzer latest-1 #2481). A
-    // demoted node resolves no lane and stays plain: its pass IS the truth.
-    lane = GlobalQueue._recomputeLane!(el, true);
-    if (lane) isOptimisticDirty = true;
-  } else if (activeTransition && !create && activeTransition._optimisticNodes.length) {
+  } else if (
+    activeTransition &&
+    !create &&
+    activeTransition._optimisticNodes.length &&
+    !(el._config & CONFIG_DERIVED_OVERRIDE)
+  ) {
     // Lane adoption: parent-deeper-than-owned-child can run before its OPT-dirty
     // child propagates. Walk deps once and inherit the OPT lane so this node
-    // recomputes under the right posture and propagates correctly.
+    // recomputes under the right posture and propagates correctly. (A derived
+    // override takes the arm below; a status-free candidate would decline
+    // under a live transition anyway.)
     lane = GlobalQueue._recomputeLane!(el, false);
     if (lane) isOptimisticDirty = true;
+  } else if (el._config & DERIVED_OVERRIDE_OR_NOTHROW) {
+    if (!COMPILED_SEAMS || el._config & CONFIG_DERIVED_OVERRIDE) {
+      // Lanes stage (#3479): a pass over a live lane member carrying a derived
+      // override is the lane's pass whatever channel dirtied it (a boundary
+      // reset, an unrelated sync write) — its inputs serve the lane's view, so
+      // its result is the lane's and belongs in the override slot. Run plain,
+      // A18's sync twin below read that re-derived lane view as a differing
+      // truth (a fresh array), superseded the override and demoted the lane;
+      // the lane's next pass then dropped the staged "truth" and left the node
+      // flagged superseded with nothing to serve (fuzzer latest-1 #2481). A
+      // demoted node resolves no lane and stays plain: its pass IS the truth.
+      lane = GlobalQueue._recomputeLane!(el, true);
+      if (lane) isOptimisticDirty = true;
+    } else if (statusFree(el, create)) return;
   }
   if (!create) {
     // A stamped memo re-enters its hold: its value is that transaction's work.

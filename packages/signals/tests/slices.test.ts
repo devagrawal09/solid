@@ -54,7 +54,7 @@ describe("link-time feature switches", () => {
     ],
     SNAPSHOTS: ["CONFIG_IN_SNAPSHOT_SCOPE", "CONFIG_HAS_SNAPSHOT"],
     ITERABLE: ["accessorIterator"],
-    COMPILED_SEAMS: ["CONFIG_STATUS_FREE", "_recomputeStatusFree(", "CONFIG_NOTHROW"]
+    COMPILED_SEAMS: ["function statusFree(", "_recomputeStatusFree(", "CONFIG_NOTHROW"]
   };
 
   it("the switch list matches src/core/features.ts", () => {
