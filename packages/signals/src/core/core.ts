@@ -1305,19 +1305,29 @@ export function ext(el: { _x: NodeExtension | null }): NodeExtension {
 }
 
 /**
- * An effect's compiled seams (COMPILED_SEAMS): `noThrow` with `sync` (the
- * status-free pair) and an `equals` cut-off (compiler memo fusion: a memo
- * fused into its only reader keeps its cut-off). Out of line, behind one
- * test: createEffectNode is inlined into every render effect's creation
- * site, where its bytecode size counts against V8's inlining budget (the
- * handwritten create path, vs-upstream-v2.md).
+ * An effect's options past the node literal, out of line behind one test:
+ * createEffectNode is inlined into every render effect's creation site
+ * (createRenderEffect, and through it the renderer's insert), where its
+ * bytecode counts against TurboFan's cumulative inlining budget. With these
+ * tests inline, `linkChild` no longer fit into createRenderEffect (the
+ * handwritten create path, vs-upstream-v2.md). Most effects pass no options.
+ *
+ * - `unobserved`: the node's unobserved hook.
+ * - COMPILED_SEAMS: `noThrow` (with `sync`, the status-free pair) and an
+ *   `equals` cut-off for the effect phase (compiler memo fusion: a memo fused
+ *   into its only reader keeps its cut-off).
  */
-function effectSeams(self: Computed<any>, options: NodeOptions<any>): void {
-  if (options.sync && options.noThrow) self._config |= CONFIG_NOTHROW;
-  if (options.equals) {
-    self._equals = options.equals;
-    self._config |= CONFIG_EFFECT_EQUALS;
+function effectOptions(self: Computed<any>, options: NodeOptions<any>): void {
+  if (options.unobserved) ext(self)._unobserved = options.unobserved;
+  if (__TEST__ && (options.equals || options.noThrow)) markFeature("COMPILED_SEAMS");
+  if (COMPILED_SEAMS) {
+    if (options.noThrow) self._config |= CONFIG_NOTHROW;
+    if (options.equals) {
+      self._equals = options.equals;
+      self._config |= CONFIG_EFFECT_EQUALS;
+    }
   }
+  if (__ORACLE__ && (options as any).oracle) self._oracle = (options as any).oracle;
 }
 
 /**
@@ -1436,12 +1446,7 @@ export function createEffectNode<T>(
   // allocation on EVERY effect at creation (an alloc + 19 field stores,
   // +23% effect creation, caught by the creation benches). Only genuinely
   // per-node channels (boundaries) live on _x.
-  if (options?.unobserved) ext(self)._unobserved = options.unobserved;
-  // `equals`: an equality cut-off for the effect phase (compiled memo
-  // fusion — a memo inlined into its only reader keeps its cut-off here).
-  if (__TEST__ && (options?.equals || options?.noThrow)) markFeature("COMPILED_SEAMS");
-  if (COMPILED_SEAMS && options) effectSeams(self, options);
-  if (__ORACLE__ && (options as any)?.oracle) self._oracle = (options as any).oracle;
+  if (options) effectOptions(self, options);
   setupComputedNode(self, lazyOptions);
   return self;
 }
