@@ -48,6 +48,7 @@ export function ir(module, mode, ops, n) {
       "--predictable",
       "--single-threaded",
       ...GC_FLAGS,
+      ...(process.env.BV2_GC_ALIGN ? ["--expose-gc"] : []),
       join(here, "worker.mjs"),
       pathToFileURL(module).href,
       mode,

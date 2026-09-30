@@ -28,6 +28,13 @@ async function run(count) {
   }
 }
 await run(Number(warmup));
+// BV2_GC_ALIGN (measure.mjs): a full GC right before the window, so the
+// scavenges inside it fall at the same point for every runtime (the young
+// generation starts empty). Without it, a cell that allocates a fraction of
+// the semi-space per op counts 0 or 1 scavenges in the window depending on
+// what the process allocated before it (module size, warmup), a GC-phase
+// difference between two runtimes that allocate the same bytes per op.
+if (process.env.BV2_GC_ALIGN) globalThis.gc();
 if (!timed) {
   await run(Number(ops));
 } else {
