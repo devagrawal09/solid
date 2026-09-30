@@ -783,12 +783,13 @@ export class GlobalQueue extends Queue {
   // override-owner / lane-transition chase. Installed with the engine, so a
   // graph that never creates optimistic state does not retain the lane merge
   // code. Every call site is gated on a lane (or override owner) that only
-  // the engine can have produced, so a null slot is unreachable there.
-  static _assignLane: ((el: Signal<any> | Computed<any>, lane: OptimisticLane) => void) | null =
-    null;
-  static _resolveTransition:
+  // the engine can have produced, so an unset slot is unreachable there.
+  declare static _assignLane:
+    | ((el: Signal<any> | Computed<any>, lane: OptimisticLane) => void)
+    | undefined;
+  declare static _resolveTransition:
     | ((el: Signal<any> | Computed<any>) => Transition | null | undefined)
-    | null = null;
+    | undefined;
   /** Authoritative-view reader wakeup: installed by until() and refresh() before
    * their first read. Call sites are gated by CONFIG_AUTHORITATIVE_OBSERVED, which
    * only such a reader's carve-out read can set, so `!` invocations are safe once
@@ -2005,7 +2006,7 @@ export function runAsTransitionBatch<T>(transition: Transition, fn: () => T): T 
  * engine (lanes.ts `resolveTransition`).
  */
 export function transitionOf(el: Signal<any> | Computed<any>): Transition | null | undefined {
-  return GlobalQueue._resolveTransition !== null
+  return __ASYNC__ && GlobalQueue._resolveTransition
     ? GlobalQueue._resolveTransition(el)
     : el._transition;
 }

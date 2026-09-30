@@ -12,22 +12,30 @@ signals/solid/web. The compiler package does not build here (no native or wasi b
 
 ## Baseline (before the change)
 
+Measured with the harness now on this branch (`scripts/size`, Rolldown 1.2.11, brotli of the
+eager chunk) at `origin/experiment/iterable-signals` 86807094, after building signals, solid and
+web locally. The numbers in the attribution section below were taken earlier with an
+esbuild-based harness on an older tip (floor 8571 B there); they are useful for relative
+attribution only and must not be compared with these.
+
 | scenario | brotli B |
 | --- | --- |
-| signals: core floor (createSignal/Memo/Effect/Root/flush) | 8571 |
-| signals: + createStore | 17178 |
-| signals: + isPending/latest | 10866 |
-| app: render + one signal | 11596 |
-| app: hydrating (no stores) | 19032 |
-| app: hydrating + every store family | 30239 |
-| app: CSR Show/For/Loading/Errored/lazy | 14374 |
-| app: CSR observe tier | 15757 |
-| app: CSR observe + attribution | 27276 |
-| frames: eager client consumer | 11372 |
+| signals: core floor (createSignal/Memo/Effect/Root/flush) | 9711 |
+| signals: + createStore | 17203 |
+| signals: + isPending/latest | 12363 |
+| app: render + one signal | 12337 |
+| app: hydrating (no stores) | 20216 |
+| app: hydrating + every store family | 31380 |
+| app: CSR Show/For/Loading/Errored/lazy | 15290 |
+| app: CSR observe tier | 16666 |
+| app: CSR observe + attribution | 30989 |
+| frames: eager client consumer | 12703 |
+| page: base server components | 46739 |
+| page: live server components | 50775 |
 
-Several of these are above the caps committed in `.size-limit.js` in this environment (floor by
-121 B, simple app by 446 B, createStore by 1.83 KB). The caps were set from CI artifacts; this
-box's toolchain output is a little larger. I did not touch any cap (see "Limits").
+Every scenario except frames measures over its committed cap on this box (floor cap 9.51 KB vs
+9711 here), so this toolchain output is a little larger than CI's. No cap was changed (see
+"Limits").
 
 ## Attribution of the core floor
 
@@ -103,13 +111,18 @@ Yet `scheduler.ts` (`insertSubs`) and `async.ts` (`notifyStatus`, `handleAsync`)
 minified bytes of lane merge code on every floor.
 
 - `scheduler.ts`: two new hook slots `GlobalQueue._assignLane` and `GlobalQueue._resolveTransition`
-  (installed by the engine), and `transitionOf(el)`, which returns `el._transition` when no engine
-  is installed (identical to the old `resolveTransition` result when no override or lane exists)
-  and defers to the engine's `resolveTransition` otherwise. `insertSubs` calls
+  (installed by the engine; `declare static`, so they emit no class field and cost the async-free
+  build nothing), and `transitionOf(el)`, which returns `el._transition` when no engine is
+  installed (identical to the old `resolveTransition` result when no override or lane exists)
+  and defers to the engine's `resolveTransition` otherwise. The engine branch is gated on
+  `__ASYNC__`, so the async-free build folds it away. A first version used `= null` static fields
+  and pushed the async-free floor over the `slices.test.ts` (13,450) and `treeshake.test.ts`
+  (14,550) byte budgets by 3 and 23 bytes; the `declare` form fixes that without touching either
+  budget. `insertSubs` calls
   `GlobalQueue._assignLane!` under its existing `optimistic && sourceLane` gate.
 - `async.ts`: `resolveTransition(el)` -> `transitionOf(el)` (three sites); `assignOrMergeLane`
-  -> `GlobalQueue._assignLane!` under the existing `lane && !blockStatus` gate (lane comes from
-  `resolveLane`, so it is non-undefined only with the engine).
+  -> `GlobalQueue._assignLane!` under the existing `__ASYNC__ && OPTIMISTIC && lane` gate (lane
+  comes from `resolveLane`, so it is non-undefined only with the engine).
 - `optimistic.ts`: `installOptimisticEngine` also installs the two hooks.
 - `tests/treeshake.test.ts`: the sync-entry marker list used `function assignOrMergeLane` as a
   "present in the full floor" marker, which is no longer true by design. It is replaced by
@@ -122,47 +135,58 @@ without it the call sites are unreachable (gates unchanged) or fall through to `
 
 ## New numbers
 
+Same harness and toolchain as the baseline, on top of the same tip.
+
 | scenario | before | after | delta |
 | --- | --- | --- | --- |
-| signals: core floor | 8571 | 8438 | -133 |
-| signals: + createStore | 17178 | 17041 | -137 |
-| signals: + isPending/latest | 10866 | 10909 | +43 |
-| app: render + one signal | 11596 | 11434 | -162 |
-| app: hydrating (no stores) | 19032 | 18892 | -140 |
-| app: hydrating + every store family | 30239 | 30259 | +20 |
-| app: CSR Show/For/Loading/Errored/lazy | 14374 | 14246 | -128 |
-| app: CSR observe tier | 15757 | 15602 | -155 |
-| app: CSR observe + attribution | 27276 | 27142 | -134 |
-| frames: eager client consumer | 11372 | 11372 | 0 |
+| signals: core floor | 9711 | 9582 | -129 |
+| signals: + createStore | 17203 | 17086 | -117 |
+| signals: + isPending/latest | 12363 | 12382 | +19 |
+| app: render + one signal | 12337 | 12177 | -160 |
+| app: hydrating (no stores) | 20216 | 20085 | -131 |
+| app: hydrating + every store family | 31380 | 31399 | +19 |
+| app: CSR Show/For/Loading/Errored/lazy | 15290 | 15100 | -190 |
+| app: CSR observe tier | 16666 | 16495 | -171 |
+| app: CSR observe + attribution | 30989 | 30817 | -172 |
+| frames: eager client consumer | 12703 | 12703 | 0 |
+| page: base server components | 46739 | 46516 | -223 |
+| page: live server components | 50775 | 50818 | +43 |
 
 Scenarios that install the optimistic engine (isPending/latest imports verdict.ts; the
-every-store-family hydrating app imports createOptimisticStore) pay the two hook stores and
-`transitionOf` (+20 to +43 B); those are the scenarios that use the feature, which is the intended
-direction of the trade. The floor and everything lacking optimistic state save 130 to 160 B.
+every-store-family hydrating app imports createOptimisticStore; the live page uses
+isPending/latest) pay the two hook stores and `transitionOf` (+19 to +43 B): those are the
+scenarios that use the feature, which is the intended direction of the trade. The floor and
+everything lacking optimistic state save 117 to 223 B.
 
-Limits: the floor now measures 8438 B here, under its 8.45 KB cap, the only cap I could move
-without guessing at CI output. I did not lower any cap: the baseline here already exceeded
-several caps, so this box does not reproduce CI numbers exactly and a ratchet from local numbers
-could break CI. Re-ratchet from CI artifacts (expected about -130 B on floor, -160 B on the simple
-app).
+Limits: I did not change `floor-caps.json` or `scenarios.js`. The caps are CI-derived and this box
+already measures over them at the baseline (floor by about 200 B), so a ratchet computed from local
+numbers could break CI. The expected CI ratchet for the frozen floor caps is about -130 B on the
+signals floor, -160 B on the simple app and -130 B on the hydrating no-stores app; whoever has the
+CI artifacts should lower them (lowering is allowed by the freeze).
 
 ## Verification
 
-- `pnpm --filter @solidjs/signals test`: 1863 passed, 5 skipped, 0 failed across 164 files
-  (one first-run failure of `attribution-holds` "longHolds: false records the tail", a 30 ms timing
-  threshold that measured 29.6 ms; it passed on three reruns and is unrelated to lanes).
-  `tests/treeshake.test.ts`: 8/8 pass.
-- `packages/solid` tests: 600 passed (23 files).
-- `packages/web` tests: 15 files, 227 tests pass; 66 files fail to LOAD because
-  `@solidjs/compiler` has no native or wasi binary in this environment (identical without the
-  change; environmental, not a test failure).
-- `prettier --check` clean on all changed files. `tsc --noEmit` reports only pre-existing errors in
-  test files (unrelated to these edits).
+Run on the rebased tree (the branch moved during the session: 149 commits including a
+`features.ts` link-time switch layer and a Rolldown-based size harness; the one conflict, in
+`async.ts`'s `notifyStatus`, was resolved by pointing the relocated `assignOrMergeLane` call at the
+hook).
+
+- `pnpm --filter @solidjs/signals test`: 5019 passed, 1 expected fail, 6 skipped, 0 failed
+  (271 files passed, 1 skipped), including `tests/treeshake.test.ts` and `tests/slices.test.ts`.
+- `packages/solid` tests: 821 passed, 40 files (after building `packages/universal` and the solid
+  declarations, which the cross-package and published-declaration specs read).
+- `packages/web` tests: not runnable here. `@solidjs/compiler` has no native or wasi binary in
+  this environment, so the web suites cannot load the vite plugin (same without the change). The web
+  scenarios were still bundled and measured above.
+- `prettier --check` is clean on every changed file (`tests/attribution-fan-out.test.ts` was
+  already unformatted at the tip and is untouched).
+- An earlier run showed one timing flake in `attribution-holds` (a 30 ms threshold measured
+  29.6 ms); it passed on reruns and is unrelated.
 
 ## Ranked next candidates
 
 1. Hook `handleAsync` (and everything only it reaches) behind a capability import. Measured
-   ceiling for the anchor alone: -981 B on the floor; with follow-on shaking of the settle walks
+   ceiling for the anchor alone: -981 B on the floor (esbuild harness, older tip); with follow-on shaking of the settle walks
    (`settlePendingSource`, `releaseSettledDependents`, `forEachDependent`, `addPendingSource`,
    `parkLoadingWindow`, `releaseFlightTeardown`) and `NotReadyError` plausibly -1.4 to -2.0 KB.
    Needs the compiler (or an explicit sync memo option) to say when a compute may return a
@@ -187,6 +211,11 @@ app).
 5. Split `notifyStatus`/`clearStatus` so the error-only half stays on the floor and the
    pending-only half moves with candidate 1 (about 100-150 B), and fold `NotReadyError` /
    pending status constants behind the same import (about 60 B).
+
+Note on overlap: the tip's `features.ts` switches (`OPTIMISTIC`, `VERDICTS`, `STORES`, `SNAPSHOTS`)
+already let the capability linker fold seams at link time. Candidates 1-3 are the same idea for
+async/transitions and should be expressed as further `features.ts` switches plus hook-installed
+modules, so the linker and the default (unlinked) build stay in agreement.
 
 Reproduction helpers used (kept out of the repo): an esbuild script that bundles the floor
 scenario from `dist/prod/index.js` versus `dist/sync/index.sync.js` with `--metafile` and prints
