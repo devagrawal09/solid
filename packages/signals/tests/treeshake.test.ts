@@ -83,9 +83,17 @@ function retainedFrom(retained: string[], names: string[]): string[] {
 
 describe("pay-for-use tree-shaking (#2883)", () => {
   it("core floor sheds every optional feature module", async () => {
-    const { minifiedBytes, retained } = await bundleFixture(
+    const { minifiedBytes, retained, code } = await bundleFixture(
       `export { createSignal, createMemo, createEffect, createRoot, flush } from "sigsrc";`
     );
+    // Lane merge/assign code is installed with the optimistic engine
+    // (GlobalQueue._assignLane / _resolveTransition), not hard-referenced by
+    // the scheduler or handleAsync: a floor with no optimistic API sheds it.
+    expect(
+      ["function assignOrMergeLane", "function mergeLanes", "function resolveTransition"].filter(
+        marker => code.includes(marker)
+      )
+    ).toEqual([]);
     // Explicitly-imported APIs are the opt-ins: none of their modules may be
     // reachable from the five core primitives.
     expect(
@@ -531,7 +539,7 @@ describe("pay-for-use tree-shaking (#2883)", () => {
       "function transitionComplete",
       "function mergeTransitionState",
       "function runInTransition",
-      "function assignOrMergeLane"
+      "function resolveLane"
     ];
     for (const marker of markers) {
       // Present in the full floor (the markers are real), absent from sync.

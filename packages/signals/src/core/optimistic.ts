@@ -818,5 +818,7 @@ export function installOptimisticEngine(): void {
   GlobalQueue._recomputeLane = recomputeLane;
   GlobalQueue._laneAsyncPending = laneAsyncPending;
   GlobalQueue._laneAsyncSettled = laneAsyncSettled;
+  GlobalQueue._assignLane = assignOrMergeLane;
+  GlobalQueue._resolveTransition = resolveTransition;
   GlobalQueue._trackOptimisticStore = trackOptimisticStore;
 }

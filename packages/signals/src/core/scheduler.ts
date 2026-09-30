@@ -46,7 +46,6 @@ import { sweepDormant, trimStaleDeps } from "./graph.js";
 import { deleteFromHeap, enqueueSub, runHeap, type Heap } from "./heap.js";
 import {
   activeLanes,
-  assignOrMergeLane,
   findLane,
   hasActiveOverride,
   signalLanes,
@@ -63,7 +62,7 @@ import {
 } from "./invariants.js";
 import type { Computed, Owner, Signal } from "./types.js";
 
-export { activeLanes, assignOrMergeLane, findLane };
+export { activeLanes, findLane };
 export { getOrCreateLane, hasActiveOverride, mergeLanes, resolveLane } from "./lanes.js";
 
 export const transitions = new Set<Transition>();
@@ -779,6 +778,17 @@ export class GlobalQueue extends Queue {
     | ((el: Computed<any>, own: boolean) => OptimisticLane | null | false)
     | null = null;
   static _laneAsyncPending: ((el: Computed<any>) => void) | null = null;
+  // Lane routing that only ever runs once a lane or override exists: the
+  // union-find merge behind assignOrMergeLane, and resolveTransition's
+  // override-owner / lane-transition chase. Installed with the engine, so a
+  // graph that never creates optimistic state does not retain the lane merge
+  // code. Every call site is gated on a lane (or override owner) that only
+  // the engine can have produced, so a null slot is unreachable there.
+  static _assignLane: ((el: Signal<any> | Computed<any>, lane: OptimisticLane) => void) | null =
+    null;
+  static _resolveTransition:
+    | ((el: Signal<any> | Computed<any>) => Transition | null | undefined)
+    | null = null;
   /** Authoritative-view reader wakeup: installed by until() and refresh() before
    * their first read. Call sites are gated by CONFIG_AUTHORITATIVE_OBSERVED, which
    * only such a reader's carve-out read can set, so `!` invocations are safe once
@@ -1333,7 +1343,7 @@ export function insertSubs(node: Signal<any> | Computed<any>, optimistic: boolea
       // Optimistic notifications need the optimistic engine (async runtime).
     } else if (optimistic && sourceLane) {
       sub._flags |= REACTIVE_OPTIMISTIC_DIRTY;
-      assignOrMergeLane(sub as any, sourceLane);
+      GlobalQueue._assignLane!(sub as any, sourceLane);
     } else if (optimistic) {
       sub._flags |= REACTIVE_OPTIMISTIC_DIRTY;
       // No source lane means reversion - clear subscriber's lane so effects go to regular queue
@@ -1986,4 +1996,16 @@ export function runAsTransitionBatch<T>(transition: Transition, fn: () => T): T 
     activeTransition = prevTransition;
     currentBatch = globalQueue._batch = prevBatch;
   }
+}
+
+/**
+ * A node's owning transition: its stamp, unless an optimistic override or lane
+ * (engine-only state) reroutes it. Without the engine there is nothing to
+ * chase, so the stamp is the answer — the lane/override chase lives with the
+ * engine (lanes.ts `resolveTransition`).
+ */
+export function transitionOf(el: Signal<any> | Computed<any>): Transition | null | undefined {
+  return GlobalQueue._resolveTransition !== null
+    ? GlobalQueue._resolveTransition(el)
+    : el._transition;
 }

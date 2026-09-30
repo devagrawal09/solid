@@ -26,10 +26,9 @@ import { emitDiagnostic, reportDiagnostic, watchAsyncTail } from "./dev.js";
 import { NotReadyError, StatusError } from "./error.js";
 import { trimStaleDeps, unobserved } from "./graph.js";
 import { enqueueSub } from "./heap.js";
-import { hasActiveOverride, resolveLane, resolveTransition, type OptimisticLane } from "./lanes.js";
+import { hasActiveOverride, resolveLane, type OptimisticLane } from "./lanes.js";
 import { cleanup } from "./owner.js";
 import {
-  assignOrMergeLane,
   clock,
   currentTransition,
   dirtyQueue,
@@ -42,6 +41,7 @@ import {
   queuePendingNode,
   schedule,
   setOrigin,
+  transitionOf,
   waitingTransition,
   zombieQueue
 } from "./scheduler.js";
@@ -426,7 +426,7 @@ export function handleAsync<T>(
   // keeps transition scheduling; initialized (value-holding) pending settles
   // are the transaction's reveal machinery and always re-enter.
   const settleTransition = () => {
-    let transition = resolveTransition(el as any);
+    let transition = transitionOf(el as any);
     // A lane-routed node's landing is revealed by its lane, ahead of the
     // transaction that owns the lane (whose own commit is only the override's
     // confirm/revert). Entering that owner here would fold every transaction
@@ -873,7 +873,7 @@ export function handleAsync<T>(
       // (invisible to boundaries and transitions); the flight itself is
       // already registered in _inFlight and lands through asyncWrite.
       if (el._loading) return el._value;
-      globalQueue.initTransition(resolveTransition(el as any));
+      globalQueue.initTransition(transitionOf(el as any));
       throw new NotReadyError(context!);
     } else if (!flattenIfIterable(syncValue!)) {
       // Synchronously-resolved promise: the first real answer landed.
@@ -890,7 +890,7 @@ export function handleAsync<T>(
     if (!liveLanded) {
       // Loading window: serve commit #0 (see the promise branch above).
       if (el._loading) return el._value;
-      globalQueue.initTransition(resolveTransition(el as any));
+      globalQueue.initTransition(transitionOf(el as any));
       throw new NotReadyError(context!);
     }
     // A sync first yield (or immediate empty completion) is the first real
@@ -1006,7 +1006,7 @@ export function notifyStatus(
     // propagation before it rode the lane got a parentless companion lane,
     // and the isPending reader that also depends on the node merged it into
     // the held lane — the verdict then waited on the async it reports (#3379).
-    if (__ASYNC__ && OPTIMISTIC && lane) assignOrMergeLane(el, lane);
+    if (__ASYNC__ && OPTIMISTIC && lane) GlobalQueue._assignLane!(el, lane);
     if (__ASYNC__ && status === STATUS_PENDING && pendingSource) {
       addPendingSource(el, pendingSource);
       // A fresh flight from a settled state starts with its inputs unpublished
