@@ -48,6 +48,12 @@ attribution: the branch did not merge any upstream work after the fork.
   expensive on 10 of 12 cells.** Upstream drifted up over the same period (it is
   above the fork point on every cell too), so the branch does not look slower
   than upstream today. But the branch is not cheaper than rc.8 was.
+- **Handwritten hot path after the upstream merge (2026-09-30): +0.1% to
+  +1.2% over upstream `7f9bd7a6`** on the plain update and mount cells with
+  every switch on (asyncEvent +3.6%, of which all but 0.7% is GC phase), from
+  +1.0% to +4.0% at the resumed head and +8.7% to +13.6% before this work;
+  `paths`, `helperReads` and `async` at or under upstream; the linker-sliced
+  runtime 4.7–9.2% under upstream. See "Handwritten path regression" below.
 - **SSR / hydration (today's hydration, variant A): the branch and upstream are
   at parity.** Same HTML bytes. JS gz is 2.1 KB smaller on the branch for hn and 2.3 KB
   smaller for handwritten todos. Hydrate/script times are within noise, and the
@@ -304,6 +310,115 @@ change.
 The runtime (section 3) and SSR (section 4) measurements were not re-run.
 `node scripts/ssr-redesign/measure.mjs --check` passes on the merged tree
 (every variant gates equal to A).
+
+## Handwritten path regression (2026-09-30)
+
+The question: does plain Solid code (no blocks, islands or frames) cost more
+instructions on this branch's runtime than on upstream `next` @ `7f9bd7a6`,
+with the branch's features still behind their switches? Measured after
+merging `origin/experiment/iterable-signals` @ `7ca7ca17` (islands emitter,
+core floor), default build (every switch on, no linker).
+
+Method: section 3's harness (`scripts/vs-upstream/compare.mjs --n 300`,
+each tree's cells compiled by its own compiler, Ir/op =
+(run(2·ops) − run(ops)) / ops, ops 20). Attribution per JS function:
+callgrind `--dump-instr=yes` with `node --perf-basic-prof`, JIT addresses
+mapped through the perf map (the cachegrind totals do not name JIT code).
+Inlining: `--trace-turbo-inlining`. Allocation: new-space bytes per op with
+GC off.
+
+Runtimes: **upstream** `7f9bd7a6`; **fork point** `344ed054`; **before** =
+`b9111efa` (the branch before this work); **resumed** = the merged head
+with the two interrupted WIP commits (`1e787c25` marked switch literals +
+`blocksBuilt`, `c2709d9f` effect seams out of line + generator/signals
+trims); **after** = `5334ed0a`.
+
+| cell (Ir/op, n=300) | upstream | fork point |  before | resumed |   after |        after vs upstream | after, linker-sliced |
+| ------------------- | -------: | ---------: | ------: | ------: | ------: | -----------------------: | -------------------: |
+| memo update         |   1,881k |     1,638k |  2,061k |  1,904k |  1,887k |                    +0.3% |               1,745k |
+| create mount        |   3,496k |     3,155k |  3,920k |  3,607k |  3,538k |                    +1.2% |               3,317k |
+| view update         |     766k |       701k |    833k |    775k |    772k |                    +0.8% |                 725k |
+| holes update        |   1,926k |     1,735k |  2,124k |  1,953k |  1,941k |                    +0.8% |               1,805k |
+| event update        |     836k |       755k |    947k |    848k |    843k |                    +0.9% |                 759k |
+| attrs update        |   1,353k |     1,226k |  1,486k |  1,372k |  1,363k |                    +0.8% |               1,274k |
+| asyncEvent update   |   1,028k |       952k |  1,169k |  1,069k |  1,065k | +3.6% (+0.7% GC-aligned) |                 980k |
+| helpers mount       |   5,005k |     4,562k |  5,445k |  5,002k |  4,920k | −1.7% (+1.1% GC-aligned) |               4,550k |
+| helpers update      |   3,005k |     2,596k |  3,282k |  3,034k |  3,010k |                    +0.1% |               2,774k |
+| helperReads update  |   3,897k |     3,410k |  4,191k |  3,894k |  3,856k |                    −1.1% |                    – |
+| effect update       |     767k |       702k |    835k |    776k |    772k |                    +0.7% |                 726k |
+| paths update        |   5,200k |     5,095k |  5,077k |  4,984k |  4,980k |                    −4.2% |                    – |
+| async update        |  74,842k |    45,673k | 75,068k |       – | 74,851k |                    +0.0% |                    – |
+
+"Linker-sliced" is the after runtime with the marked literals of
+OPTIMISTIC, VERDICTS, STORES, SNAPSHOTS, ITERABLE and COMPILED_SEAMS set to
+`false`, as `solidCapabilities` does for an app that proves them unused
+(`paths` and `helperReads` use stores and are left out). "GC-aligned" is
+`BV2_GC_ALIGN=1` (below); with it, upstream / after are memo 1,883k /
+1,889k, create 3,458k / 3,500k, asyncEvent 1,040k / 1,048k, helpers mount
+4,911k / 4,967k, helpers update 3,008k / 3,019k.
+
+The fork-point column is far below both: upstream itself grew 7–15% on
+these cells (and 64% on `async`) between rc.8 and `7f9bd7a6`, so "8–16%
+over the fork point" in section 3 was mostly upstream's growth.
+
+**Causes, with evidence, and what was done:**
+
+1. **Switch tests as imported bindings** (before → resumed, the bulk: memo
+   −7.6%, create −8.0%). Each switch test in the published trees was a
+   module-cell load and a branch. `scripts/inline-features.mjs` (WIP
+   `1e787c25`, kept) rewrites them to marked literals; the linker flips the
+   marks. Kept as is.
+2. **Block probes on every function child** (`isBlock` / `blockFlags` read a
+   symbol-keyed property: a prototype-chain miss per JSX hole). The
+   `blocksBuilt` flag (WIP `1e787c25`) answers without the probe until a
+   block exists. `c2709d9f` split the probes so the flag test stays tiny
+   (always inlined), inlined `generatorMemo` into createMemo and hoisted
+   `Symbol.iterator`: kept, measured create −0.7%, helpers mount −0.4%
+   against the same runtime without them.
+3. **Inlining budget: `linkChild` out of line per render effect** (create
+   +42k Ir, callgrind). effect 189 + createEffectNode 388 + setupComputedNode
+   251 + inheritId 67 = 895 bytes of bytecode; `linkChild` (34) no longer fit
+   TurboFan's cumulative 920 into createRenderEffect (upstream: 370 → 874 +
+   34 = 908). Fixed in `cbd92d41` (effect options out of line; createEffectNode
+   349 bytes): create 3,607k → 3,566k.
+4. **Status-free dispatch test at the top of recompute** (ablation: memo
+   −15.6k, holes −13k). Moved into the lane-posture chain's existing
+   derived-override test (`5334ed0a`): memo 1,904k → 1,887k, create 3,566k →
+   3,538k, holes 1,953k → 1,941k, helpers update 3,033k → 3,010k.
+5. **GC phase, not work** (asyncEvent, and the mount cells in both
+   directions). Allocation per op is identical to upstream (asyncEvent
+   152.9 KB, create 778.6 KB, memo 15.1 KB per op). With ops = 20 and one
+   scavenge per ~55 asyncEvent ops, the window holds 0 or 1 scavenges
+   depending on what was allocated before it; the branch's held one.
+   `BV2_GC_ALIGN=1` (`8a9aa104`) runs a full GC before the window: asyncEvent
+   is then +0.7%, not +3.6%.
+
+**Tried and not kept:**
+
+- _Marked literals as conditionals_ (`S && x` → `(/*mark*/ true ? x : false)`
+  in `inline-features.mjs`). A literal left operand of `&&` in a test
+  context still costs a 3-byte Jump, and with them `read` inlines
+  `readerSeesCommitted` where upstream inlines `markNode`. The conditional
+  form restores upstream's inlining but measured +0.3–0.5% on the update
+  cells (memo 1,904k → 1,911k), so it is not in.
+- _The block guard scoped to its owner_ (no save / lower / restore in
+  recompute, worth ~0.5% on update cells: ablation memo −9.6k, holes −14k).
+  Deciding "a computation's run is its own read scope" by owner identity
+  changed block hydration: 11, then (walking plain owners) 5 failures in
+  `packages/web` `test/hydration/parity-harness.spec.tsx`. Reverted; the
+  guard keeps `c2709d9f`'s write-only-when-raised form.
+- _`valueChanged = wasUninitialized || !_equals || …`_ for recompute's
+  first-run rule: tracked effects carry `isEqual`, and 74 signals tests
+  failed. Reverted.
+
+**What is left** (after vs upstream, default build): +0.1% to +1.2% on
+the plain update and mount cells, of which recompute's block-guard save /
+restore is ~0.5% (two tests per pass), the rest create-path work the
+branch's features add per primitive: the ITERABLE iterator store on every
+accessor, the generator-hook test in createMemo, and `read` inlining
+`readerSeesCommitted` instead of `markNode` (≈ +6k on create). The
+capability linker removes all of it for an app that proves the features
+unused: the sliced runtime is 4.7–9.2% under upstream on every cell measured.
 
 ## Caveats
 
