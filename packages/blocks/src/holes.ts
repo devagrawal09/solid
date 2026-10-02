@@ -8,7 +8,7 @@
  * plain thunk is not a hole (it would be a hidden read) and is rejected by
  * the types.
  */
-import { $, accessor, READ, BODY, ROW_MARK, isGeneratorFunction, runRow } from "@solidjs/blocks";
+import { $, perform, READ, BODY, ROW_MARK, isGeneratorFunction, runRow } from "@solidjs/blocks";
 import type {
   ChildView,
   COMPONENT,
@@ -94,7 +94,8 @@ export function toHole(value: any): any {
     return value;
   }
   if (typeof value === "object") {
-    if (value[READ] !== undefined) return accessor(value);
+    // a path or a selection: read in the hole, as the JSX transform's `perform`
+    if (value[READ] !== undefined) return () => perform(value);
     if (Array.isArray(value)) return value.map(toHole);
   }
   return value;

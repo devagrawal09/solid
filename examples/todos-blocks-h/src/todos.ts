@@ -8,7 +8,7 @@
 // State architecture: three lifetime layers, each a derivation of the layer
 // below, applied in a fixed order across the whole application.
 //
-//   3. Optimistic  (transition-scoped) ── `setTodos` writes inside `action`
+//   3. Optimistic  (transition-scoped) ── `setTodos` writes inside `$event`
 //                                         generators, auto-revert on settle.
 //                                         Layered on top of (2).
 //   2. Ephemeral   (UI-scoped)         ── the `Errors` side-channel below,
@@ -31,7 +31,7 @@
 // own identity, but exposes intermediate views as accidental footguns; the
 // single-primitive form is canonical.
 
-import { action, createOptimisticStore, refresh } from "solid-js";
+import { $event, $optimisticStore, attempt, readStore, refresh } from "@solidjs/blocks";
 import { api, type Todo as ServerTodo } from "./api";
 
 export type TodoError = {
@@ -82,40 +82,46 @@ export interface TodoActions {
   retryTodo: (todo: Todo) => Promise<void>;
 }
 
-export function createTodos() {
-  const [todos, setTodos] = createOptimisticStore<Todo[]>(async () => {
-    const todos: Todo[] = await api.getTodos();
+/**
+ * The todos store and its actions, for a setup: `const todos = yield* createTodos()`.
+ * The store is an optimistic projection of the server's list (pending until
+ * the first fetch lands); every action is an `$event` whose writes revert
+ * when it settles, after `refresh` has pulled the server's answer.
+ */
+export function* createTodos() {
+  const [todos, setTodos] = yield* $optimisticStore(function* () {
+    const todos: Todo[] = yield* attempt(() => api.getTodos());
     applyErrors(todos, Errors);
     return todos;
-  }, []);
+  }, [] as Todo[]);
 
   const actions = {
-    addTodo: action(function* (todo: ServerTodo) {
-      setTodos(t => {
+    addTodo: $event(function* (todo: ServerTodo) {
+      yield* setTodos(t => {
         const old = t.find(x => x.id === todo.id);
         if (old) old.pending = true;
         else t.push({ ...todo, pending: true });
       });
       try {
-        yield api.addTodo(todo);
+        yield* attempt(() => api.addTodo(todo));
         delete Errors[todo.id];
       } catch {
         Errors[todo.id] ||= { type: "addTodo", args: [todo] };
       }
-      refresh(todos);
+      yield* refresh(todos);
     }),
-    removeTodo: action(function* (id: string) {
-      setTodos(t => t.filter(todo => todo.id !== id));
+    removeTodo: $event(function* (id: string) {
+      yield* setTodos(t => t.filter(todo => todo.id !== id));
       try {
-        yield api.removeTodo(id);
+        yield* attempt(() => api.removeTodo(id));
         delete Errors[id];
       } catch {
         Errors[id] ||= { type: "removeTodo", args: [id] };
       }
-      refresh(todos);
+      yield* refresh(todos);
     }),
-    toggleTodo: action(function* (id: string, completed: boolean) {
-      setTodos(t => {
+    toggleTodo: $event(function* (id: string, completed: boolean) {
+      yield* setTodos(t => {
         const todo = t.find(x => x.id === id);
         if (todo) {
           todo.completed = completed;
@@ -123,17 +129,19 @@ export function createTodos() {
         }
       });
       try {
-        yield api.toggleTodo(id, completed);
+        yield* attempt(() => api.toggleTodo(id, completed));
         delete Errors[id];
       } catch {
         Errors[id] ||= { type: "toggleTodo", args: [id, completed] };
       }
-      refresh(todos);
+      yield* refresh(todos);
     }),
-    toggleAll: action(function* (completed: boolean) {
-      const ids = todos.filter(t => t.completed !== completed).map(t => t.id);
+    toggleAll: $event(function* (completed: boolean) {
+      const ids = yield* readStore(todos, t =>
+        t.filter(x => x.completed !== completed).map(x => x.id)
+      );
       const set = new Set(ids);
-      setTodos(t => {
+      yield* setTodos(t => {
         t.forEach(todo => {
           if (set.has(todo.id)) {
             todo.completed = completed;
@@ -142,33 +150,35 @@ export function createTodos() {
         });
       });
       try {
-        yield api.toggleAll(ids, completed);
+        yield* attempt(() => api.toggleAll(ids, completed));
         ids.forEach(id => delete Errors[id]);
       } catch {
         // Bulk failed — fan the error out to per-item entries so each
-        // failed item gets its own retry affordance via `retryTodo`.
+        // failed todo gets its own retry affordance via `retryTodo`.
         ids.forEach(id => {
           Errors[id] ||= { type: "toggleTodo", args: [id, completed] };
         });
       }
-      refresh(todos);
+      yield* refresh(todos);
     }),
-    clearCompleted: action(function* () {
-      const ids = todos.filter(t => t.completed).map(t => t.id);
-      setTodos(t => t.filter(todo => !todo.completed));
+    clearCompleted: $event(function* () {
+      const ids = yield* readStore(todos, t => t.filter(x => x.completed).map(x => x.id));
+      yield* setTodos(t => t.filter(todo => !todo.completed));
       try {
-        yield api.clearCompleted(ids);
+        yield* attempt(() => api.clearCompleted(ids));
         ids.forEach(id => delete Errors[id]);
       } catch {
         ids.forEach(id => {
           Errors[id] ||= { type: "removeTodo", args: [id] };
         });
       }
-      refresh(todos);
+      yield* refresh(todos);
     }),
-    retryTodo(todo: Todo): Promise<void> {
+    retryTodo(todo: Todo): Promise<unknown> {
       if (!todo.error) return Promise.resolve();
-      return (actions[todo.error.type] as any)(...todo.error.args);
+      return (actions[todo.error.type] as (...args: unknown[]) => Promise<unknown>)(
+        ...todo.error.args
+      );
     }
   };
 

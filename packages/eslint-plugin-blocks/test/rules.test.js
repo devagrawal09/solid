@@ -89,34 +89,75 @@ tester.run("read-before-attempt", rules["read-before-attempt"], {
   ]
 });
 
-tester.run("no-write-in-reactive", rules["no-write-in-reactive"], {
+tester.run("no-unyielded-write", rules["no-unyielded-write"], {
   valid: [
     component(
-      "const [n, setN] = yield* $signal(1); const inc = $event(function* () { setN(2); }); yield* $effect(function* () { yield* setN(3); }); return function* () { return <p onClick={inc}>{yield* n}</p>; };"
+      "const [n, setN] = yield* $signal(1); const inc = $event(function* () { yield* setN(2); }); yield* $effect(function* () { const v = yield* setN(3); }); return function* () { return <p onClick={inc}>{yield* n}</p>; };"
     ),
     component(
-      "const [n, setN] = yield* $signal(1); const bump = () => setN(1); return function* () { return <p>{yield* n}</p>; };"
+      "const [s, setS] = yield* $optimisticStore({ a: 1 }); const go = $event(function* () { yield* setS(d => { d.a = 2; }); }); return function* () { return <p onClick={go} />; };"
     ),
-    "const [a, setA] = createSignal(1); const m = $memo(function* () { return 1; });"
+    // not a block setter: plain code is no-foreign-reactive's concern
+    "const [a, setA] = createSignal(1); setA(2);"
   ],
   invalid: [
     {
       code: component(
-        "const [n, setN] = yield* $signal(1); const m = yield* $memo(function* () { setN(2); return yield* n; }); return function* () { return <p>{yield* m}</p>; };"
+        "const [n, setN] = yield* $signal(1); const inc = $event(function* () { setN(2); }); return function* () { return <p onClick={inc} />; };"
       ),
-      errors: [{ messageId: "write", data: { kind: "a $memo" } }]
+      errors: [{ messageId: "unyielded", data: { name: "setN" } }]
     },
     {
       code: component(
         "const [s, setS] = yield* $store({ a: 1 }); setS(d => { d.a = 2; }); return function* () { return <p />; };"
       ),
-      errors: [{ messageId: "write", data: { kind: "a setup" } }]
+      errors: [{ messageId: "unyielded", data: { name: "setS" } }]
     },
     {
       code: component(
-        "const [n, setN] = yield* $signal(1); return function* () { setN(1); return <p />; };"
+        "const [n, setN] = yield* $optimistic(1); const bump = () => setN(1); return function* () { return <p />; };"
       ),
-      errors: [{ messageId: "write", data: { kind: "a view" } }]
+      errors: [{ messageId: "unyielded", data: { name: "setN" } }]
+    },
+    {
+      code: component(
+        "const [n, setN] = yield* $signal(1); const go = $event(function* () { yield setN(1); }); return function* () { return <p onClick={go} />; };"
+      ),
+      errors: [{ messageId: "unyielded", data: { name: "setN" } }]
+    }
+  ]
+});
+
+tester.run("no-foreign-reactive", rules["no-foreign-reactive"], {
+  valid: [
+    'import { $signal, $optimisticStore, until, refresh } from "@solidjs/blocks";',
+    'import { lazy, createUniqueId, onCleanup } from "solid-js";',
+    'import { query, useNavigate } from "@solidjs/router";',
+    'import type { Accessor } from "solid-js";',
+    'import { type Signal } from "solid-js";'
+  ],
+  invalid: [
+    {
+      code: 'import { createSignal, createOptimisticStore } from "solid-js";',
+      errors: [
+        { messageId: "foreign", data: { name: "createSignal", source: "solid-js", hint: " Use `$signal`." } },
+        {
+          messageId: "foreign",
+          data: { name: "createOptimisticStore", source: "solid-js", hint: " Use `$optimisticStore`." }
+        }
+      ]
+    },
+    {
+      code: 'import { useLocation as loc } from "@solidjs/router";',
+      errors: [{ messageId: "foreign" }]
+    },
+    {
+      code: 'import { dynamic } from "@solidjs/web";',
+      errors: [{ messageId: "foreign", data: { name: "dynamic", source: "@solidjs/web", hint: " Use `$dynamic`." } }]
+    },
+    {
+      code: 'import { flush } from "solid-js";',
+      errors: [{ messageId: "foreign", data: { name: "flush", source: "solid-js", hint: "" } }]
     }
   ]
 });

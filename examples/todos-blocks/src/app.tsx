@@ -1,45 +1,50 @@
 // TodoMVC from examples/todos with @solidjs/blocks (JSX flavor). The data
 // layer (`todos.ts`: an optimistic store over a projection, actions, the
-// error side-channel) and `api.ts` / `filter.ts` are the original's: they are
-// Solid primitives, used from the components' setups.
+// error side-channel) and `filter.ts` are generator helpers the App's setup
+// delegates to; `api.ts` is the original's.
 //
 // What the library's rules change here:
+// - every read and write is a `yield*`: no plain Solid state in block code;
 // - components are `$component`s: setups read the context (`yield* TodosContext`)
 //   and create handlers (`$event`); views read in JSX holes;
-// - the todos store is Solid's (optimistic, fetched): blocks read it through
-//   `paths<Todo[], true>` (stated pending — the first fetch is async) and
-//   structural reads through `readStore`;
+// - the todos store is an `$optimisticStore` whose body fetches (pending
+//   until the first fetch lands); structural reads go through `readStore`;
 // - a view that reads a pending store is pending, so the loading boundary
 //   receives the two sections as views: `<Loading>{MainSection(…)}{Footer(…)}</Loading>`.
 import {
   $,
   $component,
   $event,
+  $signal,$memo,
   createContext,
   Errored,
   For,
   Loading,
-  paths,
-  read,
   readStore,
   Show,
   type TypedProps
 } from "@solidjs/blocks";
 import { createTodos, type Todo } from "./todos";
-import { createHashFilter, type Filter } from "./filter";
+import { hashFilter, type Filter } from "./filter";
 
-const TodosContext = createContext<ReturnType<typeof createTodos>>();
+/** What a generator helper returns once delegated to. */
+type Returned<F> = F extends (...args: never[]) => Generator<unknown, infer R, unknown> ? R : never;
+
+const TodosContext = createContext<Returned<typeof createTodos>>();
 
 /** The todos store (pending until the first fetch lands) and the actions. */
 function* useTodos() {
-  const [store, actions] = yield* TodosContext;
-  return [paths<Todo[], true>(store), actions] as const;
+  return yield* TodosContext;
 }
 
 type Input = InputEvent & { currentTarget: HTMLInputElement };
 type Key = KeyboardEvent & { currentTarget: HTMLInputElement };
 
 const Header = $component(function* Header() {
+  const [s, set] = yield* $signal(0)
+  const ss = yield* $memo(function*() {
+    return yield* s
+  })
   const [, { addTodo }] = yield* useTodos();
   const submit = $event(function* (e: Key) {
     if (e.key !== "Enter") return;
@@ -194,7 +199,8 @@ const Footer = $component(function* Footer(props: TypedProps<{ filter: Filter },
 });
 
 export const App = $component(function* App() {
-  const filter = read(createHashFilter());
+  const filter = yield* hashFilter();
+  const todos = yield* createTodos();
   return function* () {
     return (
       <Errored
@@ -205,7 +211,7 @@ export const App = $component(function* App() {
           </div>
         )}
       >
-        <TodosContext value={createTodos()}>
+        <TodosContext value={todos}>
           <section class="todoapp">
             <Header />
             <Loading fallback={<p class="loading">Loading…</p>}>

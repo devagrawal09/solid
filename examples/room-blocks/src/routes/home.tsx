@@ -8,9 +8,9 @@
 //   `dynamic` created in a view is re-created when the view re-renders);
 //   its compute reads the props through `accessor`s — it is a plain Solid
 //   computation, and its reads are its own.
-// - The composer's post is Solid's `action` (a transition with its own
-//   generator protocol: `yield promise`), called from an `$event`; the
-//   library has no action form of its own.
+// - The composer's post is an `$event` (a Solid action: one transition,
+//   waiting on `yield* attempt(() => send(...))`), called from the submit
+//   `$event`.
 // - Handlers are `$event`s; the room links are a row block over ROOMS.
 import {
   $,
@@ -26,7 +26,6 @@ import {
   Show,
   type TypedProps
 } from "@solidjs/blocks";
-import { action } from "solid-js";
 import { dynamic } from "@solidjs/web";
 import type { RouteSectionProps } from "@solidjs/router";
 import { useIdentity } from "~/lib/identity";
@@ -118,12 +117,14 @@ const Composer = $component(function* Composer(props: TypedProps<{ room: string 
   const shown = latestOf(text);
   const room = accessor(props.room);
   const who = accessor(me);
-  const post = action(function* (text: string) {
+  const post = $event(function* (text: string) {
     const current = who();
     if (!current) return;
     setError(undefined);
     try {
-      yield send(room(), Math.random().toString(36).slice(2, 10), current.name, text);
+      yield* attempt(() =>
+        send(room(), Math.random().toString(36).slice(2, 10), current.name, text)
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }

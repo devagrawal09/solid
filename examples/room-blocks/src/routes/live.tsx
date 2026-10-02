@@ -13,8 +13,8 @@
 //   is settled), and the summary keeps its <Errored>. The original lets such
 //   a failure reach the app root; with no failure the markup is the same.
 // - The transcript is Solid's `createOptimisticStore` and posting is
-//   Solid's `action` + `until` (the library has no optimistic forms of its
-//   own); blocks read the store through `paths` (stated pending).
+//   an `$event` (a Solid action) waiting on `until` (the library has no
+//   optimistic forms of its own); blocks read the store through `paths` (stated pending).
 // - Handlers are `$event`s.
 import {
   $,
@@ -35,7 +35,7 @@ import {
   type Source,
   type TypedProps
 } from "@solidjs/blocks";
-import { action, createOptimistic, createOptimisticStore, until } from "solid-js";
+import { createOptimistic, createOptimisticStore, until } from "solid-js";
 import type { RouteSectionProps } from "@solidjs/router";
 import { useIdentity } from "~/lib/identity";
 import {
@@ -211,7 +211,7 @@ const Chaos = $component(function* Chaos() {
 // ---------------------------------------------------------------------------
 // transcript + composer — the same standing shape as presence, read through
 // an OPTIMISTIC store (every yield is the whole transcript, reconciled by
-// id). Posting is an action: the row shows at once (an optimistic write),
+// id). Posting is an `$event`, an action: the row shows at once (an optimistic write),
 // the action sends, then HOLDS with `until` for the transcript to carry it.
 type Row = Message & { pending?: boolean };
 
@@ -226,7 +226,7 @@ const Chat = $component(function* Chat(props: TypedProps<{ room: string }, "Chat
   );
   const [sending, setSending] = createOptimistic(false);
   const [error, setError] = yield* $signal<string | undefined>(undefined);
-  const post = action(function* (text: string) {
+  const post = $event(function* (text: string) {
     const current = who();
     if (!current) return;
     const id = Math.random().toString(36).slice(2, 10);
@@ -236,8 +236,8 @@ const Chat = $component(function* Chat(props: TypedProps<{ room: string }, "Chat
       t.messages.push({ id, from: current.name, text, at: Date.now(), pending: true });
     });
     try {
-      yield send(room(), id, current.name, text);
-      yield until(() => store.messages.some(m => m.id === id), { timeout: 10_000 });
+      yield* attempt(() => send(room(), id, current.name, text));
+      yield* attempt(() => until(() => store.messages.some(m => m.id === id), { timeout: 10_000 }));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }

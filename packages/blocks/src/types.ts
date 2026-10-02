@@ -69,10 +69,6 @@ export interface Cleanup {
 export interface ContextRead {
   readonly [KIND]: "context";
 }
-/** `$flush()`. */
-export interface Flush {
-  readonly [KIND]: "flush";
-}
 /** `$snapshot(x)`: the current value, untracked, in a setup. */
 export interface Snapshot<P extends boolean = boolean, E = unknown> {
   readonly [KIND]: "snapshot";
@@ -94,7 +90,6 @@ export type AnyOp =
   | Create<string>
   | Cleanup
   | ContextRead
-  | Flush
   | Snapshot<boolean, any>
   | ChildView<boolean, any>;
 
@@ -109,7 +104,7 @@ export type MemoOp = Read<boolean, any> | Wait | Raise<any>;
 /** Operations an effect may perform (a sync `attempt` only). */
 export type EffectOp = Read<boolean, any> | Write | Cleanup | Raise<any>;
 /** Operations an event handler may perform. */
-export type EventOp = Read<boolean, any> | Write | Flush | Wait | Raise<any>;
+export type EventOp = Read<boolean, any> | Write | Wait | Raise<any>;
 /** Operations a hole block (`$(function* …)`) may perform: reads. */
 export type HoleOp = Read<boolean, any> | Raise<any>;
 
@@ -312,9 +307,12 @@ export interface Block<T, P extends boolean = false, E = never> extends Source<T
   readonly [BLOCK]: true;
 }
 
-/** An `$event` handler: call it with the event. */
-export interface EventHandler<Ev = unknown, E = never> {
-  (event: Ev): void;
+/**
+ * An `$event` handler, a Solid action: call it with the arguments its body
+ * takes (an event, or anything else); it returns a promise of the body's result.
+ */
+export interface EventHandler<Args extends unknown[] = any[], E = never, R = unknown> {
+  (...args: Args): Promise<R | undefined>;
   readonly [EVENT]: true;
   readonly [FAILS]?: E;
 }

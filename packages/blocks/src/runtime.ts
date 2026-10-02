@@ -15,12 +15,17 @@
  * warned about in development.
  */
 import {
+  action,
   createMemo,
+  createOptimistic,
+  createOptimisticStore,
+  createProjection,
+  refresh as solidRefresh,
+  until as solidUntil,
   createRenderEffect,
   createSignal,
   createStore,
   createTrackedEffect,
-  flush,
   getObserver,
   getOwner,
   isPending as solidIsPending,
@@ -39,6 +44,7 @@ import {
   type Store
 } from "solid-js";
 import type {
+  Write,
   COMPONENT as COMPONENT_BRAND,
   Block,
   ChildView,
@@ -54,7 +60,6 @@ import type {
   EventHandler,
   EventOp,
   FailsOf,
-  Flush,
   HoleOp,
   MemoOp,
   Path,
@@ -190,18 +195,6 @@ function asSource<T>(get: Accessor<T>): Source<T, any, any> {
   return get as any;
 }
 
-const foreign = new WeakMap<Function, unknown>();
-/**
- * `yield* read(accessor)`: read an accessor this library did not create (plain
- * Solid, a router, another library). Its coloring cannot be seen, so it is
- * trusted as settled unless stated: `read<T, true, E>(accessor)`.
- */
-export function read<T, P extends boolean = false, E = never>(accessor: () => T): Source<T, P, E> {
-  if ((accessor as any)[READ] !== undefined) return accessor as any;
-  let s = foreign.get(accessor);
-  if (!s) foreign.set(accessor, (s = asSource(() => accessor())));
-  return s as any;
-}
 
 /**
  * `yield* latestOf(results)`: the latest value of a source — while a newer
@@ -224,7 +217,10 @@ export function isPendingOf(
   return asSource(() => solidIsPending(get)) as any;
 }
 
-/** A plain accessor for a source, to hand to code that is not a block. */
+/**
+ * @internal A plain accessor for a source, for the library's own hand-offs to
+ * Solid (holes, `latestOf`, `until`). Not exported: block code reads with `yield*`.
+ */
 export function accessor<T>(source: Source<T, boolean, any>): Accessor<T> {
   return typeof source === "function" ? (source as any) : () => readOf(source) as T;
 }
@@ -305,16 +301,6 @@ export function rowArg(value: unknown, isAccessor: boolean): any {
   return makePath(value, isAccessor, []);
 }
 
-/**
- * `yield* store.a.b` for a store this library did not create. Its coloring
- * cannot be seen: state it when the store is async
- * (`paths<Order[], true>(orders)`).
- */
-export function paths<T extends object, P extends boolean = false, E = never>(
-  store: Store<T> | T
-): Path<T, P, E> {
-  return makePath(store, false, []);
-}
 
 class Selection {
   constructor(
@@ -338,10 +324,6 @@ export function readStore<T, P extends boolean, E, R>(
   store: Source<T, P, E>,
   select: (state: T) => R
 ): Source<R, P, E>;
-export function readStore<T extends object, R>(
-  store: Store<T>,
-  select: (state: T) => R
-): Source<R, false, never>;
 export function readStore(store: unknown, select: (state: any) => unknown): unknown {
   return new Selection(store, select);
 }
@@ -429,10 +411,18 @@ export function raise<E>(error: E): Yieldable<Raise<E>, never> {
   return new RaiseOp(error) as any;
 }
 
+/**
+ * A write. Calling a setter does nothing by itself: it returns this receipt,
+ * and the write happens when the receipt is delegated to (`yield* setX(v)`),
+ * so every write is in the block's type (a `Write` op) and only the hosts
+ * that may write accept it. A setter call that is not delegated is a lint
+ * error (`no-unyielded-write`).
+ */
 class Receipt<T> {
-  constructor(readonly value: T) {}
+  constructor(readonly write: () => T) {}
   *[Symbol.iterator](): Generator<never, T, unknown> {
-    return this.value;
+    if (__DEV__) checkWrite();
+    return this.write();
   }
 }
 function checkWrite(): void {
@@ -443,11 +433,11 @@ function checkWrite(): void {
     );
 }
 function receiptSetter(set: (v: any) => any, value?: () => any): any {
-  return (v: any) => {
-    if (__DEV__) checkWrite();
-    const r = set(v);
-    return new Receipt(value ? value() : r);
-  };
+  return (v: any) =>
+    new Receipt(() => {
+      const r = set(v);
+      return value ? value() : r;
+    });
 }
 
 function checkCreate(kind: string): void {
@@ -458,7 +448,8 @@ function checkCreate(kind: string): void {
     );
 }
 
-class CreateOp<T> {
+/** @internal shared with the entries that create (`$dynamic`). */
+export class CreateOp<T> {
   constructor(
     readonly kind: string,
     readonly make: () => T
@@ -490,6 +481,94 @@ export function $store<T extends object>(
   }) as any;
 }
 
+/**
+ * `const [sending, setSending] = yield* $optimistic(false)` in a setup: a
+ * signal whose writes inside an `$event` show at once and revert when the
+ * event's transaction settles (Solid's `createOptimistic`).
+ */
+export function $optimistic<T>(
+  value: Exclude<T, Function>,
+  options?: SignalOptions<T>
+): Yieldable<Create<"optimistic">, [Source<T, false, never>, BlockSetter<T>]> {
+  return new CreateOp("optimistic", () => {
+    const [get, set] = createOptimistic(value as any, options as any);
+    return [asSource(get as Accessor<T>), receiptSetter(set as any)];
+  }) as any;
+}
+
+/** A derived store's paths: pending and failing as its body is. */
+type ProjectionStore<T, Y, R> = Path<T, MemoPending<Y, R>, MemoFails<Y, R>>;
+
+/**
+ * `const [todos, setTodos] = yield* $optimisticStore(function* () { … }, [])`
+ * in a setup: a store whose writes inside an `$event` show at once and revert
+ * when the event settles (Solid's `createOptimisticStore`). With a body the
+ * store is derived: the body reads with `yield*`, may wait on an async
+ * `attempt` or return a promise / async iterable (the store is then pending),
+ * and may update the draft it is handed.
+ */
+export function $optimisticStore<T extends object>(
+  value: T
+): Yieldable<Create<"optimisticStore">, [TypedStore<T>, BlockStoreSetter<T>]>;
+export function $optimisticStore<T extends object, Y extends MemoOp = never, R = unknown>(
+  body: (draft: T) => Generator<Y, R, any>,
+  seed: Partial<T>
+): Yieldable<Create<"optimisticStore">, [ProjectionStore<T, Y, R>, BlockStoreSetter<T>]>;
+export function $optimisticStore(first: any, seed?: any): any {
+  return new CreateOp("optimisticStore", () => {
+    const [store, set] =
+      typeof first === "function"
+        ? createOptimisticStore(memoCompute(first) as any, seed)
+        : createOptimisticStore(first);
+    return [makePath(store, false, []), receiptSetter(set as any, () => store)];
+  });
+}
+
+/**
+ * `const feed = yield* $projection(function* (draft) { … }, seed)` in a setup:
+ * a derived store (Solid's `createProjection`). The body reads with `yield*`,
+ * may wait, and updates the draft or returns the next value.
+ */
+export function $projection<T extends object, Y extends MemoOp = never, R = unknown>(
+  body: (draft: T) => Generator<Y, R, any>,
+  seed: Partial<T>
+): Yieldable<Create<"projection">, ProjectionStore<T, Y, R>> {
+  return new CreateOp("projection", () =>
+    makePath(createProjection(memoCompute(body) as any, seed as any), false, [])
+  ) as any;
+}
+
+class RefreshOp {
+  constructor(readonly target: unknown) {}
+  *[Symbol.iterator](): Generator<never, void, unknown> {
+    if (__DEV__) checkWrite();
+    const t = this.target as any;
+    const pt = t != null ? t[PATH_TARGET] : undefined;
+    void solidRefresh(pt ? pt.root : t);
+  }
+}
+/**
+ * `yield* refresh(todos)`: recompute a derived store or a memo (Solid's
+ * `refresh`). It is a write: an `$event` or an `$effect` refreshes.
+ */
+export function refresh(
+  target: Source<unknown, boolean, unknown> | Path<any, boolean, unknown>
+): Yieldable<Write, void> {
+  return new RefreshOp(target) as any;
+}
+
+/**
+ * `yield* until(readStore(store, s => s.ready))`: wait until a source reads
+ * truthy (Solid's `until`). It is an async `attempt`: only a `$memo` or an
+ * `$event` waits.
+ */
+export function until<T>(
+  source: Source<T, boolean, unknown>,
+  options?: Parameters<typeof solidUntil>[1]
+): Yieldable<Wait, T> {
+  return attempt(() => solidUntil(accessor(source), options)) as any;
+}
+
 /** A memo's value: a promise's, an async iterable's latest — or a promise of an iterable's (Solid flattens one level). */
 type MemoValue<R> = R extends PromiseLike<infer U> ? IteratedValue<U> : IteratedValue<R>;
 type IteratedValue<R> = R extends AsyncIterable<infer U> ? U : R;
@@ -518,16 +597,24 @@ export function $memo(body: () => Generator<any, any, any>, options?: any): any 
   return new CreateOp("memo", () => memoOf(body, options));
 }
 
-function memoOf(body: () => Generator<unknown, unknown, unknown>, options?: any): any {
+/**
+ * A computation's function for a memo-like body: each run drives the body as
+ * the MEMO host (reads, an async `attempt` that suspends, `raise`), and a
+ * superseded run is closed instead of resumed. The argument (a projection's
+ * draft) is handed to the body.
+ */
+export function memoCompute(
+  body: (arg?: any) => Generator<unknown, unknown, unknown>
+): (arg?: unknown) => unknown {
   let run = 0;
-  const compute = () => {
+  return (arg?: unknown) => {
     const my = ++run;
     let gen!: Generator<unknown, unknown, unknown>;
     let r!: IteratorResult<unknown, unknown>;
     const prev = host;
     host = MEMO;
     try {
-      gen = body();
+      gen = body(arg);
       r = gen.next();
     } finally {
       host = prev;
@@ -535,7 +622,10 @@ function memoOf(body: () => Generator<unknown, unknown, unknown>, options?: any)
     if (r.done) return r.value;
     return resume(gen, r.value, MEMO, () => my === run);
   };
-  return asSource(createMemo(compute as any, options) as Accessor<unknown>);
+}
+
+function memoOf(body: () => Generator<unknown, unknown, unknown>, options?: any): any {
+  return asSource(createMemo(memoCompute(body) as any, options) as Accessor<unknown>);
 }
 
 /**
@@ -649,21 +739,6 @@ export function $cleanup(fn: () => void): Yieldable<Cleanup, void> {
   return new CleanupOp(fn) as any;
 }
 
-class FlushOp {
-  *[Symbol.iterator](): Generator<never, void, unknown> {
-    if (__DEV__ && host !== EVENT)
-      throw devError(
-        "FLUSH_OUTSIDE_EVENT",
-        `$flush belongs to an $event, not ${HOST_NAMES[host]}.`
-      );
-    flush();
-  }
-}
-/** `yield* $flush()`: apply pending writes now (event handlers only). */
-export function $flush(): Yieldable<Flush, void> {
-  return new FlushOp() as any;
-}
-
 class SnapshotOp {
   constructor(readonly target: unknown) {}
   *[Symbol.iterator](): Generator<never, unknown, unknown> {
@@ -731,14 +806,60 @@ function reportError(owner: ReturnType<typeof getOwner>, error: unknown): void {
 }
 
 /**
- * `$event(function* (e) {…})`: an event handler. Reads return current values,
- * writes apply, an async `attempt` suspends it, and a failure goes to the
- * nearest `Errored` above where the handler was created (or is thrown, as an
- * ordinary handler's would be, when there is none).
+ * Adapts an `$event` body to Solid's `action` driver: each step of the body
+ * runs as the EVENT host, and an async `attempt` (a Wait) is handed to the
+ * action as the promise it yields, so the action re-enters its transaction
+ * before the body continues. A rejection comes back from the action's
+ * `yield` and is thrown into the body at the `yield*`.
  */
-export function $event<Ev = Event, Y extends EventOp = never>(
-  body: (event: Ev) => Generator<Y, unknown, any>
-): EventHandler<Ev, FailsOf<Y>> {
+function* eventSteps(
+  gen: Generator<unknown, unknown, unknown>
+): Generator<PromiseLike<unknown>, unknown, unknown> {
+  let value: unknown;
+  let failed = false;
+  for (;;) {
+    let r: IteratorResult<unknown, unknown>;
+    const prev = host;
+    host = EVENT;
+    try {
+      r = failed ? gen.throw(value) : gen.next(value);
+    } finally {
+      host = prev;
+    }
+    if (r.done) return r.value;
+    const op = r.value;
+    if (!isWait(op)) {
+      try {
+        gen.return(undefined);
+      } catch {}
+      return drive({ next: () => ({ done: false, value: op }) } as any, SYNC_RUN);
+    }
+    try {
+      value = yield op.promise;
+      failed = false;
+    } catch (e) {
+      value = e;
+      failed = true;
+    }
+  }
+}
+
+/**
+ * `$event(function* (e) {…})`: an event handler that is a Solid `action`.
+ * Every call is one transaction: writes are held until it settles (an
+ * optimistic source shows its value at once), an async `attempt` suspends it
+ * and re-enters the transaction when the promise settles, and a rejection is
+ * thrown at the `yield*`. It takes any arguments and returns a promise of the
+ * body's result, so it replaces `action` in block code.
+ *
+ * A failure goes to the nearest `Errored` above where the handler was created
+ * (the promise then resolves `undefined`); with none, the promise rejects.
+ * Like any action it is called from an event or other imperative code, not
+ * synchronously inside a computation (ACTION_CALLED_IN_OWNED_SCOPE).
+ */
+export function $event<Args extends unknown[] = [], Y extends EventOp = never, R = void>(
+  body: (...args: Args) => Generator<Y, R, any>
+): EventHandler<Args, FailsOf<Y>, R> {
   const owner = getOwner();
   let boundary = false;
   if (owner) {
@@ -746,26 +867,17 @@ export function $event<Ev = Event, Y extends EventOp = never>(
       boundary = useContext(BOUNDARY);
     } catch {}
   }
-  const fail = (error: unknown) => {
-    if (boundary && owner) reportError(owner, error);
-    else throw error;
-  };
-  return ((event: Ev) => {
-    let gen: Generator<unknown, unknown, unknown>;
-    let r: IteratorResult<unknown, unknown>;
-    const prev = host;
-    host = EVENT;
-    try {
-      gen = body(event) as any;
-      r = gen.next();
-    } catch (e) {
-      host = prev;
-      fail(e);
-      return;
-    }
-    host = prev;
-    if (!r.done) resume(gen, r.value, EVENT, () => true).then(undefined, fail);
-  }) as any;
+  const run = action(function* (...args: Args) {
+    return yield* eventSteps(body(...args) as Generator<unknown, unknown, unknown>);
+  });
+  return ((...args: Args) =>
+    run(...args).then(undefined, (error: unknown) => {
+      if (boundary && owner) {
+        reportError(owner, error);
+        return undefined;
+      }
+      throw error;
+    })) as any;
 }
 
 // --- blocks -----------------------------------------------------------------------------------

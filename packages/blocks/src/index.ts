@@ -12,14 +12,15 @@ export {
   $component,
   $effect,
   $event,
-  $flush,
   $memo,
+  $optimistic,
+  $optimisticStore,
+  $projection,
   $scope,
   $settled,
   $signal,
   $snapshot,
   $store,
-  accessor,
   adopt,
   attempt,
   context,
@@ -27,11 +28,11 @@ export {
   isComponent,
   isPendingOf,
   latestOf,
-  paths,
   perform,
   raise,
-  read,
   readStore,
+  refresh,
+  until,
   type BlockContext
 } from "./runtime.js";
 /** @internal shared with the `h` / `html` entries (one runtime per app). */
@@ -49,6 +50,7 @@ export {
 } from "./runtime.js";
 export { For, Show, Switch, Match, Repeat, Loading, Errored } from "./flow.js";
 export { render, hydrate } from "./render.js";
+export { $dynamic } from "./dynamic.js";
 export type { Element, ArrayElement, RenderedObject } from "./element.js";
 export type {
   AnyOp,
@@ -65,7 +67,6 @@ export type {
   EventHandler,
   EventOp,
   FailsOf,
-  Flush,
   HView,
   HViewOp,
   HoleOp,

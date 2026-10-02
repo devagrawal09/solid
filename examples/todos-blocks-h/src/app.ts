@@ -15,22 +15,22 @@ import {
   Errored,
   For,
   Loading,
-  paths,
-  read,
   readStore,
   Show,
   type TypedProps
 } from "@solidjs/blocks";
 import { h } from "@solidjs/blocks/h";
 import { createTodos, type Todo } from "./todos";
-import { createHashFilter, type Filter } from "./filter";
+import { hashFilter, type Filter } from "./filter";
 
-const TodosContext = createContext<ReturnType<typeof createTodos>>();
+/** What a generator helper returns once delegated to. */
+type Returned<F> = F extends (...args: never[]) => Generator<unknown, infer R, unknown> ? R : never;
+
+const TodosContext = createContext<Returned<typeof createTodos>>();
 
 /** The todos store (pending until the first fetch lands) and the actions. */
 function* useTodos() {
-  const [store, actions] = yield* TodosContext;
-  return [paths<Todo[], true>(store), actions] as const;
+  return yield* TodosContext;
 }
 
 type Input = InputEvent & { currentTarget: HTMLInputElement };
@@ -226,7 +226,8 @@ const Footer = $component(function* Footer(props: TypedProps<{ filter: Filter },
 });
 
 export const App = $component(function* App() {
-  const filter = read(createHashFilter());
+  const filter = yield* hashFilter();
+  const todos = yield* createTodos();
   return function* () {
     return h(
       Errored,
@@ -241,7 +242,7 @@ export const App = $component(function* App() {
       },
       h(
         TodosContext,
-        { value: createTodos() },
+        { value: todos },
         h(
           "section",
           { class: "todoapp" },

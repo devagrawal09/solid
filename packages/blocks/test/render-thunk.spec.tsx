@@ -51,7 +51,7 @@ for (const form of forms) {
         setups++;
         const [n, setN] = yield* $signal(0);
         const inc = $event(function* () {
-          setN(v => v + 1);
+          yield* setN(v => v + 1);
         });
         return function* () {
           return <button onClick={inc}>{yield* n}</button>;
@@ -74,7 +74,7 @@ for (const form of forms) {
         setups++;
         const [n, setN] = yield* $signal(0);
         const inc = $event(function* () {
-          setN(v => v + 1);
+          yield* setN(v => v + 1);
         });
         return function* () {
           const v = yield* n;
@@ -103,7 +103,7 @@ for (const form of forms) {
           return yield* attempt(() => new Promise<string>(r => (resolve = r)));
         });
         const inc = $event(function* () {
-          setN(v => v + 1);
+          yield* setN(v => v + 1);
         });
         return function* () {
           const d = yield* data;

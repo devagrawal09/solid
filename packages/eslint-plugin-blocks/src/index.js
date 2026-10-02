@@ -6,11 +6,11 @@
  *   no-read-outside-hole   a JSX view reads only inside JSX (else it re-renders whole)
  *   yield-in-jsx-hole      every `yield*` in JSX is in a position the transform turns into a hole
  *   read-before-attempt    a $memo reads before its first `attempt`
- *   no-write-in-reactive   a setup, view, memo or hole block does not call a setter
+ *   no-unyielded-write     a setter call writes only as `yield* setX(v)`
+ *   no-foreign-reactive    no reactive state from plain Solid, the router or another library
  *   typed-props-key        exported components name their type-linker key
  */
 import {
-  REACTIVE,
   blockKind,
   enclosingFunction,
   isCallTo,
@@ -157,7 +157,7 @@ const readBeforeAttempt = {
   }
 };
 
-/** Whether an identifier is a setter created by `yield* $signal(…)` / `yield* $store(…)`. */
+/** Whether an identifier is a setter created by `yield* $signal / $store / $optimistic / $optimisticStore(…)`. */
 function isBlockSetter(context, identifier) {
   const scope = context.sourceCode.getScope(identifier);
   let s = scope;
@@ -177,37 +177,108 @@ function isBlockSetter(context, identifier) {
     !!init &&
     init.type === "YieldExpression" &&
     init.delegate &&
-    isCallTo(init.argument, ["$signal", "$store"])
+    isCallTo(init.argument, ["$signal", "$store", "$optimistic", "$optimisticStore"])
   );
 }
 
-const noWriteInReactive = {
+const noUnyieldedWrite = {
   meta: {
     type: "problem",
     docs: {
       description:
-        "A setup, view, memo or hole block does not write: writes belong in an $event or an $effect."
+        "A block setter writes only when its receipt is delegated to: `yield* setX(v)`, in an $event or an $effect."
     },
     messages: {
-      write: "{{kind}} does not write: write in an $event or an $effect."
+      unyielded:
+        "`{{name}}(…)` writes nothing until it is delegated to: `yield* {{name}}(…)`, in an $event or an $effect."
     },
     schema: []
   },
   create(context) {
-    const names = {
-      memo: "a $memo",
-      view: "a view",
-      hole: "a hole block",
-      setup: "a setup",
-      row: "a row block's setup"
-    };
     return {
       CallExpression(node) {
         if (node.callee.type !== "Identifier") return;
-        const kind = kindAt(node);
-        if (!kind || !REACTIVE.has(kind)) return;
+        const p = node.parent;
+        if (p && p.type === "YieldExpression" && p.delegate && p.argument === node) return;
         if (!isBlockSetter(context, node.callee)) return;
-        context.report({ node, messageId: "write", data: { kind: names[kind] } });
+        context.report({ node, messageId: "unyielded", data: { name: node.callee.name } });
+      }
+    };
+  }
+};
+
+const ROUTE_PROPS = "the route component's props (`yield* props.location…`, `yield* props.params…`)";
+const SOLID_FOREIGN = {
+  createSignal: "`$signal`",
+  createMemo: "`$memo`",
+  createStore: "`$store`",
+  createProjection: "`$projection`",
+  createOptimistic: "`$optimistic`",
+  createOptimisticStore: "`$optimisticStore`",
+  createEffect: "`$effect`",
+  createRenderEffect: "`$effect`",
+  createTrackedEffect: "`$effect`",
+  createReaction: "`$effect`",
+  onSettled: "`$settled`",
+  action: "`$event`",
+  until: "`until` from @solidjs/blocks",
+  refresh: "`refresh` from @solidjs/blocks",
+  isPending: "`isPendingOf`",
+  latest: "`latestOf`",
+  untrack: "`$snapshot`",
+  flush: null
+};
+/**
+ * Reactive state that blocks cannot see: importing it into block code would
+ * read or write outside `yield*`. Each name maps to its block replacement.
+ */
+export const FOREIGN_REACTIVE = {
+  "solid-js": SOLID_FOREIGN,
+  "@solidjs/signals": SOLID_FOREIGN,
+  "@solidjs/router": {
+    useLocation: ROUTE_PROPS,
+    useParams: ROUTE_PROPS,
+    useSearchParams: ROUTE_PROPS,
+    useMatch: ROUTE_PROPS,
+    useCurrentMatches: ROUTE_PROPS,
+    useIsRouting: null,
+    useSubmission: null,
+    useSubmissions: null,
+    createAsync: "`$memo`",
+    createAsyncStore: "`$optimisticStore` or `$projection`"
+  },
+  "@solidjs/web": { dynamic: "`$dynamic`" }
+};
+
+const noForeignReactive = {
+  meta: {
+    type: "problem",
+    docs: {
+      description:
+        "Block code reads and writes only with `yield*`: no reactive state from plain Solid, the router or another library."
+    },
+    messages: {
+      foreign:
+        "`{{name}}` from \"{{source}}\" is reactive state blocks cannot see: blocks read and write only with `yield*`.{{hint}}"
+    },
+    schema: []
+  },
+  create(context) {
+    return {
+      ImportDeclaration(node) {
+        const banned = FOREIGN_REACTIVE[node.source.value];
+        if (!banned || node.importKind === "type") return;
+        for (const spec of node.specifiers) {
+          if (spec.type !== "ImportSpecifier" || spec.importKind === "type") continue;
+          const name = spec.imported.type === "Identifier" ? spec.imported.name : spec.imported.value;
+          if (!Object.prototype.hasOwnProperty.call(banned, name)) continue;
+          const use = banned[name];
+          context.report({
+            node: spec,
+            messageId: "foreign",
+            data: { name, source: node.source.value, hint: use ? ` Use ${use}.` : "" }
+          });
+        }
       }
     };
   }
@@ -275,7 +346,8 @@ export const rules = {
   "no-read-outside-hole": noReadOutsideHole,
   "yield-in-jsx-hole": yieldInJsxHole,
   "read-before-attempt": readBeforeAttempt,
-  "no-write-in-reactive": noWriteInReactive,
+  "no-unyielded-write": noUnyieldedWrite,
+  "no-foreign-reactive": noForeignReactive,
   "typed-props-key": typedPropsKey
 };
 

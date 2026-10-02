@@ -24,6 +24,9 @@ import { h } from "@solidjs/blocks/h";
 import { html } from "@solidjs/blocks/html";
 
 const tick = () => new Promise<void>(r => setTimeout(r, 0));
+
+/** A write driven from plain test code (no block host): what `yield*` does in an $event. */
+const write = (receipt: Iterable<unknown>): void => void [...receipt];
 async function settle() {
   for (let i = 0; i < 3; i++) {
     await tick();
@@ -50,7 +53,7 @@ for (const flavor of ["h", "html"] as const) {
       let inc!: () => void;
       const Greeting = $component(function* () {
         const [n, setN] = yield* $signal(1);
-        inc = () => void setN(v => v + 1);
+        inc = () => write(setN(v => v + 1));
         const user = yield* $memo(function* () {
           return yield* attempt(() => new Promise<{ name: string }>(r => (resolve = r)));
         });
@@ -117,18 +120,18 @@ for (const flavor of ["h", "html"] as const) {
         const [store, setStore] = yield* $store({ items: ["a", "b"] });
         const [show, setShow] = yield* $signal(true);
         const add = $event(function* () {
-          setStore(s => {
+          yield* setStore(s => {
             s.items.push("c");
           });
         });
         const hide = $event(function* () {
-          setShow(false);
+          yield* setShow(false);
         });
         const row = function* (item: any) {
           rowSetups++;
           const [n, setN] = yield* $signal(0);
           const bump = $event(function* () {
-            setN(v => v + 1);
+            yield* setN(v => v + 1);
           });
           return function* () {
             return flavor === "h"
@@ -176,7 +179,7 @@ describe("h argument shapes", () => {
     const App = $component(function* () {
       const [store, setStore] = yield* $store({ user: { name: "Ada" }, tags: ["a", "b"] });
       const rename = $event(function* () {
-        setStore(s => {
+        yield* setStore(s => {
           s.user.name = "Grace";
         });
       });
@@ -205,7 +208,7 @@ describe("h argument shapes", () => {
     const App = $component(function* () {
       const [count, setCount] = yield* $signal(1);
       const inc = $event(function* () {
-        setCount(c => c + 1);
+        yield* setCount(c => c + 1);
       });
       return function* () {
         return h([h("b", count), h("button", { onClick: inc }, "+")]);

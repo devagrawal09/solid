@@ -44,7 +44,7 @@ export const App = $component(function* App() {
             <For each={SLOTS}>
               {function* (s) {
                 const choose = $event(function* () {
-                  setSlot(yield* s);
+                  yield* setSlot(yield* s);
                 });
                 return function* () {
                   return (

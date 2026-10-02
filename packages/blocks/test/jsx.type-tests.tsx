@@ -55,6 +55,14 @@ export const Settled = $component(function* (props: TypedProps<{ label: string }
 });
 export const ok1 = <Settled label="a" />;
 
+// $event is an action: it takes arguments and returns a promise of its result
+const save = $event(function* (id: string, times: number) {
+  return id.repeat(times);
+});
+export const saved: Promise<string | undefined> = save("a", 2);
+// @ts-expect-error its arguments are typed
+export const savedMissingArg = save("a");
+
 // @ts-expect-error a setup does not read
 export const ReadsInSetup = $component(function* () {
   const [count] = yield* $signal(0);
@@ -269,7 +277,7 @@ export const Rows = $component(function* () {
           {function* (c, i) {
             const [open, setOpen] = yield* $signal(false);
             const toggle = $event(function* () {
-              setOpen(o => !o);
+              yield* setOpen(o => !o);
             });
             return function* () {
               return (

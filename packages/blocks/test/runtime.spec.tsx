@@ -8,17 +8,19 @@ import {
   $,
   $cleanup,
   $component,
+  $dynamic,
   $effect,
   $event,
-  $flush,
   $memo,
+  $optimistic,
+  $optimisticStore,
+  $projection,
   isPendingOf,
   $scope,
   $settled,
   $signal,
   $snapshot,
   $store,
-  accessor,
   adopt,
   attempt,
   createContext,
@@ -26,28 +28,28 @@ import {
   For,
   Loading,
   Match,
-  paths,
   perform,
   raise,
-  read,
   readStore,
+  refresh,
   render,
   Repeat,
+  rowArg,
   Show,
   Switch,
+  until,
   type TypedProps
 } from "@solidjs/blocks";
-import {
-  createMemo as plainMemo,
-  createSignal as plainSignal,
-  createStore as plainStore
-} from "solid-js";
+import { createSignal as plainSignal } from "solid-js";
 
 declare const __DEV__: boolean;
 /** Dev-only checks (warnings, dev errors) are skipped against production builds. */
 const devIt = __DEV__ ? it : it.skip;
 
 const tick = () => new Promise<void>(r => setTimeout(r, 0));
+
+/** A write driven from plain test code (no block host): what `yield*` does in an $event. */
+const write = (receipt: Iterable<unknown>): void => void [...receipt];
 async function settle(times = 3) {
   for (let i = 0; i < times; i++) {
     await tick();
@@ -78,7 +80,7 @@ describe("views are fine-grained", () => {
     let bump!: () => void;
     const Counter = $component(function* () {
       const [n, setN] = yield* $signal(0);
-      bump = () => void setN(v => v + 1);
+      bump = () => write(setN(v => v + 1));
       return function* () {
         viewRuns++;
         return (
@@ -151,7 +153,7 @@ describe("views are fine-grained", () => {
     let runs = 0;
     const Whole = $component(function* () {
       const [n, setN] = yield* $signal(1);
-      set = v => void setN(v);
+      set = v => write(setN(v));
       return function* () {
         runs++;
         const v = yield* n;
@@ -194,7 +196,7 @@ describe("setup operations", () => {
     let set!: (v: number) => void;
     const App = $component(function* () {
       const [n, setN] = yield* $signal(1);
-      set = v => void setN(v);
+      set = v => write(setN(v));
       const doubled = yield* $memo(function* () {
         return (yield* n) * 2;
       });
@@ -223,7 +225,7 @@ describe("setup operations", () => {
     const App = $component(function* () {
       const [n, setN] = yield* $signal(1);
       const [copy, setCopy] = yield* $signal(0);
-      set = v => void setN(v);
+      set = v => write(setN(v));
       yield* $effect(function* () {
         const v = yield* n;
         const written = yield* setCopy(v * 10);
@@ -247,9 +249,9 @@ describe("setup operations", () => {
     const App = $component(function* () {
       const [todos, setTodos] = yield* $store({ list: [{ title: "a", done: false }] });
       toggle = () =>
-        void setTodos(s => {
+        write(setTodos(s => {
           s.list[0].done = !s.list[0].done;
-        });
+        }));
       const remaining = readStore(todos, t => t.list.filter(x => !x.done).length);
       return function* () {
         return (
@@ -301,7 +303,7 @@ describe("setup operations", () => {
       const [n, setN] = yield* $signal(1);
       const m = yield* $memo(function* () {
         try {
-          setN(2);
+          write(setN(2));
         } catch (e) {
           error = e;
         }
@@ -356,14 +358,6 @@ describe("the runtime's other dev errors", () => {
         })
       )
     ).toThrow(/CONTEXT_OUTSIDE_SETUP/);
-    // $flush belongs to an $event
-    expect(() =>
-      perform(
-        hole(function* () {
-          yield* $flush();
-        })
-      )
-    ).toThrow(/FLUSH_OUTSIDE_EVENT/);
   });
 
   devIt("a setup returns its view; a path is not writable", () => {
@@ -371,7 +365,7 @@ describe("the runtime's other dev errors", () => {
       return 1;
     } as unknown as () => Generator<never, () => Generator<never, null>>);
     expect(() => createRoot(() => NoView())).toThrow(/COMPONENT_VIEW/);
-    const p = paths({ a: 1 }) as unknown as { a: number };
+    const p = rowArg({ a: 1 }, false) as unknown as { a: number };
     expect(() => {
       p.a = 2;
     }).toThrow(/PATH_WRITE/);
@@ -438,7 +432,7 @@ describe("props", () => {
     });
     const Parent = $component(function* () {
       const [user, setUser] = yield* $signal({ name: "a" });
-      setName = name => void setUser({ name });
+      setName = name => write(setUser({ name }));
       return function* () {
         return <Card user={user} tag="t" />;
       };
@@ -451,27 +445,148 @@ describe("props", () => {
     expect(childRuns).toBe(1);
   });
 
-  it("foreign accessors and stores: read(), paths()", () => {
-    const [count, setCount] = plainSignal(1);
-    const [store, setStore] = plainStore({ a: { b: 2 } });
+  it("a setter call does nothing until it is delegated to", () => {
+    let poke!: () => void;
+    let bump!: () => void;
     const App = $component(function* () {
-      const c = read(count);
-      const s = paths(store);
-      const sum = yield* $memo(function* () {
-        return (yield* c) + (yield* s.a.b);
-      });
+      const [n, setN] = yield* $signal(0);
+      poke = () => void setN(1);
+      bump = () => write(setN(2));
       return function* () {
-        return <i>{perform(sum)}</i>;
+        return <i>{perform(n)}</i>;
       };
     });
     mount(App);
-    expect(root.textContent).toBe("3");
-    setCount(10);
-    setStore(s => {
-      s.a.b = 5;
-    });
+    poke();
     flush();
-    expect(root.textContent).toBe("15");
+    expect(root.textContent).toBe("0");
+    bump();
+    flush();
+    expect(root.textContent).toBe("2");
+  });
+
+  it("$optimistic / $optimisticStore: an $event's writes show at once and revert when it settles", async () => {
+    let resolve!: () => void;
+    const App = $component(function* () {
+      const [saving, setSaving] = yield* $optimistic(false);
+      const [list, setList] = yield* $optimisticStore({ items: ["a"] });
+      const add = $event(function* () {
+        yield* setSaving(true);
+        yield* setList(s => {
+          s.items.push("b");
+        });
+        yield* attempt(() => new Promise<void>(r => (resolve = r)));
+      });
+      return function* () {
+        return (
+          <button onClick={add}>
+            {String(perform(saving))} {perform(readStore(list, s => s.items.join(",")))}
+          </button>
+        );
+      };
+    });
+    mount(App);
+    root.querySelector("button")!.click();
+    flush();
+    expect(root.textContent).toBe("true a,b");
+    resolve();
+    await settle();
+    expect(root.textContent).toBe("false a");
+  });
+
+  it("a derived $optimisticStore waits on its body; refresh recomputes it", async () => {
+    let calls = 0;
+    let reload!: () => void;
+    const App = $component(function* () {
+      const [todos] = yield* $optimisticStore(function* () {
+        const n = ++calls;
+        return yield* attempt(() => Promise.resolve([`t${n}`]));
+      }, [] as string[]);
+      const again = $event(function* () {
+        yield* refresh(todos);
+      });
+      reload = () => void again();
+      return function* () {
+        return <i>{perform(readStore(todos, t => t.join(",")))}</i>;
+      };
+    });
+    mount(() => <Loading fallback={<b>wait</b>}>{App()}</Loading>);
+    expect(root.textContent).toBe("wait");
+    await settle();
+    expect(root.textContent).toBe("t1");
+    reload();
+    await settle();
+    expect(root.textContent).toBe("t2");
+  });
+
+  it("$projection derives a store from block reads", () => {
+    let setN!: (v: number) => void;
+    const App = $component(function* () {
+      const [n, set] = yield* $signal(1);
+      setN = v => write(set(v));
+      const view = yield* $projection(
+        function* (draft: { doubled: number }) {
+          draft.doubled = (yield* n) * 2;
+        },
+        { doubled: 0 }
+      );
+      return function* () {
+        return <i>{perform(view.doubled)}</i>;
+      };
+    });
+    mount(App);
+    expect(root.textContent).toBe("2");
+    setN(4);
+    flush();
+    expect(root.textContent).toBe("8");
+  });
+
+  it("until waits in an $event until a source reads truthy", async () => {
+    let ready!: () => void;
+    let done = false;
+    const App = $component(function* () {
+      const [ok, setOk] = yield* $signal(false);
+      ready = () => write(setOk(true));
+      const go = $event(function* () {
+        yield* until(ok);
+        done = true;
+      });
+      return function* () {
+        return <button onClick={go}>go</button>;
+      };
+    });
+    mount(App);
+    root.querySelector("button")!.click();
+    await settle();
+    expect(done).toBe(false);
+    ready();
+    await settle();
+    expect(done).toBe(true);
+  });
+
+  it("$dynamic renders what its body returns and re-runs on its reads", () => {
+    let setWhich!: (v: "a" | "b") => void;
+    const A = () => <i>A</i>;
+    const B = () => <b>B</b>;
+    const App = $component(function* () {
+      const [which, set] = yield* $signal<"a" | "b">("a");
+      setWhich = v => write(set(v));
+      const View = yield* $dynamic(function* () {
+        return (yield* which) === "a" ? A : B;
+      });
+      return function* () {
+        return (
+          <div>
+            <View />
+          </div>
+        );
+      };
+    });
+    mount(App);
+    expect(root.textContent).toBe("A");
+    setWhich("b");
+    flush();
+    expect(root.textContent).toBe("B");
   });
 });
 
@@ -490,18 +605,17 @@ describe("context", () => {
 });
 
 describe("events", () => {
-  it("$event reads current values, writes, flushes, and waits on an async attempt", async () => {
+  it("$event is an action: its writes are one transaction across an async attempt", async () => {
     let resolve!: () => void;
     const App = $component(function* () {
       const [n, setN] = yield* $signal(0);
       const [status, setStatus] = yield* $signal("idle");
       const click = $event(function* () {
         const v = yield* n;
-        setN(v + 1);
-        yield* $flush();
-        setStatus("saving");
+        yield* setN(v + 1);
+        yield* setStatus("saving");
         yield* attempt(() => new Promise<void>(r => (resolve = r)));
-        setStatus("saved");
+        yield* setStatus("saved");
       });
       return function* () {
         return (
@@ -514,10 +628,33 @@ describe("events", () => {
     mount(App);
     root.querySelector("button")!.click();
     flush();
-    expect(root.textContent).toBe("1 saving");
+    // held by the transaction: nothing the handler wrote shows while it waits
+    expect(root.textContent).toBe("0 idle");
     resolve();
     await settle();
     expect(root.textContent).toBe("1 saved");
+  });
+
+  it("$event takes arguments, returns its result, and throws a rejection at the yield*", async () => {
+    class SaveError extends Error {}
+    const caught: string[] = [];
+    const save = $event(function* (id: string, times: number) {
+      try {
+        yield* attempt(() => Promise.reject(new SaveError(id)), SaveError);
+      } catch (e) {
+        caught.push((e as Error).message);
+      }
+      return id.repeat(times);
+    });
+    expect(await save("a", 3)).toBe("aaa");
+    expect(caught).toEqual(["a"]);
+  });
+
+  it("a failing $event with no Errored rejects its promise", async () => {
+    const fail = $event(function* () {
+      yield* raise(new Error("nope"));
+    });
+    await expect(fail()).rejects.toThrow("nope");
   });
 
   it("a failing $event goes to the nearest Errored", async () => {
@@ -562,7 +699,7 @@ describe("row blocks", () => {
         { id: 1, text: "a" },
         { id: 2, text: "b" }
       ]);
-      setItems = v => void set(v);
+      setItems = v => write(set(v));
       return function* () {
         return (
           <ul>
@@ -571,7 +708,7 @@ describe("row blocks", () => {
                 setups++;
                 const [open, setOpen] = yield* $signal(false);
                 const toggle = $event(function* () {
-                  setOpen(o => !o);
+                  yield* setOpen(o => !o);
                 });
                 return function* () {
                   views++;
@@ -621,7 +758,7 @@ describe("row blocks", () => {
     });
     const App = $component(function* () {
       const [items, setItems] = yield* $signal(rows);
-      set = v => void setItems(v);
+      set = v => write(setItems(v));
       return function* () {
         return (
           <ul>
@@ -794,19 +931,24 @@ describe("a view that is a function is a branch's content", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const [n, setN] = plainSignal(1);
     // reads at its top level: its output is a memo (a function marked as a view)
-    const Whole = $component(function* () {
+    const Whole = $component(function* (props: TypedProps<{ n: number }>) {
       return function* () {
-        const v = yield* read(n);
+        const v = yield* props.n;
         return <b>{v}</b>;
       };
     });
     const Page = adopt(plainLazy(() => Promise.resolve({ default: Whole })));
     const [on, setOn] = plainSignal<string | false>("a");
+    const nProps = {
+      get n() {
+        return n();
+      }
+    };
     mount(() => (
       <div>
-        <Show when={on()}>{Whole()}</Show>
+        <Show when={on()}>{Whole(nProps)}</Show>
         <Switch>
-          <Match when={on()}>{perform(Page())}</Match>
+          <Match when={on()}>{perform(Page(nProps))}</Match>
         </Switch>
       </div>
     ));
@@ -830,7 +972,7 @@ describe("adopt", () => {
     const Inner = $component(function* (props: TypedProps<{ label: string }>) {
       setups++;
       const [n, setN] = yield* $signal(1);
-      bump = () => void setN(v => v + 1);
+      bump = () => write(setN(v => v + 1));
       return function* () {
         return (
           <b>
@@ -842,10 +984,12 @@ describe("adopt", () => {
     });
     let land!: (m: { default: typeof Inner }) => void;
     const Page = adopt(plainLazy(() => new Promise<{ default: typeof Inner }>(r => (land = r))));
-    const [label, setLabel] = plainSignal("n=");
+    let setLabel!: (v: string) => void;
     const App = $component(function* () {
+      const [label, set] = yield* $signal("n=");
+      setLabel = v => write(set(v));
       return function* () {
-        return <div>{perform(Page({ label: read(label) }))}</div>;
+        return <div>{perform(Page({ label }))}</div>;
       };
     });
     mount(() => <Loading fallback={<i>wait</i>}>{App()}</Loading>);
@@ -903,17 +1047,14 @@ describe("flow controls keep children lazy", () => {
   });
 });
 
-describe("plain Solid computations created in a setup", () => {
-  it("read sources in their own first pass (their reads are theirs, not the setup's)", () => {
-    let doubled!: () => number;
+describe("computations created in a setup", () => {
+  it("read sources in their own pass (their reads are theirs, not the setup's)", () => {
     const Child = $component(function* (props: TypedProps<{ n: number }>) {
-      const n = accessor(props.n);
-      const m = plainMemo(() => n() * 2);
-      doubled = m;
-      // the memo's first pass runs here, while the host is the setup
-      m();
+      const m = yield* $memo(function* () {
+        return (yield* props.n) * 2;
+      });
       return function* () {
-        return <b>{m()}</b>;
+        return <b>{yield* m}</b>;
       };
     });
     const [n, setN] = plainSignal(2);
@@ -922,12 +1063,11 @@ describe("plain Solid computations created in a setup", () => {
     setN(3);
     flush();
     expect(root.textContent).toBe("6");
-    expect(doubled()).toBe(6);
   });
 
   devIt("the setup's own read is still an error", () => {
     const Child = $component(function* (props: TypedProps<{ n: number }>) {
-      accessor(props.n)();
+      yield* (props.n as unknown as Iterable<never>);
       return function* () {
         return <b />;
       };
@@ -938,10 +1078,11 @@ describe("plain Solid computations created in a setup", () => {
 
 describe("Loading on a source", () => {
   it("the call form's `on` may be a source: a new key shows the fallback", async () => {
-    const [key, setKey] = plainSignal("a");
+    let setKey!: (v: string) => void;
     const resolvers: Record<string, (v: string) => void> = {};
     const Page = $component(function* () {
-      const k = read(key);
+      const [k, set] = yield* $signal("a");
+      setKey = v => write(set(v));
       const v = yield* $memo(function* () {
         const at = yield* k;
         return yield* attempt(() => new Promise<string>(r => (resolvers[at] = r)));
@@ -1056,7 +1197,7 @@ describe("hole blocks", () => {
     let runs = 0;
     const App = $component(function* () {
       const [n, setN] = yield* $signal(2);
-      set = v => void setN(v);
+      set = v => write(setN(v));
       const doubled = $(function* () {
         runs++;
         return (yield* n) * 2;
@@ -1088,7 +1229,7 @@ describe("attempt / isPending interplay", () => {
     let set!: (v: number) => void;
     const App = $component(function* () {
       const [id, setId] = yield* $signal(1);
-      set = v => void setId(v);
+      set = v => write(setId(v));
       const m = yield* $memo(function* () {
         const i = yield* id;
         const v = yield* attempt(() => new Promise<number>(r => resolvers.push(r)));

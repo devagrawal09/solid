@@ -20,6 +20,9 @@ import {
 } from "@solidjs/blocks";
 
 const tick = () => new Promise<void>(r => setTimeout(r, 0));
+
+/** A write driven from plain test code (no block host): what `yield*` does in an $event. */
+const write = (receipt: Iterable<unknown>): void => void [...receipt];
 async function settle() {
   for (let i = 0; i < 3; i++) {
     await tick();
@@ -44,7 +47,7 @@ it("measured case: runs once, suspends to Loading, updates text and class indepe
   let inc!: () => void;
   const Greeting = $component(function* () {
     const [n, setN] = yield* $signal(1);
-    inc = () => void setN(v => v + 1);
+    inc = () => write(setN(v => v + 1));
     const user = yield* $memo(function* () {
       return yield* attempt(() => new Promise<{ name: string }>(r => (resolve = r)));
     });
@@ -98,15 +101,15 @@ it("props, stores, row blocks and hole blocks read with yield* in JSX", () => {
       ]
     });
     toggle = () =>
-      void setTodos(s => {
+      write(setTodos(s => {
         s.list[1].done = true;
-      });
+      }));
     const count = $(function* () {
       return (yield* todos.list).filter(t => !t.done).length;
     });
     const [open, setOpen] = yield* $signal(true);
     const close = $event(function* () {
-      setOpen(false);
+      yield* setOpen(false);
     });
     return function* () {
       return (

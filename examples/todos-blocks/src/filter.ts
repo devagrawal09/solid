@@ -1,4 +1,4 @@
-import { createSignal, onSettled } from "solid-js";
+import { $cleanup, $event, $settled, $signal } from "@solidjs/blocks";
 
 export type Filter = "all" | "active" | "completed";
 
@@ -9,21 +9,21 @@ function parseHash(hash: string): Filter {
 }
 
 /**
- * View-state primitive that mirrors the URL hash into a reactive filter.
+ * The URL hash as a filter source, for a setup: `const filter = yield* hashFilter()`.
  *
- * Returns just the accessor — the value is set externally via `location.hash`
- * (see the `<a href="#/...">` links in `<Footer>`), so there's no public
- * setter. The `hashchange` listener is attached after the current activity
- * settles (post-render / post-transition) and removed via the returned
- * cleanup on owner disposal, so this is safe to call from any owner scope
- * and doesn't leak across SSR requests.
+ * The value is set externally via `location.hash` (see the `<a href="#/...">`
+ * links in `<Footer>`), so there is no public setter. The `hashchange`
+ * listener is an `$event` (its write is a `yield*`), attached once the first
+ * render settles and removed with the component.
  */
-export function createHashFilter(): () => Filter {
-  const [filter, setFilter] = createSignal<Filter>(parseHash(location.hash));
-  onSettled(() => {
-    const onChange = () => setFilter(parseHash(location.hash));
+export function* hashFilter() {
+  const [filter, setFilter] = yield* $signal<Filter>(parseHash(location.hash));
+  const onChange = $event(function* () {
+    yield* setFilter(parseHash(location.hash));
+  });
+  yield* $settled(function* () {
     window.addEventListener("hashchange", onChange);
-    return () => window.removeEventListener("hashchange", onChange);
+    yield* $cleanup(() => window.removeEventListener("hashchange", onChange));
   });
   return filter;
 }

@@ -42,13 +42,13 @@ export const TriangleDemo = $component(function* TriangleDemo() {
   });
   const start = Date.now();
   const tick = $event(function* () {
-    setSeconds(s => (s % 10) + 1);
+    yield* setSeconds(s => (s % 10) + 1);
   });
   const t = setInterval(tick, 1000);
 
   let f: number;
   const update = $event(function* (_time: number) {
-    setElapsed(Date.now() - start);
+    yield* setElapsed(Date.now() - start);
     f = requestAnimationFrame(update);
   });
   f = requestAnimationFrame(update);
@@ -142,10 +142,10 @@ const Dot = $component(function* Dot(props: TypedProps<TriangleProps, "Dot">) {
   const s = yield* $snapshot(props.s);
   const [hover, setHover] = yield* $signal(false);
   const onEnter = $event(function* () {
-    setHover(true);
+    yield* setHover(true);
   });
   const onExit = $event(function* () {
-    setHover(false);
+    yield* setHover(false);
   });
 
   return function* () {
