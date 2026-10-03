@@ -1,16 +1,17 @@
-import { createProjection } from "solid-js";
 import {
   $component,
   $memo,
+  $projection,
   $snapshot,
+  attempt,
   For,
   Loading,
-  paths,
   Repeat,
   type Path,
   type Source,
   type TypedProps
 } from "@solidjs/blocks";
+import { StreamError } from "./errors";
 
 interface StreamItem {
   id: number;
@@ -93,19 +94,31 @@ const ProjList = $component(function* ProjList(
 const Stream = $component(function* Stream() {
   // A memo over an async iterable: its latest value, pending until the first.
   const memoItems = yield* $memo(function* () {
-    return accumulate();
+    return yield* attempt(
+      () => accumulate(),
+      cause => new StreamError(cause)
+    );
   });
 
-  const projItems = createProjection<StreamItem[]>(async function* (state) {
-    for await (const val of getData()) {
-      state.push(val);
-      yield;
-    }
-  }, []);
-  // The projection is Solid's: its coloring is stated. Its length is pending
-  // until the first yield; a row reads an index the store already holds.
-  const count = paths<StreamItem[], true, unknown>(projItems).length;
-  const rows = paths<StreamItem[]>(projItems);
+  // A projection over the same stream: the body answers with the async
+  // iterable that pushes each item into the draft. Its length is pending
+  // until the first yield.
+  const projItems = yield* $projection(function* (state: StreamItem[]) {
+    return yield* attempt(
+      () =>
+        (async function* () {
+          for await (const val of getData()) {
+            state.push(val);
+            yield;
+          }
+        })(),
+      cause => new StreamError(cause)
+    );
+  }, [] as StreamItem[]);
+  const count = projItems.length;
+  // Stated: a row exists only for an index the store already holds (the
+  // Repeat counts `length`), so a row's reads are settled.
+  const rows = projItems as unknown as Path<StreamItem[]>;
 
   return function* () {
     return (

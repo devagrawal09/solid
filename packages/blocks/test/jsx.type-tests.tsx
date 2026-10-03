@@ -14,6 +14,7 @@ import {
   $signal,
   $store,
   attempt,
+  start,
   Errored,
   For,
   Loading,
@@ -24,11 +25,14 @@ import {
   Show,
   type Source,
   type TypedProps,
-  type View
+  type View,
+  type EventHandler
 } from "@solidjs/blocks";
 
 declare const root: HTMLElement;
 declare function fetchUser(id: string): Promise<{ name: string }>;
+/** Pending until its first value, and never failing (as a server border states it). */
+declare const pendingUser: Source<{ name: string }, true, never>;
 class NotFound extends Error {
   readonly kind = "not-found";
 }
@@ -112,14 +116,18 @@ export const asyncMemo = $memo(async function* () {
 });
 // @ts-expect-error an effect's attempt is synchronous (Wait is not an EffectOp)
 export const asyncInEffect = $effect(function* () {
-  yield* attempt(() => fetchUser("1"));
+  yield* attempt(
+    () => fetchUser("1"),
+    () => new NotFound()
+  );
 });
 
 // --- only settled values render -------------------------------------------------------------
+// pending, and nothing it reads can fail
 export const Pending = $component(function* (props: TypedProps<{ id: string }>) {
-  const user = yield* $memo(function* () {
-    const id = yield* props.id;
-    return yield* attempt(() => fetchUser(id));
+  const user = $(function* () {
+    yield* props.id;
+    return yield* pendingUser;
   });
   return function* () {
     return <h3>{(yield* user).name}</h3>;
@@ -128,7 +136,10 @@ export const Pending = $component(function* (props: TypedProps<{ id: string }>) 
 export const Fallible = $component(function* (props: TypedProps<{ id: string }>) {
   const user = yield* $memo(function* () {
     const id = yield* props.id;
-    const u = yield* attempt(() => fetchUser(id), NotFound);
+    const u = yield* attempt(
+      () => fetchUser(id),
+      () => new NotFound()
+    );
     if (!u.name) yield* raise(new NotFound());
     return u;
   });
@@ -141,17 +152,22 @@ export const Seeded = $component(function* (props: TypedProps<{ id: string }>) {
   const user = yield* $memo(
     function* () {
       const id = yield* props.id;
-      return yield* attempt(() => fetchUser(id));
+      return yield* attempt(
+        () => fetchUser(id),
+        () => new NotFound()
+      );
     },
     { loadingValue: { name: "…" } }
   );
-  const seeded: Source<{ name: string }, false, never> = user;
+  // never pending (commit #0 is the value); it fails as its attempt does
+  const seeded: Source<{ name: string }, false, NotFound> = user;
   void seeded;
   return function* () {
     return <h3>{(yield* user).name}</h3>;
   };
 });
-export const seededOk = <Seeded id="1" />;
+// never pending: an Errored alone renders it
+export const seededOk = <Errored fallback="!">{Seeded({ id: "1" })}</Errored>;
 const pendingView: View<true, never> = Pending({ id: "1" });
 const fallibleView: View<true, NotFound> = Fallible({ id: "1" });
 void [pendingView, fallibleView];
@@ -217,9 +233,7 @@ export const Thunks = $component(function* () {
 // --- blocks as children (settled only) and as attribute values ----------------------------
 export const Blocks = $component(function* () {
   const [n] = yield* $signal(1);
-  const user = yield* $memo(function* () {
-    return yield* attempt(() => fetchUser("x"));
-  });
+  const user = pendingUser;
   const doubled = $(function* () {
     return (yield* n) * 2;
   });
@@ -239,9 +253,7 @@ export const Blocks = $component(function* () {
 });
 // a block read in an attribute counts in the view: this view may be pending
 export const PendingAttribute = $component(function* () {
-  const user = yield* $memo(function* () {
-    return yield* attempt(() => fetchUser("x"));
-  });
+  const user = pendingUser;
   const name = $(function* () {
     return (yield* user).name;
   });
@@ -358,11 +370,25 @@ export const bad7 = <Declared user={settledUser} />;
 declare function stream(): Promise<AsyncIterable<number>>;
 export const Streamed = $component(function* () {
   const n = yield* $memo(function* () {
-    return stream();
+    return yield* attempt(
+      () => stream(),
+      () => new NotFound()
+    );
   });
-  const typed: Source<number, true, unknown> = n;
+  // pending (a stream), failing as its attempt's handler says
+  const typed: Source<number, true, NotFound> = n;
   return function* () {
     return <b>{yield* typed}</b>;
+  };
+});
+export const StreamedWithoutAttempt = $component(function* () {
+  // @ts-expect-error a body returns a promise or a stream through attempt
+  const n = yield* $memo(function* () {
+    return stream();
+  });
+  void n;
+  return function* () {
+    return <b />;
   };
 });
 
@@ -383,3 +409,116 @@ void lazyHostView;
 declare const serializable: import("@solidjs/web").JSX.SerializableAttributeValue;
 export const formAction = <form action={serializable} />;
 export const linkHref = <a href={serializable} />;
+
+// events carry two colors: P (reads pending data, and waits for it), A (async work of its own)
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+type Colors<H> = H extends EventHandler<any, any, any, infer P, infer A> ? [P, A] : never;
+export const EventColors = $component(function* () {
+  const [n] = yield* $signal(1);
+  const data = yield* $memo(function* () {
+    const v = yield* n;
+    return yield* attempt(
+      () => Promise.resolve(v),
+      () => new NotFound()
+    );
+  });
+  const readsData = $event(function* () {
+    return yield* data;
+  });
+  const requests = $event(function* () {
+    yield* attempt(
+      () => Promise.resolve(1),
+      () => new NotFound()
+    );
+  });
+  const callsBoth = $event(function* () {
+    yield* readsData();
+    yield* requests();
+  });
+  const startsBoth = $event(function* () {
+    yield* start(readsData());
+    yield* start(requests());
+  });
+  const sync = $event(function* () {});
+  const colors: [
+    Same<Colors<typeof readsData>, [true, false]>,
+    Same<Colors<typeof requests>, [false, true]>,
+    Same<Colors<typeof callsBoth>, [true, true]>,
+    Same<Colors<typeof startsBoth>, [false, false]>,
+    Same<Colors<typeof sync>, [false, false]>
+  ] = [true, true, true, true, true];
+  void colors;
+  // an $effect does not wait: it delegates to a sync event, and starts an async one
+  yield* $effect(function* () {
+    yield* sync();
+    yield* start(requests());
+  });
+  // @ts-expect-error an $effect does not wait on an event doing async work
+  yield* $effect(function* () {
+    yield* requests();
+  });
+  // @ts-expect-error nor on an event that waits for pending data
+  yield* $effect(function* () {
+    yield* readsData();
+  });
+  return function* () {
+    return <p />;
+  };
+});
+
+// each error type is its own color; an Errored with `catch` handles only the types it lists
+class NotFoundE extends Error {
+  readonly kind = "not-found" as const;
+}
+class ForbiddenE extends Error {
+  readonly kind = "forbidden" as const;
+}
+const Fetches = $component(function* () {
+  const [id] = yield* $signal("1");
+  const user = yield* $memo(function* () {
+    const v = yield* id;
+    return yield* attempt(
+      () => Promise.resolve({ name: v }),
+      error => (error === "forbidden" ? new ForbiddenE() : new NotFoundE())
+    );
+  });
+  return function* () {
+    return <p>{(yield* user).name}</p>;
+  };
+});
+// one boundary per type: both handled, renderable
+export const bothHandled = Errored({
+  catch: [ForbiddenE],
+  fallback: "no access",
+  children: () =>
+    Errored({
+      catch: [NotFoundE],
+      fallback: err => {
+        const e: NotFoundE = err();
+        return <p>{e.kind}</p>;
+      },
+      children: () => Loading({ children: () => Fetches() })
+    })
+});
+render(() => bothHandled, root);
+// only NotFound handled: ForbiddenE still fails the tree
+export const partlyHandled = Errored({
+  catch: [NotFoundE],
+  fallback: err => <p>{err().kind}</p>,
+  children: () => Loading({ children: () => Fetches() })
+});
+// @ts-expect-error ForbiddenE is unhandled: the tree may fail
+render(() => partlyHandled, root);
+export const tagHandled = (
+  <Errored catch={[NotFoundE, ForbiddenE]} fallback={err => <p>{err().kind}</p>}>
+    {Loading({ children: () => Fetches() })}
+  </Errored>
+);
+export const tagPartly = (
+  // @ts-expect-error tag form: ForbiddenE is unhandled
+  <Errored catch={[NotFoundE]} fallback={err => <p>{err().kind}</p>}>
+    {Loading({ children: () => Fetches() })}
+  </Errored>
+);
+// @ts-expect-error async data outside a Loading: the tree would suspend
+render(() => Errored({ fallback: "!", children: () => Fetches() }), root);

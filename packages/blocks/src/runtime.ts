@@ -40,10 +40,15 @@ import {
   type Accessor,
   type Context,
   type MemoOptions,
+  type ProjectionOptions,
   type SignalOptions,
   type Store
 } from "solid-js";
 import type {
+  Handled,
+  WaitsOf,
+  ReadsPendingOf,
+  EventCall,
   Write,
   COMPONENT as COMPONENT_BRAND,
   Block,
@@ -184,8 +189,26 @@ export function through(v: any): any {
   return v != null && v[READ] !== undefined ? readOf(v) : v;
 }
 
-function* sourceIterator(this: any): Generator<never, unknown, unknown> {
-  return readOf(this);
+function* sourceIterator(this: any): Generator<unknown, unknown, unknown> {
+  return host === EVENT ? yield* eventRead(this) : readOf(this);
+}
+
+/**
+ * A read in an event: an event takes current values, and when the source has
+ * none yet (pending) the event waits until it can be read — the reading event's
+ * `P` color.
+ */
+function* eventRead(x: any): Generator<unknown, unknown, unknown> {
+  try {
+    return readOf(x);
+  } catch (e) {
+    if (!(e instanceof NotReadyError)) throw e;
+    // The value comes from the wait itself: when the source's first value
+    // lands inside this event's own transaction, a second (untracked) read
+    // here could not see it until the transaction commits — after the event.
+    const box = (yield new Wait_(solidUntil(() => ({ value: readOf(x) })))) as { value: unknown };
+    return box.value;
+  }
 }
 
 /** Turn an accessor this library created into a source (iterable, readable). */
@@ -194,7 +217,6 @@ function asSource<T>(get: Accessor<T>): Source<T, any, any> {
   (get as any)[Symbol.iterator] = sourceIterator;
   return get as any;
 }
-
 
 /**
  * `yield* latestOf(results)`: the latest value of a source — while a newer
@@ -301,7 +323,6 @@ export function rowArg(value: unknown, isAccessor: boolean): any {
   return makePath(value, isAccessor, []);
 }
 
-
 class Selection {
   constructor(
     readonly store: any,
@@ -311,8 +332,8 @@ class Selection {
     const s = this.store;
     return this.select(s != null && s[PATH_TARGET] ? readPath(s[PATH_TARGET]) : s);
   }
-  *[Symbol.iterator](): Generator<never, unknown, unknown> {
-    return readOf(this);
+  *[Symbol.iterator](): Generator<unknown, unknown, unknown> {
+    return host === EVENT ? yield* eventRead(this) : readOf(this);
   }
 }
 /**
@@ -377,27 +398,49 @@ function isThenable(v: any): v is PromiseLike<unknown> {
 }
 
 class Attempt {
-  constructor(readonly run: () => unknown) {}
+  constructor(
+    readonly run: () => unknown,
+    readonly onError: (error: unknown) => unknown
+  ) {}
   *[Symbol.iterator](): Generator<unknown, unknown, unknown> {
-    const v = this.run();
-    if (isThenable(v)) return yield new Wait_(v);
-    return v;
+    let v: unknown;
+    try {
+      v = this.run();
+    } catch (e) {
+      if (e instanceof NotReadyError) throw e;
+      throw this.onError(e);
+    }
+    if (isThenable(v)) {
+      try {
+        v = yield new Wait_(v);
+      } catch (e) {
+        throw this.onError(e);
+      }
+    }
+    // a stream (or a promise's stream) is not waited for: its failures go
+    // through the handler as they come
+    return mapStream(v, this.onError);
   }
 }
-type AttemptOps<T, E> =
-  | (T extends PromiseLike<any> ? Wait : never)
-  | ([E] extends [never] ? never : Raise<E>);
+type AttemptOps<T, E> = (T extends PromiseLike<any> ? Wait : never) | Raise<E>;
+/** What an attempt gives: a promise's value; a stream as itself, handled. */
+type Attempted<T> = Awaited<T> extends AsyncIterable<any> ? Awaited<T> & Handled : Awaited<T>;
 /**
- * `yield* attempt(fn, ...Errors)`: call `fn`, declaring the failures it may
- * raise. When `fn` returns a promise the block suspends until it settles
- * ($memo and $event only) and resumes with its value, or with the rejection
- * thrown at the `yield*`.
+ * `yield* attempt(fn, onError)`: call `fn`; when it throws, or the promise it
+ * returns rejects, `onError` turns what it caught into the error object the
+ * block fails with — the failure's type is its color. An attempt always
+ * handles its error: one without a handler would be just a call. When `fn`
+ * returns a promise the block suspends until it settles ($memo and $event
+ * only) and resumes with its value. When it returns a stream (or a promise of
+ * one) the attempt gives the stream back, its failures going through
+ * `onError` as they come: `return yield* attempt(() => watch(feed), cause =>
+ * new FeedError(cause))` is how a memo's body returns a stream.
  */
-export function attempt<T, C extends ErrorClass[] = []>(
+export function attempt<T, E extends Error>(
   fn: () => T,
-  ..._errors: C
-): Yieldable<AttemptOps<T, InstanceType<C[number]>>, Awaited<T>> {
-  return new Attempt(fn) as any;
+  onError: (error: unknown) => E
+): Yieldable<AttemptOps<T, E>, Attempted<T>> {
+  return new Attempt(fn, onError) as any;
 }
 
 class RaiseOp {
@@ -497,28 +540,36 @@ export function $optimistic<T>(
 }
 
 /** A derived store's paths: pending and failing as its body is. */
-type ProjectionStore<T, Y, R> = Path<T, MemoPending<Y, R>, MemoFails<Y, R>>;
+type ProjectionStore<T, Y, R, E = never> = Path<T, MemoPending<Y, R>, FailsOf<Y> | E>;
+/** With `seedLoadingValue: true` the seed is commit #0: the store is never pending. */
+type SeededStore<T, Y, E = never> = Path<T, false, FailsOf<Y> | E>;
 
 /**
  * `const [todos, setTodos] = yield* $optimisticStore(function* () { … }, [])`
  * in a setup: a store whose writes inside an `$event` show at once and revert
  * when the event settles (Solid's `createOptimisticStore`). With a body the
  * store is derived: the body reads with `yield*`, may wait on an async
- * `attempt` or return a promise / async iterable (the store is then pending),
+ * `attempt` or return a stream through `attempt` (the store is then pending),
  * and may update the draft it is handed.
  */
 export function $optimisticStore<T extends object>(
   value: T
 ): Yieldable<Create<"optimisticStore">, [TypedStore<T>, BlockStoreSetter<T>]>;
 export function $optimisticStore<T extends object, Y extends MemoOp = never, R = unknown>(
-  body: (draft: T) => Generator<Y, R, any>,
-  seed: Partial<T>
+  body: (draft: T) => Generator<Y, SyncReturn<R>, any>,
+  seed: Partial<T>,
+  options: ProjectionOptions & { seedLoadingValue: true }
+): Yieldable<Create<"optimisticStore">, [SeededStore<T, Y>, BlockStoreSetter<T>]>;
+export function $optimisticStore<T extends object, Y extends MemoOp = never, R = unknown>(
+  body: (draft: T) => Generator<Y, SyncReturn<R>, any>,
+  seed: Partial<T>,
+  options?: ProjectionOptions
 ): Yieldable<Create<"optimisticStore">, [ProjectionStore<T, Y, R>, BlockStoreSetter<T>]>;
-export function $optimisticStore(first: any, seed?: any): any {
+export function $optimisticStore(first: any, seed?: any, options?: any): any {
   return new CreateOp("optimisticStore", () => {
     const [store, set] =
       typeof first === "function"
-        ? createOptimisticStore(memoCompute(first) as any, seed)
+        ? createOptimisticStore(memoCompute(first) as any, seed, options)
         : createOptimisticStore(first);
     return [makePath(store, false, []), receiptSetter(set as any, () => store)];
   });
@@ -527,15 +578,23 @@ export function $optimisticStore(first: any, seed?: any): any {
 /**
  * `const feed = yield* $projection(function* (draft) { … }, seed)` in a setup:
  * a derived store (Solid's `createProjection`). The body reads with `yield*`,
- * may wait, and updates the draft or returns the next value.
+ * may wait, and updates the draft or returns the next value (a stream through
+ * `attempt`).
  */
 export function $projection<T extends object, Y extends MemoOp = never, R = unknown>(
-  body: (draft: T) => Generator<Y, R, any>,
-  seed: Partial<T>
-): Yieldable<Create<"projection">, ProjectionStore<T, Y, R>> {
+  body: (draft: T) => Generator<Y, SyncReturn<R>, any>,
+  seed: Partial<T>,
+  options: ProjectionOptions & { seedLoadingValue: true }
+): Yieldable<Create<"projection">, SeededStore<T, Y>>;
+export function $projection<T extends object, Y extends MemoOp = never, R = unknown>(
+  body: (draft: T) => Generator<Y, SyncReturn<R>, any>,
+  seed: Partial<T>,
+  options?: ProjectionOptions
+): Yieldable<Create<"projection">, ProjectionStore<T, Y, R>>;
+export function $projection(body: any, seed: any, options?: any): any {
   return new CreateOp("projection", () =>
-    makePath(createProjection(memoCompute(body) as any, seed as any), false, [])
-  ) as any;
+    makePath(createProjection(memoCompute(body) as any, seed, options), false, [])
+  );
 }
 
 class RefreshOp {
@@ -558,15 +617,17 @@ export function refresh(
 }
 
 /**
- * `yield* until(readStore(store, s => s.ready))`: wait until a source reads
- * truthy (Solid's `until`). It is an async `attempt`: only a `$memo` or an
- * `$event` waits.
+ * `yield* until(readStore(store, s => s.ready), onError, { timeout })`: wait
+ * until a source reads truthy (Solid's `until`). It is an async `attempt`:
+ * only a `$memo` or an `$event` waits, and `onError` turns a failure (a
+ * timeout) into the block's error.
  */
-export function until<T>(
+export function until<T, E extends Error>(
   source: Source<T, boolean, unknown>,
+  onError: (error: unknown) => E,
   options?: Parameters<typeof solidUntil>[1]
-): Yieldable<Wait, T> {
-  return attempt(() => solidUntil(accessor(source), options)) as any;
+): Yieldable<Wait | Raise<E>, T> {
+  return attempt(() => solidUntil(accessor(source), options), onError) as any;
 }
 
 /** A memo's value: a promise's, an async iterable's latest — or a promise of an iterable's (Solid flattens one level). */
@@ -574,10 +635,14 @@ type MemoValue<R> = R extends PromiseLike<infer U> ? IteratedValue<U> : Iterated
 type IteratedValue<R> = R extends AsyncIterable<infer U> ? U : R;
 type MemoPending<Y, R> =
   PendingOf<Y> extends true ? true : R extends PromiseLike<any> | AsyncIterable<any> ? true : false;
-/** A memo that returns a promise or an async iterable may fail with anything it rejects with. */
-type MemoFails<Y, R> =
-  | FailsOf<Y>
-  | (Extract<R, PromiseLike<any> | AsyncIterable<any>> extends never ? never : unknown);
+/** A body's result that is a promise or a stream no `attempt` handled. */
+type UnhandledAsync<R> = Exclude<Extract<R, PromiseLike<any> | AsyncIterable<any>>, Handled>;
+/** A body returns a promise or a stream through `attempt`, whose handler types its failure. */
+type NeedsAttempt = {
+  readonly "a body that returns a promise or a stream wraps it: return yield* attempt(() => it, onError)": never;
+};
+/** @internal A body's return: anything but a promise or a stream no `attempt` handled. */
+export type SyncReturn<R> = R & ([UnhandledAsync<R>] extends [never] ? unknown : NeedsAttempt);
 
 /**
  * `$memo(body, { loadingValue })`: commit #0 is the loading value, so a read
@@ -585,16 +650,53 @@ type MemoFails<Y, R> =
  * newer value in flight). Its failures are the body's.
  */
 export function $memo<Y extends MemoOp = never, R = unknown>(
-  body: () => Generator<Y, R, any>,
+  body: () => Generator<Y, SyncReturn<R>, any>,
   options: MemoOptions<MemoValue<R>> & { loadingValue: MemoValue<R> }
-): Yieldable<Create<"memo">, Source<MemoValue<R>, false, MemoFails<Y, R>>>;
-/** `const doubled = yield* $memo(function* () { return (yield* n) * 2 })` in a setup. */
+): Yieldable<Create<"memo">, Source<MemoValue<R>, false, FailsOf<Y>>>;
+/**
+ * `const doubled = yield* $memo(function* () { return (yield* n) * 2 })` in a setup.
+ * A body over a promise or a stream returns it through `attempt`: `return
+ * yield* attempt(() => watch(feed), cause => new FeedError(cause))`.
+ */
 export function $memo<Y extends MemoOp = never, R = unknown>(
-  body: () => Generator<Y, R, any>,
+  body: () => Generator<Y, SyncReturn<R>, any>,
   options?: MemoOptions<MemoValue<R>>
-): Yieldable<Create<"memo">, Source<MemoValue<R>, MemoPending<Y, R>, MemoFails<Y, R>>>;
+): Yieldable<Create<"memo">, Source<MemoValue<R>, MemoPending<Y, R>, FailsOf<Y>>>;
 export function $memo(body: () => Generator<any, any, any>, options?: any): any {
   return new CreateOp("memo", () => memoOf(body, options));
+}
+
+/**
+ * A stream whose failures go through an attempt's handler: a Proxy that keeps
+ * the stream's own properties (a server function's brand, a live source's
+ * `onstatus`) and changes only how it fails.
+ */
+function mapStream(value: unknown, onError: (error: unknown) => unknown): unknown {
+  if (value == null || (typeof value !== "object" && typeof value !== "function")) return value;
+  if (typeof (value as any)[Symbol.asyncIterator] !== "function") return value;
+  return new Proxy(value as any, {
+    get(target, key) {
+      if (key === Symbol.asyncIterator)
+        return () => {
+          const it = target[Symbol.asyncIterator]();
+          return {
+            next: (v?: unknown) =>
+              it.next(v).then(undefined, (e: unknown) => {
+                throw onError(e);
+              }),
+            return: it.return && ((v?: unknown) => it.return(v)),
+            throw: it.throw && ((v?: unknown) => it.throw(v)),
+            [Symbol.asyncIterator]() {
+              return this;
+            }
+          };
+        };
+      return Reflect.get(target, key);
+    },
+    set(target, key, v) {
+      return Reflect.set(target, key, v);
+    }
+  });
 }
 
 /**
@@ -852,14 +954,16 @@ function* eventSteps(
  * thrown at the `yield*`. It takes any arguments and returns a promise of the
  * body's result, so it replaces `action` in block code.
  *
- * A failure goes to the nearest `Errored` above where the handler was created
- * (the promise then resolves `undefined`); with none, the promise rejects.
+ * A failure goes to whoever handles the returned promise (`await`, `.then`,
+ * `.catch`). One nobody handles — a DOM dispatch ignores the result — goes to
+ * the nearest `Errored` above where the handler was created (the promise then
+ * resolves `undefined`); with no boundary either, the promise rejects.
  * Like any action it is called from an event or other imperative code, not
  * synchronously inside a computation (ACTION_CALLED_IN_OWNED_SCOPE).
  */
 export function $event<Args extends unknown[] = [], Y extends EventOp = never, R = void>(
   body: (...args: Args) => Generator<Y, R, any>
-): EventHandler<Args, FailsOf<Y>, R> {
+): EventHandler<Args, FailsOf<Y>, R, ReadsPendingOf<Y>, WaitsOf<Y>> {
   const owner = getOwner();
   let boundary = false;
   if (owner) {
@@ -867,17 +971,69 @@ export function $event<Args extends unknown[] = [], Y extends EventOp = never, R
       boundary = useContext(BOUNDARY);
     } catch {}
   }
-  const run = action(function* (...args: Args) {
-    return yield* eventSteps(body(...args) as Generator<unknown, unknown, unknown>);
+  const run = action(function* (rec: CallRecord, ...args: Args) {
+    try {
+      const value = yield* eventSteps(body(...args) as Generator<unknown, unknown, unknown>);
+      rec.done = { ok: true, value };
+      return value;
+    } catch (error) {
+      rec.done = { ok: false, value: error };
+      throw error;
+    }
   });
-  return ((...args: Args) =>
-    run(...args).then(undefined, (error: unknown) => {
-      if (boundary && owner) {
+  return ((...args: Args) => {
+    // A failure goes to whoever handles the returned promise; one nobody
+    // handles (a DOM dispatch ignores the result) goes to the boundary.
+    const rec: CallRecord = {};
+    let handled = false;
+    const result = run(rec, ...args).then(undefined, (error: unknown) => {
+      if (!handled && boundary && owner) {
         reportError(owner, error);
         return undefined;
       }
       throw error;
-    })) as any;
+    });
+    const then = result.then.bind(result);
+    result.then = ((onFulfilled?: any, onRejected?: any) => {
+      handled = true;
+      return then(onFulfilled, onRejected);
+    }) as typeof result.then;
+    // `yield* call`: a write that waits for the call — at once when the body
+    // already finished (a synchronous event, as an `$effect` may delegate to).
+    (result as any)[Symbol.iterator] = function* (): Generator<unknown, unknown, unknown> {
+      if (__DEV__) checkWrite();
+      const done = rec.done;
+      if (done) {
+        handled = true;
+        then(undefined, () => {});
+        if (done.ok) return done.value;
+        throw done.value;
+      }
+      return yield new Wait_(result);
+    };
+    return result;
+  }) as any;
+}
+
+/** Whether (and how) an event call's body finished. */
+interface CallRecord {
+  done?: { ok: boolean; value: unknown };
+}
+
+class StartOp {
+  *[Symbol.iterator](): Generator<never, void, unknown> {
+    if (__DEV__) checkWrite();
+  }
+}
+/**
+ * `yield* start(save(x))`: an event call the block does not wait for. It is a
+ * write; the callee's colors stay its own, and a failure nobody handles goes
+ * to the nearest `Errored`.
+ */
+export function start(
+  _call: EventCall<unknown, unknown, boolean, boolean>
+): Yieldable<Write, void> {
+  return new StartOp() as any;
 }
 
 // --- blocks -----------------------------------------------------------------------------------

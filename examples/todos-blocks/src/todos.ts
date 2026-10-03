@@ -31,8 +31,24 @@
 // own identity, but exposes intermediate views as accidental footguns; the
 // single-primitive form is canonical.
 
-import { $event, $optimisticStore, attempt, readStore, refresh } from "@solidjs/blocks";
+import {
+  $event,
+  $optimisticStore,
+  attempt,
+  readStore,
+  refresh,
+  type EventCall
+} from "@solidjs/blocks";
 import { api, type Todo as ServerTodo } from "./api";
+
+/** The todo API failed: the color of every todo request's failure. */
+export class ApiError extends Error {
+  readonly kind = "api" as const;
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+  }
+}
+const apiError = (cause: unknown) => new ApiError(cause);
 
 export type TodoError = {
   type: "addTodo" | "removeTodo" | "toggleTodo";
@@ -73,15 +89,6 @@ function applyErrors(todos: Todo[], errors: Record<string, TodoError>) {
   }
 }
 
-export interface TodoActions {
-  addTodo: (todo: ServerTodo) => Promise<void>;
-  removeTodo: (id: string) => Promise<void>;
-  toggleTodo: (id: string, completed: boolean) => Promise<void>;
-  toggleAll: (completed: boolean) => Promise<void>;
-  clearCompleted: () => Promise<void>;
-  retryTodo: (todo: Todo) => Promise<void>;
-}
-
 /**
  * The todos store and its actions, for a setup: `const todos = yield* createTodos()`.
  * The store is an optimistic projection of the server's list (pending until
@@ -90,7 +97,7 @@ export interface TodoActions {
  */
 export function* createTodos() {
   const [todos, setTodos] = yield* $optimisticStore(function* () {
-    const todos: Todo[] = yield* attempt(() => api.getTodos());
+    const todos: Todo[] = yield* attempt(() => api.getTodos(), apiError);
     applyErrors(todos, Errors);
     return todos;
   }, [] as Todo[]);
@@ -103,7 +110,7 @@ export function* createTodos() {
         else t.push({ ...todo, pending: true });
       });
       try {
-        yield* attempt(() => api.addTodo(todo));
+        yield* attempt(() => api.addTodo(todo), apiError);
         delete Errors[todo.id];
       } catch {
         Errors[todo.id] ||= { type: "addTodo", args: [todo] };
@@ -113,7 +120,7 @@ export function* createTodos() {
     removeTodo: $event(function* (id: string) {
       yield* setTodos(t => t.filter(todo => todo.id !== id));
       try {
-        yield* attempt(() => api.removeTodo(id));
+        yield* attempt(() => api.removeTodo(id), apiError);
         delete Errors[id];
       } catch {
         Errors[id] ||= { type: "removeTodo", args: [id] };
@@ -129,7 +136,7 @@ export function* createTodos() {
         }
       });
       try {
-        yield* attempt(() => api.toggleTodo(id, completed));
+        yield* attempt(() => api.toggleTodo(id, completed), apiError);
         delete Errors[id];
       } catch {
         Errors[id] ||= { type: "toggleTodo", args: [id, completed] };
@@ -150,7 +157,7 @@ export function* createTodos() {
         });
       });
       try {
-        yield* attempt(() => api.toggleAll(ids, completed));
+        yield* attempt(() => api.toggleAll(ids, completed), apiError);
         ids.forEach(id => delete Errors[id]);
       } catch {
         // Bulk failed — fan the error out to per-item entries so each
@@ -165,7 +172,7 @@ export function* createTodos() {
       const ids = yield* readStore(todos, t => t.filter(x => x.completed).map(x => x.id));
       yield* setTodos(t => t.filter(todo => !todo.completed));
       try {
-        yield* attempt(() => api.clearCompleted(ids));
+        yield* attempt(() => api.clearCompleted(ids), apiError);
         ids.forEach(id => delete Errors[id]);
       } catch {
         ids.forEach(id => {
@@ -173,14 +180,18 @@ export function* createTodos() {
         });
       }
       yield* refresh(todos);
-    }),
-    retryTodo(todo: Todo): Promise<unknown> {
-      if (!todo.error) return Promise.resolve();
-      return (actions[todo.error.type] as (...args: unknown[]) => Promise<unknown>)(
-        ...todo.error.args
-      );
-    }
+    })
   };
 
-  return [todos, actions] as const;
+  // Re-runs the failed action recorded on the todo: an event, so the call it
+  // makes is delegated to (and its colors are this event's).
+  const retryTodo = $event(function* (todo: Todo) {
+    if (!todo.error) return;
+    const retry = actions[todo.error.type] as (
+      ...args: unknown[]
+    ) => EventCall<void, ApiError, boolean, true>;
+    yield* retry(...todo.error.args);
+  });
+
+  return [todos, { ...actions, retryTodo }] as const;
 }

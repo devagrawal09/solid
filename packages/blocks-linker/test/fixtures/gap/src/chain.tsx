@@ -33,7 +33,10 @@ export const Middle = $component(function* (
 
 export const Grand = $component(function* () {
   const user = yield* $memo(function* () {
-    const u = yield* attempt(() => load());
+    const u = yield* attempt(
+      () => load(),
+      () => new Missing()
+    );
     if (!u.name) yield* raise(new Missing());
     return u;
   });
@@ -73,7 +76,10 @@ export const Hidden = $component(function* (
 });
 export const UsesDynamic = $component(function* () {
   const user = yield* $memo(function* () {
-    return yield* attempt(() => load());
+    return yield* attempt(
+      () => load(),
+      () => new Missing()
+    );
   });
   return function* () {
     return <Loading>{Dynamic({ component: Hidden, user } as any)}</Loading>;

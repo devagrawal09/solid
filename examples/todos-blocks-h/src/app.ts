@@ -40,11 +40,13 @@ const Header = $component(function* Header() {
   const [, { addTodo }] = yield* useTodos();
   const submit = $event(function* (e: Key) {
     if (e.key !== "Enter") return;
-    const title = e.currentTarget.value.trim();
+    const input = e.currentTarget;
+    const title = input.value.trim();
     if (!title) return;
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    addTodo({ id, title, completed: false });
-    e.currentTarget.value = "";
+    // the event is gone once the call waits: clear the input first
+    input.value = "";
+    yield* addTodo({ id, title, completed: false });
   });
   return function* () {
     return h(
@@ -64,13 +66,13 @@ const Header = $component(function* Header() {
 const TodoItem = $component(function* TodoItem(props: TypedProps<{ todo: Todo }, "TodoItem">) {
   const [, { toggleTodo, removeTodo, retryTodo }] = yield* useTodos();
   const toggle = $event(function* (e: Input) {
-    toggleTodo(yield* props.todo.id, e.currentTarget.checked);
+    yield* toggleTodo(yield* props.todo.id, e.currentTarget.checked);
   });
   const retry = $event(function* () {
-    retryTodo(yield* props.todo);
+    yield* retryTodo(yield* props.todo);
   });
   const remove = $event(function* () {
-    removeTodo(yield* props.todo.id);
+    yield* removeTodo(yield* props.todo.id);
   });
   const classes = $(function* () {
     return [
@@ -137,7 +139,7 @@ const MainSection = $component(function* MainSection(
     return (yield* todos.length) > 0;
   });
   const toggle = $event(function* () {
-    toggleAll(!(yield* allCompleted));
+    yield* toggleAll(!(yield* allCompleted));
   });
   return function* () {
     return Show({
@@ -175,7 +177,7 @@ const Footer = $component(function* Footer(props: TypedProps<{ filter: Filter },
     return (yield* todos.length) > 0;
   });
   const clear = $event(function* () {
-    clearCompleted();
+    yield* clearCompleted();
   });
   const link = (href: string, label: string, value: Filter) =>
     h(

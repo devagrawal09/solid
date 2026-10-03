@@ -14,18 +14,20 @@
 import { createRouter, type RouteSectionProps } from "@solidjs/router";
 import {
   $component,
+  $dynamic,
   $snapshot,
-  accessor,
+  attempt,
   Loading,
   type Element,
   type TypedProps
 } from "@solidjs/blocks";
-import { dynamic } from "@solidjs/web";
+import type { dynamic } from "@solidjs/web";
 import { appView } from "~/server/App";
 import { getNoteList } from "~/lib/api";
 import searchField from "~/components/searchField";
 import SidebarNoteContent from "~/components/SidebarNoteContent";
 import { preload, routes } from "~/routes";
+import { ServerError } from "~/lib/errors";
 import "./app.css";
 
 const Router = createRouter({ routes, preload });
@@ -33,7 +35,12 @@ const Router = createRouter({ routes, preload });
 const App = $component(function* App() {
   // Static chrome: rendered inline at t=0, adopted by the client, never
   // refetched (no reactive input).
-  const AppShell = dynamic(() => appView());
+  const AppShell = yield* $dynamic(function* () {
+    return yield* attempt(
+      () => appView(),
+      cause => new ServerError(cause)
+    );
+  });
   const rendered = (
     <Router>
       {props => (
@@ -62,9 +69,14 @@ const Shell = $component(function* Shell(
 ) {
   // The list refetches when the search param changes — and morphs in place
   // when a mutation's single-flight response includes it.
-  const searchText = accessor(props.location.query.searchText);
-  const NoteList = dynamic(() => getNoteList(String(searchText() || "")));
-  const search = searchField();
+  const NoteList = yield* $dynamic(function* () {
+    const searchText2 = yield* props.location.query.searchText;
+    return yield* attempt(
+      () => getNoteList(String(searchText2 || "")),
+      cause => new ServerError(cause)
+    );
+  });
+  const search = yield* searchField(props.location);
   const AppShell = yield* $snapshot(props.AppShell);
   return function* () {
     return (
@@ -73,7 +85,9 @@ const Shell = $component(function* Shell(
           {...search}
           noteList={
             <Loading fallback="Loading Notes..">
-              <NoteList item={p => <SidebarNoteContent {...p} />} />
+              <NoteList
+                item={p => <SidebarNoteContent {...p} pathname={props.location.pathname} />}
+              />
             </Loading>
           }
         >

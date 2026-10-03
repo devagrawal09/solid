@@ -30,10 +30,10 @@ export function* createWire() {
     error: unknown;
   }) {
     if (current !== update.token) return;
-    setStatus(update.state);
+    yield* setStatus(update.state);
     if (update.state === "reconnecting") {
-      setDeaths(n => n + 1);
-      setError(update.error);
+      yield* setDeaths(n => n + 1);
+      yield* setError(update.error);
     }
   });
   return {

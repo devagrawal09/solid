@@ -11,7 +11,7 @@ declare module "@solidjs/blocks" {
     };
     "Markdown": {
       copy: { pending: false; fails: never; live: true; static: false };
-      text: { pending: false; fails: never; live: true; static: false };
+      text: { pending: true; fails: import("./lib/errors").GenerationError; live: true; static: false };
     };
     "Message": {
       copy: { pending: false; fails: never; live: true; static: false };

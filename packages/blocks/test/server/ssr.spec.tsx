@@ -89,7 +89,10 @@ describe("server rendering", () => {
   it("an async memo resolves on the server", async () => {
     const User = $component(function* () {
       const user = yield* $memo(function* () {
-        return yield* attempt(() => Promise.resolve({ name: "Ada" }));
+        return yield* attempt(
+          () => Promise.resolve({ name: "Ada" }),
+          e => (e instanceof Error ? e : new Error(String(e)))
+        );
       });
       return function* () {
         return <h3>{perform(user).name}</h3>;

@@ -19,7 +19,8 @@ import type { Slot } from "@solidjs/web/frames";
 import { allNotes } from "~/lib/db";
 import type SidebarNoteContent from "~/components/SidebarNoteContent";
 
-type ItemSlot = Slot<ComponentProps<typeof SidebarNoteContent>>;
+// What the server sends; the client's shell adds the route's `pathname`.
+type ItemSlot = Slot<Omit<ComponentProps<typeof SidebarNoteContent>, "pathname">>;
 
 /** A plain-text summary, like the demo's excerpt of the note body. */
 function excerpt(body: string) {

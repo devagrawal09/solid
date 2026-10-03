@@ -27,10 +27,10 @@ const NoteEditor = $component(function* NoteEditor(
   const [title, setTitle] = yield* $signal(yield* $snapshot(props.initialTitle));
   const [body, setBody] = yield* $signal(yield* $snapshot(props.initialBody));
   const editTitle = $event(function* (e: Input) {
-    setTitle(e.currentTarget.value);
+    yield* setTitle(e.currentTarget.value);
   });
   const editBody = $event(function* (e: Input) {
-    setBody(e.currentTarget.value);
+    yield* setBody(e.currentTarget.value);
   });
 
   return function* () {

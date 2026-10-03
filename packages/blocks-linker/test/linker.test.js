@@ -45,7 +45,9 @@ describe("the measured gap becomes a type error", () => {
     const { changed, text } = linker.write();
     expect(changed).toBe(true);
     expect(text).toContain('"UserCard": {');
-    expect(text).toMatch(/user: \{ pending: true; fails: never; live: true; static: false \}/);
+    expect(text).toMatch(
+      /user: \{ pending: true; fails: import\("\.\/Parent"\)\.FetchError; live: true; static: false \}/
+    );
 
     const errors = typecheck(dir);
     const parent = path.join(dir, "src/Parent.tsx");
@@ -53,8 +55,8 @@ describe("the measured gap becomes a type error", () => {
     const appLine = lineOf(parent, "<CallForm />");
     expect(errors.some(e => e.startsWith(`src/Parent.tsx:${tagLine}:`))).toBe(true);
     expect(errors.some(e => e.startsWith(`src/Parent.tsx:${appLine}:`))).toBe(true);
-    // Loading handles it; the declared value type stays the contract
-    const handledLine = lineOf(parent, "UserCard({ user })}</Loading>");
+    // Errored and Loading handle it; the declared value type stays the contract
+    const handledLine = lineOf(parent, "children: () => UserCard({ user })");
     expect(errors.some(e => e.startsWith(`src/Parent.tsx:${handledLine}:`))).toBe(false);
     expect(errors.every(e => e.startsWith("src/Parent.tsx") || e.startsWith("src/chain.tsx"))).toBe(
       true
@@ -139,7 +141,7 @@ describe("staleness and incremental updates", () => {
     writeFileSync(
       parent,
       readFileSync(parent, "utf8").replaceAll(
-        "return yield* attempt(() => fetchUser());",
+        "return yield* attempt(() => fetchUser(), () => new FetchError());",
         'return { name: "x" };'
       )
     );
@@ -192,7 +194,10 @@ describe("staleness and incremental updates", () => {
     // a save that changes the facts rewrites the file
     writeFileSync(
       parent,
-      original.replaceAll("return yield* attempt(() => fetchUser());", 'return { name: "x" };')
+      original.replaceAll(
+        "return yield* attempt(() => fetchUser(), () => new FetchError());",
+        'return { name: "x" };'
+      )
     );
     linker.update(parent);
     expect(linker.write().changed).toBe(true);

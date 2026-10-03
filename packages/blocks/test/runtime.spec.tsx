@@ -36,6 +36,7 @@ import {
   Repeat,
   rowArg,
   Show,
+  start,
   Switch,
   until,
   type TypedProps
@@ -47,6 +48,9 @@ declare const __DEV__: boolean;
 const devIt = __DEV__ ? it : it.skip;
 
 const tick = () => new Promise<void>(r => setTimeout(r, 0));
+
+/** An attempt's handler in these tests: what failed, as an Error. */
+const toError = (e: unknown): Error => (e instanceof Error ? e : new Error(String(e)));
 
 /** A write driven from plain test code (no block host): what `yield*` does in an $event. */
 const write = (receipt: Iterable<unknown>): void => void [...receipt];
@@ -110,7 +114,7 @@ describe("views are fine-grained", () => {
     let resolve!: (v: { name: string }) => void;
     const User = $component(function* () {
       const user = yield* $memo(function* () {
-        return yield* attempt(() => new Promise<{ name: string }>(r => (resolve = r)));
+        return yield* attempt(() => new Promise<{ name: string }>(r => (resolve = r)), toError);
       });
       return function* () {
         viewRuns++;
@@ -130,7 +134,7 @@ describe("views are fine-grained", () => {
     const User = $component(function* () {
       const user = yield* $memo(
         function* () {
-          return yield* attempt(() => new Promise<{ name: string }>(r => (resolve = r)));
+          return yield* attempt(() => new Promise<{ name: string }>(r => (resolve = r)), toError);
         },
         { loadingValue: { name: "…" } }
       );
@@ -249,9 +253,11 @@ describe("setup operations", () => {
     const App = $component(function* () {
       const [todos, setTodos] = yield* $store({ list: [{ title: "a", done: false }] });
       toggle = () =>
-        write(setTodos(s => {
-          s.list[0].done = !s.list[0].done;
-        }));
+        write(
+          setTodos(s => {
+            s.list[0].done = !s.list[0].done;
+          })
+        );
       const remaining = readStore(todos, t => t.list.filter(x => !x.done).length);
       return function* () {
         return (
@@ -330,7 +336,7 @@ describe("the runtime's other dev errors", () => {
     expect(() =>
       perform(
         hole(function* () {
-          return yield* attempt(() => Promise.resolve(1));
+          return yield* attempt(() => Promise.resolve(1), toError);
         })
       )
     ).toThrow(/ASYNC_NOT_ALLOWED/);
@@ -375,7 +381,7 @@ describe("the runtime's other dev errors", () => {
     const Late = $component(function* () {
       const [n] = yield* $signal(1);
       const m = yield* $memo(function* () {
-        yield* attempt(() => Promise.resolve(0));
+        yield* attempt(() => Promise.resolve(0), toError);
         return yield* n;
       });
       return function* () {
@@ -475,7 +481,7 @@ describe("props", () => {
         yield* setList(s => {
           s.items.push("b");
         });
-        yield* attempt(() => new Promise<void>(r => (resolve = r)));
+        yield* attempt(() => new Promise<void>(r => (resolve = r)), toError);
       });
       return function* () {
         return (
@@ -500,7 +506,7 @@ describe("props", () => {
     const App = $component(function* () {
       const [todos] = yield* $optimisticStore(function* () {
         const n = ++calls;
-        return yield* attempt(() => Promise.resolve([`t${n}`]));
+        return yield* attempt(() => Promise.resolve([`t${n}`]), toError);
       }, [] as string[]);
       const again = $event(function* () {
         yield* refresh(todos);
@@ -548,7 +554,7 @@ describe("props", () => {
       const [ok, setOk] = yield* $signal(false);
       ready = () => write(setOk(true));
       const go = $event(function* () {
-        yield* until(ok);
+        yield* until(ok, toError);
         done = true;
       });
       return function* () {
@@ -614,7 +620,7 @@ describe("events", () => {
         const v = yield* n;
         yield* setN(v + 1);
         yield* setStatus("saving");
-        yield* attempt(() => new Promise<void>(r => (resolve = r)));
+        yield* attempt(() => new Promise<void>(r => (resolve = r)), toError);
         yield* setStatus("saved");
       });
       return function* () {
@@ -640,7 +646,10 @@ describe("events", () => {
     const caught: string[] = [];
     const save = $event(function* (id: string, times: number) {
       try {
-        yield* attempt(() => Promise.reject(new SaveError(id)), SaveError);
+        yield* attempt(
+          () => Promise.reject(new SaveError(id)),
+          e => e as SaveError
+        );
       } catch (e) {
         caught.push((e as Error).message);
       }
@@ -648,6 +657,117 @@ describe("events", () => {
     });
     expect(await save("a", 3)).toBe("aaa");
     expect(caught).toEqual(["a"]);
+  });
+
+  it("a failure the caller handles goes to the caller, not to the Errored", async () => {
+    let caught: unknown;
+    let save!: () => Promise<unknown>;
+    const App = $component(function* () {
+      const failing = $event(function* () {
+        yield* raise(new Error("declined"));
+      });
+      save = () => failing().catch(e => (caught = e));
+      return function* () {
+        return <p>ok</p>;
+      };
+    });
+    mount(() => <Errored fallback={(e: any) => <p>failed: {e().message}</p>}>{App()}</Errored>);
+    await save();
+    await settle();
+    expect((caught as Error).message).toBe("declined");
+    expect(root.textContent).toBe("ok");
+  });
+
+  it("an event that reads a pending source waits for its data", async () => {
+    let resolve!: (v: number) => void;
+    let seen: number | undefined;
+    let go!: () => unknown;
+    const App = $component(function* () {
+      const data = yield* $memo(function* () {
+        return yield* attempt(() => new Promise<number>(r => (resolve = r)), toError);
+      });
+      const take = $event(function* () {
+        seen = yield* data;
+      });
+      go = () => take();
+      return function* () {
+        return <p>ok</p>;
+      };
+    });
+    mount(App);
+    go();
+    await settle();
+    expect(seen).toBe(undefined);
+    resolve(7);
+    await settle();
+    expect(seen).toBe(7);
+  });
+
+  it("yield* a call of another event waits for it, returns its result, and throws its failure", async () => {
+    let resolve!: (v: number) => void;
+    const log: string[] = [];
+    const fetchN = $event(function* () {
+      return yield* attempt(() => new Promise<number>(r => (resolve = r)), toError);
+    });
+    const fail = $event(function* () {
+      yield* raise(new Error("no"));
+    });
+    const outer = $event(function* () {
+      const n = yield* fetchN();
+      log.push(`got ${n}`);
+      try {
+        yield* fail();
+      } catch (e) {
+        log.push((e as Error).message);
+      }
+    });
+    const done = outer();
+    await settle();
+    expect(log).toEqual([]);
+    resolve(3);
+    await done;
+    expect(log).toEqual(["got 3", "no"]);
+  });
+
+  it("start runs an event call without waiting for it", async () => {
+    let resolve!: () => void;
+    const order: string[] = [];
+    const slow = $event(function* () {
+      yield* attempt(() => new Promise<void>(r => (resolve = r)), toError);
+      order.push("slow done");
+    });
+    const outer = $event(function* () {
+      yield* start(slow());
+      order.push("outer done");
+    });
+    await outer();
+    expect(order).toEqual(["outer done"]);
+    resolve();
+    await settle();
+    expect(order).toEqual(["outer done", "slow done"]);
+  });
+
+  it("an $effect delegates to a synchronous event call", () => {
+    const seen: number[] = [];
+    let setN!: (v: number) => void;
+    const record = $event(function* (v: number) {
+      seen.push(v);
+    });
+    const App = $component(function* () {
+      const [n, set] = yield* $signal(1);
+      setN = v => write(set(v));
+      yield* $effect(function* () {
+        yield* record(yield* n);
+      });
+      return function* () {
+        return <p />;
+      };
+    });
+    mount(App);
+    flush();
+    setN(2);
+    flush();
+    expect(seen).toEqual([1, 2]);
   });
 
   it("a failing $event with no Errored rejects its promise", async () => {
@@ -671,6 +791,123 @@ describe("events", () => {
     root.querySelector("button")!.click();
     await settle();
     expect(root.textContent).toBe("failed: nope");
+  });
+
+  it("an Errored with catch handles the error types it lists", () => {
+    class NotFound extends Error {
+      readonly kind = "not-found";
+    }
+    const Fails = $component(function* () {
+      const m = yield* $memo(function* () {
+        yield* raise(new NotFound("nf"));
+        return 1;
+      });
+      return function* () {
+        return <i>{perform(m)}</i>;
+      };
+    });
+    mount(() => (
+      <Errored fallback={(e: any) => <p>outer: {e().message}</p>}>
+        {Errored({
+          catch: [NotFound],
+          fallback: (e: any) => <p>inner: {e().message}</p>,
+          children: () => Fails()
+        })}
+      </Errored>
+    ));
+    expect(root.textContent).toBe("inner: nf");
+  });
+
+  it("an Errored with catch rethrows any other error to the boundary above", () => {
+    class NotFound extends Error {
+      readonly kind = "not-found";
+    }
+    class Forbidden extends Error {
+      readonly kind = "forbidden";
+    }
+    const Fails = $component(function* () {
+      const m = yield* $memo(function* () {
+        yield* raise(new Forbidden("no"));
+        return 1;
+      });
+      return function* () {
+        return <i>{perform(m)}</i>;
+      };
+    });
+    mount(() => (
+      <Errored fallback={(e: any) => <p>outer: {e().message}</p>}>
+        {Errored({
+          catch: [NotFound],
+          fallback: (e: any) => <p>inner: {e().message}</p>,
+          children: () => Fails()
+        })}
+      </Errored>
+    ));
+    expect(root.textContent).toBe("outer: no");
+  });
+
+  it("a body's attempt types a returned promise's failure", async () => {
+    class LoadError extends Error {
+      readonly kind = "load";
+    }
+    const Loads = $component(function* () {
+      const m = yield* $memo(function* () {
+        return yield* attempt(
+          () => Promise.reject(new Error("boom")),
+          e => new LoadError((e as Error).message)
+        );
+      });
+      return function* () {
+        return <i>{perform(m)}</i>;
+      };
+    });
+    mount(() => (
+      <Errored
+        fallback={(e: any) => (
+          <p>
+            {e() instanceof LoadError ? "load" : "other"}: {e().message}
+          </p>
+        )}
+      >
+        {Loading({ children: () => Loads() })}
+      </Errored>
+    ));
+    await settle();
+    expect(root.textContent).toBe("load: boom");
+  });
+
+  it("a body's attempt gives back a stream whose failures it types", async () => {
+    class StreamError extends Error {
+      readonly kind = "stream";
+    }
+    const Streams = $component(function* () {
+      const m = yield* $memo(function* () {
+        return yield* attempt(
+          () =>
+            (async function* () {
+              yield 1;
+              throw new Error("cut");
+            })(),
+          e => new StreamError((e as Error).message)
+        );
+      });
+      return function* () {
+        return <i>{perform(m)}</i>;
+      };
+    });
+    mount(() => (
+      <Errored
+        fallback={(e: any) => (
+          <p>
+            {e() instanceof StreamError ? "stream" : "other"}: {e().message}
+          </p>
+        )}
+      >
+        {Loading({ children: () => Streams() })}
+      </Errored>
+    ));
+    await settle(6);
+    expect(root.textContent).toBe("stream: cut");
   });
 
   it("a memo's raise reaches Errored", () => {
@@ -883,7 +1120,7 @@ describe("reads from JSX positions are never a view's or a setup's own", () => {
     let cardViews = 0;
     const Card = $component(function* () {
       const v = yield* $memo(function* () {
-        return yield* attempt(() => new Promise<string>(r => (resolve = r)));
+        return yield* attempt(() => new Promise<string>(r => (resolve = r)), toError);
       });
       return function* () {
         cardViews++;
@@ -1067,7 +1304,7 @@ describe("computations created in a setup", () => {
 
   devIt("the setup's own read is still an error", () => {
     const Child = $component(function* (props: TypedProps<{ n: number }>) {
-      yield* (props.n as unknown as Iterable<never>);
+      yield* props.n as unknown as Iterable<never>;
       return function* () {
         return <b />;
       };
@@ -1085,7 +1322,7 @@ describe("Loading on a source", () => {
       setKey = v => write(set(v));
       const v = yield* $memo(function* () {
         const at = yield* k;
-        return yield* attempt(() => new Promise<string>(r => (resolvers[at] = r)));
+        return yield* attempt(() => new Promise<string>(r => (resolvers[at] = r)), toError);
       });
       const Content = $component(function* () {
         return function* () {
@@ -1122,7 +1359,7 @@ describe("boundaries in call form", () => {
     let resolve!: (v: string) => void;
     const Pending = $component(function* () {
       const v = yield* $memo(function* () {
-        return yield* attempt(() => new Promise<string>(r => (resolve = r)));
+        return yield* attempt(() => new Promise<string>(r => (resolve = r)), toError);
       });
       return function* () {
         return <b>{perform(v)}</b>;
@@ -1232,7 +1469,7 @@ describe("attempt / isPending interplay", () => {
       set = v => write(setId(v));
       const m = yield* $memo(function* () {
         const i = yield* id;
-        const v = yield* attempt(() => new Promise<number>(r => resolvers.push(r)));
+        const v = yield* attempt(() => new Promise<number>(r => resolvers.push(r)), toError);
         after++;
         return v + i;
       });

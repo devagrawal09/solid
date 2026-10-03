@@ -6,7 +6,7 @@
  *   no-read-outside-hole   a JSX view reads only inside JSX (else it re-renders whole)
  *   yield-in-jsx-hole      every `yield*` in JSX is in a position the transform turns into a hole
  *   read-before-attempt    a $memo reads before its first `attempt`
- *   no-unyielded-write     a setter call writes only as `yield* setX(v)`
+ *   no-unyielded-write     an operation acts only as `yield* op` (setters; with types, event calls and any op)
  *   no-foreign-reactive    no reactive state from plain Solid, the router or another library
  *   typed-props-key        exported components name their type-linker key
  */
@@ -181,33 +181,97 @@ function isBlockSetter(context, identifier) {
   );
 }
 
+const OP_TYPES = new Set(["Yieldable", "Receipt", "EventCall", "Generator"]);
+
+/** Whether a TypeScript type is (or extends) one of the named block-operation types. */
+function isOpType(type, seen = new Set()) {
+  if (!type || seen.has(type)) return false;
+  seen.add(type);
+  if (type.isUnionOrIntersection && type.isUnionOrIntersection())
+    return type.types.some(t => isOpType(t, seen));
+  const sym = type.aliasSymbol || (type.getSymbol && type.getSymbol());
+  if (sym && OP_TYPES.has(sym.getName())) return true;
+  const target = type.target || type;
+  const bases = (target.getBaseTypes && target.getBaseTypes()) || [];
+  return bases.some(b => isOpType(b, seen));
+}
+function isEventCallType(type) {
+  if (!type) return false;
+  if (type.isUnionOrIntersection && type.isUnionOrIntersection())
+    return type.types.some(isEventCallType);
+  const sym = type.aliasSymbol || (type.getSymbol && type.getSymbol());
+  return !!sym && sym.getName() === "EventCall";
+}
+/** `start(call)`: the call is the argument of `start`. */
+function isStarted(node) {
+  const p = node.parent;
+  return !!p && isCallTo(p, ["start"]) && p.arguments[0] === node;
+}
+/** A call whose value nobody uses: a statement, `void x`, or an optional call statement. */
+function isDiscarded(node) {
+  let n = node;
+  let p = n.parent;
+  if (p && p.type === "ChainExpression") {
+    n = p;
+    p = p.parent;
+  }
+  return (
+    !!p &&
+    (p.type === "ExpressionStatement" || (p.type === "UnaryExpression" && p.operator === "void"))
+  );
+}
+
 const noUnyieldedWrite = {
   meta: {
     type: "problem",
     docs: {
       description:
-        "A block setter writes only when its receipt is delegated to: `yield* setX(v)`, in an $event or an $effect."
+        "A block operation acts only when delegated to: `yield* setX(v)`, `yield* save(x)` (an event call), `yield* attempt(…)`. With type information, any operation a block discards is reported."
     },
     messages: {
       unyielded:
-        "`{{name}}(…)` writes nothing until it is delegated to: `yield* {{name}}(…)`, in an $event or an $effect."
+        "`{{name}}(…)` writes nothing until it is delegated to: `yield* {{name}}(…)`, in an $event or an $effect.",
+      discarded: "`{{name}}(…)` does nothing until it is delegated to: `yield* {{name}}(…)`.",
+      eventCall:
+        "`{{name}}(…)` is an event call this block does not delegate to: `yield* {{name}}(…)` waits for it (its colors join this block's type); `yield* start({{name}}(…))` runs it without waiting."
     },
     schema: []
   },
   create(context) {
+    const services = context.sourceCode.parserServices;
+    const checker =
+      services && services.program && services.esTreeNodeToTSNodeMap
+        ? services.program.getTypeChecker()
+        : null;
+    const nameOf = node => {
+      const text = context.sourceCode.getText(node.callee);
+      return text.length > 40 ? text.slice(0, 37) + "..." : text;
+    };
     return {
       CallExpression(node) {
-        if (node.callee.type !== "Identifier") return;
         const p = node.parent;
         if (p && p.type === "YieldExpression" && p.delegate && p.argument === node) return;
-        if (!isBlockSetter(context, node.callee)) return;
-        context.report({ node, messageId: "unyielded", data: { name: node.callee.name } });
+        if (node.callee.type === "Identifier" && isBlockSetter(context, node.callee)) {
+          context.report({ node, messageId: "unyielded", data: { name: node.callee.name } });
+          return;
+        }
+        if (!checker || !kindAt(node)) return;
+        const type = checker.getTypeAtLocation(services.esTreeNodeToTSNodeMap.get(node));
+        if (isEventCallType(type)) {
+          // in a block an event call is delegated to, started, or kept to
+          // delegate to later — never used as a bare promise (its colors would
+          // not reach this block's type)
+          if (isStarted(node) || (p && p.type === "VariableDeclarator" && p.init === node)) return;
+          context.report({ node, messageId: "eventCall", data: { name: nameOf(node) } });
+        } else if (isDiscarded(node) && isOpType(type))
+          context.report({ node, messageId: "discarded", data: { name: nameOf(node) } });
       }
     };
   }
 };
 
-const ROUTE_PROPS = "the route component's props (`yield* props.location…`, `yield* props.params…`)";
+const ROUTE_PROPS =
+  "the route component's props (`yield* props.location…`, `yield* props.params…`)";
 const SOLID_FOREIGN = {
   createSignal: "`$signal`",
   createMemo: "`$memo`",
@@ -259,7 +323,7 @@ const noForeignReactive = {
     },
     messages: {
       foreign:
-        "`{{name}}` from \"{{source}}\" is reactive state blocks cannot see: blocks read and write only with `yield*`.{{hint}}"
+        '`{{name}}` from "{{source}}" is reactive state blocks cannot see: blocks read and write only with `yield*`.{{hint}}'
     },
     schema: []
   },
@@ -270,7 +334,8 @@ const noForeignReactive = {
         if (!banned || node.importKind === "type") return;
         for (const spec of node.specifiers) {
           if (spec.type !== "ImportSpecifier" || spec.importKind === "type") continue;
-          const name = spec.imported.type === "Identifier" ? spec.imported.name : spec.imported.value;
+          const name =
+            spec.imported.type === "Identifier" ? spec.imported.name : spec.imported.value;
           if (!Object.prototype.hasOwnProperty.call(banned, name)) continue;
           const use = banned[name];
           context.report({

@@ -5,6 +5,7 @@ import {
   $memo,
   $signal,
   attempt,
+  Errored,
   Loading,
   Show,
   type Source,
@@ -16,7 +17,7 @@ function delayedValue<T>(ms: number, value: T): Promise<T> {
 }
 
 const CardBody = $component(function* CardBody(
-  props: TypedProps<{ title: string; value: Source<string, true, never> }, "CardBody">
+  props: TypedProps<{ title: string; value: Source<string, true, RevealError> }, "CardBody">
 ) {
   return function* () {
     return (
@@ -28,19 +29,35 @@ const CardBody = $component(function* CardBody(
   };
 });
 
+/** A card\u0027s value failed: the color of its failure. */
+export class RevealError extends Error {
+  readonly kind = "reveal" as const;
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+  }
+}
+
 const AsyncCard = $component(function* AsyncCard(
   props: TypedProps<{ delay: number; title: string }, "AsyncCard">
 ) {
   const value = yield* $memo(function* () {
     const delay = yield* props.delay;
     const title = yield* props.title;
-    return yield* attempt(() => delayedValue(delay, `${title} resolved in ${delay}ms`));
+    return yield* attempt(
+      () => delayedValue(delay, `${title} resolved in ${delay}ms`),
+      cause => new RevealError(cause)
+    );
   });
 
   return function* () {
     return (
+      // the Loading stays the Reveal's direct boundary; the card's failure is
+      // handled inside it
       <Loading fallback={<div class="loader">{yield* props.title} loading...</div>}>
-        {CardBody({ title: props.title, value })}
+        {Errored({
+          fallback: err => <div class="error">{err().message}</div>,
+          children: () => CardBody({ title: props.title, value })
+        })}
       </Loading>
     );
   };
@@ -55,13 +72,13 @@ const RevealPage = $component(function* RevealPage() {
 
   const pick = (value: RevealOrder) =>
     $event(function* () {
-      setOrder(value);
+      yield* setOrder(value);
     });
   const collapse = $event(function* (e: Input) {
-    setCollapsed(e.currentTarget.checked);
+    yield* setCollapsed(e.currentTarget.checked);
   });
   const restart = $event(function* () {
-    setSeed(s => s + 1);
+    yield* setSeed(s => s + 1);
   });
 
   return function* () {

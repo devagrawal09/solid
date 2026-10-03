@@ -57,7 +57,9 @@ function RouteHOC<P extends boolean, E>(Comp: Component<{}, P, E>) {
       });
 
     if (!isServer) {
-      window.onpopstate = () => setLocation(window.location.pathname.slice(1) || "index");
+      window.onpopstate = $event(function* () {
+        yield* setLocation(window.location.pathname.slice(1) || "index");
+      });
     }
 
     return function* () {
@@ -80,7 +82,7 @@ const Link = $component(function* Link(
     event.preventDefault();
     const path = yield* props.path;
     window.history.pushState("", "", `/${path}`);
-    setLocation(path);
+    yield* setLocation(path);
   });
   return function* () {
     return (

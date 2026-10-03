@@ -1,17 +1,22 @@
-import { createStore } from "solid-js";
 import {
   $component,
   $event,
   $memo,
+  $projection,
   $signal,
-  accessor,
   attempt,
   For,
   isPendingOf,
-  paths,
-  read,
   type TypedProps
 } from "@solidjs/blocks";
+
+/** Fetching the feed failed: the color of its failure. */
+export class FeedError extends Error {
+  readonly kind = "feed" as const;
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+  }
+}
 
 interface Feed {
   user: string;
@@ -82,18 +87,23 @@ const Skeleton = $component(function* Skeleton() {
   const feed = yield* $memo(
     function* () {
       yield* version; // track: bumping refetches
-      return yield* attempt(() => fetchFeed());
+      return yield* attempt(
+        () => fetchFeed(),
+        cause => new FeedError(cause)
+      );
     },
     { loadingValue: placeholderFeed() }
   );
 
-  // A derived store is Solid's (`seedLoadingValue`: seeded, never pending);
-  // its function is a plain computation, tracking the version by accessor.
-  const tracked = accessor(version);
-  const [store] = createStore<Feed>(
-    async draft => {
-      tracked(); // track: bumping refetches
-      const data = await fetchFeed();
+  // A derived store (`seedLoadingValue`: seeded, never pending): its body
+  // reads the version (bumping refetches), waits, and fills the draft.
+  const store = yield* $projection(
+    function* (draft: Feed) {
+      yield* version; // track: bumping refetches
+      const data = yield* attempt(
+        () => fetchFeed(),
+        cause => new FeedError(cause)
+      );
       draft.user = data.user;
       draft.items = data.items;
       draft.provisional = false;
@@ -102,9 +112,9 @@ const Skeleton = $component(function* Skeleton() {
     { seedLoadingValue: true }
   );
   const refreshing = isPendingOf(feed);
-  const storeRefreshing = isPendingOf(read(() => store.items));
+  const storeRefreshing = isPendingOf(store.items);
   const refetch = $event(function* () {
-    setVersion(v => v + 1);
+    yield* setVersion(v => v + 1);
   });
 
   return function* () {
@@ -128,7 +138,7 @@ const Skeleton = $component(function* Skeleton() {
           </div>
           <div>
             <h2>createStore + seedLoadingValue</h2>
-            <FeedCard feed={paths<Feed>(store)} />
+            <FeedCard feed={store} />
           </div>
         </div>
         <button type="button" onClick={refetch}>

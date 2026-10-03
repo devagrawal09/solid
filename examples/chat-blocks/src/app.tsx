@@ -5,12 +5,12 @@
 //
 // What the library's rules change here:
 // - `App` is a `$component`: its setup creates the signals, the handlers
-//   (`$event`s), the welcome reply's `dynamic()` and the autoscroll
+//   (`$event`s), the welcome reply's `$dynamic` and the autoscroll
 //   (`$settled` + `$cleanup`, the original's `onSettled(() => { …; return
 //   teardown })`); the view reads in holes.
 // - Each message is a row block: its setup takes the prompt once
 //   (`$snapshot`: a message's prompt never changes) and creates that row's
-//   `dynamic(() => reply(prompt))` — a `dynamic` created in a view would be
+//   `$dynamic` over `reply(prompt)` — a `$dynamic` created in a view would be
 //   re-created whenever the view re-rendered.
 // - The copy handler is an `$event`. The server puts it in an event position
 //   on each code block's button (`onClick={copy}`, see ai.tsx); delegation
@@ -18,16 +18,18 @@
 import {
   $cleanup,
   $component,
+  $dynamic,
   $event,
   $settled,
   $signal,
   $snapshot,
+  attempt,
   For,
   Loading
 } from "@solidjs/blocks";
-import { dynamic } from "@solidjs/web";
 import { reply, welcome } from "~/lib/ai";
 import Status from "~/components/status";
+import { ServerError } from "~/lib/errors";
 import "./app.css";
 
 interface Message {
@@ -62,7 +64,12 @@ const App = $component(function* App() {
   // The t=0 reply: rendered during the INITIAL document render, so the
   // assistant is already typing as the page loads; hydration adopts the
   // boundary in place and picks the generation up mid-sentence.
-  const Welcome = dynamic(() => welcome());
+  const Welcome = yield* $dynamic(function* () {
+    return yield* attempt(
+      () => welcome(),
+      cause => new ServerError(cause)
+    );
+  });
 
   // Follow the stream: bottom-pinning watches the transcript's SIZE (replies
   // grow through server-driven morphs, not a client render). Stay pinned
@@ -74,12 +81,12 @@ const App = $component(function* App() {
     e.preventDefault();
     const prompt = (yield* draft).trim();
     if (!prompt) return;
-    setMessages(m => [...m, { id: nextId++, prompt }]);
-    setDraft("");
+    yield* setMessages(m => [...m, { id: nextId++, prompt }]);
+    yield* setDraft("");
     pinned = true;
   });
   const input = $event(function* (e: Input) {
-    setDraft(e.currentTarget.value);
+    yield* setDraft(e.currentTarget.value);
   });
 
   yield* $settled(function* () {
@@ -125,7 +132,12 @@ const App = $component(function* App() {
               // server input; `status` is a client position the server fills
               // with live args, rendered by the client <Status>.
               const prompt = yield* $snapshot(m.prompt);
-              const Reply = dynamic(() => reply(prompt));
+              const Reply = yield* $dynamic(function* () {
+                return yield* attempt(
+                  () => reply(prompt),
+                  cause => new ServerError(cause)
+                );
+              });
               return function* () {
                 return (
                   <li class="exchange">

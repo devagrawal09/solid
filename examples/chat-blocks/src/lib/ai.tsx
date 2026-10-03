@@ -47,12 +47,14 @@
 // its args written as holes (`progress={yield* progress}`) — still live
 // expressions at the slot border. `createMemo` over an async face is a
 // `$memo` returning it. `reply` and `welcome` share one component.
-import { createProjection } from "solid-js";
 import {
+  $projection,
   $component,
   $memo,
   $snapshot,
+  attempt,
   Loading,
+  type Path,
   type Source,
   type TypedProps
 } from "@solidjs/blocks";
@@ -61,6 +63,7 @@ import { Marked } from "marked";
 import hljs from "highlight.js/lib/core";
 import javascript from "highlight.js/lib/languages/javascript";
 import { generate, greet, type Generation, type Stats, type Usage } from "./model";
+import { GenerationError } from "~/lib/errors";
 
 // Syntax highlighting rides the same single-copy principle as the markdown
 // itself: highlight.js is a dependency of this server-only module, so the
@@ -146,7 +149,8 @@ function closePartial(md: string): string {
   return head + tail;
 }
 
-export type StatusSlot = Slot<{ progress: string; stats: Stats; usage: Usage }>;
+/** `usage` crosses as the projection itself: a store path, pending until the first event. */
+export type StatusSlot = Slot<{ progress: string; stats: Stats; usage: Path<Usage, true, never> }>;
 export type CopyHandler = (e: MouseEvent & { currentTarget: HTMLButtonElement }) => void;
 
 /**
@@ -156,16 +160,28 @@ export type CopyHandler = (e: MouseEvent & { currentTarget: HTMLButtonElement })
  * store, not a read), it serializes as its trace and the client
  * materializes a live read-only twin.
  */
-function usageStore(gen: Generation) {
+function* usageStore(gen: Generation) {
   // The original's seed, `totalParts` included (it ships in the trace).
   const state: Usage["state"] = "thinking";
   const seed = { state, tokens: 0, parts: 0, totalParts: 0 };
-  return createProjection<Usage>(async function* (draft: Usage) {
-    for await (const event of gen.usage) {
-      Object.assign(draft, event);
-      yield;
-    }
+  // The body reads nothing; it answers with the stream that folds each usage
+  // event into the draft (an async iterable: the store is pending until the
+  // first event).
+  const usage = yield* $projection(function* (draft: Usage) {
+    return yield* attempt(
+      () =>
+        (async function* () {
+          for await (const event of gen.usage) {
+            Object.assign(draft, event);
+            yield;
+          }
+        })(),
+      cause => new GenerationError(cause)
+    );
   }, seed);
+  // Stated at the border: the usage channel only pushes and ends (model.ts),
+  // so the stream never rejects — the client's `Status` takes it as such.
+  return usage as Path<Usage, true, never>;
 }
 
 /**
@@ -183,12 +199,18 @@ function generation(gen: Generation) {
     // Async values read through memos: `progress` is the iterable's latest
     // yield, `stats` the promise's resolution (not ready until it lands).
     const progress = yield* $memo(function* () {
-      return gen.progress;
+      return yield* attempt(
+        () => gen.progress,
+        cause => new GenerationError(cause)
+      );
     });
     const stats = yield* $memo(function* () {
-      return gen.stats;
+      return yield* attempt(
+        () => gen.stats,
+        cause => new GenerationError(cause)
+      );
     });
-    const usage = usageStore(gen);
+    const usage = yield* usageStore(gen);
     const StatusFill = yield* $snapshot(props.status);
     const copy = yield* $snapshot(props.copy);
     return function* () {
@@ -234,7 +256,11 @@ const Message = $component(function* Message(
   props: TypedProps<{ text: AsyncIterable<string>; copy: CopyHandler }, "Message">
 ) {
   const text = yield* $memo(function* () {
-    return yield* props.text;
+    const text2 = yield* props.text;
+    return yield* attempt(
+      () => text2,
+      cause => new GenerationError(cause)
+    );
   });
   return function* () {
     return (

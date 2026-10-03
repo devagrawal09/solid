@@ -7,9 +7,21 @@
 import { flush } from "solid-js";
 import { jsx } from "@solidjs/blocks/jsx-runtime";
 import { jsx as coreJsx } from "@solidjs/h/jsx-runtime";
-import { $component, $event, $memo, $signal, attempt, Loading, render } from "@solidjs/blocks";
+import {
+  $component,
+  $event,
+  $memo,
+  $signal,
+  attempt,
+  Errored,
+  Loading,
+  render
+} from "@solidjs/blocks";
 
 const tick = () => new Promise<void>(r => setTimeout(r, 0));
+
+/** An attempt's handler in these tests: what failed, as an Error. */
+const fail = (e: unknown): Error => (e instanceof Error ? e : new Error(String(e)));
 async function settle() {
   for (let i = 0; i < 4; i++) {
     await tick();
@@ -100,7 +112,7 @@ for (const form of forms) {
         setups++;
         const [n, setN] = yield* $signal(0);
         const data = yield* $memo(function* () {
-          return yield* attempt(() => new Promise<string>(r => (resolve = r)));
+          return yield* attempt(() => new Promise<string>(r => (resolve = r)), fail);
         });
         const inc = $event(function* () {
           yield* setN(v => v + 1);
@@ -116,7 +128,11 @@ for (const form of forms) {
       });
       const App = $component(function* () {
         return function* () {
-          return <Loading fallback={<i>…</i>}>{Inner()}</Loading>;
+          return (
+            <Errored fallback="!">
+              {Loading({ fallback: <i>…</i>, children: () => Inner() })}
+            </Errored>
+          );
         };
       });
       mount(form, App);

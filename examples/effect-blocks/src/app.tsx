@@ -1,22 +1,28 @@
-import { $, $component, $event, $signal, Errored, For, paths, Show } from "@solidjs/blocks";
+import {
+  $,
+  $component,
+  $event,
+  $signal,
+  $snapshot,
+  Errored,
+  For,
+  Show,
+  type TypedProps
+} from "@solidjs/blocks";
 import { Typeahead } from "./typeahead";
 import { Checkout } from "./checkout";
-import { clearLog, logEntries } from "./log";
+import { createLog, type Log } from "./log";
 import { createRuntime, RuntimeContext } from "./solid-effect";
 import { SearchConfigLive } from "./api";
 
 type Tab = "typeahead" | "checkout";
 
-// The fiber log is a plain Solid store (written from inside Effect programs):
-// blocks read it through `paths`.
-const log = paths(logEntries);
-
-const LogPanel = $component(function* LogPanel() {
-  const clear = $event(function* () {
-    clearLog();
-  });
+// The fiber log is block state the app's setup creates (Effect programs
+// write it through `log()`); the panel reads its entries and clears it.
+const LogPanel = $component(function* LogPanel(props: TypedProps<{ log: Log }, "LogPanel">) {
+  const { entries, clear } = yield* $snapshot(props.log);
   const newestFirst = $(function* () {
-    return [...(yield* log)].reverse();
+    return [...(yield* entries)].reverse();
   });
   return function* () {
     return (
@@ -26,7 +32,7 @@ const LogPanel = $component(function* LogPanel() {
           <button onClick={clear}>Clear</button>
         </header>
         <Show
-          when={(yield* log.length) > 0}
+          when={(yield* entries.length) > 0}
           fallback={<p class="empty">Interact to see fiber lifecycle events.</p>}
         >
           <ul>
@@ -51,12 +57,15 @@ const LogPanel = $component(function* LogPanel() {
 });
 
 export const App = $component(function* App() {
+  // Created before any child: the first Effects log as soon as they fork.
+  const log = yield* createLog();
+  const runtime = createRuntime(SearchConfigLive);
   const [tab, setTab] = yield* $signal<Tab>("typeahead");
   const showTypeahead = $event(function* () {
-    setTab("typeahead");
+    yield* setTab("typeahead");
   });
   const showCheckout = $event(function* () {
-    setTab("checkout");
+    yield* setTab("checkout");
   });
   return function* () {
     return (
@@ -71,7 +80,7 @@ export const App = $component(function* App() {
         {/* Effect's R channel rides Solid context: this ManagedRuntime provides
             SearchConfig to every Effect forked below it, and its Layer scope is
             disposed when this subtree unmounts. */}
-        <RuntimeContext value={createRuntime(SearchConfigLive)}>
+        <RuntimeContext value={runtime}>
           <div class="app">
             <header class="app-header">
               <h1>
@@ -95,7 +104,7 @@ export const App = $component(function* App() {
               <Show when={(yield* tab) === "typeahead"} fallback={<Checkout />}>
                 <Typeahead />
               </Show>
-              <LogPanel />
+              <LogPanel log={log} />
             </main>
           </div>
         </RuntimeContext>

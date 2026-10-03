@@ -206,6 +206,86 @@ struct BodyFacts<'s> {
     depth: u32,
 }
 
+/// What an attempt's handler fails with: the classes of the error objects it
+/// returns — `error => new NotFound()`, either branch of a conditional or a
+/// logical expression, or the `return`s of a function body. Anything else
+/// (a handler passed by name) is `*`, a failure the linker cannot name.
+fn handler_fails(handler: &Expression, fails: &mut Vec<String>) {
+    match handler {
+        Expression::ArrowFunctionExpression(arrow) => match &arrow.body {
+            ArrowFunctionBody::FunctionBody(body) => {
+                let mut returns = Returns { fails, depth: 0 };
+                for stmt in &body.statements {
+                    returns.visit_statement(stmt);
+                }
+            }
+            body => match body.as_expression() {
+                Some(expr) => returned_fails(expr, fails),
+                None => push(fails, "*".into()),
+            },
+        },
+        Expression::FunctionExpression(f) => match &f.body {
+            Some(body) => {
+                let mut returns = Returns { fails, depth: 0 };
+                for stmt in &body.statements {
+                    returns.visit_statement(stmt);
+                }
+            }
+            None => push(fails, "*".into()),
+        },
+        Expression::ParenthesizedExpression(p) => handler_fails(&p.expression, fails),
+        _ => push(fails, "*".into()),
+    }
+}
+
+/// The classes an expression a handler returns constructs.
+fn returned_fails(expr: &Expression, fails: &mut Vec<String>) {
+    match expr {
+        Expression::NewExpression(n) => match &n.callee {
+            Expression::Identifier(id) => push(fails, id.name.to_string()),
+            _ => push(fails, "*".into()),
+        },
+        Expression::ConditionalExpression(c) => {
+            returned_fails(&c.consequent, fails);
+            returned_fails(&c.alternate, fails);
+        }
+        Expression::LogicalExpression(l) => {
+            returned_fails(&l.left, fails);
+            returned_fails(&l.right, fails);
+        }
+        Expression::ParenthesizedExpression(p) => returned_fails(&p.expression, fails),
+        Expression::TSAsExpression(a) => returned_fails(&a.expression, fails),
+        _ => push(fails, "*".into()),
+    }
+}
+
+/// The `return`s of a handler's body (not of the functions nested in it).
+struct Returns<'f> {
+    fails: &'f mut Vec<String>,
+    depth: u32,
+}
+
+impl<'a> Visit<'a> for Returns<'_> {
+    fn visit_function(&mut self, it: &Function<'a>, flags: ScopeFlags) {
+        self.depth += 1;
+        walk::walk_function(self, it, flags);
+        self.depth -= 1;
+    }
+    fn visit_arrow_function_expression(&mut self, it: &ArrowFunctionExpression<'a>) {
+        self.depth += 1;
+        walk::walk_arrow_function_expression(self, it);
+        self.depth -= 1;
+    }
+    fn visit_return_statement(&mut self, it: &ReturnStatement<'a>) {
+        if self.depth == 0
+            && let Some(arg) = &it.argument
+        {
+            returned_fails(arg, self.fails);
+        }
+        walk::walk_return_statement(self, it);
+    }
+}
+
 impl<'a> Visit<'a> for BodyFacts<'_> {
     fn visit_function(&mut self, it: &Function<'a>, flags: ScopeFlags) {
         // A nested generator is its own block; a nested plain function is a
@@ -223,14 +303,11 @@ impl<'a> Visit<'a> for BodyFacts<'_> {
         match callee_name(it) {
             Some("attempt") => {
                 // An attempt may suspend (it may return a promise) and fails
-                // with the classes it declares.
+                // with the error objects its handler returns.
                 self.pending = true;
-                for arg in it.arguments.iter().skip(1) {
-                    if let Some(Expression::Identifier(id)) = arg.as_expression() {
-                        push(&mut self.fails, id.name.to_string());
-                    } else {
-                        push(&mut self.fails, "*".into());
-                    }
+                match it.arguments.get(1).and_then(|a| a.as_expression()) {
+                    Some(handler) => handler_fails(handler, &mut self.fails),
+                    None => push(&mut self.fails, "*".into()),
                 }
             }
             Some("raise") => {
@@ -1035,7 +1112,7 @@ mod tests {
             });
             export const Parent = $component(function* () {
               const user = yield* $memo(function* () {
-                const u = yield* attempt(() => fetchUser(), NotFound);
+                const u = yield* attempt(() => fetchUser(), () => new NotFound());
                 if (!u) yield* raise(new TypeError("x"));
                 return u;
               });
@@ -1061,6 +1138,35 @@ mod tests {
             s.contains(r#""component":"UserCard","form":"tag","owner":"Parent""#),
             "{s}"
         );
+    }
+
+    #[test]
+    fn attempt_handlers_name_their_failures() {
+        let s = summary(
+            r#"
+            import { $component, $memo, attempt } from "@solidjs/blocks";
+            import { A, B } from "./errors";
+            export const C = $component(function* () {
+              const one = yield* $memo(function* () {
+                return yield* attempt(() => load(), e => (e ? new A() : new B()));
+              });
+              const two = yield* $memo(function* () {
+                return yield* attempt(() => load(), function (e) {
+                  if (e) return new A();
+                  const inner = () => new B();
+                  return inner() || new B();
+                });
+              });
+              const three = yield* $memo(function* () {
+                return yield* attempt(() => load(), toError);
+              });
+              return function* () { return null; };
+            });
+            "#,
+        );
+        assert!(s.contains(r#""one":{"k":"memo","pending":true,"fails":["A","B"],"reads":[]}"#), "{s}");
+        assert!(s.contains(r#""two":{"k":"memo","pending":true,"fails":["A","*","B"],"reads":[]}"#), "{s}");
+        assert!(s.contains(r#""three":{"k":"memo","pending":true,"fails":["*"],"reads":[]}"#), "{s}");
     }
 
     #[test]

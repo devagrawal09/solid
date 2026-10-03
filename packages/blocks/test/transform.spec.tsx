@@ -13,6 +13,7 @@ import {
   $store,
   attempt,
   For,
+  Errored,
   Loading,
   render,
   Show,
@@ -20,6 +21,9 @@ import {
 } from "@solidjs/blocks";
 
 const tick = () => new Promise<void>(r => setTimeout(r, 0));
+
+/** An attempt's handler in these tests: what failed, as an Error. */
+const fail = (e: unknown): Error => (e instanceof Error ? e : new Error(String(e)));
 
 /** A write driven from plain test code (no block host): what `yield*` does in an $event. */
 const write = (receipt: Iterable<unknown>): void => void [...receipt];
@@ -49,7 +53,7 @@ it("measured case: runs once, suspends to Loading, updates text and class indepe
     const [n, setN] = yield* $signal(1);
     inc = () => write(setN(v => v + 1));
     const user = yield* $memo(function* () {
-      return yield* attempt(() => new Promise<{ name: string }>(r => (resolve = r)));
+      return yield* attempt(() => new Promise<{ name: string }>(r => (resolve = r)), fail);
     });
     return function* () {
       viewRuns++;
@@ -61,7 +65,14 @@ it("measured case: runs once, suspends to Loading, updates text and class indepe
       );
     };
   });
-  dispose = render(() => <Loading fallback={<i>loading</i>}>{Greeting()}</Loading>, root);
+  dispose = render(
+    () => (
+      <Errored fallback="!">
+        {Loading({ fallback: <i>loading</i>, children: () => Greeting() })}
+      </Errored>
+    ),
+    root
+  );
   flush();
   expect(root.textContent).toBe("loading");
   resolve({ name: "Ada" });
@@ -101,9 +112,11 @@ it("props, stores, row blocks and hole blocks read with yield* in JSX", () => {
       ]
     });
     toggle = () =>
-      write(setTodos(s => {
-        s.list[1].done = true;
-      }));
+      write(
+        setTodos(s => {
+          s.list[1].done = true;
+        })
+      );
     const count = $(function* () {
       return (yield* todos.list).filter(t => !t.done).length;
     });

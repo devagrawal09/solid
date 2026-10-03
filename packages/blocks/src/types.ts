@@ -32,6 +32,16 @@ export declare const PROPS: unique symbol;
 export declare const HVIEW: unique symbol;
 /** Phantom brand of `$event` handlers (a plain function is not one). */
 export declare const EVENT: unique symbol;
+/** Phantom brand of a call of an `$event` handler. */
+export declare const EVENT_CALL: unique symbol;
+/** Phantom key of an event call's async color. */
+export declare const ASYNC: unique symbol;
+/** Phantom brand of a stream an `attempt` handled. */
+export declare const HANDLED: unique symbol;
+/** A stream an `attempt` gave back: its failures go through the attempt's handler. */
+export interface Handled {
+  readonly [HANDLED]: true;
+}
 /** Phantom brand of `$component`s (a plain function is not one). */
 export declare const COMPONENT: unique symbol;
 
@@ -52,9 +62,24 @@ export interface Raise<E> {
   readonly [KIND]: "raise";
   readonly [FAILS]: E;
 }
-/** A write through a block setter's receipt. */
+/** A write through a block setter's receipt (or a call of an `$event`). */
 export interface Write {
   readonly [KIND]: "write";
+}
+/**
+ * Delegating to a call of an `$event`: a write that carries the callee's
+ * colors — `P`, it waits for pending data; `A`, it does async work — and its
+ * failures, so the caller's type gets them.
+ */
+export interface EventCallOp<
+  P extends boolean = boolean,
+  A extends boolean = boolean,
+  E = unknown
+> {
+  readonly [KIND]: "call";
+  readonly [PENDING]: P;
+  readonly [ASYNC]: A;
+  readonly [FAILS]: E;
 }
 /** Creating owned state (`$signal`, `$store`, `$memo`, `$effect`, `$settled`). */
 export interface Create<K extends string = string> {
@@ -87,6 +112,7 @@ export type AnyOp =
   | Wait
   | Raise<any>
   | Write
+  | EventCallOp<boolean, boolean, any>
   | Create<string>
   | Cleanup
   | ContextRead
@@ -102,9 +128,19 @@ export type HViewOp = ChildView<boolean, any>;
 /** Operations a memo may perform. */
 export type MemoOp = Read<boolean, any> | Wait | Raise<any>;
 /** Operations an effect may perform (a sync `attempt` only). */
-export type EffectOp = Read<boolean, any> | Write | Cleanup | Raise<any>;
+export type EffectOp =
+  | Read<boolean, any>
+  | Write
+  | Cleanup
+  | Raise<any>
+  | EventCallOp<false, false, any>;
 /** Operations an event handler may perform. */
-export type EventOp = Read<boolean, any> | Write | Wait | Raise<any>;
+export type EventOp =
+  | Read<boolean, any>
+  | Write
+  | Wait
+  | EventCallOp<boolean, boolean, any>
+  | Raise<any>;
 /** Operations a hole block (`$(function* …)`) may perform: reads. */
 export type HoleOp = Read<boolean, any> | Raise<any>;
 
@@ -122,6 +158,29 @@ export type PendingOf<Y> = [PendingBits<Y>] extends [never] ? false : true;
 /** The union of the failures of the operations in `Y`. */
 export type FailsOf<Y> = Y extends { readonly [FAILS]: infer E } ? E : never;
 
+type ReadPendingBits<Y> = Y extends { readonly [PENDING]: infer P }
+  ? true extends P
+    ? true
+    : never
+  : never;
+/**
+ * An event's first color: it reads a source that may be pending (or calls an
+ * event that does), so it waits for that data.
+ */
+export type ReadsPendingOf<Y> = [ReadPendingBits<Y>] extends [never] ? false : true;
+/**
+ * An event's second color: it does async work of its own — an async
+ * `attempt`, `until`, or a call of an event that does.
+ */
+type WaitBits<Y> = Y extends Wait
+  ? true
+  : Y extends { readonly [ASYNC]: infer A }
+    ? true extends A
+      ? true
+      : never
+    : never;
+export type WaitsOf<Y> = [WaitBits<Y>] extends [never] ? false : true;
+
 /** Something `yield*` can delegate to: yields `Y`, evaluates to `R`. */
 export interface Yieldable<Y, R> {
   [Symbol.iterator](): Generator<Y, R, any>;
@@ -133,7 +192,7 @@ export interface Yieldable<Y, R> {
  * A readable source: `yield* source` is a tracked read. `P` / `E` say whether
  * the read may be pending and what it may fail with. Deliberately not
  * callable at the type level: inside a block, a read is a `yield*` (a call
- * would be a hidden read). Use `accessor(source)` to hand it to plain code.
+ * would be a hidden read). Block code reads it with `yield*`.
  */
 export interface Source<T, P extends boolean = false, E = never> {
   readonly [SOURCE]: T;
@@ -308,11 +367,35 @@ export interface Block<T, P extends boolean = false, E = never> extends Source<T
 }
 
 /**
- * An `$event` handler, a Solid action: call it with the arguments its body
- * takes (an event, or anything else); it returns a promise of the body's result.
+ * A call of an `$event` handler: it has started (a handler runs when it is
+ * called, as a DOM dispatch needs), and it is a promise of the body's result.
+ * In block code it is an operation: `yield* save(x)` waits for it — its
+ * result, or its failure thrown at the `yield*` — and carries its colors into
+ * the caller's type; `yield* start(save(x))` does not wait.
  */
-export interface EventHandler<Args extends unknown[] = any[], E = never, R = unknown> {
-  (...args: Args): Promise<R | undefined>;
+export interface EventCall<
+  R = unknown,
+  E = never,
+  P extends boolean = boolean,
+  A extends boolean = boolean
+>
+  extends Promise<R | undefined>, Yieldable<EventCallOp<P, A, E>, R> {
+  readonly [EVENT_CALL]: true;
+}
+
+/**
+ * An `$event` handler, a Solid action: call it with the arguments its body
+ * takes (an event, or anything else). Its colors: `P`, it reads pending data
+ * (and waits for it); `A`, it does async work of its own.
+ */
+export interface EventHandler<
+  Args extends unknown[] = any[],
+  E = never,
+  R = unknown,
+  P extends boolean = boolean,
+  A extends boolean = boolean
+> {
+  (...args: Args): EventCall<R, E, P, A>;
   readonly [EVENT]: true;
   readonly [FAILS]?: E;
 }

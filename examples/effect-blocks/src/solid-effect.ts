@@ -19,7 +19,7 @@
 // timeouts, finalizers, the whole tree) composes with Solid's flight
 // semantics without either side knowing about the other.
 //
-// Action path — `effectAction`: a Solid `action` whose suspension points are
+// Action path — `effectAction`: an `$event` (a Solid action) whose suspension points are
 // Effect programs. Effect values are iterable (that's how `Effect.gen`
 // works), so `yield*` inside a plain generator delegates a `YieldWrap`ped
 // Effect out to our driver loop with full inferred types. Each yielded
@@ -31,7 +31,8 @@
 
 import { Cause, Effect, Exit, Fiber, Layer, ManagedRuntime } from "effect";
 import { YieldWrap, yieldWrapGet } from "effect/Utils";
-import { action, createContext, onCleanup, useContext } from "solid-js";
+import { createContext, onCleanup, useContext } from "solid-js";
+import { $event, attempt, type EventCall, type Write } from "@solidjs/blocks";
 
 /** Solid context carrying the Effect runtime. Provide with
  * `<RuntimeContext value={createRuntime(layer)}>`. The explicit `null`
@@ -112,8 +113,17 @@ export class ActionInterruptedError extends Error {
 
 type SagaStep = YieldWrap<Effect.Effect<any, any, any>>;
 
+/** The saga driver itself failed (not a step: a step's failure is in its exit). */
+export class SagaDriverError extends Error {
+  readonly kind = "saga-driver" as const;
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+  }
+}
+
 export interface EffectAction<Args extends unknown[], R> {
-  (...args: Args): Promise<R>;
+  /** An event call doing async work (its steps are fibers); a failure is whatever the saga rethrows. */
+  (...args: Args): EventCall<R, unknown, boolean, true>;
   /** Interrupt the in-flight step's fiber. The interruption surfaces inside
    * the generator as a thrown `ActionInterruptedError` at the `yield*`. */
   interrupt(): void;
@@ -127,18 +137,24 @@ export interface EffectAction<Args extends unknown[], R> {
  * one's in-flight fiber before starting. Services in step `R` channels
  * resolve from the nearest `RuntimeContext` at creation (component setup). */
 export function effectAction<Args extends unknown[], R>(
-  genFn: (...args: Args) => Generator<SagaStep, R, never>
+  genFn: (...args: Args) => Generator<SagaStep | Write, R, never>
 ): EffectAction<Args, R> {
   const fork = resolveFork(); // context resolves where the action is created
   let inFlight: Fiber.RuntimeFiber<any, any> | null = null;
 
-  const base = action(function* (...args: Args) {
+  const base = $event(function* (...args: Args) {
     const it = genFn(...args);
     let step = it.next();
     while (!step.done) {
-      const fiber = fork(yieldWrapGet(step.value));
+      // A block write in the saga (`yield* setX(v)`) completes without yielding:
+      // every step that reaches here is an Effect.
+      const fiber = fork(yieldWrapGet(step.value as SagaStep));
       inFlight = fiber;
-      const exit: Exit.Exit<any, any> = yield Effect.runPromise(Fiber.await(fiber));
+      // awaiting a fiber's exit does not reject (a failure is in the exit)
+      const exit: Exit.Exit<any, any> = yield* attempt(
+        () => Effect.runPromise(Fiber.await(fiber)),
+        cause => new SagaDriverError(cause)
+      );
       if (inFlight === fiber) inFlight = null;
       if (Exit.isSuccess(exit)) step = it.next(exit.value as never);
       else if (Exit.isInterrupted(exit)) step = it.throw(new ActionInterruptedError());
@@ -149,7 +165,7 @@ export function effectAction<Args extends unknown[], R>(
 
   const invoke = (...args: Args) => {
     invoke.interrupt(); // superseding call cancels the previous flight
-    return base(...args);
+    return base(...args) as EventCall<R, unknown, boolean, true>;
   };
   invoke.interrupt = () => {
     const fiber = inFlight;

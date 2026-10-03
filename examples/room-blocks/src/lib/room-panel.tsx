@@ -8,10 +8,19 @@
 // setup joins (`$cleanup(join(…))`: the member leaves when the render is
 // disposed), creates the two watchers as `$memo`s, and takes the client
 // slot with `$snapshot` (a setup does not read); the view reads in holes.
-import { $cleanup, $component, $memo, $snapshot, For, type TypedProps } from "@solidjs/blocks";
+import {
+  $cleanup,
+  $component,
+  $memo,
+  $snapshot,
+  attempt,
+  For,
+  type TypedProps
+} from "@solidjs/blocks";
 import { GET, live } from "@solidjs/web/server-functions";
 import type { Slot } from "@solidjs/web/frames";
 import { join, topicOf, watchMembers, watchMessages, type Identity } from "./rooms";
+import { LiveError } from "~/lib/errors";
 
 export type ComposerSlot = Slot<{ room: string }>;
 
@@ -32,10 +41,16 @@ export const roomPanel = live(
       // Joining IS the render; the document's render (no identity) only watches.
       if (me) yield* $cleanup(join(room, me));
       const members = yield* $memo(function* () {
-        return watchMembers(room, gone.signal);
+        return yield* attempt(
+          () => watchMembers(room, gone.signal),
+          cause => new LiveError(cause)
+        );
       });
       const messages = yield* $memo(function* () {
-        return watchMessages(room, gone.signal);
+        return yield* attempt(
+          () => watchMessages(room, gone.signal),
+          cause => new LiveError(cause)
+        );
       });
       const Composer = yield* $snapshot(props.composer);
       return function* () {

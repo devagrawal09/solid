@@ -5,7 +5,7 @@ import { $component, $event, $signal, type Element, type TypedProps } from "@sol
 const Toggle = $component(function* Toggle(props: TypedProps<{ children: Element }, "Toggle">) {
   const [open, setOpen] = yield* $signal(true);
   const toggle = $event(function* () {
-    setOpen(o => !o);
+    yield* setOpen(o => !o);
   });
   return function* () {
     return (

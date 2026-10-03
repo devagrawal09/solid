@@ -21,6 +21,7 @@ declare module "@solidjs/blocks" {
       location: { pending: false; fails: never; live: true; static: false };
     };
     "SidebarNoteContent": {
+      pathname: { pending: false; fails: never; live: true; static: false };
     };
   }
 }

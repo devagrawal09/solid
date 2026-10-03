@@ -1,4 +1,5 @@
-import { $component, For, Loading, type Source, type TypedProps } from "@solidjs/blocks";
+import { $component, Errored, For, Loading, type Source, type TypedProps } from "@solidjs/blocks";
+import type { ProfileError } from "./errors";
 
 export interface User {
   firstName: string;
@@ -7,7 +8,7 @@ export interface User {
 
 // What a `<Loading>` covers is its own component: the facts list.
 const Facts = $component(function* Facts(
-  props: TypedProps<{ info: Source<string[], true, never> }, "Facts">
+  props: TypedProps<{ info: Source<string[], true, ProfileError> }, "Facts">
 ) {
   return function* () {
     return (
@@ -26,7 +27,7 @@ const Facts = $component(function* Facts(
 
 const Profile = $component(function* Profile(
   props: TypedProps<
-    { info: Source<string[], true, never>; user: Source<User, true, never> },
+    { info: Source<string[], true, ProfileError>; user: Source<User, true, ProfileError> },
     "Profile"
   >
 ) {
@@ -35,9 +36,12 @@ const Profile = $component(function* Profile(
       <>
         <h1>{yield* props.user.firstName}'s Profile</h1>
         <p>This section could be about you.</p>
-        <Loading fallback={<span class="loader">Loading Info...</span>}>
-          {Facts({ info: props.info })}
-        </Loading>
+        <Errored fallback={err => <span class="error">{err().message}</span>}>
+          {Loading({
+            fallback: <span class="loader">Loading Info...</span>,
+            children: () => Facts({ info: props.info })
+          })}
+        </Errored>
       </>
     );
   };

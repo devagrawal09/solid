@@ -1,7 +1,8 @@
 import { type RouteParams, type RoutePreloadFuncArgs, type RouteProps } from "@solidjs/router";
-import { $component, $memo, For, Show, type TypedProps } from "@solidjs/blocks";
+import { $component, $memo, attempt, For, Show, type TypedProps } from "@solidjs/blocks";
 import Comment from "~/components/comment";
 import { getStory } from "~/lib/api";
+import { ApiError } from "~/lib/errors";
 
 // The route lives in app.tsx, so the component and preload here name the
 // pattern they belong to; `params.id` is then `string`, not `string | undefined`.
@@ -13,7 +14,11 @@ export const preload = ({ params }: RoutePreloadFuncArgs<RouteParams<Path>>) => 
 
 const Story = $component(function* Story(props: TypedProps<RouteProps<Path>, "StoryPage">) {
   const story = yield* $memo(function* () {
-    return getStory(yield* props.params.id);
+    const id2 = yield* props.params.id;
+    return yield* attempt(
+      () => getStory(id2),
+      cause => new ApiError(cause)
+    );
   });
   return function* () {
     return (

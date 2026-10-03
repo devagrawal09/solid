@@ -7,6 +7,7 @@ import {
   attempt,
   Errored,
   Loading,
+  type BlockSetter,
   type Source,
   type TypedProps
 } from "@solidjs/blocks";
@@ -37,7 +38,10 @@ function* item(props: TypedProps<{ id: string }>) {
   const [id, setId] = yield* $signal(yield* $snapshot(props.id));
   const item = yield* $memo(function* () {
     const current = yield* id;
-    return yield* attempt(() => loadItem(current), Error);
+    return yield* attempt(
+      () => loadItem(current),
+      cause => (cause instanceof Error ? cause : new Error(String(cause)))
+    );
   });
   return { item, setId };
 }
@@ -50,10 +54,10 @@ const Title = $component(function* Title(
   };
 });
 
-function fallback(setId: (id: string) => unknown) {
+function fallback(setId: BlockSetter<string>) {
   return (error: () => Error, reset: () => void) => {
     const retry = $event(function* () {
-      setId("1");
+      yield* setId("1");
       reset();
     });
     return (

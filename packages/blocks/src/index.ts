@@ -32,6 +32,7 @@ export {
   raise,
   readStore,
   refresh,
+  start,
   until,
   type BlockContext
 } from "./runtime.js";
@@ -64,7 +65,11 @@ export type {
   Create,
   EffectOp,
   ErrorClass,
+  EventCall,
+  EventCallOp,
   EventHandler,
+  ReadsPendingOf,
+  WaitsOf,
   EventOp,
   FailsOf,
   HView,

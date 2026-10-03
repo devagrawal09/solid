@@ -26,6 +26,7 @@ import {
 import { BODY, BOUNDARY, READ, VIEW_MARK, isRowBlock, rowArg, runRow, through } from "./runtime.js";
 import type { Element } from "./element.js";
 import type {
+  ErrorClass,
   COMPONENT,
   FailsOf,
   HView,
@@ -289,7 +290,19 @@ function LoadingBlocks(props: any): any {
  * Handles failures below it. The fallback receives the error (typed with the
  * failures of the children) and a `reset`. `$event` failures under it are
  * routed here.
+ *
+ * With `catch` it handles only those error types: `<Errored catch={[NotFound]}
+ * fallback={err => …}>` removes `NotFound` from its children's failures (the
+ * rest still have to be handled above), its fallback receives a `NotFound`,
+ * and any other failure is rethrown to the boundary above. Each error type is
+ * its own color: give each class a member of its own (`readonly kind =
+ * "not-found"`), or TypeScript cannot tell two of them apart.
  */
+function ErroredBlocks<P extends boolean, E, C extends readonly ErrorClass[]>(props: {
+  catch: C;
+  fallback: Element | ((error: Accessor<InstanceType<C[number]>>, reset: () => void) => Element);
+  children: View<P, E> | readonly View<P, E>[] | (() => View<P, E> | readonly View<P, E>[]);
+}): View<P, Exclude<E, InstanceType<C[number]>>>;
 function ErroredBlocks(props: {
   fallback: Element | ((error: Accessor<unknown>, reset: () => void) => Element);
   children: Element;
@@ -301,6 +314,7 @@ function ErroredBlocks<P extends boolean, E>(props: {
 function ErroredBlocks(props: any): any {
   const children = content(props, "Errored");
   const fallback = props.fallback as any;
+  const handles = props.catch as readonly ErrorClass[] | undefined;
   const adapted =
     typeof fallback === "function" && (isRowBlock(fallback) || fallback[BODY] !== undefined)
       ? (err: Accessor<unknown>, reset: () => void) =>
@@ -308,7 +322,14 @@ function ErroredBlocks(props: any): any {
       : undefined;
   return SolidErrored({
     get fallback() {
-      return adapted || props.fallback;
+      const render = adapted || props.fallback;
+      if (!handles) return render;
+      // only the listed error types: any other goes to the boundary above
+      return (err: Accessor<unknown>, reset: () => void) => {
+        const error = err();
+        if (!handles.some(C => error instanceof (C as any))) throw error;
+        return typeof render === "function" ? render(err, reset) : render;
+      };
     },
     get children() {
       return createComponent(BOUNDARY as any, {

@@ -4,10 +4,9 @@
 // changing; the composer is a CLIENT slot the server positions inside it.
 //
 // What the library's rules change here:
-// - `dynamic(() => roomPanel(room, me))` is created in Panel's SETUP (a
-//   `dynamic` created in a view is re-created when the view re-renders);
-//   its compute reads the props through `accessor`s — it is a plain Solid
-//   computation, and its reads are its own.
+// - `$dynamic` over `roomPanel(room, me)` is created in Panel's SETUP (a
+//   dynamic created in a view is re-created when the view re-renders); its
+//   body reads the props with `yield*`, and its reads are its own.
 // - The composer's post is an `$event` (a Solid action: one transition,
 //   waiting on `yield* attempt(() => send(...))`), called from the submit
 //   `$event`.
@@ -15,10 +14,10 @@
 import {
   $,
   $component,
+  $dynamic,
   $event,
   $signal,
   $snapshot,
-  accessor,
   attempt,
   For,
   latestOf,
@@ -26,9 +25,9 @@ import {
   Show,
   type TypedProps
 } from "@solidjs/blocks";
-import { dynamic } from "@solidjs/web";
 import type { RouteSectionProps } from "@solidjs/router";
 import { useIdentity } from "~/lib/identity";
+import { ChaosError, SendError } from "~/lib/errors";
 import { roomPanel } from "~/lib/room-panel";
 import { send, type Identity } from "~/lib/sources";
 import StatusPill, { createWire, type WireControl } from "~/components/status-pill";
@@ -94,10 +93,10 @@ export default Home;
 const Panel = $component(function* Panel(
   props: TypedProps<{ room: string; me: Identity | null; wire: WireControl }, "Panel">
 ) {
-  const room = accessor(props.room);
-  const me = accessor(props.me);
   const wire = yield* $snapshot(props.wire);
-  const Room = dynamic(() => wire.watch(roomPanel(room(), me())));
+  const Room = yield* $dynamic(function* () {
+    return wire.watch(roomPanel(yield* props.room, yield* props.me));
+  });
   return function* () {
     return (
       <Loading fallback={<p class="muted">Rendering the room on the server…</p>}>
@@ -115,29 +114,29 @@ const Composer = $component(function* Composer(props: TypedProps<{ room: string 
   const [text, setText] = yield* $signal("");
   const [error, setError] = yield* $signal<string | undefined>(undefined);
   const shown = latestOf(text);
-  const room = accessor(props.room);
-  const who = accessor(me);
   const post = $event(function* (text: string) {
-    const current = who();
+    const current = yield* me;
     if (!current) return;
-    setError(undefined);
+    const room = yield* props.room;
+    yield* setError(undefined);
     try {
-      yield* attempt(() =>
-        send(room(), Math.random().toString(36).slice(2, 10), current.name, text)
+      yield* attempt(
+        () => send(room, Math.random().toString(36).slice(2, 10), current.name, text),
+        cause => new SendError(cause)
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      yield* setError(err instanceof Error ? err.message : String(err));
     }
   });
   const submit = $event(function* (e: Submit) {
     e.preventDefault();
     const trimmed = (yield* text).trim();
     if (!trimmed) return;
-    post(trimmed);
-    setText("");
+    yield* setText("");
+    yield* post(trimmed);
   });
   const input = $event(function* (e: Input) {
-    setText(e.currentTarget.value);
+    yield* setText(e.currentTarget.value);
   });
   return function* () {
     return (
@@ -168,12 +167,20 @@ const Chaos = $component(function* Chaos() {
   const [last, setLast] = yield* $signal("");
   const drop = $event(function* () {
     try {
-      const res = yield* attempt(() => fetch("/__chaos/drop", { method: "POST" }));
-      setLast(
-        res.ok ? yield* attempt(() => res.text()) : `no chaos route (${res.status}) — dev only`
+      const res = yield* attempt(
+        () => fetch("/__chaos/drop", { method: "POST" }),
+        cause => new ChaosError(cause)
+      );
+      yield* setLast(
+        res.ok
+          ? yield* attempt(
+              () => res.text(),
+              cause => new ChaosError(cause)
+            )
+          : `no chaos route (${res.status}) — dev only`
       );
     } catch (e) {
-      setLast(String(e));
+      yield* setLast(String(e));
     }
   });
   return function* () {

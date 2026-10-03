@@ -12,16 +12,16 @@ const Settings = $component(function* Settings() {
 
   // Clicks inside the portal bubble here through the component tree.
   const count = $event(function* () {
-    if (yield* modalOpen) setModalClicks(c => c + 1);
+    if (yield* modalOpen) yield* setModalClicks(c => c + 1);
   });
   const input = $event(function* (e: Input) {
-    setText(e.currentTarget.value);
+    yield* setText(e.currentTarget.value);
   });
   const open = $event(function* () {
-    setModalOpen(true);
+    yield* setModalOpen(true);
   });
   const close = $event(function* () {
-    setModalOpen(false);
+    yield* setModalOpen(false);
   });
 
   return function* () {

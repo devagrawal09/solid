@@ -140,10 +140,17 @@ tester.run("no-foreign-reactive", rules["no-foreign-reactive"], {
     {
       code: 'import { createSignal, createOptimisticStore } from "solid-js";',
       errors: [
-        { messageId: "foreign", data: { name: "createSignal", source: "solid-js", hint: " Use `$signal`." } },
         {
           messageId: "foreign",
-          data: { name: "createOptimisticStore", source: "solid-js", hint: " Use `$optimisticStore`." }
+          data: { name: "createSignal", source: "solid-js", hint: " Use `$signal`." }
+        },
+        {
+          messageId: "foreign",
+          data: {
+            name: "createOptimisticStore",
+            source: "solid-js",
+            hint: " Use `$optimisticStore`."
+          }
         }
       ]
     },
@@ -153,7 +160,12 @@ tester.run("no-foreign-reactive", rules["no-foreign-reactive"], {
     },
     {
       code: 'import { dynamic } from "@solidjs/web";',
-      errors: [{ messageId: "foreign", data: { name: "dynamic", source: "@solidjs/web", hint: " Use `$dynamic`." } }]
+      errors: [
+        {
+          messageId: "foreign",
+          data: { name: "dynamic", source: "@solidjs/web", hint: " Use `$dynamic`." }
+        }
+      ]
     },
     {
       code: 'import { flush } from "solid-js";',
@@ -235,4 +247,72 @@ describe("transform refusals and lint refusals are the same list", () => {
       expect(compiled).toBe(code);
     });
   }
+});
+
+// --- with type information -----------------------------------------------------------
+const typedFixtures = fileURLToPath(new URL("./fixtures", import.meta.url));
+const typedTester = new RuleTester({
+  languageOptions: {
+    parser: tsParser,
+    parserOptions: {
+      ecmaFeatures: { jsx: true },
+      projectService: true,
+      tsconfigRootDir: typedFixtures
+    },
+    ecmaVersion: 2024,
+    sourceType: "module"
+  }
+});
+const filename = `${typedFixtures}/file.tsx`;
+const decls = `
+interface Yieldable<Y, R> { [Symbol.iterator](): Generator<Y, R, any>; }
+interface EventCall<R> extends Promise<R>, Yieldable<unknown, R> { readonly __call: true }
+declare function $event<A extends unknown[]>(f: (...a: A) => Generator<unknown, unknown, unknown>): (...a: A) => EventCall<void>;
+declare function attempt<T>(f: () => T): Yieldable<unknown, T>;
+declare function start(c: EventCall<unknown>): Yieldable<unknown, void>;
+declare const actions: { save: (x: number) => EventCall<void> };
+`;
+typedTester.run("no-unyielded-write (with types)", rules["no-unyielded-write"], {
+  valid: [
+    {
+      filename,
+      code:
+        decls +
+        "const e = $event(function* () { yield* actions.save(1); yield* start(actions.save(2)); });"
+    },
+    // plain code calls an event: it runs (a DOM dispatch, a timer, a callback)
+    { filename, code: decls + "const e = $event(function* () {}); e();" },
+    // a call kept for later is not discarded
+    {
+      filename,
+      code: decls + "const e = $event(function* () { const call = actions.save(1); yield* call; });"
+    }
+  ],
+  invalid: [
+    {
+      filename,
+      code: decls + "const e = $event(function* () { actions.save(1); });",
+      errors: [{ messageId: "eventCall" }]
+    },
+    {
+      filename,
+      code: decls + "const e = $event(function* () { void actions.save(1); });",
+      errors: [{ messageId: "eventCall" }]
+    },
+    {
+      filename,
+      code: decls + "const e = $event(function* () { actions.save(1).catch(() => {}); });",
+      errors: [{ messageId: "eventCall" }]
+    },
+    {
+      filename,
+      code: decls + "const e = $event(function* () { attempt(() => 1); });",
+      errors: [{ messageId: "discarded" }]
+    },
+    {
+      filename,
+      code: decls + "function* helper() { yield 1; } const e = $event(function* () { helper(); });",
+      errors: [{ messageId: "discarded" }]
+    }
+  ]
 });

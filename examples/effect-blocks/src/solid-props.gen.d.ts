@@ -6,6 +6,9 @@
 export {};
 declare module "@solidjs/blocks" {
   interface PropColors {
+    "LogPanel": {
+      log: { pending: false; fails: never; live: true; static: false };
+    };
     "Orders": {
       orders: { pending: false; fails: never; live: true; static: false };
     };

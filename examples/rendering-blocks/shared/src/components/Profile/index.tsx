@@ -1,6 +1,7 @@
 import { lazy } from "solid-js";
 import { $component, $memo, adopt, attempt } from "@solidjs/blocks";
 import type { User } from "./Profile";
+import { ProfileError } from "./errors";
 
 const Profile = adopt(lazy(() => import("./Profile")));
 
@@ -13,7 +14,8 @@ export default $component(function* ProfilePage() {
       () =>
         new Promise<User>(resolve => {
           setTimeout(() => resolve({ firstName: "Jon", lastName: "Snow" }), 400);
-        })
+        }),
+      cause => new ProfileError(cause)
     );
   });
 
@@ -33,7 +35,8 @@ export default $component(function* ProfilePage() {
               ]),
             400
           );
-        })
+        }),
+      cause => new ProfileError(cause)
     );
   });
 

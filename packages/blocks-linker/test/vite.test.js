@@ -40,7 +40,7 @@ describe("vite plugin", () => {
       writeFileSync(
         parent,
         readFileSync(parent, "utf8").replaceAll(
-          "return yield* attempt(() => fetchUser());",
+          "return yield* attempt(() => fetchUser(), () => new FetchError());",
           'return { name: "x" };'
         )
       );

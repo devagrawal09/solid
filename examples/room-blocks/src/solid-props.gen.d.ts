@@ -7,21 +7,21 @@ export {};
 declare module "@solidjs/blocks" {
   interface PropColors {
     "ActivityLine": {
-      activity: { pending: false; fails: never; live: true; static: false };
+      activity: { pending: true; fails: import("./lib/errors").LiveError; live: true; static: false };
     };
     "Archive": {
       room: { pending: false; fails: never; live: true; static: false };
     };
     "ArchiveCount": {
-      stats: { pending: true; fails: never; live: true; static: false };
+      stats: { pending: true; fails: import("./lib/errors").ArchiveError; live: true; static: false };
     };
     "Card": {
       room: { pending: false; fails: never; live: true; static: false };
     };
     "CardBody": {
-      activity: { pending: false; fails: never; live: true; static: false };
+      activity: { pending: true; fails: import("./lib/errors").LiveError; live: true; static: false };
       card: { pending: false; fails: never; live: true; static: false };
-      members: { pending: false; fails: never; live: true; static: false };
+      members: { pending: true; fails: import("./lib/errors").LiveError; live: true; static: false };
     };
     "Chat": {
       room: { pending: false; fails: never; live: true; static: false };
@@ -33,7 +33,7 @@ declare module "@solidjs/blocks" {
       sending: { pending: false; fails: never; live: true; static: false };
     };
     "Count": {
-      who: { pending: false; fails: never; live: true; static: false };
+      who: { pending: true; fails: import("./lib/errors").LiveError; live: true; static: false };
     };
     "Directory": {
       current: { pending: false; fails: never; live: true; static: false };
@@ -48,18 +48,18 @@ declare module "@solidjs/blocks" {
     "IdentityProvider": {
     };
     "Joined": {
-      joined: { pending: false; fails: never; live: true; static: false };
+      joined: { pending: true; fails: import("./lib/errors").LiveError; live: true; static: false };
       me: { pending: false; fails: never; live: true; static: false };
     };
     "LivePage": {
       room: { pending: false; fails: never; live: true; static: false };
     };
     "MemberCount": {
-      members: { pending: false; fails: never; live: true; static: false };
+      members: { pending: true; fails: import("./lib/errors").LiveError; live: true; static: false };
     };
     "Members": {
       me: { pending: false; fails: never; live: true; static: false };
-      who: { pending: false; fails: never; live: true; static: false };
+      who: { pending: true; fails: import("./lib/errors").LiveError; live: true; static: false };
     };
     "Messages": {
       messages: { pending: false; fails: never; live: true; static: false };

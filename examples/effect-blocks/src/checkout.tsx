@@ -13,16 +13,18 @@ import {
   $memo,
   $signal,
   $store,
+  $optimistic,
+  $optimisticStore,
+  attempt,
   For,
+  Errored,
   Loading,
-  paths,
-  read,
   readStore,
+  refresh,
   Show,
   type Source,
   type TypedProps
 } from "@solidjs/blocks";
-import { createOptimistic, createOptimisticStore, refresh } from "solid-js";
 import {
   CardDeclinedError,
   chargeCard,
@@ -63,7 +65,7 @@ const INITIAL_CART: CartItem[] = [
  * list is its own component and the boundary receives it.
  */
 const Orders = $component(function* Orders(
-  props: TypedProps<{ orders: Source<Order[], true, never> }, "Orders">
+  props: TypedProps<{ orders: Source<Order[], true, OrdersError> }, "Orders">
 ) {
   return function* () {
     return (
@@ -92,17 +94,28 @@ const Orders = $component(function* Orders(
   };
 });
 
+/** Fetching the orders failed: the color of the orders list's failure. */
+export class OrdersError extends Error {
+  readonly kind = "orders" as const;
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+  }
+}
+
 export const Checkout = $component(function* Checkout() {
   const [cart, setCart] = yield* $store<CartItem[]>(INITIAL_CART.map(i => ({ ...i })));
-  // The optimistic orders store fetches asynchronously: read through
-  // `paths`, stated pending (the fetch is not expected to fail here).
-  const [ordersStore] = createOptimisticStore<Order[]>(async () => fetchOrders(), []);
-  const orders = paths<Order[], true>(ordersStore);
+  // The optimistic orders store fetches asynchronously: pending until the
+  // first fetch lands, and failing as an OrdersError.
+  const [orders] = yield* $optimisticStore(function* () {
+    return yield* attempt(
+      () => fetchOrders(),
+      cause => new OrdersError(cause)
+    );
+  }, [] as Order[]);
 
   // Transition-scoped: writes inside the action revert automatically when it
   // settles — success, failure, or cancellation.
-  const [phaseAccessor, setPhase] = createOptimistic<Phase>("idle");
-  const phase = read(phaseAccessor);
+  const [phase, setPhase] = yield* $optimistic<Phase>("idle");
   // Plain signal: survives the optimistic revert, carries the outcome.
   const [notice, setNotice] = yield* $signal<Notice | null>(null);
   const [declineCard, setDeclineCard] = yield* $signal(false);
@@ -116,22 +129,22 @@ export const Checkout = $component(function* Checkout() {
   const placeOrder = effectAction(function* (items: CartItem[], decline: boolean) {
     let reservation: Reservation | undefined;
     let charge: Charge | undefined;
-    setNotice(null);
+    yield* setNotice(null);
     try {
-      setPhase("reserving");
+      yield* setPhase("reserving");
       reservation = yield* reserveInventory(items);
-      setPhase("charging");
+      yield* setPhase("charging");
       charge = yield* chargeCard(
         items.reduce((sum, item) => sum + item.price * item.quantity, 0),
         decline
       );
-      setPhase("finalizing");
+      yield* setPhase("finalizing");
       const order = yield* createOrder(items, reservation, charge);
-      setNotice({
+      yield* setNotice({
         kind: "success",
         text: `Order ${order.id} confirmed — $${order.total.toFixed(2)}`
       });
-      refresh(ordersStore);
+      yield* refresh(orders);
       return order;
     } catch (e) {
       // Saga compensation, in reverse order of what committed. Mid-step
@@ -140,12 +153,15 @@ export const Checkout = $component(function* Checkout() {
       if (charge) yield* refundCharge(charge);
       if (reservation) yield* releaseReservation(reservation);
       if (e instanceof CardDeclinedError) {
-        setNotice({
+        yield* setNotice({
           kind: "error",
           text: `Card declined for $${e.amount.toFixed(2)} — refunds/releases applied, cart untouched`
         });
       } else if (e instanceof ActionInterruptedError) {
-        setNotice({ kind: "info", text: "Checkout cancelled — compensations ran, cart untouched" });
+        yield* setNotice({
+          kind: "info",
+          text: "Checkout cancelled — compensations ran, cart untouched"
+        });
       }
       throw e; // reject the action → optimistic phase reverts to "idle"
     }
@@ -156,13 +172,17 @@ export const Checkout = $component(function* Checkout() {
   });
   const place = $event(function* () {
     const items = yield* readStore(cart, c => c.map(item => ({ ...item })));
-    placeOrder(items, yield* declineCard).catch(() => {});
+    try {
+      yield* placeOrder(items, yield* declineCard);
+    } catch {
+      // the saga set the notice; its failure ends here
+    }
   });
   const cancel = $event(function* () {
     placeOrder.interrupt();
   });
   const toggleDecline = $event(function* (e: InputEvent & { currentTarget: HTMLInputElement }) {
-    setDeclineCard(e.currentTarget.checked);
+    yield* setDeclineCard(e.currentTarget.checked);
   });
 
   return function* () {
@@ -182,13 +202,13 @@ export const Checkout = $component(function* Checkout() {
             {function* (item, i) {
               const decrement = $event(function* () {
                 const index = yield* i;
-                setCart(c => {
+                yield* setCart(c => {
                   c[index].quantity--;
                 });
               });
               const increment = $event(function* () {
                 const index = yield* i;
-                setCart(c => {
+                yield* setCart(c => {
                   c[index].quantity++;
                 });
               });
@@ -276,7 +296,12 @@ export const Checkout = $component(function* Checkout() {
         </Show>
 
         <h3>Your orders</h3>
-        <Loading fallback={<p class="loading">Loading orders…</p>}>{Orders({ orders })}</Loading>
+        <Errored fallback={err => <p class="error">Could not load orders: {err().message}</p>}>
+          {Loading({
+            fallback: <p class="loading">Loading orders…</p>,
+            children: () => Orders({ orders })
+          })}
+        </Errored>
       </section>
     );
   };

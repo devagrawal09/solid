@@ -14,17 +14,15 @@
 // server names each occurrence with.
 //
 // What the library's rules change: the expanded state is a `$signal`, the
-// handlers `$event`s; the router's location is plain Solid, read through
-// `read(() => location.pathname)`; the flash is an `$effect` that keeps the
+// handlers `$event`s; the router's location arrives as a prop
+// from the shell (`pathname`, the route's location path); the flash is an `$effect` that keeps the
 // previous title itself (an effect block has no `prev`).
-import { useLocation } from "@solidjs/router";
 import {
   $,
   $component,
   $effect,
   $event,
   $signal,
-  read,
   Show,
   type Element,
   type TypedProps
@@ -32,15 +30,20 @@ import {
 
 const SidebarNoteContent = $component(function* SidebarNoteContent(
   props: TypedProps<
-    { id: number; title: string; href: string; children: Element; expandedChildren: Element },
+    {
+      id: number;
+      title: string;
+      href: string;
+      pathname: string;
+      children: Element;
+      expandedChildren: Element;
+    },
     "SidebarNoteContent"
   >
 ) {
-  const location = useLocation();
-  const pathname = read(() => location.pathname);
   const [isExpanded, setIsExpanded] = yield* $signal(false);
   const isActive = $(function* () {
-    return (yield* pathname).startsWith(`/notes/${yield* props.id}`);
+    return (yield* props.pathname).startsWith(`/notes/${yield* props.id}`);
   });
   let itemRef!: HTMLDivElement;
 
@@ -55,7 +58,7 @@ const SidebarNoteContent = $component(function* SidebarNoteContent(
   });
   const toggle = $event(function* (e: MouseEvent) {
     e.stopPropagation();
-    setIsExpanded(expanded => !expanded);
+    yield* setIsExpanded(expanded => !expanded);
   });
 
   return function* () {

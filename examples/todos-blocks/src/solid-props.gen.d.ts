@@ -12,6 +12,9 @@ declare module "@solidjs/blocks" {
     "MainSection": {
       filter: { pending: false; fails: never; live: true; static: false };
     };
+    "TodoApp": {
+      filter: { pending: false; fails: never; live: true; static: false };
+    };
     "TodoItem": {
       todo: { pending: false; fails: never; live: true; static: false };
     };

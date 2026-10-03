@@ -14,6 +14,7 @@ import {
   $store,
   attempt,
   For,
+  Errored,
   Loading,
   readStore,
   render,
@@ -24,6 +25,9 @@ import { h } from "@solidjs/blocks/h";
 import { html } from "@solidjs/blocks/html";
 
 const tick = () => new Promise<void>(r => setTimeout(r, 0));
+
+/** An attempt's handler in these tests: what failed, as an Error. */
+const fail = (e: unknown): Error => (e instanceof Error ? e : new Error(String(e)));
 
 /** A write driven from plain test code (no block host): what `yield*` does in an $event. */
 const write = (receipt: Iterable<unknown>): void => void [...receipt];
@@ -55,7 +59,7 @@ for (const flavor of ["h", "html"] as const) {
         const [n, setN] = yield* $signal(1);
         inc = () => write(setN(v => v + 1));
         const user = yield* $memo(function* () {
-          return yield* attempt(() => new Promise<{ name: string }>(r => (resolve = r)));
+          return yield* attempt(() => new Promise<{ name: string }>(r => (resolve = r)), fail);
         });
         const cls = $(function* () {
           return (yield* n) > 3 ? "big" : "";
@@ -90,8 +94,16 @@ for (const flavor of ["h", "html"] as const) {
       dispose = render(
         () =>
           flavor === "h"
-            ? h("div", Loading({ fallback: "loading", children: Greeting() }))
-            : html`<${Loading} fallback="loading"><${Greeting} /><//>`,
+            ? h(
+                "div",
+                Errored({
+                  fallback: "failed",
+                  children: () => Loading({ fallback: "loading", children: () => Greeting() })
+                })
+              )
+            : html`<${Errored} fallback="failed"
+                ><${Loading} fallback="loading"><${Greeting} /><//
+              ><//>`,
         root
       );
       flush();

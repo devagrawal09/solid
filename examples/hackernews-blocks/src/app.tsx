@@ -5,21 +5,21 @@
 // and arrives as HTML. All that ships is the router, the boundary, and the one
 // component that owns state (Toggle).
 //
-// Note there is no server-component API in this file. `dynamic()` over a
+// Note there is no server-component API in this file. `$dynamic` over a
 // `"use server"` call is the entire client surface (see the routes); the
 // transport install lives in the generated entry.
 //
 // What the library's rules change here: `App` is a `$component` whose SETUP
-// creates the nav's `dynamic()` and the router's tree (a `dynamic` or a
+// creates the nav's `$dynamic` and the router's tree (a dynamic or a
 // router created inside a view would be re-created whenever the view
 // re-rendered).
 import { createRouter, defineRoute } from "@solidjs/router";
-import { $component, Loading } from "@solidjs/blocks";
-import { dynamic } from "@solidjs/web";
+import { $component, $dynamic, attempt, Loading } from "@solidjs/blocks";
 import { navView } from "~/lib/views";
 import Stories, { preload as preloadStories } from "~/routes/stories";
 import Story, { preload as preloadStory } from "~/routes/story";
 import User, { preload as preloadUser } from "~/routes/user";
+import { ServerError } from "~/lib/errors";
 import "./app.css";
 
 // `defineRoute` types each route's component and preload from its own `path`,
@@ -44,7 +44,12 @@ const App = $component(function* App() {
   // reason for its markup to ship as client templates at all — and with no
   // reactive input it is never refetched: it renders inline at t=0, the client
   // adopts it, and navigation leaves it alone.
-  const Nav = dynamic(() => navView());
+  const Nav = yield* $dynamic(function* () {
+    return yield* attempt(
+      () => navView(),
+      cause => new ServerError(cause)
+    );
+  });
   const rendered = (
     <Router>
       {props => (

@@ -11,13 +11,16 @@ import {
   For,
   Loading,
   render,
-  type HView
+  type HView,
+  type Source
 } from "@solidjs/blocks";
 import { h } from "@solidjs/blocks/h";
 import { html } from "@solidjs/blocks/html";
 
 declare const root: HTMLElement;
 declare function fetchUser(): Promise<{ name: string }>;
+/** Pending until its first value, and never failing (as a server border states it). */
+declare const pendingUser: Source<{ name: string }, true, never>;
 
 export const Settled = $component(function* () {
   const [n] = yield* $signal(1);
@@ -68,9 +71,7 @@ export const ReadsInView = $component(function* () {
 
 // pending holes make the output (and so the view) pending
 export const Pending = $component(function* () {
-  const user = yield* $memo(function* () {
-    return yield* attempt(() => fetchUser());
-  });
+  const user = pendingUser;
   return function* () {
     return h("p", function* () {
       return (yield* user).name;
@@ -78,9 +79,7 @@ export const Pending = $component(function* () {
   };
 });
 export const PendingHtml = $component(function* () {
-  const user = yield* $memo(function* () {
-    return yield* attempt(() => fetchUser());
-  });
+  const user = pendingUser;
   const name = $(function* () {
     return (yield* user).name;
   });

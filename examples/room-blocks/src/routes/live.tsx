@@ -12,32 +12,34 @@
 //   (`Errored` around the page), each directory row handles its own (a row
 //   is settled), and the summary keeps its <Errored>. The original lets such
 //   a failure reach the app root; with no failure the markup is the same.
-// - The transcript is Solid's `createOptimisticStore` and posting is
-//   an `$event` (a Solid action) waiting on `until` (the library has no
-//   optimistic forms of its own); blocks read the store through `paths` (stated pending).
+// - The transcript is an `$optimisticStore` over the room's stream (pending
+//   until the first transcript lands) and posting is an `$event` (a Solid
+//   action) that writes the row optimistically and waits with `until`.
 // - Handlers are `$event`s.
 import {
   $,
   $component,
   $event,
   $memo,
+  $optimistic,
+  $optimisticStore,
   $signal,
-  accessor,
   attempt,
   Errored,
   For,
   latestOf,
   Loading,
-  paths,
-  read,
+  readStore,
   Show,
+  until,
+  type EventHandler,
   type Path,
   type Source,
   type TypedProps
 } from "@solidjs/blocks";
-import { createOptimistic, createOptimisticStore, until } from "solid-js";
 import type { RouteSectionProps } from "@solidjs/router";
 import { useIdentity } from "~/lib/identity";
+import { ArchiveError, ChaosError, DeliveryError, SendError } from "~/lib/errors";
 import {
   archive,
   presence,
@@ -53,6 +55,7 @@ import {
   type RoomCard
 } from "~/lib/sources";
 import StatusPill, { createWire, type Wire } from "~/components/status-pill";
+import { LiveError } from "~/lib/errors";
 
 const ROOMS = ["lobby", "design", "infra", "random"];
 
@@ -83,14 +86,12 @@ const LivePage = $component(function* LivePage(props: TypedProps<{ room: string 
       <div class="room">
         {yield* Header({ room: props.room })}
         <div class="columns">
-          <main class="main">
-            <Chat room={yield* props.room} />
-          </main>
+          <main class="main">{yield* Chat({ room: props.room })}</main>
           <aside class="side">
             <Directory current={yield* props.room} />
             {yield* Card({ room: props.room })}
             <Summary room={yield* props.room} />
-            <Archive room={yield* props.room} />
+            {yield* Archive({ room: props.room })}
           </aside>
         </div>
       </div>
@@ -107,7 +108,12 @@ const Header = $component(function* Header(props: TypedProps<{ room: string }, "
   const me = yield* useIdentity();
   const wire = yield* createWire();
   const who = yield* $memo(function* () {
-    return wire.watch(presence(yield* props.room, yield* me));
+    const room2 = yield* props.room;
+    const me2 = yield* me;
+    return yield* attempt(
+      () => wire.watch(presence(room2, me2)),
+      cause => new LiveError(cause)
+    );
   });
   // Am I in the room? Only once the tab's own connection has joined.
   const joined = $(function* () {
@@ -186,12 +192,20 @@ const Chaos = $component(function* Chaos() {
   const [last, setLast] = yield* $signal("");
   const drop = $event(function* () {
     try {
-      const res = yield* attempt(() => fetch("/__chaos/drop", { method: "POST" }));
-      setLast(
-        res.ok ? yield* attempt(() => res.text()) : `no chaos route (${res.status}) — dev only`
+      const res = yield* attempt(
+        () => fetch("/__chaos/drop", { method: "POST" }),
+        cause => new ChaosError(cause)
+      );
+      yield* setLast(
+        res.ok
+          ? yield* attempt(
+              () => res.text(),
+              cause => new ChaosError(cause)
+            )
+          : `no chaos route (${res.status}) — dev only`
       );
     } catch (e) {
-      setLast(String(e));
+      yield* setLast(String(e));
     }
   });
   return function* () {
@@ -218,44 +232,56 @@ type Row = Message & { pending?: boolean };
 const Chat = $component(function* Chat(props: TypedProps<{ room: string }, "Chat">) {
   const me = yield* useIdentity();
   const wire = yield* createWire();
-  const room = accessor(props.room);
-  const who = accessor(me);
-  const [store, setOptimistic] = createOptimisticStore<{ messages: Row[] }>(
-    () => wire.watch(transcript(room())),
-    { messages: [] }
+  const [store, setOptimistic] = yield* $optimisticStore(
+    function* () {
+      const room3 = yield* props.room;
+      return yield* attempt(
+        () => wire.watch(transcript(room3)),
+        cause => new LiveError(cause)
+      );
+    },
+    { messages: [] } as { messages: Row[] }
   );
-  const [sending, setSending] = createOptimistic(false);
+  const [sending, setSending] = yield* $optimistic(false);
   const [error, setError] = yield* $signal<string | undefined>(undefined);
   const post = $event(function* (text: string) {
-    const current = who();
+    const current = yield* me;
     if (!current) return;
+    const room = yield* props.room;
     const id = Math.random().toString(36).slice(2, 10);
-    setError(undefined);
-    setSending(true);
-    setOptimistic(t => {
+    yield* setError(undefined);
+    yield* setSending(true);
+    yield* setOptimistic(t => {
       t.messages.push({ id, from: current.name, text, at: Date.now(), pending: true });
     });
     try {
-      yield* attempt(() => send(room(), id, current.name, text));
-      yield* attempt(() => until(() => store.messages.some(m => m.id === id), { timeout: 10_000 }));
+      yield* attempt(
+        () => send(room, id, current.name, text),
+        cause => new SendError(cause)
+      );
+      yield* until(
+        readStore(store, s => s.messages.some(m => m.id === id)),
+        cause => new DeliveryError(cause),
+        { timeout: 10_000 }
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      yield* setError(err instanceof Error ? err.message : String(err));
     }
   });
   // The first transcript arrives asynchronously: the store's reads are pending.
-  const transcriptRows = paths<{ messages: Row[] }, true>(store).messages;
+  const transcriptRows = store.messages;
   return function* () {
     return (
       <>
-        <Transcript messages={transcriptRows} wire={wire} />
-        <Composer room={yield* props.room} post={post} sending={read(sending)} error={error} />
+        {yield* Transcript({ messages: transcriptRows, wire })}
+        <Composer room={yield* props.room} post={post} sending={sending} error={error} />
       </>
     );
   };
 });
 
 const Transcript = $component(function* Transcript(
-  props: TypedProps<{ messages: Source<Row[], true>; wire: Wire }, "Transcript">
+  props: TypedProps<{ messages: Source<Row[], true, unknown>; wire: Wire }, "Transcript">
 ) {
   return function* () {
     return (
@@ -264,16 +290,19 @@ const Transcript = $component(function* Transcript(
           <h2>Transcript</h2>
           <StatusPill wire={yield* props.wire} />
         </div>
-        <Loading fallback={<p class="muted">loading…</p>}>
-          {Messages({ messages: props.messages })}
-        </Loading>
+        {
+          yield* Loading({
+            fallback: <p class="muted">loading…</p>,
+            children: () => Messages({ messages: props.messages })
+          })
+        }
       </section>
     );
   };
 });
 
 const Messages = $component(function* Messages(
-  props: TypedProps<{ messages: Source<Row[], true> }, "Messages">
+  props: TypedProps<{ messages: Source<Row[], true, unknown> }, "Messages">
 ) {
   const me = yield* useIdentity();
   return function* () {
@@ -312,7 +341,8 @@ const Composer = $component(function* Composer(
   props: TypedProps<
     {
       room: string;
-      post: (text: string) => unknown;
+      // an event that does async work (it sends, then waits for the transcript)
+      post: EventHandler<[text: string], SendError | DeliveryError, void, boolean, true>;
       sending: boolean;
       error: string | undefined;
     },
@@ -326,13 +356,13 @@ const Composer = $component(function* Composer(
     e.preventDefault();
     const trimmed = (yield* text).trim();
     if (!trimmed) return;
-    (yield* props.post)(trimmed);
-    // Same tick as the action call, so this write is the action's: it lands
-    // when the post settles. The input shows `latestOf(text)`.
-    setText("");
+    // One transaction with the post: the clear lands when the post settles,
+    // and the input shows `latestOf(text)` meanwhile.
+    yield* setText("");
+    yield* (yield* props.post)(trimmed);
   });
   const input = $event(function* (e: Input) {
-    setText(e.currentTarget.value);
+    yield* setText(e.currentTarget.value);
   });
   return function* () {
     return (
@@ -385,7 +415,11 @@ const DirectoryEntry = $component(function* DirectoryEntry(
 ) {
   const wire = yield* createWire();
   const who = yield* $memo(function* () {
-    return wire.watch(presence(yield* props.name, null));
+    const name2 = yield* props.name;
+    return yield* attempt(
+      () => wire.watch(presence(name2, null)),
+      cause => new LiveError(cause)
+    );
   });
   return function* () {
     return (
@@ -422,10 +456,18 @@ const Card = $component(function* Card(props: TypedProps<{ room: string }, "Card
     return wire.watch(roomCard(yield* props.room));
   });
   const members = yield* $memo(function* () {
-    return (yield* card).members;
+    const card2 = yield* card;
+    return yield* attempt(
+      () => card2.members,
+      cause => new LiveError(cause)
+    );
   });
   const activity = yield* $memo(function* () {
-    return (yield* card).activity;
+    const card3 = yield* card;
+    return yield* attempt(
+      () => card3.activity,
+      cause => new LiveError(cause)
+    );
   });
   return function* () {
     return (
@@ -535,7 +577,7 @@ const ActivityLine = $component(function* ActivityLine(
 const Summary = $component(function* Summary(props: TypedProps<{ room: string }, "Summary">) {
   const [attemptNo, setAttempt] = yield* $signal(1);
   const regenerate = $event(function* (reset: () => void) {
-    setAttempt(a => a + 1);
+    yield* setAttempt(a => a + 1);
     reset();
   });
   return function* () {
@@ -570,7 +612,12 @@ const SummaryText = $component(function* SummaryText(
 ) {
   const text = yield* $memo(
     function* () {
-      return summary(yield* props.room, yield* props.attempt);
+      const room4 = yield* props.room;
+      const attempt2 = yield* props.attempt;
+      return yield* attempt(
+        () => summary(room4, attempt2),
+        cause => new LiveError(cause)
+      );
     },
     { ssrSource: "client" }
   );
@@ -580,13 +627,16 @@ const SummaryText = $component(function* SummaryText(
 });
 
 // ---------------------------------------------------------------------------
-// archive — a slow plain read in its own boundary. `on={room}` makes a room
-// switch show the fallback for the new room at once. `attempt` states it
-// raises nothing the page handles.
+// archive — a slow plain read in its own boundary. `on: room` makes a room
+// switch show the fallback for the new room at once. A failure is an
+// ArchiveError, handled with the page's other failures (`Errored` at its root).
 const Archive = $component(function* Archive(props: TypedProps<{ room: string }, "Archive">) {
   const stats = yield* $memo(function* () {
     const room = yield* props.room;
-    return yield* attempt(() => archive(room));
+    return yield* attempt(
+      () => archive(room),
+      cause => new ArchiveError(cause)
+    );
   });
   return function* () {
     return (
@@ -595,9 +645,13 @@ const Archive = $component(function* Archive(props: TypedProps<{ room: string },
           <h2>Archive</h2>
           <span class="muted">slow, plain</span>
         </div>
-        <Loading on={yield* props.room} fallback={<p class="muted">counting the archive (4s)…</p>}>
-          {ArchiveCount({ stats })}
-        </Loading>
+        {
+          yield* Loading({
+            on: props.room,
+            fallback: <p class="muted">counting the archive (4s)…</p>,
+            children: () => ArchiveCount({ stats })
+          })
+        }
       </section>
     );
   };

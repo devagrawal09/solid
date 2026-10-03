@@ -19,6 +19,7 @@ import {
   $signal,
   $snapshot,
   attempt,
+  Errored,
   Loading,
   type Component,
   type TypedProps
@@ -32,6 +33,14 @@ type TriangleProps = {
   s: number;
   children: number;
 };
+
+/** The idle-time work failed: the color of a slow child's failure. */
+export class IdleError extends Error {
+  readonly kind = "idle" as const;
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+  }
+}
 
 const TARGET = 25;
 
@@ -61,7 +70,12 @@ export const TriangleDemo = $component(function* TriangleDemo() {
   });
 
   return function* () {
-    return h(Loading, { fallback: "Loading..." }, h(Container, { scale, seconds }));
+    // the slow children wait on idle time, which may fail
+    return h(
+      Errored,
+      { fallback: err => `Failed: ${String(err())}` },
+      h(Loading, { fallback: "Loading..." }, h(Container, { scale, seconds }))
+    );
   };
 });
 
@@ -88,7 +102,7 @@ const Container = $component(function* Container(
 // a const its own initializer references): a triangle may be pending — its
 // branches read an async memo. Its setup is left unnamed: a named setup
 // (`function* Triangle`) would shadow the component inside its own body.
-const Triangle: Component<TriangleProps, true, never> = $component(function* (
+const Triangle: Component<TriangleProps, true, IdleError> = $component(function* (
   props: TypedProps<TriangleProps, "Triangle">
 ) {
   const x = yield* $snapshot(props.x);
@@ -117,7 +131,8 @@ const Triangle: Component<TriangleProps, true, never> = $component(function* (
             res(seconds);
           });
           onCleanup(() => cancelIdleCallback(t));
-        })
+        }),
+      cause => new IdleError(cause)
     );
   });
 

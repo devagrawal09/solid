@@ -15,7 +15,8 @@ import {
   $,
   $component,
   $event,
-  $signal,$memo,
+  $signal,
+  $memo,
   createContext,
   Errored,
   For,
@@ -41,18 +42,20 @@ type Input = InputEvent & { currentTarget: HTMLInputElement };
 type Key = KeyboardEvent & { currentTarget: HTMLInputElement };
 
 const Header = $component(function* Header() {
-  const [s, set] = yield* $signal(0)
-  const ss = yield* $memo(function*() {
-    return yield* s
-  })
+  const [s, set] = yield* $signal(0);
+  const ss = yield* $memo(function* () {
+    return yield* s;
+  });
   const [, { addTodo }] = yield* useTodos();
   const submit = $event(function* (e: Key) {
     if (e.key !== "Enter") return;
-    const title = e.currentTarget.value.trim();
+    const input = e.currentTarget;
+    const title = input.value.trim();
     if (!title) return;
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    addTodo({ id, title, completed: false });
-    e.currentTarget.value = "";
+    // the event is gone once the call waits: clear the input first
+    input.value = "";
+    yield* addTodo({ id, title, completed: false });
   });
   return function* () {
     return (
@@ -67,13 +70,13 @@ const Header = $component(function* Header() {
 const TodoItem = $component(function* TodoItem(props: TypedProps<{ todo: Todo }, "TodoItem">) {
   const [, { toggleTodo, removeTodo, retryTodo }] = yield* useTodos();
   const toggle = $event(function* (e: Input) {
-    toggleTodo(yield* props.todo.id, e.currentTarget.checked);
+    yield* toggleTodo(yield* props.todo.id, e.currentTarget.checked);
   });
   const retry = $event(function* () {
-    retryTodo(yield* props.todo);
+    yield* retryTodo(yield* props.todo);
   });
   const remove = $event(function* () {
-    removeTodo(yield* props.todo.id);
+    yield* removeTodo(yield* props.todo.id);
   });
   return function* () {
     return (
@@ -129,7 +132,7 @@ const MainSection = $component(function* MainSection(
     return yield* readStore(todos, t => t.length > 0 && t.every(x => x.completed));
   });
   const toggle = $event(function* () {
-    toggleAll(!(yield* allCompleted));
+    yield* toggleAll(!(yield* allCompleted));
   });
   return function* () {
     return (
@@ -161,7 +164,7 @@ const Footer = $component(function* Footer(props: TypedProps<{ filter: Filter },
     return (yield* todos.length) - (yield* remaining);
   });
   const clear = $event(function* () {
-    clearCompleted();
+    yield* clearCompleted();
   });
   return function* () {
     return (
@@ -198,29 +201,42 @@ const Footer = $component(function* Footer(props: TypedProps<{ filter: Filter },
   };
 });
 
+/** The app's section: its list and footer read the store, so it waits for it and fails with it. */
+const TodoApp = $component(function* TodoApp(props: TypedProps<{ filter: Filter }, "TodoApp">) {
+  return function* () {
+    return (
+      <section class="todoapp">
+        <Header />
+        {
+          yield* Loading({
+            fallback: <p class="loading">Loading…</p>,
+            children: () => [
+              MainSection({ filter: props.filter }),
+              Footer({ filter: props.filter })
+            ]
+          })
+        }
+      </section>
+    );
+  };
+});
+
 export const App = $component(function* App() {
   const filter = yield* hashFilter();
   const todos = yield* createTodos();
   return function* () {
     return (
-      <Errored
-        fallback={(err, reset) => (
-          <div class="app-error">
-            <p>Something went wrong: {String(err())}</p>
-            <button onClick={reset}>Reset</button>
-          </div>
-        )}
-      >
-        <TodosContext value={todos}>
-          <section class="todoapp">
-            <Header />
-            <Loading fallback={<p class="loading">Loading…</p>}>
-              {MainSection({ filter })}
-              {Footer({ filter })}
-            </Loading>
-          </section>
-        </TodosContext>
-      </Errored>
+      <TodosContext value={todos}>
+        {Errored({
+          fallback: (err, reset) => (
+            <div class="app-error">
+              <p>Something went wrong: {String(err())}</p>
+              <button onClick={reset}>Reset</button>
+            </div>
+          ),
+          children: () => TodoApp({ filter })
+        })}
+      </TodosContext>
     );
   };
 });

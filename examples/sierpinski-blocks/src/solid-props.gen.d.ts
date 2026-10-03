@@ -11,13 +11,13 @@ declare module "@solidjs/blocks" {
       seconds: { pending: false; fails: never; live: true; static: false };
     };
     "Dot": {
-      children: { pending: true; fails: never; live: true; static: false };
+      children: { pending: true; fails: import("./app").IdleError; live: true; static: false };
       s: { pending: false; fails: never; live: false; static: true };
       x: { pending: false; fails: never; live: true; static: false };
       y: { pending: false; fails: never; live: true; static: false };
     };
     "Triangle": {
-      children: { pending: true; fails: never; live: true; static: false };
+      children: { pending: true; fails: import("./app").IdleError; live: true; static: false };
       s: { pending: false; fails: never; live: true; static: false };
       x: { pending: false; fails: never; live: true; static: false };
       y: { pending: false; fails: never; live: true; static: false };

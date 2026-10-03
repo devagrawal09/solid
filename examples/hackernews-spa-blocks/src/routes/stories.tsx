@@ -1,8 +1,9 @@
 import { type RoutePreloadFuncArgs, type RouteSectionProps } from "@solidjs/router";
-import { $, $component, $memo, For, Show, type TypedProps } from "@solidjs/blocks";
+import { $, $component, $memo, attempt, For, Show, type TypedProps } from "@solidjs/blocks";
 import Story from "~/components/story";
 import { getStories } from "~/lib/api";
 import type { StoryTypes } from "~/types";
+import { ApiError } from "~/lib/errors";
 
 /** `/` and the four named feeds all render this; the path names the feed. */
 export const storyType = (pathname: string): StoryTypes =>
@@ -24,7 +25,12 @@ const Stories = $component(function* Stories(props: TypedProps<RouteSectionProps
     return storyType(yield* props.location.pathname);
   });
   const stories = yield* $memo(function* () {
-    return getStories(yield* type, yield* page);
+    const type2 = yield* type;
+    const page2 = yield* page;
+    return yield* attempt(
+      () => getStories(type2, page2),
+      cause => new ApiError(cause)
+    );
   });
 
   return function* () {

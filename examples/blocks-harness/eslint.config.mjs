@@ -12,7 +12,13 @@ export default function blocksConfig(extra = [], files = ["src/**/*.{ts,tsx}"]) 
       files,
       languageOptions: {
         parser: tsParser,
-        parserOptions: { ecmaFeatures: { jsx: true } },
+        // type information: `no-unyielded-write` reports any block operation a
+        // block discards (an event call, a setter passed around, a bare attempt)
+        parserOptions: {
+          ecmaFeatures: { jsx: true },
+          projectService: true,
+          tsconfigRootDir: process.cwd()
+        },
         ecmaVersion: 2024,
         sourceType: "module"
       },
