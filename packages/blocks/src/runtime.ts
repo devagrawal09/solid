@@ -142,22 +142,50 @@ const HOLE = 6;
 type Host = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 const HOST_NAMES = ["plain code", "a setup", "a view", "a memo", "an effect", "an event", "a hole"];
 
-let host: Host = NONE;
 /**
- * Dev only: the name of the component (or row) whose view is running at its
- * top level — not in a hole, not in a child's setup — or null. A read then
- * is `READ_IN_VIEW`.
+ * What the running block is. One value, replaced whole by `runAs` for each
+ * run and restored after it, so a run started inside another (a view built
+ * while a memo resumes, a child's setup inside a parent's view, a hole's
+ * first pass) starts from its own state and leaves the outer one as it was.
  */
-let viewRunning: string | null = null;
+interface HostState {
+  readonly host: Host;
+  /** Cleanups of the running effect run (null outside an effect). */
+  readonly sink: (() => void)[] | null;
+  /** Set while a memo runs after its first async `attempt`. */
+  readonly resumed: boolean;
+  /**
+   * Dev only: the name of the component (or row) whose view is running at
+   * its top level — not in a hole, not in a child's setup — or null. A read
+   * then is `READ_IN_VIEW`.
+   */
+  readonly view: string | null;
+  /** Dev only: a read from a JSX position (`perform`) is in progress, paths and getters included. */
+  readonly jsx: boolean;
+}
+let state: HostState = { host: NONE, sink: null, resumed: false, view: null, jsx: false };
+
 /**
- * Dev only: set while a read from a JSX position (`perform`) is in progress,
- * paths and getters included.
+ * Run `run` as `host`, with a state of its own: every place the runtime
+ * drives block code (a setup, a view, a hole, a memo's run and resumption,
+ * an effect run, an event's steps, a snapshot) goes through here.
  */
-let jsxRead = false;
-/** Cleanups of the running effect run (null outside an effect). */
-let cleanupSink: (() => void)[] | null = null;
-/** Set while a memo runs after its first async `attempt`. */
-let memoResumed = false;
+function runAs<T>(
+  host: Host,
+  run: () => T,
+  sink: (() => void)[] | null = null,
+  view: string | null = null,
+  jsx = false,
+  resumed = false
+): T {
+  const prev = state;
+  state = { host, sink, resumed, view, jsx };
+  try {
+    return run();
+  } finally {
+    state = prev;
+  }
+}
 
 function devError(code: string, message: string): Error {
   return new Error(`[${code}] ${message}`);
@@ -168,6 +196,7 @@ function checkRead(inJsx: boolean): void {
   // to a plain Solid computation the setup created (a `dynamic`, a derived
   // store) running its first pass: that read is the computation's own. A
   // read from a JSX position is never the setup's (see `perform`).
+  const { host, view } = state;
   if (!inJsx && host === SETUP && getObserver() === null)
     throw devError(
       "READ_IN_SETUP",
@@ -175,12 +204,12 @@ function checkRead(inJsx: boolean): void {
     );
   // The same for a view's top level: a computation the view's run created
   // (a flow control reading its props, a hole's first pass) reads for itself.
-  if (!inJsx && viewRunning !== null && host === VIEW && getObserver() === null)
+  if (!inJsx && view !== null && host === VIEW && getObserver() === null)
     throw devError(
       "READ_IN_VIEW",
-      `<${viewRunning}>: read outside a JSX position. A view has no body: read in a hole ({yield* …} in JSX, a bare function* in h / html), branch with <Show> / <Match>, derive with a $memo in the setup.`
+      `<${view}>: read outside a JSX position. A view has no body: read in a hole ({yield* …} in JSX, a bare function* in h / html), branch with <Show> / <Match>, derive with a $memo in the setup.`
     );
-  if (memoResumed)
+  if (state.resumed)
     throw devError(
       "READ_AFTER_ATTEMPT",
       "a $memo reads before its first async attempt: a read after it would not be tracked."
@@ -201,7 +230,7 @@ function checkRead(inJsx: boolean): void {
  * a setup's read.
  */
 function readOf(x: any): unknown {
-  if (__DEV__) checkRead(jsxRead);
+  if (__DEV__) checkRead(state.jsx);
   const r = x[READ];
   return r === PATH_READ ? readPath(x[PATH_TARGET]) : r.call(x);
 }
@@ -212,7 +241,7 @@ export function through(v: any): any {
 }
 
 function* sourceIterator(this: any): Generator<unknown, unknown, unknown> {
-  return host === EVENT ? yield* eventRead(this) : readOf(this);
+  return state.host === EVENT ? yield* eventRead(this) : readOf(this);
 }
 
 /**
@@ -279,18 +308,13 @@ export function perform<T>(target: Yieldable<any, T> | (() => T) | T): T {
   if (x != null) {
     if (x[READ] !== undefined) {
       if (!__DEV__) return readOf(x) as T;
-      const prev = jsxRead;
-      jsxRead = true;
-      try {
-        return readOf(x) as T;
-      } finally {
-        jsxRead = prev;
-      }
+      const { host, sink, view, resumed } = state;
+      return runAs(host, () => readOf(x) as T, sink, view, true, resumed);
     }
     if (x[VIEW_MARK] === true) return x;
     if (typeof x === "function") return x();
     if (typeof x === "object" && !Array.isArray(x) && typeof x[Symbol.iterator] === "function")
-      return drive(x[Symbol.iterator](), HOLE_RUN) as T;
+      return runAs(HOLE, () => drive(x[Symbol.iterator](), HOLE_RUN)) as T;
   }
   return x;
 }
@@ -356,7 +380,7 @@ class Selection {
     return this.select(s != null && s[PATH_TARGET] ? readPath(s[PATH_TARGET]) : s);
   }
   *[Symbol.iterator](): Generator<unknown, unknown, unknown> {
-    return host === EVENT ? yield* eventRead(this) : readOf(this);
+    return state.host === EVENT ? yield* eventRead(this) : readOf(this);
   }
 }
 /**
@@ -392,22 +416,12 @@ function drive(it: Iterator<unknown>, _mode: number): unknown {
   throw isWait(r.value)
     ? devError(
         "ASYNC_NOT_ALLOWED",
-        `an async attempt suspends; only a $memo or an $event may wait (this is ${HOST_NAMES[host]}).`
+        `an async attempt suspends; only a $memo or an $event may wait (this is ${HOST_NAMES[state.host]}).`
       )
     : devError(
         "NOT_AN_OPERATION",
         "a block delegated to something that is not a block operation (`yield*` a source, a store path, a prop, attempt, raise or a setter receipt)."
       );
-}
-
-function runAs<T>(h: Host, run: () => T): T {
-  const prev = host;
-  host = h;
-  try {
-    return run();
-  } finally {
-    host = prev;
-  }
 }
 
 // --- operations ------------------------------------------------------------------------
@@ -492,6 +506,7 @@ class Receipt<T> {
   }
 }
 function checkWrite(): void {
+  const host = state.host;
   if (host === SETUP || host === VIEW || host === MEMO || host === HOLE)
     throw devError(
       "WRITE_IN_REACTIVE",
@@ -507,10 +522,10 @@ function receiptSetter(set: (v: any) => any, value?: () => any): any {
 }
 
 function checkCreate(kind: string): void {
-  if (host !== SETUP)
+  if (state.host !== SETUP)
     throw devError(
       "CREATE_OUTSIDE_SETUP",
-      `$${kind} creates state: call it in a $component's (or a row block's) setup, not in ${HOST_NAMES[host]}.`
+      `$${kind} creates state: call it in a $component's (or a row block's) setup, not in ${HOST_NAMES[state.host]}.`
     );
 }
 
@@ -735,15 +750,10 @@ export function memoCompute(
   return (arg?: unknown) => {
     const my = ++run;
     let gen!: Generator<unknown, unknown, unknown>;
-    let r!: IteratorResult<unknown, unknown>;
-    const prev = host;
-    host = MEMO;
-    try {
+    const r = runAs(MEMO, () => {
       gen = body(arg);
-      r = gen.next();
-    } finally {
-      host = prev;
-    }
+      return gen.next();
+    });
     if (r.done) return r.value;
     return resume(gen, r.value, MEMO, () => my === run);
   };
@@ -773,24 +783,29 @@ function resume(
         return;
       }
       let r: IteratorResult<unknown, unknown>;
-      const prev = host;
-      host = as;
-      if (as === MEMO) memoResumed = true;
       try {
-        r = failed ? gen.throw(value) : gen.next(value);
+        r = runAs(
+          as,
+          () => (failed ? gen.throw(value) : gen.next(value)),
+          null,
+          null,
+          false,
+          as === MEMO
+        );
       } catch (e) {
         reject(e);
         return;
-      } finally {
-        host = prev;
-        memoResumed = false;
       }
       if (r.done) resolve(r.value);
       else wait(r.value);
     };
     const wait = (next: unknown) => {
       if (!isWait(next)) {
-        reject(drive({ next: () => ({ done: false, value: next }) } as any, SYNC_RUN));
+        try {
+          runAs(as, () => drive({ next: () => ({ done: false, value: next }) } as any, SYNC_RUN));
+        } catch (e) {
+          reject(e);
+        }
         return;
       }
       Promise.resolve(next.promise).then(
@@ -818,16 +833,7 @@ export function $effect<Y extends EffectOp = never>(
 
 function runEffect(body: () => Generator<unknown, unknown, unknown>): (() => void) | undefined {
   const sink: (() => void)[] = [];
-  const prevSink = cleanupSink;
-  const prev = host;
-  cleanupSink = sink;
-  host = EFFECT;
-  try {
-    drive(body(), SYNC_RUN);
-  } finally {
-    cleanupSink = prevSink;
-    host = prev;
-  }
+  runAs(EFFECT, () => drive(body(), SYNC_RUN), sink);
   return sink.length ? () => runCleanups(sink) : undefined;
 }
 function runCleanups(sink: (() => void)[]): void {
@@ -850,7 +856,8 @@ export function $settled<Y extends EffectOp = never>(
 class CleanupOp {
   constructor(readonly fn: () => void) {}
   *[Symbol.iterator](): Generator<never, void, unknown> {
-    if (cleanupSink) cleanupSink.push(this.fn);
+    const { host, sink } = state;
+    if (sink) sink.push(this.fn);
     else if (__DEV__ && host !== SETUP)
       throw devError(
         "CLEANUP_OUTSIDE_OWNER",
@@ -867,13 +874,7 @@ export function $cleanup(fn: () => void): Yieldable<Cleanup, void> {
 class SnapshotOp {
   constructor(readonly target: unknown) {}
   *[Symbol.iterator](): Generator<never, unknown, unknown> {
-    const prev = host;
-    host = NONE;
-    try {
-      return untrack(() => through(this.target));
-    } finally {
-      host = prev;
-    }
+    return runAs(NONE, () => untrack(() => through(this.target)));
   }
 }
 /**
@@ -890,6 +891,7 @@ export function $snapshot<T, P extends boolean, E>(
 // --- context ------------------------------------------------------------------------------
 
 function* contextIterator(this: Context<unknown>): Generator<never, unknown, unknown> {
+  const host = state.host;
   if (__DEV__ && host !== SETUP && host !== NONE)
     throw devError(
       "CONTEXT_OUTSIDE_SETUP",
@@ -943,21 +945,16 @@ function* eventSteps(
   let value: unknown;
   let failed = false;
   for (;;) {
-    let r: IteratorResult<unknown, unknown>;
-    const prev = host;
-    host = EVENT;
-    try {
-      r = failed ? gen.throw(value) : gen.next(value);
-    } finally {
-      host = prev;
-    }
+    const r = runAs(EVENT, () => (failed ? gen.throw(value) : gen.next(value)));
     if (r.done) return r.value;
     const op = r.value;
     if (!isWait(op)) {
       try {
         gen.return(undefined);
       } catch {}
-      return drive({ next: () => ({ done: false, value: op }) } as any, SYNC_RUN);
+      return runAs(EVENT, () =>
+        drive({ next: () => ({ done: false, value: op }) } as any, SYNC_RUN)
+      );
     }
     try {
       value = yield op.promise;
@@ -1067,13 +1064,7 @@ function isGeneratorFunction(fn: unknown): fn is (...args: any[]) => Generator {
 const GeneratorFunctionPrototype = Object.getPrototypeOf(function* () {});
 
 function runHole(body: () => Generator<unknown, unknown, unknown>): unknown {
-  const prev = host;
-  host = HOLE;
-  try {
-    return drive(body(), HOLE_RUN);
-  } finally {
-    host = prev;
-  }
+  return runAs(HOLE, () => drive(body(), HOLE_RUN));
 }
 
 /**
@@ -1103,22 +1094,8 @@ function runSetup(
   body: (...args: any[]) => Generator<unknown, unknown, unknown>,
   args: unknown[]
 ): unknown {
-  const prev = host;
-  const prevRunning = viewRunning;
-  const prevJsx = jsxRead;
-  host = SETUP;
   // a child's setup is not its parent view's top level, nor a JSX read
-  viewRunning = null;
-  jsxRead = false;
-  let result: unknown;
-  try {
-    result = drive(body(...args), SYNC_RUN);
-  } finally {
-    host = prev;
-    viewRunning = prevRunning;
-    jsxRead = prevJsx;
-  }
-  return result;
+  return runAs(SETUP, () => drive(body(...args), SYNC_RUN));
 }
 
 /**
@@ -1130,17 +1107,7 @@ export function renderView(
   viewFn: () => Generator<unknown, unknown, unknown>,
   name = "anonymous"
 ): unknown {
-  if (!__DEV__) return runAs(VIEW, () => drive(viewFn(), SYNC_RUN));
-  const prevRunning = viewRunning;
-  const prevJsx = jsxRead;
-  viewRunning = name;
-  jsxRead = false;
-  try {
-    return runAs(VIEW, () => drive(viewFn(), SYNC_RUN));
-  } finally {
-    viewRunning = prevRunning;
-    jsxRead = prevJsx;
-  }
+  return runAs(VIEW, () => drive(viewFn(), SYNC_RUN), null, __DEV__ ? name : null);
 }
 
 /**

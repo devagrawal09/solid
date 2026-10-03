@@ -1594,6 +1594,38 @@ describe("derivations", () => {
   });
 });
 
+describe("host state is per run (re-entrancy)", () => {
+  it("an async $memo resuming while another view renders: the view's reads are its holes'", async () => {
+    let cardViews = 0;
+    const Card = $component(function* Card(props: TypedProps<{ name: string }>) {
+      return function* () {
+        cardViews++;
+        return <b>{perform(props.name)}</b>;
+      };
+    });
+    const App = $component(function* App() {
+      const card = yield* $memo(function* () {
+        const name = yield* attempt(() => Promise.resolve("Ada"), toError);
+        // built while the memo resumes after its attempt: Card's setup, view
+        // and holes run inside the resumed run, each as its own host
+        return createRoot(() => Card({ name }));
+      });
+      return function* () {
+        return <div>{perform(card)}</div>;
+      };
+    });
+    mount(() => (
+      <Loading fallback="…">
+        <Errored fallback={(e: any) => <i>{String(e())}</i>}>{App()}</Errored>
+      </Loading>
+    ));
+    expect(root.textContent).toBe("…");
+    await settle();
+    expect(root.textContent).toBe("Ada");
+    expect(cardViews).toBe(1);
+  });
+});
+
 describe("attempt / isPending interplay", () => {
   it("a memo that waits is pending, and a superseded run is closed", async () => {
     const resolvers: ((v: number) => void)[] = [];
