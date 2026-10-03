@@ -39,6 +39,10 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 | D-027 | decided | The gate pins `TZ=UTC` |
 | D-028 | decided | A setter called outside a block run throws in dev |
 | D-029 | decided | Pass-through props: explicit generics first; `Inherit<T>` only if the count is high |
+| D-030 | decided | A row body is a setup |
+| D-031 | decided | The JSX transform stays (D-003 stands) |
+| D-032 | decided | A view has no body: reads only in JSX positions, structure only via flow controls |
+| D-033 | decided | No boundary = the failure is re-thrown; D-019 reworded |
 
 ## Entries
 
@@ -131,7 +135,7 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 ### D-019 — Untyped sync throws
 **Decided.** A plain `throw` (not a typed `raise`) inside a block is a bug, not a failure channel. Dev builds re-throw with the prefix `[UNTYPED_THROW] <host> in <Component>…` naming the host (setup/view/hole/event) and component; production routes it to the nearest `<Errored>` so the app degrades rather than dies.
 *Alternatives:* treat untyped throws as `raise(unknown)`; swallow in prod.
-*Reasoning:* D-006 — typed failures are complete for library-mediated failures; making a plain throw loud in dev is what keeps that claim honest, while prod behaviour must still be an error boundary. Doc §1 strictness bullet and §7 wording follow. *Implementation:* Phase 1A item 7.
+*Reasoning:* D-006 — typed failures are complete for library-mediated failures; making a plain throw loud in dev is what keeps that claim honest, while prod behaviour must still be an error boundary. Doc §1 strictness bullet and §7 wording follow. *Amended by D-033:* "routes to the nearest `<Errored>` **if there is one**; with none, the failure is re-thrown". *Implementation:* Phase 1A item 7.
 
 ### D-020 — `$event` is always a transaction
 **Decided.** Every `$event` handler runs as a Solid `action` (transaction) — no sync fast path.
@@ -178,10 +182,32 @@ Not carried by the handoff. If you remember it, append it as a new entry naming 
 *Alternatives:* `Inherit<T>` from the start (less noise, more type machinery and worse error messages); declare every pass-through prop `Async<T, E>` (no generics anywhere, but ready values read as maybe-loading downstream and the component names errors it never sees); fix a numeric failure threshold up front.
 *Reasoning:* options 1 and 2 have identical soundness — neither infers across files; 2 is sugar for 1 — so start with the one that has no machinery and makes the cost countable; the count decides whether the sugar earns its complexity.
 
+### D-030 — A row body is a setup
+**Decided (Dev, 2026-10-04).** The bare `function*` of a `<For>`/row (D-013) is a setup: it runs once per item and returns the row's view generator, the same shape as `$component` (setup returns view). `yield* $memo` inside it is correct and owned by the row.
+*Alternatives:* row body is a view (per-row derivations unsupported; extract a `$component`); positional/hook-like idempotent `$memo` in a view (rejected: positional magic, D-006); keep `$scope` for rows only (partly reverses D-013).
+*Reasoning:* it answers "where does a per-row derivation live once `$scope` is gone" without a new concept, by making rows and components the same shape. *Implementation:* Phase 1A item 4 — doc §1 states the symmetry; runtime test "a row memo is created once per item".
+
+### D-031 — The JSX transform stays
+**Decided (Dev, 2026-10-04).** The rule "`yield* e` in a JSX expression/attribute → `perform(e)`" stays; D-003 stands and Phase 2 builds the standalone plugin (plus a disable option in the Rust compiler, which has `blocksModule` but no off switch today).
+*Alternatives:* drop the transform and require explicit `function*` holes everywhere (≈273 twin sites by a rough grep vs 20 explicit holes today; the `h` flavor already works that way). Rejected: the transform is the ergonomic path inside the strict dialect, and dropping it would not have removed the granularity cliff (D-032 does).
+*Reasoning:* the view stays a `function*` for TypeScript's sake (a `yield*` must sit in a generator to be typed); at runtime the transform removes every view yield, which is consistent with D-032.
+
+### D-032 — A view has no body
+**Decided (Dev, 2026-10-04).** A view is `function* () { return <…/>; }`. Every read is a `yield*` directly in a JSX position (a hole); there is no `yield*` outside JSX, no `if`/early `return`, no local computation. All structure comes from flow controls (`<Show>`, `<Match>`, `<For>`, …), which take sources directly. The `h`/`html` flavor follows the same rule with explicit `function*` holes.
+Consequences: (1) the whole-view read concept is deleted — `VY` is always `never`, so `ViewPending<VY, R>` collapses to `PendingOf<HOps<R>>`; a view is never pending or failing on its own, only its holes are; the runtime's whole-view detection (`viewRunning`/`jsxRead`, the machinery `a5faef57` patched) is repurposed into a dev error and otherwise removed (1A item 3 shrinks accordingly). (2) Enforcement at three levels: types (`Read` is not a `ViewOp`; type test "a view does not read"), dev runtime (`[READ_IN_VIEW] <Component>: read outside a JSX position`), lint `no-read-in-view-body` (error, in `recommended`). (3) Doc §3 row "A view reads; it does not create or write" becomes "A view does not read, create, write or branch; its holes read". (4) Twins migrate view-body reads and `if (yield* …)` branches (6 by grep) to holes and flow controls; the lint's first run gives the exact site count, which is recorded here.
+*Alternatives:* keep whole-view reads and document the position-based granularity (§3 only); lint only the cliff case (a view-body read whose binding is used only in JSX); keep whole-view reads in the runtime for safety.
+*Reasoning:* Dev: there should be no control flow or structure inside a view; all branching comes from flow controls, and a read is a hole. This removes the cliff (the same `yield* count` meaning a hole inside JSX and a whole-view re-render one line above) by removing the second meaning, not by warning about it. Fact that settled it: `ViewPending<VY, R> = PendingOf<VY | HOps<R>>` — holes were already tracked for pending/failures, so the whole-view read bought nothing but structure and a coarser scope. *Implementation:* new Phase 1A item 4b, after explicit holes (item 4).
+
+### D-033 — No boundary: the failure is re-thrown
+**Decided (Dev, 2026-10-04).** With no `<Errored>` on the path to the root, a failing view/memo is re-thrown by `reportError` and a failing `$event` rejects its promise (already the runtime's behaviour, tested for `$event`). The library installs no implicit root boundary and does not require one. D-019 is reworded accordingly.
+*Alternatives:* `render()`/`hydrate()` install a default root `<Errored>` (feasible in one place, `rootOf(code)`); require a root boundary via a dev error and a lint.
+*Reasoning:* crashing loudly with no boundary is the honest default for a strict dialect; a silent root fallback hides the failure. *Implementation:* doc §7 wording with 1A item 7; add the "no boundary → re-throw" runtime test for a view failure next to the existing `$event` one.
+
 ## Open questions
 
 - **Q22** — repo layout for extraction (D-015).
 - **Q23** — start Phase 2 in parallel with Phase 1B (recommended: yes; cheap now that worktrees are not disk-bound).
+- D-032 migration: the exact count of view-body read / branch sites per twin, from the lint's first run.
 - Whether `context()` and `createContext()` stay separate long-term (keep; revisit after 1B).
 - Whether `no-unyielded-write` gets a sync exception for `start(call)` (D-021).
 
@@ -194,5 +220,5 @@ Async `$memo` is emulated over `createMemo` + `latest`/`isPending` → needs a d
 | Date | Branch | Event |
 | --- | --- | --- |
 | 2026-10-04 | `blocks-lib` @ `b03535f6` (container) | Lost unpushed with the container (disk full). Contents: this file, the gate script and baseline, the v2 changeset, HANDOFF.md. |
-| 2026-10-04 | `bl/bootstrap` off `dfe692cf` | Reconstruction of the lost commits from the handoff: `09fa9de5` changeset, `08d7a7d3` gate + baseline, `f26f5ca2` gitlink removal (D-022), then this file. ff into `blocks-lib` when green. |
+| 2026-10-04 | `bl/bootstrap` off `dfe692cf` | Reconstruction of the lost commits from the handoff: `09fa9de5` changeset, `08d7a7d3` gate + baseline, `f26f5ca2` gitlink removal (D-022), then this file (`da03be74`); D-030…D-033 added after the design review. ff'd into `blocks-lib` and pushed to `fork` at `da03be74`; the review commit follows. |
 | 2026-10-04 | `bl/tighten`, `bl/colors` (container) | Provisioned, no commits landed; recreated on demand. |
