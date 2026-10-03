@@ -5,7 +5,6 @@
  */
 import { flush } from "solid-js";
 import {
-  $,
   $component,
   $event,
   $memo,
@@ -117,7 +116,7 @@ it("props, stores, row blocks and hole blocks read with yield* in JSX", () => {
           s.list[1].done = true;
         })
       );
-    const count = $(function* () {
+    const count = yield* $memo(function* () {
       return (yield* todos.list).filter(t => !t.done).length;
     });
     const [open, setOpen] = yield* $signal(true);
@@ -144,7 +143,7 @@ it("props, stores, row blocks and hole blocks read with yield* in JSX", () => {
               };
             }}
           </For>
-          <span>{count}</span>
+          <span>{yield* count}</span>
           <Show when={yield* open}>
             <button onClick={close}>close</button>
           </Show>

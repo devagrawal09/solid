@@ -18,10 +18,10 @@
 // from the shell (`pathname`, the route's location path); the flash is an `$effect` that keeps the
 // previous title itself (an effect block has no `prev`).
 import {
-  $,
   $component,
   $effect,
   $event,
+  $memo,
   $signal,
   Show,
   type Element,
@@ -42,7 +42,7 @@ const SidebarNoteContent = $component(function* SidebarNoteContent(
   >
 ) {
   const [isExpanded, setIsExpanded] = yield* $signal(false);
-  const isActive = $(function* () {
+  const isActive = yield* $memo(function* () {
     return (yield* props.pathname).startsWith(`/notes/${yield* props.id}`);
   });
   let itemRef!: HTMLDivElement;

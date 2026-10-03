@@ -7,7 +7,6 @@
 // created in the setup and read through `read` / `paths`; the cart, the
 // notice and the decline toggle are block state.
 import {
-  $,
   $component,
   $event,
   $memo,
@@ -167,7 +166,7 @@ export const Checkout = $component(function* Checkout() {
     }
   });
 
-  const inFlight = $(function* () {
+  const inFlight = yield* $memo(function* () {
     return (yield* phase) !== "idle";
   });
   const place = $event(function* () {
@@ -264,7 +263,7 @@ export const Checkout = $component(function* Checkout() {
         <ol class="steps">
           <For each={STEPS}>
             {function* (step) {
-              const state = $(function* () {
+              const state = yield* $memo(function* () {
                 const order: Phase[] = ["reserving", "charging", "finalizing"];
                 const current = order.indexOf(yield* phase);
                 const target = order.indexOf(yield* step.phase);

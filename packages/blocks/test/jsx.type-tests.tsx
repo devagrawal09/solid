@@ -5,7 +5,6 @@
  */
 import { lazy } from "solid-js";
 import {
-  $,
   adopt,
   $component,
   $effect,
@@ -125,7 +124,7 @@ export const asyncInEffect = $effect(function* () {
 // --- only settled values render -------------------------------------------------------------
 // pending, and nothing it reads can fail
 export const Pending = $component(function* (props: TypedProps<{ id: string }>) {
-  const user = $(function* () {
+  const user = yield* $memo(function* () {
     yield* props.id;
     return yield* pendingUser;
   });
@@ -230,31 +229,39 @@ export const Thunks = $component(function* () {
   };
 });
 
-// --- blocks as children (settled only) and as attribute values ----------------------------
+// --- derivations are $memos; in JSX the hole is the yield* ----------------------------------
 export const Blocks = $component(function* () {
   const [n] = yield* $signal(1);
   const user = pendingUser;
-  const doubled = $(function* () {
+  const doubled = yield* $memo(function* () {
     return (yield* n) * 2;
   });
-  const name = $(function* () {
+  const name = yield* $memo(function* () {
     return (yield* user).name;
   });
-  const big = $(function* () {
+  const big = yield* $memo(function* () {
     return (yield* n) > 1 ? "big" : "";
   });
   return function* () {
-    const settledChild = <div>{doubled}</div>;
-    // @ts-expect-error a pending block is not an element
-    const pendingChild = <div>{name}</div>;
+    const settledChild = <div>{yield* doubled}</div>;
+    // @ts-expect-error a memo is a source, not an element: read it with yield*
+    const memoChild = <div>{name}</div>;
+    const generatorChild = (
+      <div>
+        {/* @ts-expect-error a bare function* is not a JSX child (the web renderer does not drive it): the hole is a yield* */}
+        {function* () {
+          return yield* n;
+        }}
+      </div>
+    );
     const asAttribute = <p title={String(yield* doubled)} class={yield* big} />;
-    return [settledChild, pendingChild, asAttribute];
+    return [settledChild, memoChild, generatorChild, asAttribute];
   };
 });
-// a block read in an attribute counts in the view: this view may be pending
+// a memo read in an attribute counts in the view: this view may be pending
 export const PendingAttribute = $component(function* () {
   const user = pendingUser;
-  const name = $(function* () {
+  const name = yield* $memo(function* () {
     return (yield* user).name;
   });
   return function* () {
@@ -301,6 +308,26 @@ export const Rows = $component(function* () {
           }}
         </For>
         <For each={comments}>{c => <Settled label={c.text} />}</For>
+        <For each={comments}>
+          {function* (c) {
+            // a row's body is a setup (as a $component's): a derivation is the row's $memo
+            const shout = yield* $memo(function* () {
+              return (yield* c.text).toUpperCase();
+            });
+            return function* () {
+              return <li title={yield* shout}>{yield* shout}</li>;
+            };
+          }}
+        </For>
+        <For each={comments}>
+          {/* @ts-expect-error a row's setup does not read: derive with $memo, read in the view */}
+          {function* (c) {
+            const text = yield* c.text;
+            return function* () {
+              return <li>{text}</li>;
+            };
+          }}
+        </For>
         <Repeat count={2}>
           {function* (i) {
             return function* () {

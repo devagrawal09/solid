@@ -4,9 +4,9 @@
  *
  * - a callback's arguments are reads (`yield* item.title`, `yield* index`),
  *   never raw values that would be read without `yield*`;
- * - a callback may be a row block (a bare `function*`, `$(function* (x) …)`,
- *   `$scope(…)`, or a named generator declared in a setup) with its own
- *   setup and view.
+ * - a callback may be a row block (a bare `function*`, or a named generator
+ *   declared in a setup): its body is a setup that runs once per row and
+ *   returns the row's view, as a `$component`'s does.
  *
  * Only the children are adapted; every other prop is forwarded as a getter,
  * so the flow control reads it where it always did.
@@ -23,12 +23,13 @@ import {
   untrack,
   type Accessor
 } from "solid-js";
-import { BODY, BOUNDARY, READ, VIEW_MARK, isRowBlock, rowArg, runRow, through } from "./runtime.js";
+import { BOUNDARY, READ, VIEW_MARK, isRowBlock, rowArg, runRow, throughHole } from "./runtime.js";
 import type { Element } from "./element.js";
 import type {
   ErrorClass,
   COMPONENT,
   FailsOf,
+  HoleOp,
   HView,
   Path,
   PendingOf,
@@ -46,6 +47,9 @@ type FlowOutput<P extends boolean, E, C> = HView<
   FailsOf<Read<P, E> | OpsOfHole<C>>
 >;
 
+/** A no-JSX hole as a flow control's source prop: a bare zero-arity `function*`. */
+type GeneratorHole<Y, T> = () => Generator<Y, T, any>;
+
 /** Flow controls are components (`<${For} …>` in `html`, `h(For, …)`). */
 type Branded = { readonly [COMPONENT]: true };
 
@@ -55,8 +59,9 @@ function forward(props: any, adaptChildren: (children: unknown) => unknown): any
   for (const key of Object.keys(props)) {
     if (key === "children") continue;
     // A source passed straight to a flow control (`each={todos}` in `h`, or
-    // a call `For({ each: todos, … })`) is read where the prop is read.
-    Object.defineProperty(out, key, { get: () => through(props[key]), enumerable: true });
+    // a call `For({ each: todos, … })`) is read where the prop is read; so is
+    // a bare `function*` hole (`Show({ when: function* () { … } })`).
+    Object.defineProperty(out, key, { get: () => throughHole(props[key]), enumerable: true });
   }
   // Children stay as lazy as they were written: JSX element children are a
   // getter the flow control reads when (and each time) it renders the branch
@@ -72,10 +77,6 @@ function forward(props: any, adaptChildren: (children: unknown) => unknown): any
   return out;
 }
 
-function bodyOf(fn: any): any {
-  return fn[BODY] || fn;
-}
-
 /**
  * Adapt a render callback. `args` maps the flow control's raw render
  * arguments to reads; `arity` is the arity the flow control expects to see.
@@ -85,11 +86,10 @@ function adapt(cb: unknown, args: (...raw: any[]) => unknown[], arity: number): 
   // A view that is a function (a component re-rendering as a whole, an
   // adopted lazy page) is content, not a render callback.
   if ((cb as any)[VIEW_MARK] === true) return cb;
-  const isBlock = (cb as any)[BODY] !== undefined;
-  const row = isBlock || isRowBlock(cb);
+  const row = isRowBlock(cb);
   if (!row && (cb as any)[READ] !== undefined) return cb;
   const run = row
-    ? (...raw: any[]) => runRow(bodyOf(cb), args(...raw))
+    ? (...raw: any[]) => runRow(cb as any, args(...raw))
     : (...raw: any[]) => (cb as any)(...args(...raw));
   if (arity === 2) return (a: any, b: any) => run(a, b);
   return (a: any) => run(a);
@@ -119,6 +119,16 @@ function ForBlocks<T extends readonly any[]>(
     children: (item: Path<EachOf<T>>, index: Source<number>) => Element;
   }
 ): SettledView;
+/**
+ * No-JSX, `each` a bare `function*` hole (`For({ each: function* () { … }, … })`):
+ * the output carries the hole's coloring and the rows' `h` output's.
+ */
+function ForBlocks<T extends readonly any[], Y extends HoleOp, C extends Hole>(props: {
+  each: GeneratorHole<Y, T | undefined | null | false>;
+  fallback?: Hole;
+  keyed?: boolean | ((item: EachOf<T>) => any);
+  children: (item: Path<EachOf<T>>, index: Source<number>) => C;
+}): FlowOutput<PendingOf<Y>, FailsOf<Y>, C>;
 /**
  * No-JSX (`For({ each: todos, children: todo => h(TodoItem, { todo }) })`):
  * `each` may be a pending source; the output carries its coloring and the
@@ -175,6 +185,16 @@ type ShowProps<T> = { when: Cond<T>; keyed?: boolean; fallback?: Element };
  * `<Show when={yield* user}>{u => <p>{yield* u.name}</p>}</Show>` — the
  * branch's value is a read — or a row block with its own setup.
  */
+/**
+ * No-JSX, `when` a bare `function*` hole (`Show({ when: function* () { … }, … })`):
+ * the output carries the hole's coloring and the content's.
+ */
+function ShowBlocks<T, Y extends HoleOp, C extends Hole>(props: {
+  when: GeneratorHole<Y, T | undefined | null | false>;
+  keyed?: boolean;
+  fallback?: Hole;
+  children: C | ((value: Path<NonNullable<T>>) => C);
+}): FlowOutput<PendingOf<Y>, FailsOf<Y>, C>;
 function ShowBlocks<T, Y, VY, R>(
   props: ShowProps<T> & { children: RowBlock<[value: Path<NonNullable<T>>], Y, VY, R> }
 ): SettledView;
@@ -281,7 +301,7 @@ function LoadingBlocks(props: any): any {
   const out: any = {};
   for (const key of Object.keys(props))
     if (key !== "children")
-      Object.defineProperty(out, key, { get: () => through(props[key]), enumerable: true });
+      Object.defineProperty(out, key, { get: () => throughHole(props[key]), enumerable: true });
   Object.defineProperty(out, "children", { get: children, enumerable: true });
   return SolidLoading(out);
 }
@@ -316,9 +336,8 @@ function ErroredBlocks(props: any): any {
   const fallback = props.fallback as any;
   const handles = props.catch as readonly ErrorClass[] | undefined;
   const adapted =
-    typeof fallback === "function" && (isRowBlock(fallback) || fallback[BODY] !== undefined)
-      ? (err: Accessor<unknown>, reset: () => void) =>
-          runRow(bodyOf(fallback), [rowArg(err, true), reset])
+    typeof fallback === "function" && isRowBlock(fallback)
+      ? (err: Accessor<unknown>, reset: () => void) => runRow(fallback, [rowArg(err, true), reset])
       : undefined;
   return SolidErrored({
     get fallback() {

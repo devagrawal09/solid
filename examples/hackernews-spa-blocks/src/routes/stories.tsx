@@ -1,5 +1,5 @@
 import { type RoutePreloadFuncArgs, type RouteSectionProps } from "@solidjs/router";
-import { $, $component, $memo, attempt, For, Show, type TypedProps } from "@solidjs/blocks";
+import { $component, $memo, attempt, For, Show, type TypedProps } from "@solidjs/blocks";
 import Story from "~/components/story";
 import { getStories } from "~/lib/api";
 import type { StoryTypes } from "~/types";
@@ -18,10 +18,10 @@ export const preload = ({ location }: RoutePreloadFuncArgs) => {
 // not memoized, as the original's plain functions); the stories are a
 // `$memo` over the query — pending until it lands, and it may fail.
 const Stories = $component(function* Stories(props: TypedProps<RouteSectionProps, "Stories">) {
-  const page = $(function* () {
+  const page = yield* $memo(function* () {
     return Number(yield* props.location.query.page) || 1;
   });
-  const type = $(function* () {
+  const type = yield* $memo(function* () {
     return storyType(yield* props.location.pathname);
   });
   const stories = yield* $memo(function* () {

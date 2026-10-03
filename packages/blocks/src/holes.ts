@@ -3,12 +3,12 @@
  * handed to Solid's `h` / `html`.
  *
  * A hole is a source (`$signal` / `$memo` accessor, store or prop path, a
- * `readStore` selection), a hole block (`$(function* …)` or a bare
- * `function*`), an `$event` handler, a child view, or a static value. A
+ * `readStore` selection), a bare zero-arity `function*` (a hole of its own),
+ * an `$event` handler, a child view, or a static value. A
  * plain thunk is not a hole (it would be a hidden read) and is rejected by
  * the types.
  */
-import { $, perform, READ, BODY, ROW_MARK, isGeneratorFunction, runRow } from "@solidjs/blocks";
+import { holeOf, perform, READ, isGeneratorFunction, runRow } from "@solidjs/blocks";
 import type {
   ChildView,
   COMPONENT,
@@ -22,8 +22,8 @@ import type {
 } from "./types.js";
 
 /**
- * A child `h` / `html` accept: a static node or value, a source, a block
- * (or a bare `function*`), a child view, or an array of them. Not a plain
+ * A child `h` / `html` accept: a static node or value, a source, a bare
+ * `function*` hole, a child view, or an array of them. Not a plain
  * object (that is an attributes object) and not a plain thunk (a hidden read).
  */
 export type Hole =
@@ -85,9 +85,9 @@ export type HViewOf<V> = HView<PendingOf<OpsOfHole<V>>, FailsOf<OpsOfHole<V>>>;
 export function toHole(value: any): any {
   if (value == null) return value;
   if (typeof value === "function") {
-    if (value[READ] !== undefined || value[BODY] !== undefined) return value;
-    if (value[ROW_MARK] === true || isGeneratorFunction(value)) {
-      if (value.length === 0) return $(value);
+    if (value[READ] !== undefined) return value;
+    if (isGeneratorFunction(value)) {
+      if (value.length === 0) return holeOf(value);
       if (value.length === 1) return (a: unknown) => runRow(value, [a]);
       return (a: unknown, b: unknown) => runRow(value, [a, b]);
     }

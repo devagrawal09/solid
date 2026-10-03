@@ -11,7 +11,6 @@
 // with `$snapshot` (the original destructures them), timer and frame
 // callbacks are `$event`s.
 import {
-  $,
   $cleanup,
   $component,
   $event,
@@ -87,11 +86,11 @@ const Container = $component(function* Container(
       "div",
       {
         class: "container",
-        style: $(function* () {
+        style: function* () {
           return {
             transform: "scaleX(" + (yield* props.scale) / 2.1 + ") scaleY(0.7) translateZ(0.1px)"
           };
-        })
+        }
       },
       h(Triangle, { x: 0, y: 0, s: 1000, children: props.seconds })
     );
@@ -162,7 +161,7 @@ const Dot = $component(function* Dot(props: TypedProps<TriangleProps, "Dot">) {
       "div",
       {
         class: "dot",
-        style: $(function* () {
+        style: function* () {
           return {
             width: s + "px",
             height: s + "px",
@@ -172,13 +171,13 @@ const Dot = $component(function* Dot(props: TypedProps<TriangleProps, "Dot">) {
             "line-height": s + "px",
             background: (yield* hover) ? "#ff0" : "#61dafb"
           };
-        }),
+        },
         onMouseEnter: onEnter,
         onMouseLeave: onExit
       },
-      $(function* () {
+      function* () {
         return (yield* hover) ? "**" + (yield* props.children) + "**" : yield* props.children;
-      })
+      }
     );
   };
 });

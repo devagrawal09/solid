@@ -12,10 +12,10 @@
 //   `$event`.
 // - Handlers are `$event`s; the room links are a row block over ROOMS.
 import {
-  $,
   $component,
   $dynamic,
   $event,
+  $memo,
   $signal,
   $snapshot,
   attempt,
@@ -38,7 +38,7 @@ type Submit = SubmitEvent & { currentTarget: HTMLFormElement };
 type Input = InputEvent & { currentTarget: HTMLInputElement };
 
 const Home = $component(function* Home(props: TypedProps<RouteSectionProps, "Home">) {
-  const room = $(function* () {
+  const room = yield* $memo(function* () {
     const q = String((yield* props.location.query.room) || "lobby");
     return ROOMS.includes(q) ? q : "lobby";
   });

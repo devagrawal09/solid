@@ -1,11 +1,14 @@
 /*
  * What a block app may render. Only *settled* things are elements: a view
- * or a block that may still be pending or fail is not, until a `Loading` /
- * `Errored` handles it (or `yield*` moves it into the enclosing view). Plain
- * thunks are not elements either (a thunk in a hole is a hidden read): a
- * hole is a `yield*` in JSX, or a source / block in `h` / `html`.
+ * that may still be pending or fail is not, until a `Loading` / `Errored`
+ * handles it (or `yield*` moves it into the enclosing view). Plain thunks
+ * are not elements either (a thunk in a hole is a hidden read): a hole is a
+ * `yield*` in JSX, or a source / a bare `function*` in `h` / `html`. A bare
+ * `function*` is not a JSX child: the JSX transform hands a child to the
+ * web renderer as it is, and the renderer does not drive generators; in
+ * JSX the hole is the `yield*`.
  */
-import type { Block, HView, PENDING, SettledView, VIEW, HVIEW } from "./types.js";
+import type { HView, PENDING, SettledView, VIEW, HVIEW } from "./types.js";
 
 type NotCallable = {
   readonly call?: never;
@@ -29,7 +32,6 @@ export type Element =
   | RenderedObject
   | ArrayElement
   | SettledView
-  | Block<any, false, never>
   | HView<false, never>
   | (string & {})
   | number

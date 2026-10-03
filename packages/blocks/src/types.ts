@@ -24,8 +24,6 @@ export declare const KIND: unique symbol;
 export declare const SOURCE: unique symbol;
 /** Phantom brand of component views. */
 export declare const VIEW: unique symbol;
-/** Phantom brand of `$` blocks. */
-export declare const BLOCK: unique symbol;
 /** Phantom brand of typed props (carries the declared props type). */
 export declare const PROPS: unique symbol;
 /** Phantom brand of no-JSX (`h` / `html`) output. */
@@ -141,7 +139,7 @@ export type EventOp =
   | Wait
   | EventCallOp<boolean, boolean, any>
   | Raise<any>;
-/** Operations a hole block (`$(function* …)`) may perform: reads. */
+/** Operations a no-JSX hole (a bare `function*` given to `h` / `html`) may perform: reads. */
 export type HoleOp = Read<boolean, any> | Raise<any>;
 
 // --- folding a yield union ---------------------------------------------------------
@@ -355,16 +353,7 @@ export interface HView<P extends boolean = boolean, E = unknown> {
   readonly [FAILS]: E;
 }
 
-// --- blocks --------------------------------------------------------------------------
-
-/**
- * A hole block: `$(function* () { return (yield* n) * 2 })`. Readable
- * (`yield* block`), usable as a child and — in `h` / `html` — as an
- * attribute value, where it becomes one fine-grained hole.
- */
-export interface Block<T, P extends boolean = false, E = never> extends Source<T, P, E> {
-  readonly [BLOCK]: true;
-}
+// --- events ----------------------------------------------------------------------------
 
 /**
  * A call of an `$event` handler: it has started (a handler runs when it is

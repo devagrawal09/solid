@@ -51,7 +51,6 @@ import type {
   EventCall,
   Write,
   COMPONENT as COMPONENT_BRAND,
-  Block,
   ChildView,
   HView,
   BlockSetter,
@@ -95,10 +94,6 @@ export const READ: unique symbol = Symbol.for("solid.blocks.read") as any;
 export const VIEW_MARK: unique symbol = Symbol.for("solid.blocks.view") as any;
 /** Marks `$component` functions. */
 export const COMPONENT_MARK: unique symbol = Symbol.for("solid.blocks.component") as any;
-/** Marks `$` blocks; holds the generator body. */
-export const BODY: unique symbol = Symbol.for("solid.blocks.body") as any;
-/** Marks row blocks built explicitly (`$scope`, `$(function* (item) …)`). */
-export const ROW_MARK: unique symbol = Symbol.for("solid.blocks.row") as any;
 const OP: unique symbol = Symbol.for("solid.blocks.op") as any;
 const PATH_TARGET: unique symbol = Symbol.for("solid.blocks.path") as any;
 const PATH_READ = 1;
@@ -145,15 +140,7 @@ const EFFECT = 4;
 const EVENT = 5;
 const HOLE = 6;
 type Host = 0 | 1 | 2 | 3 | 4 | 5 | 6;
-const HOST_NAMES = [
-  "plain code",
-  "a setup",
-  "a view",
-  "a memo",
-  "an effect",
-  "an event",
-  "a hole block"
-];
+const HOST_NAMES = ["plain code", "a setup", "a view", "a memo", "an effect", "an event", "a hole"];
 
 let host: Host = NONE;
 /** Set while a view's first run is at its top level (not in a hole, not in a child's setup). */
@@ -1086,30 +1073,24 @@ function runHole(body: () => Generator<unknown, unknown, unknown>): unknown {
 }
 
 /**
- * `$(function* () { return (yield* n) * 2 })`: a hole block — a derived
- * read that is not memoized, usable as a child (and, in `h` / `html`, as an
- * attribute value) where it becomes one fine-grained hole, and readable with
- * `yield*`. With parameters it is a row block (`$(function* (item) {…})`).
+ * @internal A bare zero-arity `function*` in a hole position (a child or an
+ * attribute value of `h` / `html`, a flow control's source prop): one
+ * computation's read, not memoized, readable as a source.
  */
-export function $<Y extends HoleOp = never, R = unknown>(
-  body: () => Generator<Y, R, any>
-): Block<R, PendingOf<Y>, FailsOf<Y>>;
-export function $<A extends unknown[], F extends (...args: A) => Generator<any, any, any>>(
-  body: F
-): F;
-export function $(body: any): any {
-  if (body.length > 0) return $scope(body);
+export function holeOf(body: () => Generator<unknown, unknown, unknown>): any {
   const block: any = () => runHole(body);
   block[READ] = block;
   block[Symbol.iterator] = sourceIterator;
-  block[BODY] = body;
   return block;
 }
 
-/** Mark a generator function as a row block explicitly. */
-export function $scope<F extends (...args: any[]) => Generator<any, any, any>>(body: F): F {
-  (body as any)[ROW_MARK] = true;
-  return body;
+/**
+ * @internal A flow control's prop read where the flow control reads it: a
+ * source or a path is read through, and a bare zero-arity `function*` (a
+ * no-JSX hole) runs as a hole.
+ */
+export function throughHole(v: any): any {
+  return isGeneratorFunction(v) && v.length === 0 ? runHole(v) : through(v);
 }
 
 // --- components and views -------------------------------------------------------------------
@@ -1233,7 +1214,7 @@ export type NoJsxViewRule<VY, R> = [R] extends [HView<any, any>]
   ? [Exclude<VY, ChildView<any, any>>] extends [never]
     ? []
     : [
-        error: "[HVIEW_READ] a no-JSX view reads only in holes: pass the source, or a $(function* …) block, to h / html"
+        error: "[HVIEW_READ] a no-JSX view reads only in holes: pass the source, or a bare function* hole, to h / html"
       ]
   : [];
 
@@ -1264,15 +1245,17 @@ export function isComponent(value: unknown): boolean {
   return typeof value === "function" && (value as any)[COMPONENT_MARK] === true;
 }
 
-/** Whether a render callback is a row block (a generator function, `$scope`, `$(function* (x) …)`). */
+/** Whether a render callback is a row block: a generator function. */
 export function isRowBlock(fn: unknown): boolean {
-  return typeof fn === "function" && ((fn as any)[ROW_MARK] === true || isGeneratorFunction(fn));
+  return isGeneratorFunction(fn);
 }
 
 /**
- * Run a row block: its setup with the render arguments, then its view. A
- * generator that returns something other than a view function rendered it
- * directly (a view without setup).
+ * Run a row block. A row's body is a setup, as a `$component`'s is: it runs
+ * once per row (per item of a `For`, per shown branch), untracked, with the
+ * render arguments as reads; it creates (a `yield* $memo` there is the row's,
+ * disposed with it) and returns the row's view, which is rendered as a
+ * component's is.
  */
 export function runRow(
   body: (...args: any[]) => Generator<unknown, unknown, unknown>,
@@ -1281,12 +1264,18 @@ export function runRow(
   return untrack(() => {
     const view = runSetup(body, args);
     if (
-      typeof view === "function" &&
-      (view as any)[READ] === undefined &&
-      !(view as any)[VIEW_MARK]
-    )
-      return renderView(view as any);
-    return view;
+      typeof view !== "function" ||
+      (view as any)[READ] !== undefined ||
+      (view as any)[VIEW_MARK] === true
+    ) {
+      if (__DEV__)
+        throw devError(
+          "ROW_VIEW",
+          "a row's body is a setup: it returns the row's view, `return function* () { return <…/> }`."
+        );
+      return view;
+    }
+    return renderView(view as any);
   });
 }
 

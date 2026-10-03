@@ -5,7 +5,6 @@
  */
 import { flush, createRoot, isPending, lazy as plainLazy, Reveal, untrack } from "solid-js";
 import {
-  $,
   $cleanup,
   $component,
   $dynamic,
@@ -16,7 +15,6 @@ import {
   $optimisticStore,
   $projection,
   isPendingOf,
-  $scope,
   $settled,
   $signal,
   $snapshot,
@@ -26,6 +24,7 @@ import {
   createContext,
   Errored,
   For,
+  holeOf,
   Loading,
   Match,
   perform,
@@ -328,8 +327,7 @@ describe("setup operations", () => {
 describe("the runtime's other dev errors", () => {
   // Each is also a type error or a lint error where the syntax allows it;
   // these reach the runtime through casts / plain JS.
-  const hole = (body: () => Generator<unknown, unknown, unknown>) =>
-    $(body as () => Generator<never, unknown, unknown>);
+  const hole = (body: () => Generator<unknown, unknown, unknown>) => holeOf(body);
 
   devIt("operations in the wrong host", () => {
     const Ctx = createContext("x");
@@ -955,6 +953,82 @@ describe("events", () => {
 });
 
 describe("row blocks", () => {
+  it("a row memo is created once per item", () => {
+    let setItems!: (v: { id: number; text: string }[]) => void;
+    let setText!: (v: string) => void;
+    const created: number[] = [];
+    const computed: string[] = [];
+    const a = { id: 1, text: "a" };
+    const b = { id: 2, text: "b" };
+    const List = $component(function* () {
+      const [items, set] = yield* $signal([a, b]);
+      const [suffix, setSuffix] = yield* $signal("!");
+      setItems = v => write(set(v));
+      setText = v => write(setSuffix(v));
+      return function* () {
+        return (
+          <ul>
+            <For each={perform(items)}>
+              {function* (item) {
+                // the row's body is a setup: it runs once per item, and the
+                // memo it creates is the row's (read by two holes, computed once)
+                const id = yield* $snapshot(item.id);
+                created.push(id);
+                const label = yield* $memo(function* () {
+                  const text = `${yield* item.text}${yield* suffix}`;
+                  computed.push(text);
+                  return text;
+                });
+                return function* () {
+                  return <li title={perform(label)}>{perform(label)}</li>;
+                };
+              }}
+            </For>
+          </ul>
+        );
+      };
+    });
+    mount(List);
+    const lis = () => [...root.querySelectorAll("li")];
+    expect(lis().map(l => l.textContent)).toEqual(["a!", "b!"]);
+    expect(created).toEqual([1, 2]);
+    expect(computed).toEqual(["a!", "b!"]);
+    const [first] = lis();
+    // a new item creates its row (and its memo); the others keep theirs
+    setItems([a, b, { id: 3, text: "c" }]);
+    flush();
+    expect(lis().map(l => l.textContent)).toEqual(["a!", "b!", "c!"]);
+    expect(lis()[0]).toBe(first);
+    expect(created).toEqual([1, 2, 3]);
+    // a change the memos read recomputes each once; no row is created again
+    computed.length = 0;
+    setText("?");
+    flush();
+    expect(lis().map(l => l.title)).toEqual(["a?", "b?", "c?"]);
+    expect(computed).toEqual(["a?", "b?", "c?"]);
+    expect(created).toEqual([1, 2, 3]);
+  });
+
+  devIt("a row's body returns its view, as a setup does", () => {
+    const Rows = $component(function* () {
+      return function* () {
+        return (
+          <ul>
+            <For each={[1]}>
+              {
+                // a row that returns its markup directly (no view): a dev error
+                function* () {
+                  return <li />;
+                } as unknown as () => Generator<never, () => Generator<never, null>>
+              }
+            </For>
+          </ul>
+        );
+      };
+    });
+    expect(() => createRoot(() => Rows())).toThrow(/ROW_VIEW/);
+  });
+
   it("per-row state in a For; updating the list keeps rows (issue: views re-rendered on re-walk)", () => {
     let setItems!: (v: { id: number; text: string }[]) => void;
     let setups = 0;
@@ -1044,7 +1118,7 @@ describe("row blocks", () => {
     expect(views).toBe(3);
   });
 
-  it("named recursive row blocks, $() and $scope rows, Show / Match / Repeat branches", () => {
+  it("named recursive row blocks, bare function* rows, Show / Match / Repeat branches", () => {
     type C = { id: number; kids: C[] };
     const tree: C[] = [{ id: 1, kids: [{ id: 2, kids: [] }] }];
     const Thread = $component(function* () {
@@ -1078,7 +1152,7 @@ describe("row blocks", () => {
         return (
           <div>
             <Show when={when()} keyed>
-              {$(function* (v: any) {
+              {function* (v: any) {
                 const [k] = yield* $signal("!");
                 return function* () {
                   return (
@@ -1088,15 +1162,15 @@ describe("row blocks", () => {
                     </b>
                   );
                 };
-              })}
+              }}
             </Show>
             <Switch>
               <Match when={when()}>
-                {$scope(function* (v: any) {
+                {function* (v: any) {
                   return function* () {
                     return <s>{perform(v.name)}</s>;
                   };
-                })}
+                }}
               </Match>
             </Switch>
             <Repeat count={2}>
@@ -1456,14 +1530,14 @@ describe("boundaries in call form", () => {
   });
 });
 
-describe("hole blocks", () => {
-  it("$() is a fine-grained child and readable with yield*", () => {
+describe("derivations", () => {
+  it("a derivation several holes read is a $memo: it runs once per change", () => {
     let set!: (v: number) => void;
     let runs = 0;
     const App = $component(function* () {
       const [n, setN] = yield* $signal(2);
       set = v => write(setN(v));
-      const doubled = $(function* () {
+      const doubled = yield* $memo(function* () {
         runs++;
         return (yield* n) * 2;
       });
@@ -1473,17 +1547,17 @@ describe("hole blocks", () => {
       return function* () {
         return (
           <p>
-            {doubled} {perform(plusOne)}
+            {perform(doubled)} {perform(plusOne)} {perform(doubled)}
           </p>
         );
       };
     });
     mount(App);
-    expect(root.textContent).toBe("4 5");
+    expect(root.textContent).toBe("4 5 4");
     set(5);
     flush();
-    expect(root.textContent).toBe("10 11");
-    expect(runs).toBe(4);
+    expect(root.textContent).toBe("10 11 10");
+    expect(runs).toBe(2);
   });
 });
 

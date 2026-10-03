@@ -8,6 +8,7 @@
  *   read-before-attempt    a $memo reads before its first `attempt`
  *   no-unyielded-write     an operation acts only as `yield* op` (setters; with types, event calls and any op)
  *   no-foreign-reactive    no reactive state from plain Solid, the router or another library
+ *   no-dollar-block        `$` / `$scope` are removed: bare `function*` holes and rows, `$memo` derivations (autofix)
  *   typed-props-key        exported components name their type-linker key
  */
 import {
@@ -406,6 +407,203 @@ const typedPropsKey = {
   }
 };
 
+/** The flow-control props that read a source (where an `h`-flavor hole may stand). */
+const FLOW_SOURCE_PROPS = new Set(["when", "each", "count", "on"]);
+const FLOW_CONTROLS = new Set(["For", "Show", "Match", "Repeat", "Loading", "Errored", "Switch"]);
+
+/** Whether `$` / `$scope` at `identifier` is the library's (imported from it, or unbound). */
+function isLibraryBinding(context, identifier) {
+  let s = context.sourceCode.getScope(identifier);
+  while (s) {
+    const variable = s.set.get(identifier.name);
+    if (variable) {
+      const def = variable.defs[0];
+      return (
+        !!def &&
+        def.type === "ImportBinding" &&
+        def.parent.type === "ImportDeclaration" &&
+        def.parent.source.value === "@solidjs/blocks"
+      );
+    }
+    s = s.upper;
+  }
+  return true;
+}
+
+/**
+ * Whether a node is a hole of the no-JSX flavor: an argument of `h(…)` (a
+ * child, or an attribute value in its props object), a value in an `html`
+ * template, or a source prop (`when`, `each`, …) of a flow control called
+ * directly. A bare `function*` is a hole there.
+ */
+function isHHole(node) {
+  let child = node;
+  let p = node.parent;
+  let key = null;
+  while (p) {
+    if (p.type === "ArrayExpression") {
+      child = p;
+      p = p.parent;
+      continue;
+    }
+    if (p.type === "Property" && p.value === child && p.parent.type === "ObjectExpression") {
+      if (key !== null) return false;
+      key = p.key.type === "Identifier" ? p.key.name : p.key.value;
+      child = p.parent;
+      p = child.parent;
+      continue;
+    }
+    if (p.type === "TemplateLiteral")
+      return (
+        p.parent.type === "TaggedTemplateExpression" &&
+        p.parent.tag.type === "Identifier" &&
+        p.parent.tag.name === "html"
+      );
+    if (p.type === "CallExpression" && p.arguments.includes(child)) {
+      const callee = p.callee.type === "Identifier" ? p.callee.name : null;
+      if (callee === "h") {
+        if (key !== null) return !/^on/.test(String(key)) && key !== "ref" && key !== "children";
+        return p.arguments[0] !== child || child.type === "ArrayExpression";
+      }
+      if (callee && FLOW_CONTROLS.has(callee))
+        return key !== null && FLOW_SOURCE_PROPS.has(String(key)) && child === p.arguments[0];
+      return false;
+    }
+    return false;
+  }
+  return false;
+}
+
+const noDollarBlock = {
+  meta: {
+    type: "problem",
+    fixable: "code",
+    docs: {
+      description:
+        "`$` and `$scope` are removed: a hole or a row is a bare `function*`, and a derivation several holes read is `yield* $memo(…)` in the setup (or the row's setup)."
+    },
+    messages: {
+      hole: "`$` is removed: a hole is a bare `function*` here.",
+      row: "`{{name}}` is removed: a row is a bare `function*` (its body is a setup that returns the row's view).",
+      derived:
+        "`$` is removed: a derivation is `yield* $memo(function* () { … })` in the setup (or the row's setup).",
+      other:
+        "`$` is removed: read inside JSX (`{yield* …}`), pass a bare `function*` hole to `h` / `html`, or derive with `yield* $memo(…)` in a setup.",
+      import: "`{{name}}` is removed from @solidjs/blocks."
+    },
+    schema: []
+  },
+  create(context) {
+    const source = context.sourceCode;
+    let needsMemo = false;
+    const unfixed = new Set();
+    const imports = [];
+    return {
+      ImportDeclaration(node) {
+        if (node.source.value === "@solidjs/blocks") imports.push(node);
+      },
+      CallExpression(node) {
+        const callee = node.callee;
+        if (callee.type !== "Identifier" || (callee.name !== "$" && callee.name !== "$scope"))
+          return;
+        if (!isLibraryBinding(context, callee)) return;
+        const arg = node.arguments[0];
+        const name = callee.name;
+        const isGen =
+          arg &&
+          (arg.type === "FunctionExpression" || arg.type === "FunctionDeclaration") &&
+          arg.generator;
+        const argText = arg ? source.getText(arg) : "";
+        // a row: `$(function* (item) …)`, `$scope(fn)`
+        if (arg && (name === "$scope" || (isGen && arg.params.length > 0))) {
+          context.report({
+            node,
+            messageId: "row",
+            data: { name },
+            fix: fixer => fixer.replaceText(node, argText)
+          });
+          return;
+        }
+        if (!isGen) {
+          unfixed.add(name);
+          context.report({ node, messageId: "other" });
+          return;
+        }
+        // a hole of the no-JSX flavor
+        if (isHHole(node)) {
+          context.report({
+            node,
+            messageId: "hole",
+            fix: fixer => fixer.replaceText(node, argText)
+          });
+          return;
+        }
+        // a derivation bound in a setup or a row's setup
+        const p = node.parent;
+        const kind = kindAt(node);
+        if (
+          p.type === "VariableDeclarator" &&
+          p.init === node &&
+          (kind === "setup" || kind === "row")
+        ) {
+          needsMemo = true;
+          context.report({
+            node,
+            messageId: "derived",
+            fix: fixer => fixer.replaceText(node, `yield* $memo(${argText})`)
+          });
+          return;
+        }
+        unfixed.add(name);
+        context.report({ node, messageId: "other" });
+      },
+      "Program:exit"() {
+        for (const decl of imports) {
+          const specs = decl.specifiers.filter(
+            s =>
+              s.type === "ImportSpecifier" &&
+              s.imported.type === "Identifier" &&
+              (s.imported.name === "$" || s.imported.name === "$scope")
+          );
+          if (!specs.length) continue;
+          const hasMemo = decl.specifiers.some(
+            s => s.type === "ImportSpecifier" && s.local.name === "$memo"
+          );
+          // one fix for the declaration: drop the specifiers whose every use
+          // was fixed, and import `$memo` when a fix introduced it
+          const keep = decl.specifiers.filter(s => !specs.includes(s) || unfixed.has(s.local.name));
+          const removable = keep.length < decl.specifiers.length;
+          const named = keep.filter(s => s.type === "ImportSpecifier").map(s => source.getText(s));
+          if (needsMemo && !hasMemo) {
+            // after the `$` creators that sort before it
+            let at = 0;
+            named.forEach((text, i) => {
+              if (text.startsWith("$") && text < "$memo") at = i + 1;
+            });
+            named.splice(at, 0, "$memo");
+          }
+          const others = keep.filter(s => s.type !== "ImportSpecifier").map(s => source.getText(s));
+          const clause = [...others, ...(named.length ? [`{ ${named.join(", ")} }`] : [])].join(
+            ", "
+          );
+          const fix = fixer =>
+            clause
+              ? fixer.replaceText(decl, `import ${clause} from ${source.getText(decl.source)};`)
+              : fixer.remove(decl);
+          specs.forEach((spec, i) =>
+            context.report({
+              node: spec,
+              messageId: "import",
+              data: { name: spec.imported.name },
+              ...(i === 0 && removable ? { fix } : {})
+            })
+          );
+        }
+      }
+    };
+  }
+};
+
 export const rules = {
   "no-throw": noThrow,
   "no-read-outside-hole": noReadOutsideHole,
@@ -413,6 +611,7 @@ export const rules = {
   "read-before-attempt": readBeforeAttempt,
   "no-unyielded-write": noUnyieldedWrite,
   "no-foreign-reactive": noForeignReactive,
+  "no-dollar-block": noDollarBlock,
   "typed-props-key": typedPropsKey
 };
 

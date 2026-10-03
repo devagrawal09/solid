@@ -6,8 +6,8 @@
 // settled on the client, so the null→identity change flows through the
 // graph: the composer enables, presence re-invokes and this tab joins.
 import {
-  $,
   $component,
+  $memo,
   $settled,
   $signal,
   createContext,
@@ -34,14 +34,7 @@ function mint(): Identity {
   return identity;
 }
 
-/**
- * Outside an `IdentityProvider` there is no identity (the original throws;
- * a setup does not fail, so the default is "nobody").
- */
-const NOBODY = $(function* (): Generator<never, Identity | null> {
-  return null;
-});
-const IdentityContext = createContext<Source<Identity | null>>(NOBODY);
+const IdentityContext = createContext<Source<Identity | null> | undefined>(undefined);
 
 /** Holds this tab's identity for the tree below; mints it on the client once settled. */
 export const IdentityProvider = $component(function* IdentityProvider(
@@ -56,7 +49,16 @@ export const IdentityProvider = $component(function* IdentityProvider(
   };
 });
 
-/** This tab's identity — `null` on the server and until the client mints it. */
+/**
+ * This tab's identity — `null` on the server and until the client mints it.
+ * Outside an `IdentityProvider` there is no identity (the original throws; a
+ * setup does not fail, so it is "nobody", created in the asking setup).
+ */
 export function* useIdentity() {
-  return yield* IdentityContext;
+  return (
+    (yield* IdentityContext) ??
+    (yield* $memo(function* (): Generator<never, Identity | null> {
+      return null;
+    }))
+  );
 }

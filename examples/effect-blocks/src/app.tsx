@@ -1,7 +1,7 @@
 import {
-  $,
   $component,
   $event,
+  $memo,
   $signal,
   $snapshot,
   Errored,
@@ -21,7 +21,7 @@ type Tab = "typeahead" | "checkout";
 // write it through `log()`); the panel reads its entries and clears it.
 const LogPanel = $component(function* LogPanel(props: TypedProps<{ log: Log }, "LogPanel">) {
   const { entries, clear } = yield* $snapshot(props.log);
-  const newestFirst = $(function* () {
+  const newestFirst = yield* $memo(function* () {
     return [...(yield* entries)].reverse();
   });
   return function* () {

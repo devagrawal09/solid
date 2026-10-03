@@ -1,12 +1,13 @@
 /*
  * `h` for blocks: Solid's hyperscript with typed holes.
  *
- *   h("p", { class: $(function* () { return (yield* n) > 3 ? "big" : "" }) },
- *     "Hello ", $(function* () { return (yield* user).name }))
+ *   h("p", { class: function* () { return (yield* n) > 3 ? "big" : "" } },
+ *     "Hello ", function* () { return (yield* user).name })
  *
  * Tag and attribute names are checked against the DOM JSX types; an
- * attribute value is a static value or a source / block of it; a child is a
- * static element, a source, a block, a child view or an array of them.
+ * attribute value is a static value, a source of it, or a bare `function*`
+ * hole returning it; a child is a static element, a source, a bare
+ * `function*` hole, a child view or an array of them.
  * The result's type carries the pending / failures of every hole, so a view
  * returning it is pending when any hole is.
  */

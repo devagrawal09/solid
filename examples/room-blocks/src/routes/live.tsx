@@ -17,7 +17,6 @@
 //   action) that writes the row optimistically and waits with `until`.
 // - Handlers are `$event`s.
 import {
-  $,
   $component,
   $event,
   $memo,
@@ -60,7 +59,7 @@ import { LiveError } from "~/lib/errors";
 const ROOMS = ["lobby", "design", "infra", "random"];
 
 const Live = $component(function* Live(props: TypedProps<RouteSectionProps, "Live">) {
-  const room = $(function* () {
+  const room = yield* $memo(function* () {
     const q = String((yield* props.location.query.room) || "lobby");
     return ROOMS.includes(q) ? q : "lobby";
   });
@@ -116,7 +115,7 @@ const Header = $component(function* Header(props: TypedProps<{ room: string }, "
     );
   });
   // Am I in the room? Only once the tab's own connection has joined.
-  const joined = $(function* () {
+  const joined = yield* $memo(function* () {
     const id = (yield* me)?.id;
     return id != null && (yield* who).members.some(m => m.id === id);
   });
@@ -543,7 +542,7 @@ const ActivityLine = $component(function* ActivityLine(
   props: TypedProps<{ activity: Source<Activity, true, unknown> }, "ActivityLine">
 ) {
   // A row is settled: the (pending) activity is read once, into one flag per tick.
-  const ticks = $(function* () {
+  const ticks = yield* $memo(function* () {
     const { of, tick } = yield* props.activity;
     return Array.from({ length: of }, (_, i) => i < tick);
   });

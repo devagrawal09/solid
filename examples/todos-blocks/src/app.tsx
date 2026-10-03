@@ -12,7 +12,6 @@
 // - a view that reads a pending store is pending, so the loading boundary
 //   receives the two sections as views: `<Loading>{MainSection(…)}{Footer(…)}</Loading>`.
 import {
-  $,
   $component,
   $event,
   $signal,
@@ -118,7 +117,7 @@ const MainSection = $component(function* MainSection(
   props: TypedProps<{ filter: Filter }, "MainSection">
 ) {
   const [todos, { toggleAll }] = yield* useTodos();
-  const filtered = $(function* () {
+  const filtered = yield* $memo(function* () {
     const f = yield* props.filter;
     return yield* readStore(todos, t =>
       f === "active"
@@ -128,7 +127,7 @@ const MainSection = $component(function* MainSection(
           : t
     );
   });
-  const allCompleted = $(function* () {
+  const allCompleted = yield* $memo(function* () {
     return yield* readStore(todos, t => t.length > 0 && t.every(x => x.completed));
   });
   const toggle = $event(function* () {
@@ -157,10 +156,10 @@ const MainSection = $component(function* MainSection(
 
 const Footer = $component(function* Footer(props: TypedProps<{ filter: Filter }, "Footer">) {
   const [todos, { clearCompleted }] = yield* useTodos();
-  const remaining = $(function* () {
+  const remaining = yield* $memo(function* () {
     return yield* readStore(todos, t => t.filter(x => !x.completed).length);
   });
-  const completed = $(function* () {
+  const completed = yield* $memo(function* () {
     return (yield* todos.length) - (yield* remaining);
   });
   const clear = $event(function* () {

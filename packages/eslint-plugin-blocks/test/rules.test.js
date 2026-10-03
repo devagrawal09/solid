@@ -75,6 +75,75 @@ tester.run("no-read-outside-hole", rules["no-read-outside-hole"], {
   ]
 });
 
+tester.run("no-dollar-block", rules["no-dollar-block"], {
+  valid: [
+    component(
+      "const d = yield* $memo(function* () { return 1; }); return function* () { return <p>{yield* d}</p>; };"
+    ),
+    // a `$` that is not the library's (a test helper, jQuery)
+    "const $ = s => document.querySelector(s); $('p');",
+    "import { $ } from 'jquery'; $('p');"
+  ],
+  invalid: [
+    {
+      // a derivation in a setup becomes the setup's $memo; the import follows
+      code:
+        'import { $, $component } from "@solidjs/blocks";\n' +
+        component(
+          "const d = $(function* () { return 1; }); return function* () { return <p>{yield* d}</p>; };"
+        ),
+      output:
+        'import { $component, $memo } from "@solidjs/blocks";\n' +
+        component(
+          "const d = yield* $memo(function* () { return 1; }); return function* () { return <p>{yield* d}</p>; };"
+        ),
+      errors: [{ messageId: "import" }, { messageId: "derived" }]
+    },
+    {
+      // in a row's setup too (D-030)
+      code: "const r = <For each={xs}>{function* (x) { const s = $(function* () { return yield* x.a; }); return function* () { return <i>{yield* s}</i>; }; }}</For>;",
+      output:
+        "const r = <For each={xs}>{function* (x) { const s = yield* $memo(function* () { return yield* x.a; }); return function* () { return <i>{yield* s}</i>; }; }}</For>;",
+      errors: [{ messageId: "derived" }]
+    },
+    {
+      // no-JSX holes: an `h` child, an attribute value, a flow control's source prop
+      code: "const v = h('p', { class: $(function* () { return 'a'; }) }, $(function* () { return 1; }), Show({ when: $(function* () { return true; }), children: 'x' }));",
+      output:
+        "const v = h('p', { class: function* () { return 'a'; } }, function* () { return 1; }, Show({ when: function* () { return true; }, children: 'x' }));",
+      errors: [{ messageId: "hole" }, { messageId: "hole" }, { messageId: "hole" }]
+    },
+    {
+      code: "const v = html`<p>${$(function* () { return 1; })}</p>`;",
+      output: "const v = html`<p>${function* () { return 1; }}</p>`;",
+      errors: [{ messageId: "hole" }]
+    },
+    {
+      // rows: `$(function* (item) …)` and `$scope(fn)` are the bare function*
+      code: 'import { $, $scope, For } from "@solidjs/blocks";\nconst a = <For each={xs}>{$(function* (x) { return function* () { return <i />; }; })}</For>;\nconst b = <For each={xs}>{$scope(row)}</For>;',
+      output:
+        'import { For } from "@solidjs/blocks";\nconst a = <For each={xs}>{function* (x) { return function* () { return <i />; }; }}</For>;\nconst b = <For each={xs}>{row}</For>;',
+      errors: [
+        { messageId: "import" },
+        { messageId: "import" },
+        { messageId: "row" },
+        { messageId: "row" }
+      ]
+    },
+    {
+      // no fix where no form is equivalent: a module-level source, a JSX child
+      code: 'import { $ } from "@solidjs/blocks";\nconst NOBODY = $(function* () { return null; });',
+      output: null,
+      errors: [{ messageId: "import" }, { messageId: "other" }]
+    },
+    {
+      code: component("return function* () { return <p>{$(function* () { return 1; })}</p>; };"),
+      output: null,
+      errors: [{ messageId: "other" }]
+    }
+  ]
+});
+
 tester.run("read-before-attempt", rules["read-before-attempt"], {
   valid: [
     "const m = $memo(function* () { const id = yield* props.id; return yield* attempt(() => f(id)); });",

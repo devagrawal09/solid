@@ -1,9 +1,9 @@
 /*
  * `html` for blocks: Solid's tagged templates with typed holes.
  *
- *   html`<p class=${cls}>Hello ${$(function* () { return (yield* user).name })}</p>`
+ *   html`<p class=${cls}>Hello ${function* () { return (yield* user).name }}</p>`
  *
- * Holes are typed exactly as in `h` (sources, blocks, `$event` handlers,
+ * Holes are typed exactly as in `h` (sources, bare `function*` holes, `$event` handlers,
  * child views, statics; no plain thunks) and the result carries their
  * pending / failures. Tag and attribute names inside the template string
  * are not checked by TypeScript (a template literal's text is not typed);

@@ -1,11 +1,10 @@
 /**
  * The no-JSX flavor (`h`, `html`), no build step: holes are sources and
- * blocks (a bare `function*` too), the view runs once, async suspends and
+ * bare `function*`s, the view runs once, async suspends and
  * resolves, updates are fine-grained, and the input keeps its text.
  */
 import { flush } from "solid-js";
 import {
-  $,
   $component,
   $event,
   $memo,
@@ -61,9 +60,10 @@ for (const flavor of ["h", "html"] as const) {
         const user = yield* $memo(function* () {
           return yield* attempt(() => new Promise<{ name: string }>(r => (resolve = r)), fail);
         });
-        const cls = $(function* () {
+        // a bare function* is a hole (here an attribute value's)
+        const cls = function* () {
           return (yield* n) > 3 ? "big" : "";
-        });
+        };
         return function* () {
           viewRuns++;
           return flavor === "h"
@@ -187,6 +187,46 @@ for (const flavor of ["h", "html"] as const) {
 }
 
 describe("h argument shapes", () => {
+  it("a bare function* is a hole: a child, an attribute value, a flow control's source", () => {
+    let set!: (v: number) => void;
+    let holeRuns = 0;
+    const App = $component(function* () {
+      const [n, setN] = yield* $signal(1);
+      set = v => write(setN(v));
+      return function* () {
+        return h(
+          "p",
+          {
+            title: function* () {
+              return `n is ${yield* n}`;
+            }
+          },
+          function* () {
+            holeRuns++;
+            return (yield* n) * 2;
+          },
+          Show({
+            when: function* () {
+              return (yield* n) > 1;
+            },
+            children: h("b", "big")
+          })
+        );
+      };
+    });
+    dispose = render(App, root);
+    flush();
+    const p = root.querySelector("p")!;
+    expect(p.title).toBe("n is 1");
+    expect(p.textContent).toBe("2");
+    set(2);
+    flush();
+    expect(p.title).toBe("n is 2");
+    expect(p.textContent).toBe("4big");
+    expect(root.querySelector("p")).toBe(p);
+    expect(holeRuns).toBe(2);
+  });
+
   it("a path or a selection as the second argument is a child, not the props", () => {
     const App = $component(function* () {
       const [store, setStore] = yield* $store({ user: { name: "Ada" }, tags: ["a", "b"] });

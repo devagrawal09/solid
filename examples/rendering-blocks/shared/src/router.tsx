@@ -1,16 +1,17 @@
 // The example's tiny router (examples/rendering's, as blocks): the location
 // is a `$signal` provided through context; `Link` navigates with an `$event`.
 import {
-  $,
   $component,
   $event,
+  $memo,
   $signal,
   $snapshot,
   createContext,
   type BlockSetter,
-  type Block,
   type Component,
+  type Create,
   type Element,
+  type Read,
   type Source,
   type TypedProps
 } from "@solidjs/blocks";
@@ -19,16 +20,17 @@ import { isServer } from "@solidjs/web";
 interface RouterValue {
   location: Source<string>;
   setLocation: BlockSetter<string>;
-  /** `yield* matches("profile")`: whether that route is current (a hole block). */
-  matches: (match: string) => Block<boolean>;
+  /** `yield* matches("profile")`: whether that route is current (read where it is delegated to). */
+  matches: (match: string) => Generator<Read<false, never>, boolean>;
 }
 
 /**
  * Outside a router there is no location to change (the original throws; a
- * setup does not fail, so the default is a detached router at "index").
+ * setup does not fail, so the default is a detached router at "index",
+ * created in the setup that asks for the router).
  */
-function detached(): RouterValue {
-  const location: Source<string> = $(function* () {
+function* detached(): Generator<Create<"memo">, RouterValue> {
+  const location = yield* $memo(function* (): Generator<never, string> {
     return "index";
   });
   return {
@@ -36,14 +38,13 @@ function detached(): RouterValue {
     setLocation: () => {
       throw new Error("RouterContext is not available");
     },
-    matches: match =>
-      $(function* () {
-        return match === "index";
-      })
+    *matches(match) {
+      return match === "index";
+    }
   };
 }
 
-const RouterContext = createContext<RouterValue>(detached());
+const RouterContext = createContext<RouterValue | undefined>(undefined);
 
 function RouteHOC<P extends boolean, E>(Comp: Component<{}, P, E>) {
   return $component(function* Router(props: TypedProps<{ url?: string }, "Router">) {
@@ -51,10 +52,9 @@ function RouteHOC<P extends boolean, E>(Comp: Component<{}, P, E>) {
     const url = yield* $snapshot(props.url);
     const initialPath = url ?? (isServer ? "/" : window.location.pathname);
     const [location, setLocation] = yield* $signal(initialPath.slice(1) || "index");
-    const matches = (match: string) =>
-      $(function* () {
-        return match === ((yield* location) || "index");
-      });
+    const matches = function* (match: string) {
+      return match === ((yield* location) || "index");
+    };
 
     if (!isServer) {
       window.onpopstate = $event(function* () {
@@ -71,7 +71,7 @@ function RouteHOC<P extends boolean, E>(Comp: Component<{}, P, E>) {
 }
 
 function* useRouter() {
-  return yield* RouterContext;
+  return (yield* RouterContext) ?? (yield* detached());
 }
 
 const Link = $component(function* Link(

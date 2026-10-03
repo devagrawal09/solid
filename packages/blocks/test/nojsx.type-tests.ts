@@ -3,7 +3,6 @@
  * executed.
  */
 import {
-  $,
   $component,
   $memo,
   $signal,
@@ -11,6 +10,7 @@ import {
   For,
   Loading,
   render,
+  Show,
   type HView,
   type Source
 } from "@solidjs/blocks";
@@ -24,7 +24,7 @@ declare const pendingUser: Source<{ name: string }, true, never>;
 
 export const Settled = $component(function* () {
   const [n] = yield* $signal(1);
-  const doubled = $(function* () {
+  const doubled = yield* $memo(function* () {
     return (yield* n) * 2;
   });
   return function* () {
@@ -80,7 +80,7 @@ export const Pending = $component(function* () {
 });
 export const PendingHtml = $component(function* () {
   const user = pendingUser;
-  const name = $(function* () {
+  const name = yield* $memo(function* () {
     return (yield* user).name;
   });
   return function* () {
@@ -122,3 +122,27 @@ export const Rows = $component(function* () {
     );
   };
 });
+
+// a flow control's source may be a bare function* hole: the output carries its coloring
+const shownPending: HView<true, never> = Show({
+  when: function* () {
+    return (yield* pendingUser).name;
+  },
+  children: h("b", "x")
+});
+void shownPending;
+// @ts-expect-error a hole over a pending source is pending
+const shownSettled: HView<false, never> = Show({
+  when: function* () {
+    return (yield* pendingUser).name;
+  },
+  children: h("b", "x")
+});
+void shownSettled;
+const listedSettled: HView<false, never> = For({
+  each: function* () {
+    return [1, 2];
+  },
+  children: i => h("i", i)
+});
+void listedSettled;

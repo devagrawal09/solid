@@ -8,9 +8,9 @@
 // `h` (`h(TodoItem, { todo })`) are created when the output is materialized,
 // where it is inserted — as a JSX tag would be.
 import {
-  $,
   $component,
   $event,
+  $memo,
   createContext,
   Errored,
   For,
@@ -74,7 +74,7 @@ const TodoItem = $component(function* TodoItem(props: TypedProps<{ todo: Todo },
   const remove = $event(function* () {
     yield* removeTodo(yield* props.todo.id);
   });
-  const classes = $(function* () {
+  const classes = yield* $memo(function* () {
     return [
       "todo",
       {
@@ -104,9 +104,9 @@ const TodoItem = $component(function* TodoItem(props: TypedProps<{ todo: Todo },
             return function* () {
               return h("button", {
                 class: "retry",
-                title: $(function* () {
+                title: function* () {
                   return `Retry ${yield* error.type}`;
-                }),
+                },
                 onClick: retry
               });
             };
@@ -122,7 +122,7 @@ const MainSection = $component(function* MainSection(
   props: TypedProps<{ filter: Filter }, "MainSection">
 ) {
   const [todos, { toggleAll }] = yield* useTodos();
-  const filtered = $(function* () {
+  const filtered = yield* $memo(function* () {
     const f = yield* props.filter;
     return yield* readStore(todos, t =>
       f === "active"
@@ -132,10 +132,10 @@ const MainSection = $component(function* MainSection(
           : t
     );
   });
-  const allCompleted = $(function* () {
+  const allCompleted = yield* $memo(function* () {
     return yield* readStore(todos, t => t.length > 0 && t.every(x => x.completed));
   });
-  const hasTodos = $(function* () {
+  const hasTodos = yield* $memo(function* () {
     return (yield* todos.length) > 0;
   });
   const toggle = $event(function* () {
@@ -167,13 +167,13 @@ const MainSection = $component(function* MainSection(
 
 const Footer = $component(function* Footer(props: TypedProps<{ filter: Filter }, "Footer">) {
   const [todos, { clearCompleted }] = yield* useTodos();
-  const remaining = $(function* () {
+  const remaining = yield* $memo(function* () {
     return yield* readStore(todos, t => t.filter(x => !x.completed).length);
   });
-  const completed = $(function* () {
+  const completed = yield* $memo(function* () {
     return (yield* todos.length) - (yield* remaining);
   });
-  const hasTodos = $(function* () {
+  const hasTodos = yield* $memo(function* () {
     return (yield* todos.length) > 0;
   });
   const clear = $event(function* () {
@@ -186,9 +186,9 @@ const Footer = $component(function* Footer(props: TypedProps<{ filter: Filter },
         "a",
         {
           href,
-          class: $(function* () {
+          class: function* () {
             return { selected: (yield* props.filter) === value };
-          })
+          }
         },
         label
       )
@@ -204,9 +204,9 @@ const Footer = $component(function* Footer(props: TypedProps<{ filter: Filter },
           { class: "todo-count" },
           h("strong", remaining),
           " ",
-          $(function* () {
+          function* () {
             return (yield* remaining) === 1 ? "item" : "items";
-          }),
+          },
           " left"
         ),
         h(
@@ -217,9 +217,9 @@ const Footer = $component(function* Footer(props: TypedProps<{ filter: Filter },
           link("#/completed", "Completed", "completed")
         ),
         Show({
-          when: $(function* () {
+          when: function* () {
             return (yield* completed) > 0;
-          }),
+          },
           children: h("button", { class: "clear-completed", onClick: clear }, "Clear completed")
         })
       )

@@ -7,7 +7,6 @@
  * See documentation/plans/blocks-library.md.
  */
 export {
-  $,
   $cleanup,
   $component,
   $effect,
@@ -16,7 +15,6 @@ export {
   $optimistic,
   $optimisticStore,
   $projection,
-  $scope,
   $settled,
   $signal,
   $snapshot,
@@ -39,10 +37,9 @@ export {
 /** @internal shared with the `h` / `html` entries (one runtime per app). */
 export {
   READ,
-  BODY,
-  ROW_MARK,
   VIEW_MARK,
   COMPONENT_MARK,
+  holeOf,
   isGeneratorFunction,
   isRowBlock,
   renderView,
@@ -55,7 +52,6 @@ export { $dynamic } from "./dynamic.js";
 export type { Element, ArrayElement, RenderedObject } from "./element.js";
 export type {
   AnyOp,
-  Block,
   BlockSetter,
   BlockStoreSetter,
   ChildView,
