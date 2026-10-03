@@ -199,3 +199,5 @@ The pitfalls the experiment branch's ports hit (a `$component` view under `<For>
 ## 10. Changesets
 
 `.changeset/blocks-library.md` (`@solidjs/blocks`, `@solidjs/blocks-linker`, `@solidjs/eslint-plugin-blocks`: new packages) and `.changeset/compiler-blocks-rule.md` (`@solidjs/compiler`, `@solidjs/babel-plugin`: the JSX transform's block rule and `summarizeBlocks`).
+
+`.changeset/blocks-typed-failures-v2.md` (`@solidjs/blocks`, `@solidjs/eslint-plugin-blocks`: minor; `@solidjs/compiler`: patch) documents commits 57d05dda and dfe692cf: `attempt(fn, onError)`, `Errored catch`, `$event` as an action returning an `EventCall`, the new `$optimistic` / `$optimisticStore` / `$projection` / `$dynamic` / `refresh` / `start` / `until`, the removal of `read` / `paths` / `accessor` / `$flush`, the `no-unyielded-write` and `no-foreign-reactive` lint rules, and `summarizeBlocks` reading failures from an attempt's handler.
