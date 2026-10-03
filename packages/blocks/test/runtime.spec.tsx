@@ -562,6 +562,31 @@ describe("props", () => {
     expect(root.textContent).toBe("false a");
   });
 
+  devIt(
+    "$optimistic is the scalar form and $optimisticStore the object-or-body form (D-014)",
+    () => {
+      // each through a cast: both are type errors (type-tests "D-014")
+      const Body = $component(function* () {
+        const [v] = yield* $optimistic(function* () {
+          return 1;
+        } as unknown as number);
+        return function* () {
+          return <i>{perform(v)}</i>;
+        };
+      });
+      expect(() => createRoot(() => Body())).toThrow(
+        /OPTIMISTIC_FORM.*\$optimisticStore\(function\*/
+      );
+      const Scalar = $component(function* () {
+        const [s] = yield* $optimisticStore(1 as unknown as { n: number });
+        return function* () {
+          return <i>{perform(s.n)}</i>;
+        };
+      });
+      expect(() => createRoot(() => Scalar())).toThrow(/OPTIMISTIC_FORM.*\$optimistic\(value\)/);
+    }
+  );
+
   it("a derived $optimisticStore waits on its body; refresh recomputes it", async () => {
     let calls = 0;
     let reload!: () => void;

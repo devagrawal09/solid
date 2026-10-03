@@ -10,6 +10,8 @@ import {
   $effect,
   $event,
   $memo,
+  $optimistic,
+  $optimisticStore,
   $signal,
   $store,
   attempt,
@@ -105,6 +107,31 @@ export const WritesInView = $component(function* () {
   return function* () {
     const n = yield* setCount(1);
     return <p>{n}</p>;
+  };
+});
+
+// --- $optimistic / $optimisticStore mirror $signal / $store (D-014) ------------------------------
+export const Optimistic = $component(function* () {
+  const [sending] = yield* $optimistic(false);
+  const [list] = yield* $optimisticStore({ items: ["a"] });
+  const [derived] = yield* $optimisticStore(
+    function* (draft: { items: string[] }) {
+      draft.items = [String(yield* sending)];
+    },
+    { items: [] }
+  );
+  // @ts-expect-error $optimistic is the scalar form: a derived optimistic value is $optimisticStore's body
+  yield* $optimistic(function* () {
+    return 1;
+  });
+  // @ts-expect-error $optimisticStore is the object-or-body form: a scalar is $optimistic
+  yield* $optimisticStore(1);
+  return function* () {
+    return (
+      <p>
+        {String(yield* sending)} {yield* list.items[0]} {yield* derived.items[0]}
+      </p>
+    );
   };
 });
 

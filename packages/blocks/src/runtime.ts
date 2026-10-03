@@ -566,12 +566,22 @@ export function $store<T extends object>(
  * `const [sending, setSending] = yield* $optimistic(false)` in a setup: a
  * signal whose writes inside an `$event` show at once and revert when the
  * event's transaction settles (Solid's `createOptimistic`).
+ *
+ * The scalar form, as `$signal` is (D-014): it takes a value, never a body —
+ * Solid's `createOptimistic(fn)` would derive from a function, and that is
+ * `$optimisticStore(function* (draft) { … }, seed)`, as `$store` mirrors
+ * `$signal`.
  */
 export function $optimistic<T>(
   value: Exclude<T, Function>,
   options?: SignalOptions<T>
 ): Yieldable<Create<"optimistic">, [Source<T, false, never>, BlockSetter<T>]> {
   return new CreateOp("optimistic", () => {
+    if (__DEV__ && typeof value === "function")
+      throw devError(
+        "OPTIMISTIC_FORM",
+        "$optimistic takes a value (its scalar form, as $signal); an optimistic value derived from a body is $optimisticStore(function* (draft) { … }, seed)."
+      );
     const [get, set] = createOptimistic(value as any, options as any);
     return [asSource(get as Accessor<T>), receiptSetter(set as any)];
   }) as any;
@@ -589,6 +599,8 @@ type SeededStore<T, Y, E = never> = Path<T, false, FailsOf<Y> | E>;
  * store is derived: the body reads with `yield*`, may wait on an async
  * `attempt` or return a stream through `attempt` (the store is then pending),
  * and may update the draft it is handed.
+ *
+ * The object-or-body form, as `$store` is (D-014); a scalar is `$optimistic`.
  */
 export function $optimisticStore<T extends object>(
   value: T
@@ -605,6 +617,11 @@ export function $optimisticStore<T extends object, Y extends MemoOp = never, R =
 ): Yieldable<Create<"optimisticStore">, [ProjectionStore<T, Y, R>, BlockStoreSetter<T>]>;
 export function $optimisticStore(first: any, seed?: any, options?: any): any {
   return new CreateOp("optimisticStore", () => {
+    if (__DEV__ && (first === null || (typeof first !== "object" && typeof first !== "function")))
+      throw devError(
+        "OPTIMISTIC_FORM",
+        "$optimisticStore takes an object or a body (its store form, as $store); an optimistic scalar is $optimistic(value)."
+      );
     const [store, set] =
       typeof first === "function"
         ? createOptimisticStore(memoCompute(first) as any, seed, options)
