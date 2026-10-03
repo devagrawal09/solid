@@ -85,6 +85,19 @@ function transformDirectivesAsync(code, options) {
   return Promise.resolve().then(() => transformDirectives(code, options));
 }
 
+/**
+ * Analysis only (the blocks type linker): the versioned per-module summary of
+ * a module's `$component`s, render sites and prop value facts. Never rewrites
+ * code. Returns the parsed JSON (`{ schema: "solid-blocks-summary", version, … }`).
+ */
+function summarizeBlocks(code, options) {
+  if (typeof code !== "string") {
+    throw new TypeError("@solidjs/compiler summarizeBlocks() expects source code as a string");
+  }
+  const filename = options && options.filename;
+  return JSON.parse(native.summarizeBlocks(code, filename == null ? null : String(filename)));
+}
+
 function transformLazy(code, options) {
   if (typeof code !== "string") {
     throw new TypeError("@solidjs/compiler transformLazy() expects source code as a string");
@@ -320,7 +333,8 @@ const nativeOptionKeys = new Set([
   "serverComponents",
   "hoistProps",
   "builtIns",
-  "renderers"
+  "renderers",
+  "blocksModule"
 ]);
 
 function validateOptions(code, options) {
@@ -523,6 +537,7 @@ module.exports = {
   transformDirectives,
   transformDirectivesAsync,
   transformLazy,
+  summarizeBlocks,
   transformLazyAsync,
   transformRefresh,
   transformRefreshAsync,

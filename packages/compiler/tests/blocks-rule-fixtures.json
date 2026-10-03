@@ -1,0 +1,30 @@
+{
+  "$comment": "The block rule of the JSX transform (src/blocks_rule.rs): inside a JSX expression or attribute value, `yield* e` becomes `perform(e)`. `refusals` is exactly the list of positions the rule refuses; the Rust compiler, the Babel plugin and the ESLint rule `@solidjs/blocks/yield-in-jsx-hole` are each tested against this file.",
+  "version": 1,
+  "refusals": [
+    "BLOCKS_YIELD_IN_EVENT",
+    "BLOCKS_YIELD_IN_REF",
+    "BLOCKS_YIELD_IN_SPREAD",
+    "BLOCKS_YIELD_IN_SPREAD_CHILD",
+    "BLOCKS_PLAIN_YIELD_IN_JSX"
+  ],
+  "refused": [
+    { "code": "BLOCKS_YIELD_IN_EVENT", "source": "function* v() { return <b onClick={yield* h} />; }" },
+    { "code": "BLOCKS_YIELD_IN_EVENT", "source": "function* v() { return <b on:click={yield* h} />; }" },
+    { "code": "BLOCKS_YIELD_IN_EVENT", "source": "function* v() { return <Comp onSelect={yield* h} />; }" },
+    { "code": "BLOCKS_YIELD_IN_REF", "source": "function* v() { return <b ref={yield* r} />; }" },
+    { "code": "BLOCKS_YIELD_IN_SPREAD", "source": "function* v() { return <b {...(yield* p)} />; }" },
+    { "code": "BLOCKS_YIELD_IN_SPREAD", "source": "function* v() { return <Comp {...(yield* p)} />; }" },
+    { "code": "BLOCKS_YIELD_IN_SPREAD_CHILD", "source": "function* v() { return <b>{...(yield* p)}</b>; }" },
+    { "code": "BLOCKS_PLAIN_YIELD_IN_JSX", "source": "function* v() { return <b>{yield x}</b>; }" }
+  ],
+  "accepted": [
+    "function* v() { return <p class={{ big: (yield* n) > 3 }}>Hello {(yield* user).name}</p>; }",
+    "function* v() { return <Comp a={yield* n} b={x} />; }",
+    "function* v() { return <Show when={yield* open}><i>{yield* n}</i></Show>; }",
+    "function* v() { return <p title={String(yield* t)} data-x={yield* $(function* () { return 1; })} />; }",
+    "function* v() { return <b onClick={h}>{cond ? <i>{yield* a}</i> : <s>{yield* b}</s>}</b>; }",
+    "function* v() { return <For each={yield* xs}>{function* (x) { const s = yield* $signal(1); return function* () { return <i>{yield* s}</i>; }; }}</For>; }",
+    "function* v() { const x = yield* a; return <p>{x}</p>; }"
+  ]
+}

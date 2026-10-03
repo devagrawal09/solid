@@ -68,6 +68,9 @@ export interface PluginConfig {
    * object (#3511). `false` keeps the literal everywhere. */
   hoistProps: boolean;
   renderers?: RendererConfig[];
+  /** The module the block rule imports `perform` from: inside a JSX
+   * expression or attribute value, `yield* e` becomes `perform(e)`. */
+  blocksModule: string;
 }
 
 const config: PluginConfig = {
@@ -105,7 +108,8 @@ const config: PluginConfig = {
   validate: true,
   inlineStyles: true,
   serverComponents: false,
-  hoistProps: true
+  hoistProps: true,
+  blocksModule: "@solidjs/blocks"
 };
 
 /**
