@@ -103,6 +103,38 @@ const OP: unique symbol = Symbol.for("solid.blocks.op") as any;
 const PATH_TARGET: unique symbol = Symbol.for("solid.blocks.path") as any;
 const PATH_READ = 1;
 
+// --- one runtime per app -------------------------------------------------------------
+
+/**
+ * @internal Where this copy of the runtime registers itself in development:
+ * one key per build (a server render and a client hydrating in one test
+ * process are two runtimes by design).
+ */
+export const INSTANCE: unique symbol = Symbol.for(
+  __SERVER__ ? "solid.blocks.instance.server" : "solid.blocks.instance.client"
+) as any;
+
+/**
+ * @internal Dev only: a second copy of the runtime (a duplicated dependency,
+ * a bundle that inlined the package next to an external one) is an error.
+ * The marks are `Symbol.for` keys, so two copies half-work together — each
+ * keeps its own host state, and a block driven by one copy fails the other's
+ * checks with misleading errors. The same module evaluated again (a re-import
+ * at the same URL) replaces its registration.
+ */
+export function registerInstance(url: string | undefined): void {
+  const g = globalThis as any;
+  const prev: { url: string | undefined } | undefined = g[INSTANCE];
+  if (prev && (prev.url === undefined || url === undefined || prev.url !== url))
+    throw devError(
+      "DUPLICATE_RUNTIME",
+      `two copies of @solidjs/blocks are loaded: ${prev.url ?? "(unknown URL)"} and ${url ?? "(unknown URL)"}. ` +
+        "An app holds one runtime: dedupe the dependency (one version, one install), and keep the package external in bundles."
+    );
+  g[INSTANCE] = { url };
+}
+if (__DEV__) registerInstance(import.meta.url);
+
 // --- hosts ---------------------------------------------------------------------------
 
 const NONE = 0;

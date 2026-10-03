@@ -42,6 +42,7 @@ import {
   type TypedProps
 } from "@solidjs/blocks";
 import { createSignal as plainSignal } from "solid-js";
+import { INSTANCE, registerInstance } from "../src/runtime.js";
 
 declare const __DEV__: boolean;
 /** Dev-only checks (warnings, dev errors) are skipped against production builds. */
@@ -375,6 +376,33 @@ describe("the runtime's other dev errors", () => {
     expect(() => {
       p.a = 2;
     }).toThrow(/PATH_WRITE/);
+  });
+
+  devIt("a second copy of the runtime is an error naming both module URLs", async () => {
+    const g = globalThis as any;
+    // this copy registered itself when it loaded
+    const registered = g[INSTANCE] as { url: string };
+    expect(registered.url).toMatch(/\/src\/runtime\.ts$/);
+    try {
+      // the same module evaluated again at its URL (a re-import) is not a copy
+      await import("../src/runtime.ts?again" as string);
+      // another copy (a duplicated dependency) loaded first: loading this one fails
+      const other = "file:///app/node_modules/.pnpm/@solidjs+blocks@0.0.0/dist/blocks.dev.js";
+      g[INSTANCE] = { url: other };
+      let error: unknown;
+      try {
+        await import("../src/runtime.ts?copy" as string);
+      } catch (e) {
+        error = e;
+      }
+      expect(String(error)).toMatch(/DUPLICATE_RUNTIME/);
+      expect(String(error)).toContain(other);
+      expect(String(error)).toContain(registered.url);
+      // a copy whose URL is unknown cannot be told apart from another one
+      expect(() => registerInstance(undefined)).toThrow(/DUPLICATE_RUNTIME.*\(unknown URL\)/);
+    } finally {
+      g[INSTANCE] = registered;
+    }
   });
 
   devIt("a memo's reads after its first async attempt are errors", async () => {
