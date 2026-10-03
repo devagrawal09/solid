@@ -45,6 +45,8 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 | D-033 | decided | No boundary = the failure is re-thrown; D-019 reworded |
 | D-034 | decided | Error types carry a literal `kind`; one `Failure` constraint at every `E` entry point |
 | D-035 | decided | `start()` removed |
+| D-036 | decided | `context()` removed; `yield* Ctx` is the one way to read a context |
+| D-037 | decided | D-008 amended: no Chromium clause; `oxlint` is a real gate step |
 
 ## Entries
 
@@ -84,7 +86,7 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 *Reasoning:* the rewrite is coherent (typed failures v2) and the twins pass on it; recording intent is cheaper and more faithful than reconstruction. (Reconstructed note: this is also the baseline this file was rebuilt on after the container loss.)
 
 ### D-008 — Gate per commit
-**Decided.** Every commit on a topic branch passes `scripts/blocks-gate.mjs`: for each of the 12 twins `test`, `typecheck`, `lint` (and `link:check` until Phase 1B removes it); `@solidjs/blocks` unit + type tests; `@solidjs/eslint-plugin-blocks` and `@solidjs/blocks-linker` tests; prettier check. Chromium/Playwright steps run only before pushes. "Green" = no step red that was green in the reference baseline run (see `blocks-gate-baseline.md`); pre-existing reds are listed there by name. *Reference run (reconstructed baseline, 2026-10-04, `09fa9de5`):* 52 pass / 2 fail / 1 skip over 55 steps; the reds are `pkg:blocks-linker:test` (3 staleness tests, fixture drift) and `pkg:compiler:test` (1 `blocks-summary` test not updated for `handler_fails` in `dfe692cf`), both pre-existing at the baseline and moot under D-023; `repo:oxlint` is SKIP (binary not installed). The babel-plugin and compiler steps run vitest only, against the already-built artifacts (the gate never builds). The timezone pin is D-027.
+**Decided.** Every commit on a topic branch passes `scripts/blocks-gate.mjs`: for each of the 12 twins `test`, `typecheck`, `lint` (and `link:check` until Phase 1B removes it); `@solidjs/blocks` unit + type tests; `@solidjs/eslint-plugin-blocks` and `@solidjs/blocks-linker` tests; prettier check. ~~Chromium/Playwright steps run only before pushes.~~ (Dropped by D-037: no browser test exists.) "Green" = no step red that was green in the reference baseline run (see `blocks-gate-baseline.md`); pre-existing reds are listed there by name. *Reference run (reconstructed baseline, 2026-10-04, `09fa9de5`):* 52 pass / 2 fail / 1 skip over 55 steps; the reds are `pkg:blocks-linker:test` (3 staleness tests, fixture drift) and `pkg:compiler:test` (1 `blocks-summary` test not updated for `handler_fails` in `dfe692cf`), both pre-existing at the baseline and moot under D-023; `repo:oxlint` is SKIP (binary not installed). The babel-plugin and compiler steps run vitest only, against the already-built artifacts (the gate never builds). The timezone pin is D-027.
 *Alternatives:* repo-wide `pnpm test` (too slow, and unrelated reds); gate only at merge.
 *Reasoning:* the twins' DOM-parity tests are the model's only semantic oracle (D-016); running them per commit is what makes "ff when green" (D-009) meaningful. Build `@solidjs/blocks` with `--force` before gating — twins resolve it via `dist/`, and an unforced filtered build has produced spurious reds.
 
@@ -215,12 +217,22 @@ Consequences: (1) the whole-view read concept is deleted — `VY` is always `nev
 *Alternatives:* keep it with one spelling (`yield* start(call)`); keep it legal only inside `$effect`; allow a bare `start(call)` statement (the handoff's open question — now moot).
 *Reasoning:* D-005 — an unused second way to call an event; its presence also forced the odd "yield in order to not wait" spelling. *Implementation:* Phase 1A, with item 8 (the `no-unyielded-write` rule loses its `start` special case).
 
+### D-036 — `context()` removed
+**Decided (Dev, 2026-10-04).** `context(Ctx)` ("read a context this library did not create") is removed. `yield* Ctx` on a context created with the library's `createContext` is the one way to read a context. Fact that settled it: no twin uses `context(Ctx)` and no twin creates a raw Solid context. A foreign context (a router's, an i18n library's) is reached by adopting the component that provides it (`adopt()`) or by wrapping the value once in a library context; if a twin or the router integration turns out to need the bridge, that is the finding to record here. Closes the handoff's deferred "do `context()` and `createContext()` stay separate" question.
+*Alternatives:* keep it as the sanctioned interop bridge (and add a test that uses it); make `yield* Ctx` accept any Solid context.
+*Reasoning:* D-005 and D-006 — an unused second name that is also an escape hatch. *Implementation:* Phase 1A, with item 8's surface cleanup; doc §1 setup-operations bullet.
+
+### D-037 — D-008 amended: gate contents
+**Decided (Dev, 2026-10-04).** (a) The "Chromium/Playwright steps run only before pushes" clause is dropped: no twin or blocks package has a browser test, so the clause was vestigial (three pushes were made under it without one). It returns when a browser test exists. (b) `oxlint` becomes a root devDependency so `repo:oxlint` runs for real instead of being SKIP forever (`.oxlintrc.json` existed since `dfe692cf` with no binary anywhere in the lockfile); the baseline is regenerated and any reds it adds are recorded, not hidden.
+*Alternatives:* delete `.oxlintrc.json` and the step (eslint-plugin-blocks as the only lint); keep both clauses as written.
+*Reasoning:* a gate step that can never run and a rule that is never exercised both make "green" mean less than it says. *Implementation:* `bl/bootstrap`, gate agent; baseline regenerated at the same commit.
+
 ## Open questions
 
 - **Q22** — repo layout for extraction (D-015).
 - **Q23** — start Phase 2 in parallel with Phase 1B (recommended: yes; cheap now that worktrees are not disk-bound).
 - D-032 migration: the exact count of view-body read / branch sites per twin, from the lint's first run.
-- Whether `context()` and `createContext()` stay separate long-term (keep; revisit after 1B).
+- ~~Whether `context()` and `createContext()` stay separate long-term.~~ Decided: `context()` removed (D-036).
 - ~~Whether `no-unyielded-write` gets a sync exception for `start(call)` (D-021).~~ Moot: `start` removed (D-035).
 
 ## Design-review items not yet turned into decisions
