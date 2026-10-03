@@ -43,6 +43,8 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 | D-031 | decided | The JSX transform stays (D-003 stands) |
 | D-032 | decided | A view has no body: reads only in JSX positions, structure only via flow controls |
 | D-033 | decided | No boundary = the failure is re-thrown; D-019 reworded |
+| D-034 | decided | Error types carry a literal `kind`; one `Failure` constraint at every `E` entry point |
+| D-035 | decided | `start()` removed |
 
 ## Entries
 
@@ -203,13 +205,23 @@ Consequences: (1) the whole-view read concept is deleted — `VY` is always `nev
 *Alternatives:* `render()`/`hydrate()` install a default root `<Errored>` (feasible in one place, `rootOf(code)`); require a root boundary via a dev error and a lint.
 *Reasoning:* crashing loudly with no boundary is the honest default for a strict dialect; a silent root fallback hides the failure. *Implementation:* doc §7 wording with 1A item 7; add the "no boundary → re-throw" runtime test for a view failure next to the existing `$event` one.
 
+### D-034 — Error types carry a literal `kind`
+**Decided (Dev, 2026-10-04).** `attempt`/`until`/`raise`/`<Errored catch>` remove a handled class from a failure union *structurally* (TS compares shapes) but match at runtime with `instanceof` (nominal). Two classes without a discriminant are one type to TS, so `catch={[A]}` would also erase `B` from the type while the runtime rethrows `B`. The types now enforce the convention every twin already follows: an error type accepted anywhere as `E` must satisfy one shared constraint `Failure = Error & { readonly kind: <string literal> }` (a plain `string` `kind`, or none, fails with a branded-never message: "error class X needs `readonly kind = \"x\" as const` so its failure can be told apart"). Entry points: `attempt<T, E>`, `until<T, E>`, `raise<E>` (unconstrained before this), `Errored`'s `catch`, and `Async<T, E>` in Phase 1B; everything else inherits.
+*Alternatives:* require any own literal member without fixing the name (looser, worse message); document as a §7 limitation and rely on convention.
+*Reasoning:* a typed-failure system whose type-level removal and runtime matching can disagree is unsound in exactly the case it exists for; the constraint costs one line per error class, which every twin already pays. *Implementation:* Phase 1A, with item 7; type test for the two-identical-classes case.
+
+### D-035 — `start()` removed
+**Decided (Dev, 2026-10-04).** `yield* start(call)` (v2: run an event call without waiting and without absorbing its colors) is removed, with its op, its tests and its doc mention. It existed for one typing corner — an `$effect` cannot wait, so an effect could not otherwise trigger an async event — and no twin uses it (1 runtime test, 3 type-test lines). An effect may delegate only to a sync event (already the rule); "an effect triggers an async event" is written in §7 as "model it as an event calling an event, or a `$memo`". If a twin or test turns out to need the escape, that is the finding to record here.
+*Alternatives:* keep it with one spelling (`yield* start(call)`); keep it legal only inside `$effect`; allow a bare `start(call)` statement (the handoff's open question — now moot).
+*Reasoning:* D-005 — an unused second way to call an event; its presence also forced the odd "yield in order to not wait" spelling. *Implementation:* Phase 1A, with item 8 (the `no-unyielded-write` rule loses its `start` special case).
+
 ## Open questions
 
 - **Q22** — repo layout for extraction (D-015).
 - **Q23** — start Phase 2 in parallel with Phase 1B (recommended: yes; cheap now that worktrees are not disk-bound).
 - D-032 migration: the exact count of view-body read / branch sites per twin, from the lint's first run.
 - Whether `context()` and `createContext()` stay separate long-term (keep; revisit after 1B).
-- Whether `no-unyielded-write` gets a sync exception for `start(call)` (D-021).
+- ~~Whether `no-unyielded-write` gets a sync exception for `start(call)` (D-021).~~ Moot: `start` removed (D-035).
 
 ## Design-review items not yet turned into decisions
 
