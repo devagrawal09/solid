@@ -119,10 +119,17 @@ export type AnyOp =
 
 /** Operations a component's (or a row block's) setup may perform. */
 export type SetupOp = Create<string> | Cleanup | ContextRead | Snapshot<boolean, any>;
-/** Operations a view may perform: reads, and child views. */
+/**
+ * What a JSX view's generator yields, as TypeScript sees it: the reads and
+ * child views of its holes (each `yield*` in a JSX position, which the
+ * transform turns into a hole). The view's own body reads nothing (D-032) —
+ * a rule TypeScript cannot see, since it types a `yield*` in JSX and one in
+ * a statement alike; the runtime (`READ_IN_VIEW`) and the lint
+ * (`no-read-in-view-body`) hold it.
+ */
 export type ViewOp = Read<boolean, any> | ChildView<boolean, any>;
-/** Operations a no-JSX view may perform: child views only (its reads are holes). */
-export type HViewOp = ChildView<boolean, any>;
+/** What a no-JSX view yields: nothing (D-032). Its reads are holes, its pending and failures its output's. */
+export type HViewOp = never;
 /** Operations a memo may perform. */
 export type MemoOp = Read<boolean, any> | Wait | Raise<any>;
 /** Operations an effect may perform (a sync `attempt` only). */

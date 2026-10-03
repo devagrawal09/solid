@@ -25,8 +25,7 @@ function isElementThunk(value: unknown): value is () => unknown {
  * once, outside any effect, then inserts what it returned. Compiled JSX
  * builds its component there; an `h` / `jsx` thunk would instead be built
  * inside the insert's effect, which also reads what it built — so a root
- * whose output changes (a view that re-renders as a whole, a `Loading`, a
- * `Show` at the top) re-ran the thunk and created the app again, resetting
+ * whose output changes (a `Loading` or a `Show` at the top) re-ran the thunk and created the app again, resetting
  * its state. Building the thunk here makes the thunk forms behave like
  * `render(App, root)`.
  */

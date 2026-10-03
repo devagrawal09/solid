@@ -3,7 +3,7 @@
  * TypeScript cannot express. Everything else is a type error.
  *
  *   no-throw               a block raises typed failures: `yield* raise(e)`
- *   no-read-outside-hole   a JSX view reads only inside JSX (else it re-renders whole)
+ *   no-read-in-view-body   a view has no body: every read is a hole (D-032)
  *   yield-in-jsx-hole      every `yield*` in JSX is in a position the transform turns into a hole
  *   read-before-attempt    a $memo reads before its first `attempt`
  *   no-unyielded-write     an operation acts only as `yield* op` (setters; with types, event calls and any op)
@@ -70,16 +70,22 @@ const noThrow = {
   }
 };
 
-const noReadOutsideHole = {
+/**
+ * A view has no body (D-032): `function* () { return <…/>; }`. Every read is
+ * a hole — a `yield*` in a JSX expression or attribute, or (`h` / `html`) a
+ * bare `function*` hole, whose own `yield*`s are its, not the view's.
+ */
+const noReadInViewBody = {
   meta: {
     type: "problem",
     docs: {
       description:
-        "A JSX view reads only inside JSX: a read in a statement makes the view re-render as a whole."
+        "A view does not read: every read is a hole (a `yield*` in JSX, a bare `function*` hole in `h` / `html`); structure comes from flow controls."
     },
     messages: {
-      read: "this view re-renders as a whole; move the read into JSX or a $memo.",
-      child: "a child view is rendered by a hole: write `{yield* Child(props)}` inside JSX."
+      read: "a view does not read: read in a hole (`{yield* …}` in JSX, a bare `function*` in `h` / `html`), branch with <Show> / <Match>, derive with a $memo in the setup.",
+      child:
+        "a view does not read: a child view is rendered by a hole (`{yield* Child(props)}` in JSX, `h(Child, props)` without JSX)."
     },
     schema: []
   },
@@ -87,11 +93,8 @@ const noReadOutsideHole = {
     return {
       YieldExpression(node) {
         if (!node.delegate) return;
-        const kind = kindAt(node);
-        if (kind !== "view") return;
+        if (kindAt(node) !== "view") return;
         if (jsxPosition(node)) return;
-        // Every `yield*` of a view belongs in JSX — a read, and also a child
-        // view (`{yield* Child(props)}`), which only a hole can render.
         context.report({
           node,
           messageId: isCapitalizedCall(node.argument) ? "child" : "read"
@@ -606,7 +609,7 @@ const noDollarBlock = {
 
 export const rules = {
   "no-throw": noThrow,
-  "no-read-outside-hole": noReadOutsideHole,
+  "no-read-in-view-body": noReadInViewBody,
   "yield-in-jsx-hole": yieldInJsxHole,
   "read-before-attempt": readBeforeAttempt,
   "no-unyielded-write": noUnyieldedWrite,

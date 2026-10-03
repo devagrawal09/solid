@@ -83,8 +83,8 @@ function forward(props: any, adaptChildren: (children: unknown) => unknown): any
  */
 function adapt(cb: unknown, args: (...raw: any[]) => unknown[], arity: number): unknown {
   if (typeof cb !== "function") return cb;
-  // A view that is a function (a component re-rendering as a whole, an
-  // adopted lazy page) is content, not a render callback.
+  // A view that is a function (an adopted lazy page's output, a flow
+  // control's) is content, not a render callback.
   if ((cb as any)[VIEW_MARK] === true) return cb;
   const row = isRowBlock(cb);
   if (!row && (cb as any)[READ] !== undefined) return cb;

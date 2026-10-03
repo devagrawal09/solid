@@ -10,9 +10,9 @@
  *
  * Views: after the JSX transform's one block rule (`yield* e` inside JSX
  * becomes `perform(e)`), a view generator has no `yield` left and runs once;
- * each hole is its own computation. A view that still reads at its top level
- * is detected on its first run, re-rendered as a whole from then on, and
- * warned about in development.
+ * each hole is its own computation. A view has no body (D-032): a read at its
+ * top level — outside a JSX position or a hole — is the development error
+ * `READ_IN_VIEW`.
  */
 import {
   action,
@@ -143,19 +143,16 @@ type Host = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 const HOST_NAMES = ["plain code", "a setup", "a view", "a memo", "an effect", "an event", "a hole"];
 
 let host: Host = NONE;
-/** Set while a view's first run is at its top level (not in a hole, not in a child's setup). */
-let viewRunning = false;
 /**
- * Thrown by a read at a view's top level during its first run: the run is
- * abandoned before the read happens, and the view re-renders as a whole in
- * a memo from then on. Aborting (rather than reading untracked and then
- * subscribing) matters for async: an untracked read of a pending source
- * would register the computation that created the component (a `Loading`'s
- * content, a thunk render) as waiting on it, and that computation would
- * re-run — re-creating the component — when the source resolves.
+ * Dev only: the name of the component (or row) whose view is running at its
+ * top level — not in a hole, not in a child's setup — or null. A read then
+ * is `READ_IN_VIEW`.
  */
-const WHOLE_VIEW = { wholeView: true };
-/** Set while a read from a JSX position (`perform`) is in progress, paths and getters included. */
+let viewRunning: string | null = null;
+/**
+ * Dev only: set while a read from a JSX position (`perform`) is in progress,
+ * paths and getters included.
+ */
 let jsxRead = false;
 /** Cleanups of the running effect run (null outside an effect). */
 let cleanupSink: (() => void)[] | null = null;
@@ -176,6 +173,13 @@ function checkRead(inJsx: boolean): void {
       "READ_IN_SETUP",
       "a setup creates; it does not read. Read in the view, a $memo or an $effect (or take a value with $snapshot)."
     );
+  // The same for a view's top level: a computation the view's run created
+  // (a flow control reading its props, a hole's first pass) reads for itself.
+  if (!inJsx && viewRunning !== null && host === VIEW && getObserver() === null)
+    throw devError(
+      "READ_IN_VIEW",
+      `<${viewRunning}>: read outside a JSX position. A view has no body: read in a hole ({yield* …} in JSX, a bare function* in h / html), branch with <Show> / <Match>, derive with a $memo in the setup.`
+    );
   if (memoResumed)
     throw devError(
       "READ_AFTER_ATTEMPT",
@@ -193,12 +197,11 @@ function checkRead(inJsx: boolean): void {
  * top-level read, even when it happens while one is on the stack: plain
  * Solid code may read a prop getter untracked right then (a `<Reveal>`
  * registering a nested `<Loading>` reads its `order` while the nested
- * card's view is being built), and that read must not turn the card's view
- * into a whole-view re-render or fail as a setup read.
+ * card's view is being built), and that read must not fail as a view's or
+ * a setup's read.
  */
 function readOf(x: any): unknown {
   if (__DEV__) checkRead(jsxRead);
-  if (!jsxRead && viewRunning && host === VIEW && getObserver() === null) throw WHOLE_VIEW;
   const r = x[READ];
   return r === PATH_READ ? readPath(x[PATH_TARGET]) : r.call(x);
 }
@@ -275,6 +278,7 @@ export function perform<T>(target: Yieldable<any, T> | (() => T) | T): T {
   const x = target as any;
   if (x != null) {
     if (x[READ] !== undefined) {
+      if (!__DEV__) return readOf(x) as T;
       const prev = jsxRead;
       jsxRead = true;
       try {
@@ -1104,7 +1108,7 @@ function runSetup(
   const prevJsx = jsxRead;
   host = SETUP;
   // a child's setup is not its parent view's top level, nor a JSX read
-  viewRunning = false;
+  viewRunning = null;
   jsxRead = false;
   let result: unknown;
   try {
@@ -1117,51 +1121,26 @@ function runSetup(
   return result;
 }
 
-function warnWholeView(): void {
-  console.warn(
-    "[VIEW_READS_OUTSIDE_JSX] this view re-renders as a whole; move the read into JSX or a $memo."
-  );
-}
-
 /**
- * Render a view generator. The common case (every read is in a hole) runs
- * the generator once and returns what it built. A view that read at its top
- * level re-renders as a whole: its first result is kept, the reads it took
- * are re-read in a memo to subscribe, and every later run rebuilds the view.
+ * Render a view generator: run it once, as the VIEW host, and return what it
+ * built. Every read is a hole's (D-032); in development a read at the view's
+ * own top level is `READ_IN_VIEW`, naming the component (or row).
  */
-export function renderView(viewFn: () => Generator<unknown, unknown, unknown>): unknown {
-  if (__SERVER__) return runAs(VIEW, () => drive(viewFn(), SYNC_RUN));
+export function renderView(
+  viewFn: () => Generator<unknown, unknown, unknown>,
+  name = "anonymous"
+): unknown {
+  if (!__DEV__) return runAs(VIEW, () => drive(viewFn(), SYNC_RUN));
   const prevRunning = viewRunning;
-  const prev = host;
   const prevJsx = jsxRead;
-  viewRunning = true;
-  host = VIEW;
+  viewRunning = name;
   jsxRead = false;
-  let value: unknown;
-  let whole = false;
   try {
-    value = drive(viewFn(), SYNC_RUN);
-  } catch (e) {
-    if (e !== WHOLE_VIEW) throw e;
-    whole = true;
+    return runAs(VIEW, () => drive(viewFn(), SYNC_RUN));
   } finally {
     viewRunning = prevRunning;
-    host = prev;
     jsxRead = prevJsx;
   }
-  if (!whole) return value;
-  if (__DEV__) warnWholeView();
-  const view: any = createMemo(() => {
-    const prevRunning = viewRunning;
-    viewRunning = false;
-    try {
-      return runAs(VIEW, () => drive(viewFn(), SYNC_RUN));
-    } finally {
-      viewRunning = prevRunning;
-    }
-  });
-  view[VIEW_MARK] = true;
-  return view;
 }
 
 /**
@@ -1190,7 +1169,7 @@ export function $component<
           "COMPONENT_VIEW",
           "a $component's setup returns its view: `return function* () { return <…/> }`."
         );
-      return renderView(view as any);
+      return renderView(view as any, body.name || "anonymous");
     });
   };
   component[COMPONENT_MARK] = true;
@@ -1206,15 +1185,20 @@ export type ViewYield<V> = V extends () => Generator<infer Y, any, any> ? Y : ne
 export type ViewReturn<V> = V extends () => Generator<any, infer R, any> ? R : never;
 
 /**
- * A no-JSX view (one returning `h` / `html` output) reads only in its holes:
- * its own yield may only be child views. Violations surface as a missing
- * argument naming the rule.
+ * A no-JSX view (one returning `h` / `html` output) has no body (D-032): it
+ * yields nothing — every read is a hole (a source, or a bare `function*`
+ * given to `h` / `html`), a child is `h(Child, props)`. Its pending and
+ * failures are its output's. Violations surface as a missing argument naming
+ * the rule. (A JSX view cannot be held to this by its type: TypeScript sees a
+ * `yield*` in a JSX position — a hole, after the transform — as the view's
+ * own yield, and that is how the view's coloring is its holes'. There the
+ * rule is the dev error `READ_IN_VIEW` and the lint `no-read-in-view-body`.)
  */
 export type NoJsxViewRule<VY, R> = [R] extends [HView<any, any>]
-  ? [Exclude<VY, ChildView<any, any>>] extends [never]
+  ? [VY] extends [never]
     ? []
     : [
-        error: "[HVIEW_READ] a no-JSX view reads only in holes: pass the source, or a bare function* hole, to h / html"
+        error: "[HVIEW_READ] a no-JSX view does not read: pass the source, or a bare function* hole, to h / html"
       ]
   : [];
 
@@ -1275,7 +1259,7 @@ export function runRow(
         );
       return view;
     }
-    return renderView(view as any);
+    return renderView(view as any, body.name ? `row ${body.name}` : "row");
   });
 }
 

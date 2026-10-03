@@ -59,13 +59,20 @@ export const thunkAttr = h("p", { title: () => "x" });
 // @ts-expect-error a plain thunk hole in html
 export const thunkHtml = html`<p>${() => 1}</p>`;
 
-// a no-JSX view reads only in holes
+// a view does not read (D-032): a no-JSX view yields nothing
 // @ts-expect-error [HVIEW_READ]
 export const ReadsInView = $component(function* () {
   const [n] = yield* $signal(1);
   return function* () {
     const v = yield* n;
     return h("p", String(v));
+  };
+});
+// a child view is h(Child, props), not a yield* in the view
+// @ts-expect-error [HVIEW_READ]
+export const YieldsChild = $component(function* () {
+  return function* () {
+    return h("div", yield* ReadsInView());
   };
 });
 

@@ -5,9 +5,13 @@
  * - the argument of a block constructor (`$component` → setup, `$memo`,
  *   `$effect`, `$event`, `$settled`, `$` → hole, or row when it has
  *   parameters, `$scope` → row);
- * - returned by a setup or a row block's setup (→ view);
+ * - returned by a setup or a row block's setup (→ view), also as a branch of
+ *   a conditional or logical return (a setup may return one of several views);
  * - a render callback written inline in JSX (→ row);
- * - a generator declared inside a setup (a named row block → row).
+ * - the `children` (or an `Errored`'s `fallback`) of a flow control called
+ *   directly (`For({ each, children: function* (item) { … } })`, → row);
+ * - a generator declared inside a setup or a row (a named row block → row),
+ *   or bound there to a `const` and taking parameters (→ row).
  */
 
 export const CONSTRUCTORS = {
@@ -64,13 +68,34 @@ function computeKind(fn) {
     if (name && CONSTRUCTORS[name]) return CONSTRUCTORS[name];
   }
   // returned by a setup (or a row block's setup): the view
-  if (parent.type === "ReturnStatement") {
-    const outer = enclosingFunction(parent);
+  let ret = fn;
+  while (
+    ret.parent.type === "ConditionalExpression" ||
+    ret.parent.type === "LogicalExpression" ||
+    ret.parent.type === "SequenceExpression"
+  )
+    ret = ret.parent;
+  if (ret.parent.type === "ReturnStatement" && ret.parent.argument === ret) {
+    const outer = enclosingFunction(ret.parent);
     const k = blockKind(outer);
     if (k === "setup" || k === "row") return "view";
   }
   if (parent.type === "JSXExpressionContainer") return "row";
+  // a flow control's render callback in the call form
+  if (
+    parent.type === "Property" &&
+    parent.value === fn &&
+    !parent.computed &&
+    parent.key.type === "Identifier" &&
+    (parent.key.name === "children" || parent.key.name === "fallback")
+  )
+    return "row";
   if (fn.type === "FunctionDeclaration") {
+    const outer = enclosingFunction(fn);
+    const k = blockKind(outer);
+    if (k === "setup" || k === "row") return "row";
+  }
+  if (parent.type === "VariableDeclarator" && parent.init === fn && fn.params.length > 0) {
     const outer = enclosingFunction(fn);
     const k = blockKind(outer);
     if (k === "setup" || k === "row") return "row";

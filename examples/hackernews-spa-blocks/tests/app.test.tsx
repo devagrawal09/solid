@@ -6,17 +6,13 @@ import App from "../src/app";
 import { click, install, mount, settle, uninstall, type Mounted } from "./script";
 
 let app: Mounted;
-let warn: { mock: { calls: unknown[][] } };
 afterEach(() => {
-  // no view in the app re-renders as a whole
-  expect(warn.mock.calls.some(c => String(c[0]).includes("VIEW_READS_OUTSIDE_JSX"))).toBe(false);
   app?.dispose();
   uninstall();
 });
 
 async function open(path: string) {
   install(path);
-  warn = vi.spyOn(console, "warn");
   app = mount(App);
   expect(app.root.querySelector(".news-list-nav")?.textContent).toBe("Loading...");
   await settle();

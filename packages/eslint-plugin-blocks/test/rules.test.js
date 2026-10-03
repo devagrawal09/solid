@@ -49,13 +49,22 @@ tester.run("no-throw", rules["no-throw"], {
   ]
 });
 
-tester.run("no-read-outside-hole", rules["no-read-outside-hole"], {
+tester.run("no-read-in-view-body", rules["no-read-in-view-body"], {
   valid: [
     component(
       "const [n] = yield* $signal(1); return function* () { return <p class={{ a: (yield* n) > 1 }}>{yield* n}</p>; };"
     ),
     component("return function* () { return <section>{yield* Child({})}</section>; };"),
-    "const m = $memo(function* () { const v = yield* n; return v; });"
+    "const m = $memo(function* () { const v = yield* n; return v; });",
+    // a row's setup is not its view (its reads are READ_IN_SETUP's, a type error)
+    "const r = <For each={xs}>{function* (x) { const d = yield* $memo(function* () { return yield* x.a; }); return function* () { return <i>{yield* d}</i>; }; }}</For>;",
+    // h: the reads are in bare function* holes
+    component(
+      "const [n] = yield* $signal(1); return function* () { return h('p', { class: function* () { return (yield* n) > 1 ? 'big' : ''; } }, n, function* () { return (yield* n) * 2; }); };"
+    ),
+    component(
+      "return function* () { return For({ each: xs, children: function* (x) { return function* () { return h('li', function* () { return yield* x.a; }); }; } }); };"
+    )
   ],
   invalid: [
     {
@@ -65,12 +74,33 @@ tester.run("no-read-outside-hole", rules["no-read-outside-hole"], {
       errors: [{ messageId: "read" }]
     },
     {
+      // a branch on a read: structure comes from flow controls
       code: "const r = <For each={xs}>{function* (x) { return function* () { if (yield* x.done) return <i />; return <b />; }; }}</For>;",
       errors: [{ messageId: "read" }]
     },
     {
       code: component("return function* () { const c = yield* Child({}); return c; };"),
       errors: [{ messageId: "child" }]
+    },
+    {
+      // h: a read in the view itself, in an argument and in a call-form row's view
+      code: component(
+        "const [n] = yield* $signal(1); return function* () { return h('p', String(yield* n)); };"
+      ),
+      errors: [{ messageId: "read" }]
+    },
+    {
+      code: component(
+        "return function* () { return For({ each: xs, children: function* (x) { return function* () { return h('li', yield* x.a); }; } }); };"
+      ),
+      errors: [{ messageId: "read" }]
+    },
+    {
+      // a setup returning one of two views, and a row bound to a const in the setup
+      code: component(
+        "const row = function* (x) { return function* () { return h('li', yield* x); }; }; return mode ? function* () { return h('p', yield* n); } : function* () { return h('i'); };"
+      ),
+      errors: [{ messageId: "read" }, { messageId: "read" }]
     }
   ]
 });

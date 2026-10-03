@@ -151,29 +151,65 @@ describe("views are fine-grained", () => {
     expect(root.querySelector("h3")!.className).toBe("");
   });
 
-  devIt("a view that reads at its top level re-renders as a whole, with a warning", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    let set!: (v: number) => void;
-    let runs = 0;
-    const Whole = $component(function* () {
-      const [n, setN] = yield* $signal(1);
-      set = v => write(setN(v));
+  devIt("a view does not read: a read outside a JSX position is READ_IN_VIEW", () => {
+    // (no type error: TypeScript types a yield* in JSX — a hole — and one in a
+    // statement alike; the lint `no-read-in-view-body` reports it)
+    const ReadsInBody = $component(function* ReadsInBody() {
+      const [n] = yield* $signal(1);
       return function* () {
-        runs++;
         const v = yield* n;
         return <b>{v}</b>;
       };
     });
-    mount(Whole);
-    expect(root.textContent).toBe("1");
-    set(2);
+    expect(() => createRoot(() => ReadsInBody())).toThrow(/READ_IN_VIEW.*<ReadsInBody>/);
+    // a branch on a read is one too: structure comes from flow controls
+    const Branches = $component(function* Branches() {
+      const [open] = yield* $signal(true);
+      return function* () {
+        if (yield* open) return <b>open</b>;
+        return <i>closed</i>;
+      };
+    });
+    expect(() => createRoot(() => Branches())).toThrow(/READ_IN_VIEW.*<Branches>/);
+    // in a row's view, named by the row
+    const Rows = $component(function* Rows() {
+      return function* () {
+        return (
+          <ul>
+            <For each={["a"]}>
+              {function* item(x) {
+                return function* () {
+                  const t = yield* x;
+                  return <li>{t}</li>;
+                };
+              }}
+            </For>
+          </ul>
+        );
+      };
+    });
+    expect(() => createRoot(() => Rows())).toThrow(/READ_IN_VIEW.*<row item>/);
+    // the same reads in holes, and a flow control reading its source, are the holes'
+    let set!: (v: boolean) => void;
+    const Holes = $component(function* Holes() {
+      const [open, setOpen] = yield* $signal(true);
+      set = v => write(setOpen(v));
+      return function* () {
+        return (
+          <p>
+            {perform(open) ? "open" : "closed"}
+            <Show when={perform(open)}>
+              <b>!</b>
+            </Show>
+          </p>
+        );
+      };
+    });
+    mount(Holes);
+    expect(root.textContent).toBe("open!");
+    set(false);
     flush();
-    expect(root.textContent).toBe("2");
-    // the first run stops at its first top-level read; the view then runs
-    // whole, once per change
-    expect(runs).toBe(3);
-    expect(warn.mock.calls.some(c => String(c[0]).includes("VIEW_READS_OUTSIDE_JSX"))).toBe(true);
-    warn.mockRestore();
+    expect(root.textContent).toBe("closed");
   });
 });
 
@@ -1266,16 +1302,14 @@ describe("reads from JSX positions are never a view's or a setup's own", () => {
 });
 
 describe("a view that is a function is a branch's content", () => {
-  it("Show / Match render it (a whole-view component, an adopted lazy page) instead of calling it as a render callback", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  it("Show / Match render it (an adopted lazy page) instead of calling it as a render callback", async () => {
     const [n, setN] = plainSignal(1);
-    // reads at its top level: its output is a memo (a function marked as a view)
     const Whole = $component(function* (props: TypedProps<{ n: number }>) {
       return function* () {
-        const v = yield* props.n;
-        return <b>{v}</b>;
+        return <b>{perform(props.n)}</b>;
       };
     });
+    // a lazy component's output is a function (its memo), marked as a view
     const Page = adopt(plainLazy(() => Promise.resolve({ default: Whole })));
     const [on, setOn] = plainSignal<string | false>("a");
     const nProps = {
@@ -1300,7 +1334,6 @@ describe("a view that is a function is a branch's content", () => {
     setOn("b");
     flush();
     expect(root.textContent).toBe("22");
-    warn.mockRestore();
   });
 });
 

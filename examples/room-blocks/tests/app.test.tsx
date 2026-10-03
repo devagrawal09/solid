@@ -8,15 +8,11 @@ import App from "../src/app";
 import { advance, click, install, mount, submit, type, uninstall, type Mounted } from "./script";
 
 let app: Mounted;
-let warn: { mock: { calls: unknown[][] } };
 function start(path: string) {
   install(path);
-  warn = vi.spyOn(console, "warn");
   app = mount(App);
 }
 afterEach(() => {
-  // no view in the app re-renders as a whole
-  expect(warn.mock.calls.some(c => String(c[0]).includes("VIEW_READS_OUTSIDE_JSX"))).toBe(false);
   app.dispose();
   uninstall();
 });

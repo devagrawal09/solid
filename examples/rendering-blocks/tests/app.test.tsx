@@ -5,16 +5,12 @@ import App from "../shared/src/components/App";
 import { advance, click, install, mount, nav, uninstall, until, type Mounted } from "./script";
 
 let app: Mounted;
-let warn: { mock: { calls: unknown[][] } };
 beforeEach(async () => {
   install();
-  warn = vi.spyOn(console, "warn");
   app = mount(App);
   await until(() => !!document.querySelector("h1"), "Home");
 });
 afterEach(() => {
-  // no view in the app re-renders as a whole
-  expect(warn.mock.calls.some(c => String(c[0]).includes("VIEW_READS_OUTSIDE_JSX"))).toBe(false);
   app.dispose();
   uninstall();
 });

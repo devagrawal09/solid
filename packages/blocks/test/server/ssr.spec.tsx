@@ -86,6 +86,17 @@ describe("server rendering", () => {
     );
   });
 
+  it("a view does not read on the server either: READ_IN_VIEW", () => {
+    const ReadsInBody = $component(function* ReadsInBody() {
+      const [n] = yield* $signal(1);
+      return function* () {
+        const v = yield* n;
+        return <b>{v}</b>;
+      };
+    });
+    expect(() => renderToString(() => <ReadsInBody />)).toThrow(/READ_IN_VIEW.*<ReadsInBody>/);
+  });
+
   it("an async memo resolves on the server", async () => {
     const User = $component(function* () {
       const user = yield* $memo(function* () {

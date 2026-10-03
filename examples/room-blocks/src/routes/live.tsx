@@ -528,8 +528,8 @@ const CardBody = $component(function* CardBody(
 const MemberCount = $component(function* MemberCount(
   props: TypedProps<{ members: Source<Member[], true, unknown> }, "MemberCount">
 ) {
+  const n = props.members.length;
   return function* () {
-    const n = props.members.length;
     return (
       <>
         {yield* n} member{(yield* n) === 1 ? "" : "s"} when the card was cut

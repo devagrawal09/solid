@@ -59,8 +59,8 @@ export type WireControl =
 const StatusPill = $component(function* StatusPill(
   props: TypedProps<{ wire: Wire; label?: string }, "StatusPill">
 ) {
+  const deaths = props.wire.deaths;
   return function* () {
-    const deaths = props.wire.deaths;
     return (
       <span
         class={`pill pill-${yield* props.wire.status}`}
