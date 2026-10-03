@@ -53,6 +53,8 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 | D-041 | decided | JSX only in view / hole / row returns; a setup never creates elements |
 | D-042 | decided | All props are reactive; no static prop kind; `$snapshot` removed; `$untrack` in reactive scopes only |
 | D-043 | decided | After plugin parity, the fork's compiler and babel-plugin go back to pristine upstream |
+| D-044 | decided | `$dynamic` returns a colored component |
+| D-045 | decided | Parity is the only Solid-drift canary; no golden snapshots |
 
 ## Entries
 
@@ -263,6 +265,16 @@ Consequences: (1) the whole-view read concept is deleted — `VY` is always `nev
 Facts for the executor: the diff of `packages/compiler` + `packages/babel-plugin` between `blocks-lib` and its upstream merge-base `644eaf3b` (`origin/next`) is 23 files / +2,047; the hunks in `directives/`, `refresh/`, `tsrx/` and `dom/` must be classified first — they may be unrelated fork work and are not removed by this decision. The crate requires `rust-version = "1.95"`; this machine's default toolchain is 1.88 with stable 1.99 installed — run cargo with `RUSTUP_TOOLCHAIN=stable`. Validation: `cargo clippy -- -D warnings`, `cargo test`, the compiler's 5,990-test vitest suite (the one pre-existing `blocks-summary` red disappears with the file), rebuild `compiler.node`, full gate.
 *Alternatives:* keep the Rust rule as the oracle, disabled by default; keep both as supported routes (twins gated under both).
 *Reasoning:* a reference implementation nobody ships drifts; checked-in outputs don't. *Implementation:* Phase 2's last commit (sequenced after the plugin's parity commit); `summarizeBlocks` alone goes earlier, in 1B.
+
+### D-044 — `$dynamic` returns a colored component
+**Decided (Dev, 2026-10-04).** `$dynamic(body)` no longer returns a plain `SolidComponent`. Its body's colors are already known (`Y extends MemoOp` may read pending sources; `SyncReturn<R>` routes failures through `attempt`); the returned component now carries them, and rendering it in a view (`<Reply/>`, or `h(Reply)`) contributes `PendingOf<Y> | FailsOf<Y>` to the enclosing view's hole ops — the same mechanism holes use, so a view rendering a pending `$dynamic` is pending in its type. Runtime is unchanged (Solid's `dynamic()`; pending reaches the nearest boundary per D-040). Facts that settled it: 9 twin files use `$dynamic`, none has a boundary of its own, and the type said settled.
+*Alternatives:* document as a §7 limitation; require a settled body (kills the server-component-call use that motivated `$dynamic`).
+*Reasoning:* typed failures are "complete for library-mediated failures" (D-019); a library creator that drops known colors on the floor is a hole in that claim. *Implementation:* Phase 1A item 4d (element/`h` types admit a colored component; type test "a view rendering a pending `$dynamic` is pending"; runtime test unchanged behaviour). Note for `adopt()`: the same question applies to `adopt(lazy(X))` (7 twin uses) — a lazy chunk is pending while it loads; see the next decision on it.
+
+### D-045 — Parity is the only Solid-drift canary
+**Decided (Dev, 2026-10-04).** The twins' parity tests (one script against the original and the twin, DOM snapshot after each step, hydration keys normalized) remain the canary for Solid RC drift, as D-016 says. No golden snapshots of the originals are checked in, and the standalone repo keeps the caret peer range. If a Solid change alters the original and the twin identically, parity passes and that is the intended outcome: the library followed Solid.
+*Alternatives:* golden snapshots of the originals per Solid version (a separate "Solid drift" gate step); pin an exact RC and bump deliberately.
+*Reasoning:* the library's claim is parity with Solid, not stability against it. *Implementation:* none; Phase 3 vendors the originals runnable so the harness keeps its oracle.
 
 ## Open questions
 
