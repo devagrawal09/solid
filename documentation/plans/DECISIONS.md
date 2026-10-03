@@ -47,6 +47,10 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 | D-035 | decided | `start()` removed |
 | D-036 | decided | `context()` removed; `yield* Ctx` is the one way to read a context |
 | D-037 | decided | D-008 amended: no Chromium clause; `oxlint` is a real gate step |
+| D-038 | decided | Flow controls accept holes as well as sources |
+| D-039 | decided | Conformance harness ported in Phase 4 |
+| D-040 | decided | `Async<T, E>` on a prop is permission only |
+| D-041 | decided | JSX only in view / hole / row returns; a setup never creates elements |
 
 ## Entries
 
@@ -226,6 +230,26 @@ Consequences: (1) the whole-view read concept is deleted — `VY` is always `nev
 **Decided (Dev, 2026-10-04).** (a) The "Chromium/Playwright steps run only before pushes" clause is dropped: no twin or blocks package has a browser test, so the clause was vestigial (three pushes were made under it without one). It returns when a browser test exists. (b) `oxlint` becomes a root devDependency so `repo:oxlint` runs for real instead of being SKIP forever (`.oxlintrc.json` existed since `dfe692cf` with no binary anywhere in the lockfile); the baseline is regenerated and any reds it adds are recorded, not hidden.
 *Alternatives:* delete `.oxlintrc.json` and the step (eslint-plugin-blocks as the only lint); keep both clauses as written.
 *Reasoning:* a gate step that can never run and a rule that is never exercised both make "green" mean less than it says. *Implementation:* `bl/bootstrap`, gate agent; baseline regenerated at the same commit.
+
+### D-038 — Flow controls accept holes as well as sources
+**Decided (Dev, 2026-10-04).** `<Show when>`, `<Match when>`, `<For each>` and the other flow controls accept a `Source` **or** a zero-arity `function*` (a hole, the same form as a JSX attribute hole): `<Show when={function* () { return (yield* todos).length > 0; }}>`. Derived conditions stay local to the view; one hole form everywhere (D-013). The D-013 rule still applies: a derivation used in more than one place is a `yield* $memo`.
+*Alternatives:* sources only, every derived condition a named `$memo` in setup (verbose; the todos `when={todos().length > 0}` would need a memo per condition).
+*Reasoning:* D-032 removed the view body, which is where derived conditions used to be computed; without this the migration would move every one of them into setup. *Implementation:* Phase 1A item 4b (types: the `when`/`each` prop types admit a hole; type + runtime test; `h` flavor too).
+
+### D-039 — Conformance harness ported in Phase 4
+**Decided (Dev, 2026-10-04).** The experiment branch's conformance harness (`packages/web/test/conformance` on `experiment/iterable-signals`: `conformance.spec.ts`, golden client/hydrate/server traces, 8 server-reference vs blocks-compiled HTML scenario pairs, `COVERAGE.md`) is ported as a semantics pin for the library route in Phase 4, after extraction; until then the 12 twins are the oracle. Note for the port: the `blocks-context` scenario is moot after D-036 and `blocks-effect` must be re-read against D-032.
+*Alternatives:* port now as 1A's last item (pin before more runtime surgery); never (twins suffice).
+*Reasoning:* the harness pins semantics independently of the twins, which is valuable, but it is most valuable once the runtime stops moving and the repo is standalone.
+
+### D-040 — `Async<T, E>` on a prop is permission only
+**Decided (Dev, 2026-10-04).** Declaring `todo: Async<Todo, FetchError>` says "I can be given unsettled data"; it creates no obligation to handle it. A pending read or a failure from that prop propagates to the nearest `<Pending>`/`<Errored>` wherever it is — possibly in the parent — exactly as a pending read propagates in Solid. A bare prop means "give me settled data; I am never the one that is pending". The declaration is a type permission, not a UI duty.
+*Alternatives:* duty — a component with an `Async` prop must contain the boundary for it (dev error when its pending escapes); permission plus a one-time dev hint when it escapes a component with no boundary.
+*Reasoning:* boundaries are placed by whoever owns the layout, not by whoever declares a type; a duty would force a boundary per component and fight Solid's propagation model. Doc: 1B's §6 ("Declared colors") states this in one sentence.
+
+### D-041 — JSX only in view / hole / row returns
+**Decided (Dev, 2026-10-04).** JSX appears only as the return of a view, of a hole, or of a row's view. A setup never creates elements: `const header = <h1>{yield* title}</h1>` in a setup is an error. Elements are not values in a block. Enforcement: lint `jsx-only-in-view` (error, in `recommended`); the transform's `perform` asserts the host in dev — a hole performed while a setup is the host is `[JSX_IN_SETUP] <Component>: JSX in a setup`; Phase 2's plugin inherits the rule unchanged. Closes the design-review item "the JSX rule applies syntactically anywhere in a generator".
+*Alternatives:* JSX as a settled value anywhere (a slot element passed as a prop); JSX in a setup only through a creator (`$memo` returning a view, `$dynamic`).
+*Reasoning:* D-032 made a view nothing but structure and holes; letting a setup build elements would reintroduce a second place where reads become holes, with a different host and different pending scope. *Implementation:* Phase 1A, with item 4b's lint work (new rule + tests; twin sites counted on first run and recorded here).
 
 ## Open questions
 
