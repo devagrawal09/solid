@@ -55,6 +55,8 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 | D-043 | decided | After plugin parity, the fork's compiler and babel-plugin go back to pristine upstream |
 | D-044 | decided | `$dynamic` returns a colored component |
 | D-045 | decided | Parity is the only Solid-drift canary; no golden snapshots |
+| D-046 | decided | `html`` ` flavor dropped; `h()` is the no-JSX flavor (D-012 amended) |
+| D-047 | decided | `@solidjs/blocks` exports `lazy` (colored); `adopt()` removed |
 
 ## Entries
 
@@ -116,7 +118,7 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 ### D-012 — No-JSX flavor is first-class
 **Decided.** The `h`/`html` flavor (`@solidjs/blocks/h`, `/html`) is first-class: same hole forms as JSX, same strictness, its own twins (`*-blocks-h`), and it must be a no-op for the JSX plugin.
 *Alternatives:* JSX only; no-JSX as a best-effort subset.
-*Reasoning:* the no-JSX flavor is the proof that the model does not depend on the transform (D-003): whatever JSX can express via the rule, `h` expresses without it.
+*Reasoning:* the no-JSX flavor is the proof that the model does not depend on the transform (D-003): whatever JSX can express via the rule, `h` expresses without it. *Amended by D-046:* the flavor is `h()` only; the `html`` ` tagged template is dropped.
 
 ### D-013 — Rows and holes are bare `function*`
 **Decided.** A row (list item body) or a hole (a reactive child/attribute position) is a zero-arity generator function; the runtime wraps it (as `holes.ts` `toHole` does). The `$` and `$scope` helpers are removed (lint `no-dollar-block` with autofix first; the rule stays as a deprecated-usage rule). A derivation reused in several holes is a `yield* $memo`.
@@ -202,7 +204,7 @@ Not carried by the handoff. If you remember it, append it as a new entry naming 
 ### D-031 — The JSX transform stays
 **Decided (Dev, 2026-10-04).** The rule "`yield* e` in a JSX expression/attribute → `perform(e)`" stays; D-003 stands and Phase 2 builds the standalone plugin (plus a disable option in the Rust compiler, which has `blocksModule` but no off switch today).
 *Alternatives:* drop the transform and require explicit `function*` holes everywhere (≈273 twin sites by a rough grep vs 20 explicit holes today; the `h` flavor already works that way). Rejected: the transform is the ergonomic path inside the strict dialect, and dropping it would not have removed the granularity cliff (D-032 does).
-*Reasoning:* the view stays a `function*` for TypeScript's sake (a `yield*` must sit in a generator to be typed); at runtime the transform removes every view yield, which is consistent with D-032.
+*Reasoning:* the view stays a `function*` for TypeScript's sake (a `yield*` must sit in a generator to be typed); at runtime the transform removes every view yield, which is consistent with D-032. *Implementation note (2026-10-04):* no compiler disable option is needed after all. The twins get the fork's rule because the published `@solidjs/vite-plugin@3.0.0-next.35` links the workspace `packages/compiler`/`packages/babel-plugin`; the standalone plugin runs `enforce: "pre"`, so by the time the compiler sees a file every `yield*` in JSX is already `perform(…)` and the Rust rule is a no-op. Sequence: plugin → fixture parity (5 fixtures, 5 refusal codes) → twins through the plugin with the compiler rule idle → D-043 removes the rule.
 
 ### D-032 — A view has no body
 **Decided (Dev, 2026-10-04).** A view is `function* () { return <…/>; }`. Every read is a `yield*` directly in a JSX position (a hole); there is no `yield*` outside JSX, no `if`/early `return`, no local computation. All structure comes from flow controls (`<Show>`, `<Match>`, `<For>`, …), which take sources directly. The `h`/`html` flavor follows the same rule with explicit `function*` holes.
@@ -246,7 +248,7 @@ Consequences: (1) the whole-view read concept is deleted — `VY` is always `nev
 *Reasoning:* the harness pins semantics independently of the twins, which is valuable, but it is most valuable once the runtime stops moving and the repo is standalone.
 
 ### D-040 — `Async<T, E>` on a prop is permission only
-**Decided (Dev, 2026-10-04).** Declaring `todo: Async<Todo, FetchError>` says "I can be given unsettled data"; it creates no obligation to handle it. A pending read or a failure from that prop propagates to the nearest `<Pending>`/`<Errored>` wherever it is — possibly in the parent — exactly as a pending read propagates in Solid. A bare prop means "give me settled data; I am never the one that is pending". The declaration is a type permission, not a UI duty.
+**Decided (Dev, 2026-10-04).** Declaring `todo: Async<Todo, FetchError>` says "I can be given unsettled data"; it creates no obligation to handle it. A pending read or a failure from that prop propagates to the nearest `<Loading>`/`<Errored>` wherever it is — possibly in the parent — exactly as a pending read propagates in Solid. A bare prop means "give me settled data; I am never the one that is pending". The declaration is a type permission, not a UI duty.
 *Alternatives:* duty — a component with an `Async` prop must contain the boundary for it (dev error when its pending escapes); permission plus a one-time dev hint when it escapes a component with no boundary.
 *Reasoning:* boundaries are placed by whoever owns the layout, not by whoever declares a type; a duty would force a boundary per component and fight Solid's propagation model. Doc: 1B's §6 ("Declared colors") states this in one sentence.
 
@@ -275,6 +277,16 @@ Facts for the executor: the diff of `packages/compiler` + `packages/babel-plugin
 **Decided (Dev, 2026-10-04).** The twins' parity tests (one script against the original and the twin, DOM snapshot after each step, hydration keys normalized) remain the canary for Solid RC drift, as D-016 says. No golden snapshots of the originals are checked in, and the standalone repo keeps the caret peer range. If a Solid change alters the original and the twin identically, parity passes and that is the intended outcome: the library followed Solid.
 *Alternatives:* golden snapshots of the originals per Solid version (a separate "Solid drift" gate step); pin an exact RC and bump deliberately.
 *Reasoning:* the library's claim is parity with Solid, not stability against it. *Implementation:* none; Phase 3 vendors the originals runnable so the harness keeps its oracle.
+
+### D-046 — `html`` ` flavor dropped
+**Decided (Dev, 2026-10-04).** `@solidjs/blocks/html` (Solid's tagged templates with typed holes) is removed; `h()` is the no-JSX flavor. Facts that settled it: both `-h` twins use `h()` only; no twin, fixture or doc example exercises `html`` ` beyond the package's own unit tests (5 cases in `nojsx.spec.ts`, 3 in `nojsx.type-tests.ts`), and `html.ts`'s docstring still showed the `$(function* …)` form D-013 removed. Removal list: `src/html.ts`, the two `html` entries in `scripts/build.mjs`, the `./html` export and the `@solidjs/html` dependency in `package.json`, the 8 test cases, doc §1/§2 mentions (lines 11, 26, 33, 44–46 at `46124409`).
+*Alternatives:* keep it and add an `html` twin; keep it on unit tests only.
+*Reasoning:* D-005/D-012 — a second no-JSX surface with no twin cannot be kept in parity with the first. *Implementation:* Phase 1A item 4e.
+
+### D-047 — `@solidjs/blocks` exports `lazy`; `adopt()` removed
+**Decided (Dev, 2026-10-04).** The library exports its own `lazy`, wrapping `solid-js`'s with the same signature (`preload` / `moduleUrl` kept, so the Vite plugin's module-URL pass still works); the result is a block component colored **pending while its chunk loads**, unioned with the inner block component's own declared colors, and usable in call form (`{yield* Home()}`) as before. `adopt()` — "a component this library did not create, usable in call form" — is deleted: all 7 twin uses were `adopt(lazy(…))` (`rendering-blocks`), the general case had none, and its return type dropped the chunk-loading pending (the D-044 gap one level up). Foreign non-lazy components have no bridge; if a twin needs one, that is the finding.
+*Alternatives:* blocks `lazy` plus keep `adopt` as the general bridge; keep `adopt` and overload it on Solid's lazy return type (`T & { preload; moduleUrl? }`).
+*Reasoning:* Dev: if it is for lazy, build it into lazy; D-004 forbids patching Solid's, so the library wraps it; D-005 removes the now-unused bridge. *Implementation:* Phase 1A item 4d with D-044 (type test "a view rendering a loading `lazy` is pending"; the 7 sites change import only).
 
 ## Open questions
 
