@@ -13,7 +13,6 @@ import {
   $signal,
   $store,
   attempt,
-  start,
   Errored,
   For,
   Loading,
@@ -565,23 +564,18 @@ export const EventColors = $component(function* () {
     yield* readsData();
     yield* requests();
   });
-  const startsBoth = $event(function* () {
-    yield* start(readsData());
-    yield* start(requests());
-  });
   const sync = $event(function* () {});
   const colors: [
     Same<Colors<typeof readsData>, [true, false]>,
     Same<Colors<typeof requests>, [false, true]>,
     Same<Colors<typeof callsBoth>, [true, true]>,
-    Same<Colors<typeof startsBoth>, [false, false]>,
     Same<Colors<typeof sync>, [false, false]>
-  ] = [true, true, true, true, true];
+  ] = [true, true, true, true];
   void colors;
-  // an $effect does not wait: it delegates to a sync event, and starts an async one
+  // an $effect does not wait: it delegates to a sync event only (an async one
+  // is reached through an event calling an event, or a $memo; D-035)
   yield* $effect(function* () {
     yield* sync();
-    yield* start(requests());
   });
   // @ts-expect-error an $effect does not wait on an event doing async work
   yield* $effect(function* () {

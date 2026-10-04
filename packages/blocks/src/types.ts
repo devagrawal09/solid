@@ -367,7 +367,7 @@ export interface HView<P extends boolean = boolean, E = unknown> {
  * called, as a DOM dispatch needs), and it is a promise of the body's result.
  * In block code it is an operation: `yield* save(x)` waits for it — its
  * result, or its failure thrown at the `yield*` — and carries its colors into
- * the caller's type; `yield* start(save(x))` does not wait.
+ * the caller's type.
  */
 export interface EventCall<
   R = unknown,

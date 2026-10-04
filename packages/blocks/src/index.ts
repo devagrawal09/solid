@@ -20,7 +20,6 @@ export {
   $snapshot,
   $store,
   attempt,
-  context,
   createContext,
   isComponent,
   isPendingOf,
@@ -29,7 +28,6 @@ export {
   raise,
   readStore,
   refresh,
-  start,
   until,
   type BlockContext
 } from "./runtime.js";

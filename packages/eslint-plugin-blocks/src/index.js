@@ -232,11 +232,6 @@ function isEventCallType(type) {
   const sym = type.aliasSymbol || (type.getSymbol && type.getSymbol());
   return !!sym && sym.getName() === "EventCall";
 }
-/** `start(call)`: the call is the argument of `start`. */
-function isStarted(node) {
-  const p = node.parent;
-  return !!p && isCallTo(p, ["start"]) && p.arguments[0] === node;
-}
 /** A call whose value nobody uses: a statement, `void x`, or an optional call statement. */
 function isDiscarded(node) {
   let n = node;
@@ -263,7 +258,7 @@ const noUnyieldedWrite = {
         "`{{name}}(…)` writes nothing until it is delegated to: `yield* {{name}}(…)`, in an $event or an $effect.",
       discarded: "`{{name}}(…)` does nothing until it is delegated to: `yield* {{name}}(…)`.",
       eventCall:
-        "`{{name}}(…)` is an event call this block does not delegate to: `yield* {{name}}(…)` waits for it (its colors join this block's type); `yield* start({{name}}(…))` runs it without waiting."
+        "`{{name}}(…)` is an event call this block does not delegate to: `yield* {{name}}(…)` waits for it (its colors join this block's type)."
     },
     schema: []
   },
@@ -288,10 +283,10 @@ const noUnyieldedWrite = {
         if (!checker || !kindAt(node)) return;
         const type = checker.getTypeAtLocation(services.esTreeNodeToTSNodeMap.get(node));
         if (isEventCallType(type)) {
-          // in a block an event call is delegated to, started, or kept to
-          // delegate to later — never used as a bare promise (its colors would
-          // not reach this block's type)
-          if (isStarted(node) || (p && p.type === "VariableDeclarator" && p.init === node)) return;
+          // in a block an event call is delegated to, or kept to delegate to
+          // later — never used as a bare promise (its colors would not reach
+          // this block's type)
+          if (p && p.type === "VariableDeclarator" && p.init === node) return;
           context.report({ node, messageId: "eventCall", data: { name: nameOf(node) } });
         } else if (isDiscarded(node) && isOpType(type))
           context.report({ node, messageId: "discarded", data: { name: nameOf(node) } });

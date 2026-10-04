@@ -399,16 +399,13 @@ interface Yieldable<Y, R> { [Symbol.iterator](): Generator<Y, R, any>; }
 interface EventCall<R> extends Promise<R>, Yieldable<unknown, R> { readonly __call: true }
 declare function $event<A extends unknown[]>(f: (...a: A) => Generator<unknown, unknown, unknown>): (...a: A) => EventCall<void>;
 declare function attempt<T>(f: () => T): Yieldable<unknown, T>;
-declare function start(c: EventCall<unknown>): Yieldable<unknown, void>;
 declare const actions: { save: (x: number) => EventCall<void> };
 `;
 typedTester.run("no-unyielded-write (with types)", rules["no-unyielded-write"], {
   valid: [
     {
       filename,
-      code:
-        decls +
-        "const e = $event(function* () { yield* actions.save(1); yield* start(actions.save(2)); });"
+      code: decls + "const e = $event(function* () { yield* actions.save(1); });"
     },
     // plain code calls an event: it runs (a DOM dispatch, a timer, a callback)
     { filename, code: decls + "const e = $event(function* () {}); e();" },
@@ -422,6 +419,14 @@ typedTester.run("no-unyielded-write (with types)", rules["no-unyielded-write"], 
     {
       filename,
       code: decls + "const e = $event(function* () { actions.save(1); });",
+      errors: [{ messageId: "eventCall" }]
+    },
+    {
+      // start() is removed (D-035): a call it would have wrapped is a bare promise
+      filename,
+      code:
+        decls +
+        "declare function start(c: unknown): Yieldable<unknown, void>; const e = $event(function* () { yield* start(actions.save(2)); });",
       errors: [{ messageId: "eventCall" }]
     },
     {

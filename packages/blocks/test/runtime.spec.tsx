@@ -35,7 +35,6 @@ import {
   Repeat,
   rowArg,
   Show,
-  start,
   Switch,
   until,
   type TypedProps
@@ -894,24 +893,6 @@ describe("events", () => {
     resolve(3);
     await done;
     expect(log).toEqual(["got 3", "no"]);
-  });
-
-  it("start runs an event call without waiting for it", async () => {
-    let resolve!: () => void;
-    const order: string[] = [];
-    const slow = $event(function* () {
-      yield* attempt(() => new Promise<void>(r => (resolve = r)), toError);
-      order.push("slow done");
-    });
-    const outer = $event(function* () {
-      yield* start(slow());
-      order.push("outer done");
-    });
-    await outer();
-    expect(order).toEqual(["outer done"]);
-    resolve();
-    await settle();
-    expect(order).toEqual(["outer done", "slow done"]);
   });
 
   it("an $effect delegates to a synchronous event call", () => {

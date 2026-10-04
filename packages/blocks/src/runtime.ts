@@ -48,7 +48,6 @@ import type {
   Handled,
   WaitsOf,
   ReadsPendingOf,
-  EventCall,
   Write,
   ChildView,
   HView,
@@ -1122,10 +1121,6 @@ export function createContext<T>(defaultValue?: T, options?: { name?: string }):
   ctx[Symbol.iterator] = contextIterator;
   return ctx;
 }
-/** `yield* context(Ctx)`: read a context this library did not create. */
-export function context<T>(ctx: Context<T>): Yieldable<ContextRead, T> {
-  return { [Symbol.iterator]: () => contextIterator.call(ctx as any) } as any;
-}
 
 // --- events ---------------------------------------------------------------------------------
 
@@ -1280,22 +1275,6 @@ export function $event<Args extends unknown[] = [], Y extends EventOp = never, R
 /** Whether (and how) an event call's body finished. */
 interface CallRecord {
   done?: { ok: boolean; value: unknown };
-}
-
-class StartOp {
-  *[Symbol.iterator](): Generator<never, void, unknown> {
-    if (__DEV__) checkWrite();
-  }
-}
-/**
- * `yield* start(save(x))`: an event call the block does not wait for. It is a
- * write; the callee's colors stay its own, and a failure nobody handles goes
- * to the nearest `Errored`.
- */
-export function start(
-  _call: EventCall<unknown, unknown, boolean, boolean>
-): Yieldable<Write, void> {
-  return new StartOp() as any;
 }
 
 // --- blocks -----------------------------------------------------------------------------------
