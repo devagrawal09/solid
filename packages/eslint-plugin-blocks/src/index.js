@@ -8,12 +8,23 @@
  *   read-before-attempt    a $memo reads before its first `attempt`
  *   no-unyielded-write     an operation acts only as `yield* op` (setters; with types, event calls and any op)
  *   no-foreign-reactive    no reactive state from plain Solid, the router or another library
+ *   no-component-tag       a block component is called, never a JSX tag (autofix)
+ *   no-read-in-prop        a component call's prop is a source, a hole or a value — never a read (autofix)
+ *   component-children-generator  a component call's children is a generator (autofix)
  *   jsx-only-in-view       JSX only in a view, a hole or a row's view: a setup never creates elements
  *   prefer-view-wrapper    (warning) wrap a view in `view(…)` so its errors land where it is written
  *   no-path-object-use     a path is a read: no spread, no `===`, no `JSON.stringify` of one
  *   no-dollar-block        `$` / `$scope` are removed: bare `function*` holes and rows, `$memo` derivations (autofix)
  *   typed-props-key        exported components name their type-linker key
  */
+import {
+  childrenFromFunction,
+  childrenFromJsx,
+  importView,
+  inGenerator,
+  isBlockComponent,
+  propValue
+} from "./calls.js";
 import {
   blockKind,
   isViewCall,
@@ -865,6 +876,232 @@ const jsxOnlyInView = {
   }
 };
 
+/** A capitalised call or a branded one: a component call (D-062). */
+function isComponentCallee(context, callee) {
+  if (isBlockComponent(context, callee)) return true;
+  const name =
+    callee.type === "Identifier"
+      ? callee.name
+      : callee.type === "MemberExpression" && callee.property.type === "Identifier"
+        ? callee.property.name
+        : "";
+  return /^[A-Z]/.test(name);
+}
+
+const IDENT = /^[A-Za-z_$][\w$]*$/;
+
+/**
+ * D-062 / D-067: a block component (`$component`, `lazy`, the library's flow
+ * controls and boundaries) is called — `{yield* Card({ todo })}` — never a
+ * JSX tag; tags are for DOM elements and foreign (plain-Solid) components.
+ * Autofix: the tag becomes the call, its attributes props (D-065), its
+ * children a generator (D-066).
+ */
+const noComponentTag = {
+  meta: {
+    type: "problem",
+    fixable: "code",
+    docs: {
+      description:
+        "A block component is called (`{yield* Card({ todo })}`), never a JSX tag: its colors travel only through `yield*` (D-062)."
+    },
+    messages: {
+      tag: "`<{{name}}>` is a block component: call it — `{yield* {{name}}({ … })}` — so its pending and failures reach this view (D-062)."
+    },
+    schema: []
+  },
+  create(context) {
+    const source = context.sourceCode;
+    return {
+      JSXElement(node) {
+        const nameNode = node.openingElement.name;
+        if (nameNode.type === "JSXNamespacedName") return;
+        if (nameNode.type === "JSXIdentifier" && !/^[A-Z]/.test(nameNode.name)) return;
+        if (!isBlockComponent(context, nameNode)) return;
+        const name = source.getText(nameNode);
+        const fixable = inGenerator(node);
+        context.report({
+          node: node.openingElement,
+          messageId: "tag",
+          data: { name },
+          fix: !fixable
+            ? null
+            : fixer => {
+                const props = [];
+                let usesView = false;
+                for (const attr of node.openingElement.attributes) {
+                  if (attr.type === "JSXSpreadAttribute") {
+                    props.push(`...${source.getText(attr.argument)}`);
+                    continue;
+                  }
+                  const raw =
+                    attr.name.type === "JSXNamespacedName"
+                      ? `${attr.name.namespace.name}:${attr.name.name.name}`
+                      : attr.name.name;
+                  const key = IDENT.test(raw) ? raw : JSON.stringify(raw);
+                  const v = attr.value;
+                  if (v == null) props.push(`${key}: true`);
+                  else if (v.type === "Literal") props.push(`${key}: ${JSON.stringify(v.value)}`);
+                  else if (v.type === "JSXExpressionContainer") {
+                    if (v.expression.type === "JSXEmptyExpression") continue;
+                    props.push(`${key}: ${propValue(source, v.expression)}`);
+                  } else props.push(`${key}: ${source.getText(v)}`);
+                }
+                const children = childrenFromJsx(source, node.children);
+                if (children === null) return null;
+                if (children !== undefined) {
+                  props.push(`children: ${children}`);
+                  usesView = children.includes("return view(");
+                }
+                const call = props.length ? `${name}({ ${props.join(", ")} })` : `${name}()`;
+                const parent = node.parent;
+                const inJsx = parent.type === "JSXElement" || parent.type === "JSXFragment";
+                const fixes = [
+                  fixer.replaceText(node, inJsx ? `{yield* ${call}}` : `<>{yield* ${call}}</>`)
+                ];
+                if (usesView) {
+                  const imp = importView(context, fixer);
+                  if (imp) fixes.push(imp);
+                }
+                return fixes;
+              }
+        });
+      }
+    };
+  }
+};
+
+/**
+ * D-065: a component call's props are evaluated in the caller — a `yield*` in
+ * them reads in the caller's hole, which then re-creates the component on
+ * every change. Pass the source itself, or a hole the component reads.
+ */
+const noReadInProp = {
+  meta: {
+    type: "problem",
+    fixable: "code",
+    docs: {
+      description:
+        "A component call's prop is a source, a hole (`function* () { … }`) or a settled value, never a read in the caller (D-065)."
+    },
+    messages: {
+      read: "read in a prop: pass the source (`{{key}}: src`), or a hole (`{{key}}: function* () { return …; }`) the component reads (D-065)."
+    },
+    schema: []
+  },
+  create(context) {
+    const source = context.sourceCode;
+    const reported = new WeakSet();
+    return {
+      YieldExpression(node) {
+        if (!node.delegate) return;
+        let child = node;
+        let p = node.parent;
+        while (p) {
+          if (/Function/.test(p.type) || p.type === "JSXExpressionContainer") return;
+          if (p.type === "Property" && p.value === child && p.parent.type === "ObjectExpression") {
+            const obj = p.parent;
+            const call = obj.parent;
+            if (
+              call &&
+              call.type === "CallExpression" &&
+              call.arguments[0] === obj &&
+              isComponentCallee(context, call.callee) &&
+              !reported.has(p)
+            ) {
+              reported.add(p);
+              const key = source.getText(p.key);
+              context.report({
+                node,
+                messageId: "read",
+                data: { key },
+                fix:
+                  p.kind === "init"
+                    ? fixer => fixer.replaceText(p.value, propValue(source, p.value))
+                    : null
+              });
+            }
+            return;
+          }
+          child = p;
+          p = p.parent;
+        }
+      }
+    };
+  }
+};
+
+/**
+ * D-066: a component call's `children` is always a generator — a lazy view
+ * `function* () { return <…/>; }` or a row `function* (item, index) { … }` —
+ * never plain JSX (built eagerly, in the caller), a getter or a render arrow.
+ */
+const componentChildrenGenerator = {
+  meta: {
+    type: "problem",
+    fixable: "code",
+    docs: {
+      description:
+        "A component call's `children` is a generator: a lazy view `function* () { return <…/>; }` or a row (D-066)."
+    },
+    messages: {
+      children:
+        "`children` of a component call is a generator: `function* () { return <…/>; }` (built inside the component), or a row `function* (item) { … }` (D-066)."
+    },
+    schema: []
+  },
+  create(context) {
+    const source = context.sourceCode;
+    const tsx = /\.[jt]sx$/.test(context.filename || "");
+    return {
+      Property(node) {
+        const key = node.key.type === "Identifier" ? node.key.name : node.key.value;
+        if (key !== "children" || node.computed) return;
+        const obj = node.parent;
+        const call = obj.parent;
+        if (!call || call.type !== "CallExpression" || call.arguments[0] !== obj) return;
+        if (!isComponentCallee(context, call.callee)) return;
+        const v = node.value;
+        let text;
+        if (node.kind === "get") text = childrenFromFunction(source, { ...v, params: [] });
+        else if (v.type === "JSXElement" || v.type === "JSXFragment")
+          text = `function* () {\nreturn ${source.getText(v)};\n}`;
+        else if (v.type === "FunctionExpression" || v.type === "ArrowFunctionExpression") {
+          if (v.generator) return;
+          const body = v.body.type === "BlockStatement" ? null : v.body;
+          const returnsJsx = body
+            ? body.type === "JSXElement" || body.type === "JSXFragment"
+            : v.body.body.some(
+                st =>
+                  st.type === "ReturnStatement" &&
+                  st.argument &&
+                  (st.argument.type === "JSXElement" || st.argument.type === "JSXFragment")
+              );
+          // `h` output and `() => View()` stay in a no-JSX file (built where
+          // they are inserted); in JSX every one is a generator
+          if (!returnsJsx && !tsx) return;
+          text = childrenFromFunction(source, v);
+        } else return;
+        context.report({
+          node,
+          messageId: "children",
+          fix:
+            text == null
+              ? null
+              : fixer => {
+                  const fixes = [fixer.replaceText(node, `children: ${text}`)];
+                  if (text.includes("return view(")) {
+                    const imp = importView(context, fixer);
+                    if (imp) fixes.push(imp);
+                  }
+                  return fixes;
+                }
+        });
+      }
+    };
+  }
+};
+
 export const rules = {
   "no-throw": noThrow,
   "no-read-in-view-body": noReadInViewBody,
@@ -876,6 +1113,9 @@ export const rules = {
   "no-path-object-use": noPathObjectUse,
   "prefer-view-wrapper": preferViewWrapper,
   "jsx-only-in-view": jsxOnlyInView,
+  "no-component-tag": noComponentTag,
+  "no-read-in-prop": noReadInProp,
+  "component-children-generator": componentChildrenGenerator,
   "typed-props-key": typedPropsKey
 };
 
@@ -887,15 +1127,20 @@ const plugin = {
 
 /** Rules `recommended` sets to warn (a suggestion, not a rule of the model). */
 const WARNINGS = new Set(["prefer-view-wrapper"]);
+/**
+ * Rules not in `recommended` yet: the call form's (D-062, D-065, D-066) land
+ * in it with the twins' migration, in the same commit as the types that
+ * refuse block component tags.
+ */
+const PENDING = new Set(["no-component-tag", "no-read-in-prop", "component-children-generator"]);
 
 /** `recommended`: every rule an error, but the suggestions (`WARNINGS`), which warn (flat config). */
 plugin.configs.recommended = {
   plugins: { "@solidjs/blocks": plugin },
   rules: Object.fromEntries(
-    Object.keys(rules).map(name => [
-      `@solidjs/blocks/${name}`,
-      WARNINGS.has(name) ? "warn" : "error"
-    ])
+    Object.keys(rules)
+      .filter(name => !PENDING.has(name))
+      .map(name => [`@solidjs/blocks/${name}`, WARNINGS.has(name) ? "warn" : "error"])
   )
 };
 

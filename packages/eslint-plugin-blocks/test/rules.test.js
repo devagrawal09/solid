@@ -275,6 +275,138 @@ tester.run("jsx-only-in-view", rules["jsx-only-in-view"], {
   ]
 });
 
+const imports = 'import { $component, Show, For, Loading, view } from "@solidjs/blocks";\n';
+const Card =
+  "const Card = $component(function* (props) { return view(function* () { return <p />; }); });\n";
+
+tester.run("no-component-tag", rules["no-component-tag"], {
+  valid: [
+    // DOM elements and foreign (plain-Solid) components stay tags (D-067)
+    imports +
+      component("return view(function* () { return <div><Router>{p => <i />}</Router></div>; });"),
+    'import { Router } from "@solidjs/router";\nconst x = <Router />;',
+    // a call is fine
+    imports +
+      Card +
+      component("return view(function* () { return <ul>{yield* Card({ a: 1 })}</ul>; });")
+  ],
+  invalid: [
+    {
+      // a block component tag: props as values / sources / holes, children a lazy view
+      code:
+        imports +
+        Card +
+        component(
+          'return view(function* () { return <ul><Card a={x} b="s" c={yield* n} d={(yield* n) + 1} flag><b>{yield* n}</b></Card></ul>; });'
+        ),
+      output:
+        imports +
+        Card +
+        component(
+          'return view(function* () { return <ul>{yield* Card({ a: x, b: "s", c: n, d: function* () {\nreturn (yield* n) + 1;\n}, flag: true, children: function* () {\nreturn <b>{yield* n}</b>;\n} })}</ul>; });'
+        ),
+      errors: [{ messageId: "tag" }]
+    },
+    {
+      // a flow control returned by the view: a fragment hole; a render arrow becomes a row
+      code:
+        imports +
+        component("return view(function* () { return <For each={xs}>{x => <li />}</For>; });"),
+      output:
+        imports +
+        component(
+          "return view(function* () { return <>{yield* For({ each: xs, children: function* (x) {\nreturn view(function* () {\nreturn <li />;\n});\n} })}</>; });"
+        ),
+      errors: [{ messageId: "tag" }]
+    },
+    {
+      // outside a generator the call cannot be written yet: reported, not fixed
+      code: imports + "const f = () => <Show when={x}><i /></Show>;",
+      output: null,
+      errors: [{ messageId: "tag" }]
+    }
+  ]
+});
+
+tester.run("no-read-in-prop", rules["no-read-in-prop"], {
+  valid: [
+    imports +
+      Card +
+      component(
+        "return view(function* () { return <ul>{yield* Card({ a: n, b: function* () { return yield* n; } })}</ul>; });"
+      ),
+    // a JSX hole inside a prop's element is that element's own
+    imports +
+      component(
+        "return view(function* () { return <ul>{yield* Show({ when: x, fallback: <i>{yield* n}</i>, children: function* () { return <b />; } })}</ul>; });"
+      ),
+    // an event's call is not a component call
+    "const e = $event(function* () { yield* save({ id: yield* props.id }); });"
+  ],
+  invalid: [
+    {
+      code:
+        imports +
+        Card +
+        component(
+          "return view(function* () { return <ul>{yield* Card({ a: yield* n, b: (yield* n) * 2 })}</ul>; });"
+        ),
+      output:
+        imports +
+        Card +
+        component(
+          "return view(function* () { return <ul>{yield* Card({ a: n, b: function* () {\nreturn (yield* n) * 2;\n} })}</ul>; });"
+        ),
+      errors: [{ messageId: "read" }, { messageId: "read" }]
+    }
+  ]
+});
+
+tester.run("component-children-generator", rules["component-children-generator"], {
+  valid: [
+    imports +
+      component(
+        "return view(function* () { return <ul>{yield* Show({ when: x, children: function* () { return <b />; } })}</ul>; });"
+      ),
+    imports +
+      component(
+        "return view(function* () { return <ul>{yield* For({ each: xs, children: function* (x) { return view(function* () { return <li />; }); } })}</ul>; });"
+      ),
+    // h output in a no-JSX file is built where it is inserted
+    { code: imports + "const v = Show({ when: x, children: h('b') });", filename: "app.ts" }
+  ],
+  invalid: [
+    {
+      filename: "app.tsx",
+      code:
+        imports +
+        component(
+          "return view(function* () { return <ul>{yield* Loading({ fallback: 'x', children: () => Card({}) })}</ul>; });"
+        ),
+      output:
+        imports +
+        component(
+          "return view(function* () { return <ul>{yield* Loading({ fallback: 'x', children: function* () {\nreturn <>{yield* Card({})}</>;\n} })}</ul>; });"
+        ),
+      errors: [{ messageId: "children" }]
+    },
+    {
+      filename: "app.tsx",
+      code:
+        imports +
+        component(
+          "return view(function* () { return <ul>{yield* Show({ when: x, children: <b /> })}</ul>; });"
+        ),
+      output:
+        imports +
+        component(
+          "return view(function* () { return <ul>{yield* Show({ when: x, children: function* () {\nreturn <b />;\n} })}</ul>; });"
+        ),
+      errors: [{ messageId: "children" }]
+    }
+  ]
+});
+
 tester.run("read-before-attempt", rules["read-before-attempt"], {
   valid: [
     "const m = $memo(function* () { const id = yield* props.id; return yield* attempt(() => f(id)); });",
