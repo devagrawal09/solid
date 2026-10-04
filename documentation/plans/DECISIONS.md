@@ -62,6 +62,8 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 | D-050 | decided | D-013 amended: in JSX the hole is `yield*` only |
 | D-051 | decided | D-032 amended: JSX enforcement is runtime + lint; type-level form for `h` only |
 | D-052 | decided | `createContext(defaultValue)` wraps a plain value as a constant source |
+| D-053 | decided | `$effect` and `$settled` both stay: react vs run-once-after-settle |
+| D-054 | decided | `view()` / `setup()` zero-runtime typing wrappers for error locality |
 
 ## Entries
 
@@ -320,6 +322,16 @@ Facts for the executor: the diff of `packages/compiler` + `packages/babel-plugin
 
 ### Phase 1A log (items 2–6, `bl/tighten`)
 `5a3bfba2` duplicate-runtime guard · `9f0dac54` rows and holes are bare `function*`, the `$` and `$scope` forms removed (32 twin + 13 test sites; new dev error `[ROW_VIEW]` for a row returning markup directly, D-030) · `b1634e33` a view has no body (`[READ_IN_VIEW]`, `no-read-in-view-body`) · `4f5f0dd1` one host state per run via `runAs` · `6200928e` `$optimistic` scalar / `$optimisticStore` object-or-body — D-014's "overload" never existed in this history; a dev error `[OPTIMISTIC_FORM]` now refuses the wrong form in both directions · `c9179cc5` path-proxy traps (`[PATH_OBJECT]`, lint `no-path-object-use`). The constant-source finding is D-052.
+
+### D-053 — `$effect` and `$settled` both stay
+**Decided (Dev, 2026-10-04).** Two things, not one: `$effect` (a `createTrackedEffect` pass; re-runs when what it reads changes; writes queue to the flush; 2 twin files) and `$settled` (`onSettled`; runs once after the graph settles, reads untracked; 6 twin files). §1 states the rule in one line: "`$effect` reacts; `$settled` runs once after settle".
+*Alternatives:* fold `$settled` into an `$effect` that reads nothing (loses the after-settle timing); rename `$settled`.
+*Reasoning:* the timing guarantee is the difference, and the twins use the one-shot form three times more — it is the common case, not a convenience.
+
+### D-054 — `view()` / `setup()` typing wrappers
+**Decided (Dev, 2026-10-04).** Optional zero-runtime wrappers that type-check a view (or a setup) in place, so a type error inside a hole lands on its own line instead of on the `$component(` call forty lines up with the whole yield union: `return view(function* () { return <div>{yield* props.todo.title}</div>; });`. Identity at runtime; the lint `prefer-view-wrapper` (warning) suggests them; the twins adopt them. The design review called this the biggest DX lever without a TS plugin.
+*Alternatives:* better branded-never messages at `$component` only; defer to Phase 4 to compare with a TS language-service route.
+*Reasoning:* cheap, local, removable; it does not preclude a plugin later. *Implementation:* Phase 1A item 9 (types + type tests showing the error location; lint; twin adoption; doc §1).
 
 ## Open questions
 
