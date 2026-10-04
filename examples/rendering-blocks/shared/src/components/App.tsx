@@ -1,24 +1,23 @@
 // The routes (examples/rendering's App, as a block). The pages are `lazy()`
-// chunks, as in the original; each module's default export is a
-// `$component`, and `adopt` keeps its type: a page may be pending (Profile)
+// chunks, as in the original (the library's `lazy`: pending while its chunk
+// loads, and colored as the page's `$component`): a page may be pending (Profile)
 // or fail (Stream's stream), and nothing here handles it — as in the
 // original, the root does (CSR's render defers, streaming SSR holds the
 // response, string SSR's entry wraps the app in a Loading). So the pages are
 // rendered in call form (`{yield* Profile()}`), which hands their pending /
 // failures on, and the app's type carries them.
-import { lazy } from "solid-js";
-import { $component, adopt, isPendingOf, Match, Switch } from "@solidjs/blocks";
+import { $component, isPendingOf, lazy, Match, Switch } from "@solidjs/blocks";
 import { Link, RouteHOC, useRouter } from "../router";
 import Profile from "./Profile";
 
-// @solidjs/vite-plugin's lazy() module-URL pass keys these against the client
-// manifest automatically — no hand-written module keys needed.
-const Home = adopt(lazy(() => import("./Home")));
-const Settings = adopt(lazy(() => import("./Settings")));
-const Stream = adopt(lazy(() => import("./Stream")));
-const ErrorStream = adopt(lazy(() => import("./ErrorStream")));
-const RevealPage = adopt(lazy(() => import("./Reveal")));
-const Skeleton = adopt(lazy(() => import("./Skeleton")));
+// @solidjs/vite-plugin's lazy() module-URL pass annotates only `lazy` imported
+// from "solid-js", so these carry no module URL (D-047's open point).
+const Home = lazy(() => import("./Home"));
+const Settings = lazy(() => import("./Settings"));
+const Stream = lazy(() => import("./Stream"));
+const ErrorStream = lazy(() => import("./ErrorStream"));
+const RevealPage = lazy(() => import("./Reveal"));
+const Skeleton = lazy(() => import("./Skeleton"));
 
 const App = RouteHOC(
   $component(function* Routes() {

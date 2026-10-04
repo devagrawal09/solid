@@ -1,9 +1,8 @@
-import { lazy } from "solid-js";
-import { $component, $memo, adopt, attempt } from "@solidjs/blocks";
+import { $component, $memo, attempt, lazy } from "@solidjs/blocks";
 import type { User } from "./Profile";
 import { ProfileError } from "./errors";
 
-const Profile = adopt(lazy(() => import("./Profile")));
+const Profile = lazy(() => import("./Profile"));
 
 // this component lazy loads data and code in parallel
 export default $component(function* ProfilePage() {

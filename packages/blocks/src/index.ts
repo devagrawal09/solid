@@ -19,7 +19,6 @@ export {
   $signal,
   $snapshot,
   $store,
-  adopt,
   attempt,
   context,
   createContext,
@@ -49,6 +48,7 @@ export {
 export { For, Show, Switch, Match, Repeat, Loading, Errored } from "./flow.js";
 export { render, hydrate } from "./render.js";
 export { $dynamic } from "./dynamic.js";
+export { lazy } from "./lazy.js";
 export type { Element, ArrayElement, RenderedObject } from "./element.js";
 export type {
   AnyOp,

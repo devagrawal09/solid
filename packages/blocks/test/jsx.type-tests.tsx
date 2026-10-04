@@ -3,9 +3,7 @@
  * executed. Every `@ts-expect-error` is a rule the editor enforces; every
  * line without one must typecheck.
  */
-import { lazy } from "solid-js";
 import {
-  adopt,
   $component,
   $effect,
   $event,
@@ -27,7 +25,8 @@ import {
   type Source,
   type TypedProps,
   type View,
-  type EventHandler
+  type EventHandler,
+  lazy
 } from "@solidjs/blocks";
 
 declare const root: HTMLElement;
@@ -446,8 +445,8 @@ export const StreamedWithoutAttempt = $component(function* () {
   };
 });
 
-// --- adopt: a lazily loaded block component keeps its coloring ---------------------------------
-const LazyPending = adopt(lazy(() => Promise.resolve({ default: Pending })));
+// --- lazy: pending while its chunk loads, and colored as the loaded component (D-047) -----------
+const LazyPending = lazy(() => Promise.resolve({ default: Pending }));
 // @ts-expect-error still pending: not a valid JSX element outside a Loading
 export const lazyBad = <LazyPending id="1" />;
 export const lazyOk = <Loading fallback="…">{LazyPending({ id: "1" })}</Loading>;
@@ -458,6 +457,25 @@ export const LazyHost = $component(function* () {
 });
 const lazyHostView: View<true, never> = LazyHost();
 void lazyHostView;
+// a view rendering a loading lazy is pending, even when the loaded component is settled
+const LazySettled = lazy(() => Promise.resolve({ default: Settled }));
+// @ts-expect-error pending while its chunk loads
+export const lazySettledBad = <LazySettled label="x" />;
+export const LazySettledHost = $component(function* () {
+  return function* () {
+    return <div>{yield* LazySettled({ label: "x" })}</div>;
+  };
+});
+const lazySettledView: View<true, never> = LazySettledHost();
+void lazySettledView;
+// and it fails as the loaded component does
+const LazyFallible = lazy(() => Promise.resolve({ default: Fallible }));
+const lazyFallibleView: View<true, NotFound> = LazyFallible({ id: "1" });
+void lazyFallibleView;
+// the export option and preload, as Solid's lazy
+const LazyNamed = lazy(() => Promise.resolve({ Settled }), { export: "Settled" });
+export const lazyNamedOk = <Loading fallback="…">{LazyNamed({ label: "x" })}</Loading>;
+void LazyNamed.preload;
 
 // --- web's serializable attribute values (the router's action(), typed paths) ------------------
 declare const serializable: import("@solidjs/web").JSX.SerializableAttributeValue;

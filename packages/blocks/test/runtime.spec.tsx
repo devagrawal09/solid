@@ -3,7 +3,7 @@
  * rule produces (`{perform(x)}` for `{yield* x}`), so they run with or
  * without the rule; `transform.spec.tsx` covers the `yield*` spelling.
  */
-import { flush, createRoot, isPending, lazy as plainLazy, Reveal, untrack } from "solid-js";
+import { flush, createRoot, isPending, Reveal, untrack } from "solid-js";
 import {
   $cleanup,
   $component,
@@ -15,11 +15,11 @@ import {
   $optimisticStore,
   $projection,
   isPendingOf,
+  lazy,
   $settled,
   $signal,
   $snapshot,
   $store,
-  adopt,
   attempt,
   createContext,
   Errored,
@@ -1347,7 +1347,7 @@ describe("reads from JSX positions are never a view's or a setup's own", () => {
 });
 
 describe("a view that is a function is a branch's content", () => {
-  it("Show / Match render it (an adopted lazy page) instead of calling it as a render callback", async () => {
+  it("Show / Match render it (a lazy page's output) instead of calling it as a render callback", async () => {
     const [n, setN] = plainSignal(1);
     const Whole = $component(function* (props: TypedProps<{ n: number }>) {
       return function* () {
@@ -1355,7 +1355,7 @@ describe("a view that is a function is a branch's content", () => {
       };
     });
     // a lazy component's output is a function (its memo), marked as a view
-    const Page = adopt(plainLazy(() => Promise.resolve({ default: Whole })));
+    const Page = lazy(() => Promise.resolve({ default: Whole }));
     const [on, setOn] = plainSignal<string | false>("a");
     const nProps = {
       get n() {
@@ -1382,7 +1382,7 @@ describe("a view that is a function is a branch's content", () => {
   });
 });
 
-describe("adopt", () => {
+describe("lazy", () => {
   it("a lazy block component in call form is built once; its chunk and its state land in place", async () => {
     let setups = 0;
     let bump!: () => void;
@@ -1400,7 +1400,7 @@ describe("adopt", () => {
       };
     });
     let land!: (m: { default: typeof Inner }) => void;
-    const Page = adopt(plainLazy(() => new Promise<{ default: typeof Inner }>(r => (land = r))));
+    const Page = lazy(() => new Promise<{ default: typeof Inner }>(r => (land = r)));
     let setLabel!: (v: string) => void;
     const App = $component(function* () {
       const [label, set] = yield* $signal("n=");
@@ -1421,7 +1421,7 @@ describe("adopt", () => {
     expect(root.textContent).toBe("count 2");
     expect(setups).toBe(1);
     // lazy's own properties are kept
-    expect(typeof (Page as unknown as { preload: unknown }).preload).toBe("function");
+    expect(typeof Page.preload).toBe("function");
   });
 });
 

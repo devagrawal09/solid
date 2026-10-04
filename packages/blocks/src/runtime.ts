@@ -50,7 +50,6 @@ import type {
   ReadsPendingOf,
   EventCall,
   Write,
-  COMPONENT as COMPONENT_BRAND,
   ChildView,
   HView,
   BlockSetter,
@@ -1236,26 +1235,23 @@ export type NoJsxViewRule<VY, R> = [R] extends [HView<any, any>]
   : [];
 
 /**
- * `const Page = adopt(lazy(() => import("./Page")))`: a component this
- * library did not create (a `lazy()` chunk, a library's component), usable in
- * call form in a hole — `{yield* Page()}` — as a `$component` is: created
- * untracked (as a tag is), so the hole does not re-create it when what it
- * builds changes (a `lazy` chunk landing), and its output passed on as a view.
- * Its type is its own: a lazily loaded block component keeps its coloring.
- * `preload` / `moduleUrl` (lazy's) are kept.
+ * @internal A Solid component (Solid's `lazy()` or `dynamic()` output) made a
+ * block component: usable in call form in a hole — `{yield* Page()}` — as a
+ * `$component` is: created untracked (as a tag is, `createComponent`), so the
+ * hole does not re-create it when what it builds changes (a chunk landing),
+ * and its output passed on as a view. Its own keys (`preload`, `moduleUrl`)
+ * are kept.
  */
-export function adopt<T extends (props: any) => any>(
-  comp: T
-): T & { readonly [COMPONENT_BRAND]: true } {
-  const adopted: any = function (props?: object) {
+export function blockComponent<T extends (props: any) => any>(comp: T): any {
+  const wrapped: any = function (props?: object) {
     const out = untrack(() => comp(props || {}));
     if (typeof out === "function" && out[READ] === undefined) out[VIEW_MARK] = true;
     return out;
   };
-  for (const key of Object.keys(comp)) adopted[key] = (comp as any)[key];
-  adopted[COMPONENT_MARK] = true;
-  if (comp.name) Object.defineProperty(adopted, "name", { value: comp.name });
-  return adopted;
+  for (const key of Object.keys(comp)) wrapped[key] = (comp as any)[key];
+  wrapped[COMPONENT_MARK] = true;
+  if (comp.name) Object.defineProperty(wrapped, "name", { value: comp.name });
+  return wrapped;
 }
 
 export function isComponent(value: unknown): boolean {
