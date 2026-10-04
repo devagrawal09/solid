@@ -23,6 +23,7 @@ import {
   Repeat,
   Show,
   type Source,
+  type Path,
   type TypedProps,
   type View,
   type EventHandler,
@@ -464,6 +465,29 @@ const pendingHole = function* () {
 };
 // @ts-expect-error a JSX element is settled: a hole over a pending source is not
 export const pendingHoleBad = <Show when={pendingHole}>!</Show>;
+
+// --- a row need not be settled: its failures join the view holding the list (D-059) ------------
+const failingRow = function* (c: Path<Comment>) {
+  const shown = yield* $memo(function* () {
+    const text = yield* c.text;
+    if (!text) yield* raise(new NotFound());
+    return text;
+  });
+  return function* () {
+    return <li>{yield* shown}</li>;
+  };
+};
+export const FailingRows = $component(function* () {
+  return function* () {
+    return <ul>{yield* For({ each: comments, children: failingRow })}</ul>;
+  };
+});
+// a failing row colors the holding view
+const failingRowsView: View<false, NotFound> = FailingRows();
+void failingRowsView;
+export const failingRowsOk = <Errored fallback="!">{FailingRows()}</Errored>;
+// @ts-expect-error as a tag the list is an element only when settled (a tag cannot carry colors)
+export const failingRowsTag = <For each={comments}>{failingRow}</For>;
 
 // --- paths through nullable values and nested sources --------------------------------------------
 export const Nullable = $component(function* (props: TypedProps<{ me: { name: string } | null }>) {

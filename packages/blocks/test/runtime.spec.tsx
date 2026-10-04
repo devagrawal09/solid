@@ -1196,6 +1196,49 @@ describe("row blocks", () => {
     expect(created).toEqual([1, 2, 3]);
   });
 
+  it("a row's raise reaches the Errored above the list, or re-throws with none (D-059)", () => {
+    let setItems!: (v: string[]) => void;
+    const row = function* (item: any) {
+      const shown = yield* $memo(function* () {
+        const v: string = yield* item;
+        if (v === "bad") yield* raise(new Failed(`row ${v}`));
+        return v;
+      });
+      return function* () {
+        return <li>{perform(shown)}</li>;
+      };
+    };
+    const List = $component(function* List() {
+      const [items, set] = yield* $signal(["a", "b"]);
+      setItems = v => write(() => set(v));
+      return function* () {
+        return <ul>{perform(For({ each: perform(items), children: row }))}</ul>;
+      };
+    });
+    mount(() => <Errored fallback={(e: any) => <p>{e().message}</p>}>{List()}</Errored>);
+    expect(root.textContent).toBe("ab");
+    setItems(["a", "bad"]);
+    flush();
+    expect(root.textContent).toBe("row bad");
+    dispose?.();
+    root.textContent = "";
+    // with no boundary the failure is re-thrown at the root (D-033)
+    const Bare = $component(function* Bare() {
+      return function* () {
+        return <ul>{perform(For({ each: ["bad"], children: row }))}</ul>;
+      };
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    let thrown: unknown;
+    try {
+      mount(Bare);
+    } catch (e) {
+      thrown = e;
+    }
+    error.mockRestore();
+    expect(String(thrown)).toMatch(/row bad/);
+  });
+
   devIt("a row's body returns its view, as a setup does", () => {
     const Rows = $component(function* () {
       return function* () {

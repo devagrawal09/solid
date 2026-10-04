@@ -46,6 +46,7 @@ import type {
   PendingOf,
   Read,
   RowBlock,
+  RowFails,
   SettledView,
   Source,
   View
@@ -131,7 +132,7 @@ function ForBlocks<T extends readonly any[], Y, VY, R>(
     each: SettledHole<T | undefined | null | false>;
     children: RowBlock<[item: Path<EachOf<T>>, index: Source<number>], Y, VY, R>;
   }
-): SettledView;
+): View<false, RowFails<VY, R>>;
 function ForBlocks<T extends readonly any[]>(
   props: Omit<ForProps<T>, "each"> & {
     each: SettledHole<T | undefined | null | false>;
@@ -142,7 +143,7 @@ function ForBlocks<T extends readonly any[], Y, VY, R>(
   props: ForProps<T> & {
     children: RowBlock<[item: Path<EachOf<T>>, index: Source<number>], Y, VY, R>;
   }
-): SettledView;
+): View<false, RowFails<VY, R>>;
 function ForBlocks<T extends readonly any[]>(
   props: ForProps<T> & {
     children: (item: Path<EachOf<T>>, index: Source<number>) => Element;
@@ -198,7 +199,7 @@ function RepeatBlocks<Y, VY, R>(
     count: SettledHole<number>;
     children: RowBlock<[index: Source<number>], Y, VY, R>;
   }
-): SettledView;
+): View<false, RowFails<VY, R>>;
 function RepeatBlocks(
   props: Omit<RepeatProps, "count"> & {
     count: SettledHole<number>;
@@ -207,7 +208,7 @@ function RepeatBlocks(
 ): SettledView;
 function RepeatBlocks<Y, VY, R>(
   props: RepeatProps & { children: RowBlock<[index: Source<number>], Y, VY, R> }
-): SettledView;
+): View<false, RowFails<VY, R>>;
 function RepeatBlocks(
   props: RepeatProps & { children: ((index: Source<number>) => Element) | Element }
 ): SettledView;
@@ -242,7 +243,7 @@ type HoleShowProps<T> = {
 /** `<Show when={function* () { … }}>`: the condition is a hole (D-038). */
 function ShowBlocks<T, Y, VY, R>(
   props: HoleShowProps<T> & { children: RowBlock<[value: Path<NonNullable<T>>], Y, VY, R> }
-): SettledView;
+): View<false, RowFails<VY, R>>;
 function ShowBlocks<T>(
   props: HoleShowProps<T> & { children: Element | ((value: Path<NonNullable<T>>) => Element) }
 ): SettledView;
@@ -258,7 +259,7 @@ function ShowBlocks<T, Y extends HoleOp, C extends Hole>(props: {
 }): FlowOutput<PendingOf<Y>, FailsOf<Y>, C>;
 function ShowBlocks<T, Y, VY, R>(
   props: ShowProps<T> & { children: RowBlock<[value: Path<NonNullable<T>>], Y, VY, R> }
-): SettledView;
+): View<false, RowFails<VY, R>>;
 function ShowBlocks<T>(
   props: ShowProps<T> & { children: Element | ((value: Path<NonNullable<T>>) => Element) }
 ): SettledView;
@@ -290,7 +291,7 @@ function MatchBlocks<T, Y, VY, R>(
     when: SettledHole<T | undefined | null | false>;
     children: RowBlock<[value: Path<NonNullable<T>>], Y, VY, R>;
   }
-): SettledView;
+): View<false, RowFails<VY, R>>;
 function MatchBlocks<T>(
   props: Omit<MatchProps<T>, "when"> & {
     when: SettledHole<T | undefined | null | false>;
@@ -299,7 +300,7 @@ function MatchBlocks<T>(
 ): SettledView;
 function MatchBlocks<T, Y, VY, R>(
   props: MatchProps<T> & { children: RowBlock<[value: Path<NonNullable<T>>], Y, VY, R> }
-): SettledView;
+): View<false, RowFails<VY, R>>;
 function MatchBlocks<T>(
   props: MatchProps<T> & { children: Element | ((value: Path<NonNullable<T>>) => Element) }
 ): SettledView;

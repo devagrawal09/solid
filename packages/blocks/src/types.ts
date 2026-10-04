@@ -411,11 +411,7 @@ export type RowBlock<A extends readonly unknown[], Y, VY, R = unknown> = ((
 type RowCheck<Y, VY, R> = [Y] extends [SetupOp]
   ? [VY] extends [[R] extends [HView<any, any>] ? HViewOp : ViewOp]
     ? ViewPending<VY, R> extends false
-      ? [ViewFails<VY, R>] extends [never]
-        ? unknown
-        : {
-            readonly "[UNSETTLED_ROW] this row's view may fail: handle it inside the row with Errored": never;
-          }
+      ? unknown
       : {
           readonly "[UNSETTLED_ROW] this row's view may be pending: handle it inside the row with Loading": never;
         }
@@ -425,6 +421,14 @@ type RowCheck<Y, VY, R> = [Y] extends [SetupOp]
   : {
       readonly "[ROW_SETUP_OP] a row block's setup only creates: read in its view": never;
     };
+
+/**
+ * What a row's view may fail with (D-059): a row need not be settled for
+ * failures — they join the flow control's output, and so the view holding it
+ * (`{yield* For({ … })}`), and reach the nearest `Errored` above the list. A
+ * pending row is still refused (`[UNSETTLED_ROW]`).
+ */
+export type RowFails<VY, R> = ViewFails<VY, R>;
 
 export type ErrorClass<E = unknown> = abstract new (...args: any[]) => E;
 
