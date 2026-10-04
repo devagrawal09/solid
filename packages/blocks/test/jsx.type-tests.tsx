@@ -14,6 +14,8 @@ import {
   $untrack,
   $store,
   attempt,
+  constant,
+  createContext,
   Errored,
   For,
   Loading,
@@ -830,3 +832,17 @@ const stillB: View<false, KindB> = onlyA;
 void stillB;
 // @ts-expect-error a catch list needs classes with a literal kind
 export const plainCatch = Errored({ catch: [PlainA], fallback: "!", children: () => KindFails() });
+
+// --- constant(value): a settled source that never fails (D-060) ---------------------------------
+const nobody = constant<{ name: string } | null>(null);
+const nobodyIs: Source<{ name: string } | null, false, never> = nobody;
+void nobodyIs;
+export const ConstantContext = createContext(constant<{ name: string } | null>(null));
+export const ReadsConstant = $component(function* () {
+  const who = yield* ConstantContext;
+  return function* () {
+    return <b>{(yield* who)?.name ?? "nobody"}</b>;
+  };
+});
+// settled: an element as it is
+export const readsConstantOk = <div>{ReadsConstant()}</div>;

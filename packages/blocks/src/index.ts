@@ -20,6 +20,7 @@ export {
   $untrack,
   $store,
   attempt,
+  constant,
   createContext,
   isComponent,
   isPendingOf,

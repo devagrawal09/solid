@@ -7,12 +7,11 @@
 // graph: the composer enables, presence re-invokes and this tab joins.
 import {
   $component,
-  $memo,
   $settled,
   $signal,
+  constant,
   createContext,
   type Element,
-  type Source,
   type TypedProps,
   view
 } from "@solidjs/blocks";
@@ -35,7 +34,11 @@ function mint(): Identity {
   return identity;
 }
 
-const IdentityContext = createContext<Source<Identity | null> | undefined>(undefined);
+/**
+ * Outside an `IdentityProvider` there is no identity (the original throws; a
+ * setup does not fail, so the default is "nobody": a constant source, D-060).
+ */
+const IdentityContext = createContext(constant<Identity | null>(null));
 
 /** Holds this tab's identity for the tree below; mints it on the client once settled. */
 export const IdentityProvider = $component(function* IdentityProvider(
@@ -50,16 +53,7 @@ export const IdentityProvider = $component(function* IdentityProvider(
   });
 });
 
-/**
- * This tab's identity — `null` on the server and until the client mints it.
- * Outside an `IdentityProvider` there is no identity (the original throws; a
- * setup does not fail, so it is "nobody", created in the asking setup).
- */
+/** This tab's identity — `null` on the server and until the client mints it. */
 export function* useIdentity() {
-  return (
-    (yield* IdentityContext) ??
-    (yield* $memo(function* (): Generator<never, Identity | null> {
-      return null;
-    }))
-  );
+  return yield* IdentityContext;
 }

@@ -337,6 +337,16 @@ function asSource<T>(get: Accessor<T>): Source<T, any, any> {
 }
 
 /**
+ * `constant(value)`: a source that always reads `value` — settled, never
+ * failing, never changing (D-060). Usable anywhere, module level included (a
+ * constant needs no owner): `createContext(constant<Identity | null>(null))`
+ * is a context of sources whose default is the constant.
+ */
+export function constant<T>(value: T): Source<T, false, never> {
+  return asSource(() => value) as any;
+}
+
+/**
  * `yield* latestOf(results)`: the latest value of a source — while a newer
  * one is pending, the previous one (Solid's `latest`: stale while
  * revalidating). Pending only until a first value exists.

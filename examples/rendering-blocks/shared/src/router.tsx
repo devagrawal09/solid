@@ -5,10 +5,10 @@ import {
   $event,
   $memo,
   $signal,
+  constant,
   createContext,
   type BlockSetter,
   type Component,
-  type Create,
   type Element,
   type Read,
   type Source,
@@ -26,25 +26,18 @@ interface RouterValue {
 
 /**
  * Outside a router there is no location to change (the original throws; a
- * setup does not fail, so the default is a detached router at "index",
- * created in the setup that asks for the router).
+ * setup does not fail, so the default is a detached router at "index": its
+ * location a constant source, D-060).
  */
-function* detached(): Generator<Create<"memo">, RouterValue> {
-  const location = yield* $memo(function* (): Generator<never, string> {
-    return "index";
-  });
-  return {
-    location,
-    setLocation: () => {
-      throw new Error("RouterContext is not available");
-    },
-    *matches(match) {
-      return match === "index";
-    }
-  };
-}
-
-const RouterContext = createContext<RouterValue | undefined>(undefined);
+const RouterContext = createContext<RouterValue>({
+  location: constant("index"),
+  setLocation: () => {
+    throw new Error("RouterContext is not available");
+  },
+  *matches(match) {
+    return match === "index";
+  }
+});
 
 function RouteHOC<P extends boolean, E>(Comp: Component<{}, P, E>) {
   return $component(function* Router(props: TypedProps<{ url?: string }, "Router">) {
@@ -77,7 +70,7 @@ function RouteHOC<P extends boolean, E>(Comp: Component<{}, P, E>) {
 }
 
 function* useRouter() {
-  return (yield* RouterContext) ?? (yield* detached());
+  return yield* RouterContext;
 }
 
 const Link = $component(function* Link(

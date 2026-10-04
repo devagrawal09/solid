@@ -20,6 +20,7 @@ import {
   $untrack,
   $store,
   attempt,
+  constant,
   createContext,
   Errored,
   For,
@@ -805,6 +806,42 @@ describe("props", () => {
     ready();
     await settle();
     expect(done).toBe(true);
+  });
+});
+
+describe("constant (D-060)", () => {
+  it("reads its value, never changes, needs no owner; a context of sources defaults to one", () => {
+    // module level: no owner, no root
+    const one = constant(1);
+    expect([...(one as any)]).toEqual([]);
+    expect(perform(one)).toBe(1);
+    const Identity = createContext(constant<string | null>(null));
+    let setMe!: (v: string) => void;
+    const Who = $component(function* Who() {
+      const who = yield* Identity;
+      return function* () {
+        return <b>{perform(who) ?? "nobody"}</b>;
+      };
+    });
+    const Provider = $component(function* () {
+      const [me, set] = yield* $signal<string | null>("ada");
+      setMe = v => write(() => set(v));
+      return function* () {
+        return (
+          <div>
+            <Identity value={me}>{Who()}</Identity>
+            {Who()}
+          </div>
+        );
+      };
+    });
+    mount(Provider);
+    // with a provider, its source; with none, the constant
+    expect(root.textContent).toBe("adanobody");
+    setMe("grace");
+    flush();
+    expect(root.textContent).toBe("gracenobody");
+    expect(perform(one)).toBe(1);
   });
 });
 
