@@ -57,11 +57,11 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 | D-045 | decided | Parity is the only Solid-drift canary; no golden snapshots |
 | D-046 | decided | `html`` ` flavor dropped; `h()` is the no-JSX flavor (D-012 amended) |
 | D-047 | decided | `@solidjs/blocks` exports `lazy` (colored); `adopt()` removed |
-| D-048 | decided | `$event(body, { latest: true })`: a new call closes the paused earlier run |
+| D-048 | reversed | `latest` removed by D-064 |
 | D-049 | decided | `h` flavor: the no-body rule is type-level only (`[HVIEW_READ]`) |
 | D-050 | decided | D-013 amended: in JSX the hole is `yield*` only |
 | D-051 | decided | D-032 amended: JSX enforcement is runtime + lint; type-level form for `h` only |
-| D-052 | decided | `createContext(defaultValue)` wraps a plain value as a constant source |
+| D-052 | superseded | by D-060 (`constant()`); a plain default cannot be told from a plain context |
 | D-053 | decided | `$effect` and `$settled` both stay: react vs run-once-after-settle |
 | D-054 | decided | `view()` zero-runtime typing wrapper for error locality (no `setup()`) |
 | D-055 | decided | A row receives `item: Source<T>` and `index: Source<number>` |
@@ -69,6 +69,11 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 | D-057 | decided | Phase 2 starts after Phase 1B lands (Q23 closed) |
 | D-058 | decided | No server-component support in the model; SC twins removed or converted; `$dynamic` removed; D-044 moot |
 | D-059 | decided | A row need not be settled: a row's failure propagates to the view holding the `<For>` |
+| D-060 | decided | `constant(value)` export; `createContext` stays plain (D-052 superseded) |
+| D-061 | decided | migrating-element twin removed (an element is not a value, D-041) |
+| D-062 | decided | Components are called, not tagged; JSX tags are DOM elements only |
+| D-063 | decided | Pending rows propagate like failing rows; `[UNSETTLED_ROW]` removed |
+| D-064 | decided | `latest` removed (D-048 reversed) |
 
 ## Entries
 
@@ -380,6 +385,31 @@ Consequences: F1 (server-component props in event/`ref` positions) disappears �
 **Decided (Dev, 2026-10-04).** A row's view may fail: a failure raised in a `<For>` (or `Repeat`) row propagates to the view holding the `<For>` — the `<For>` element's failure type is the union of its rows' failure types, which joins the enclosing view's, and at runtime the failure reaches the nearest `<Errored>` above the list or re-throws at the root (D-033). The "row must be settled" constraint is removed for failures; pending rows are unchanged by this decision (report if they prove to be the same wall). Closes F2: with `$dynamic` gone (D-058) the remaining colored elements are the library's `lazy` (pending) and `Async` props (1B), both of which propagate the same way.
 *Alternatives:* require an `<Errored>` per failing row (B); accept failing elements at every position with root reporting (C, the general form — D-059 is its row-specific instance; extend to other positions only when a twin needs it).
 *Reasoning:* the runtime already propagates; the types should say what the runtime does. *Implementation:* Phase 1A follow-up (types + type test "a failing row colors the holding view"; runtime test: a row's `raise` reaches an `<Errored>` above the `<For>`).
+
+### D-060 — `constant(value)`; `createContext` stays plain
+**Decided (Dev, 2026-10-04; supersedes D-052).** Finding: a context that holds a source (room's identity, provided `value={me}`) and a context that holds a plain value (todos' `[TodoStore, Actions]` tuple, destructured in consumers' setups; effect's `RuntimeContext` read by a verbatim Effect layer through Solid's `useContext`) are the same `createContext(null)` call, so the library cannot know which default to wrap; wrapping every plain default would make `yield* Ctx` return a source everywhere. So the writer states the kind: `constant(value)` → `Source<T, false, never>`, usable at module level (a constant needs no owner); room writes `createContext(constant<Identity | null>(null))`; todos and effect keep plain defaults. The `undefined` + `$memo` workaround in room and rendering is reverted.
+*Alternatives:* keep the workaround (a memo per consumer); two creators (`createContext` / `createSourceContext`).
+*Reasoning:* explicit, one small export, no ambiguity — and it is the one surviving use the `$` block form had. *Implementation:* Phase 1A follow-up 2.
+
+### D-061 — migrating-element twin removed
+**Decided (Dev, 2026-10-04).** `examples/migrating-element-blocks` is removed. Its point — `const hoistedCanvas = <Canvas />` held as a value and shown in several `<Show>` slots so the DOM node migrates — is exactly what D-041 forbids (an element is not a value in a block). Like D-058: a twin that exists to demonstrate something the model rejects by design is outside the model; node migration stays a Solid feature the compiler route can show. The `eslint-disable` exception the agent kept is gone with it. Twin count 9 → 8.
+*Alternatives:* a sanctioned `$element(<Canvas />)` creator for hoisted elements (one escape for one demo); keep the lint exception as the documented limit.
+*Reasoning:* the alternatives keep either an escape hatch or a permanent exception. *Implementation:* Phase 1A follow-up 2.
+
+### D-062 — Components are called, not tagged
+**Decided (Dev, 2026-10-04).** A component (anything that is not a DOM element) is used in call form inside a hole — `{yield* Card({ todo })}` — never as a JSX tag; JSX tags are for DOM elements only. Finding that drove it: a JSX tag's type is always `JSX.Element`, so a component's colors (pending / failures) travel only through `yield*` and are dropped at a tag; the agent's implementation therefore made a colored component's tag an element only when settled, which forces boundaries the originals do not have — the wall of F2 and of 1B's `Async` props. Dev's rule, and its reason: call everything by convention, so that when a component goes from no effects to effects (gains a color) it does not have to be rewritten at every call site; colors are always tracked. Flow controls are components and are called too: `{yield* For({ each: todos, children: function* (todo) { … } })}`, `{yield* Show({ when, children })}` — which is also the only form in which a list carries its rows' colors (D-059/D-063). Props are a plain object literal, checked directly against the declared prop type (D-056). Enforcement: lint `no-component-tag` (error, `recommended`) with an autofix tag → call; the JSX namespace rejects component tags at the type level if feasible; twins migrated (every component tag). JSX keeps: DOM elements, holes `{yield* x}`, component calls, settled children.
+*Alternatives:* tags erase colors by rule (runtime propagates; §7 limitation); decide from 1B's counts.
+*Reasoning:* the alternative makes typed failures complete only along `yield*` chains and silently incomplete at every tag; the convention costs one migration and never a per-call-site rewrite later. *Implementation:* Phase 1A follow-up 2 (before 1B, which depends on it).
+
+### D-063 — Pending rows propagate like failing rows
+**Decided (Dev, 2026-10-04).** D-059 extended to pending: a pending row propagates to the view holding the `For` (to the nearest `<Loading>`), tracked through the call form; `[UNSETTLED_ROW]` is removed. One rule for both colors; sierpinski's lazy-memo workaround can be revisited.
+*Alternatives:* keep pending rows refused (read async data in a hole).
+*Reasoning:* the same reasoning as D-059, and symmetry. *Implementation:* Phase 1A follow-up 2 (types, type test, runtime test: a pending row reaches a `<Loading>` above the list).
+
+### D-064 — `latest` removed
+**Decided (Dev, 2026-10-04; reverses D-048).** `$event(body, { latest: true })` is removed with its tests and doc mention: too many footguns — the superseded run resolving `undefined` where the type says a result was the first, and the fixes (propagating supersession to waiters, or a `SupersededError` color on every `latest` event) each add a rule. Events are independent runs, full stop; a search box that wants latest-wins reads the input through a `$memo` (which already closes superseded runs) and renders that.
+*Alternatives:* keep `latest` with supersession propagating to waiters; keep it with a typed `SupersededError`.
+*Reasoning:* D-005/D-006 — one event semantics, no corner cases. *Implementation:* Phase 1A follow-up 2 (revert `476f703c` minus its test for independent runs).
 
 ## Phase 1A findings (agent report, items 4c–8; verbatim, 2026-10-04)
 
