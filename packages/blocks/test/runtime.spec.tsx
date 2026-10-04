@@ -461,6 +461,17 @@ describe("the runtime's other dev errors", () => {
     ).toThrow(/CONTEXT_OUTSIDE_SETUP/);
   });
 
+  devIt("JSX in a setup is JSX_IN_SETUP (D-041)", () => {
+    const Builds = $component(function* Builds() {
+      const [title] = yield* $signal("t");
+      const header = <h1>{perform(title)}</h1>;
+      return function* () {
+        return header;
+      };
+    });
+    expect(() => createRoot(() => Builds())).toThrow(/JSX_IN_SETUP\] <Builds>: JSX in a setup/);
+  });
+
   devIt("a setup returns its view; a path is not writable", () => {
     const NoView = $component(function* () {
       return 1;

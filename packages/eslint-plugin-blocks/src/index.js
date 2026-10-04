@@ -8,6 +8,7 @@
  *   read-before-attempt    a $memo reads before its first `attempt`
  *   no-unyielded-write     an operation acts only as `yield* op` (setters; with types, event calls and any op)
  *   no-foreign-reactive    no reactive state from plain Solid, the router or another library
+ *   jsx-only-in-view       JSX only in a view, a hole or a row's view: a setup never creates elements
  *   prefer-view-wrapper    (warning) wrap a view in `view(…)` so its errors land where it is written
  *   no-path-object-use     a path is a read: no spread, no `===`, no `JSON.stringify` of one
  *   no-dollar-block        `$` / `$scope` are removed: bare `function*` holes and rows, `$memo` derivations (autofix)
@@ -789,6 +790,81 @@ const preferViewWrapper = {
   }
 };
 
+/** Block kinds whose body never builds elements: JSX is a view's, a hole's or a row's view's (D-041). */
+const NO_JSX_KINDS = new Set(["setup", "row", "memo", "effect", "event", "settled"]);
+
+/**
+ * JSX only as the return of a view, a hole, or a row's view (D-041): a setup
+ * never creates elements. Reports the outermost JSX in a block that is not a
+ * view — or in a plain function declared directly in such a block (a
+ * `const header = () => <h1/>` in a setup), unless it sits inside JSX (a
+ * render callback in a view, `{props => <Loading>…</Loading>}`).
+ */
+const jsxOnlyInView = {
+  meta: {
+    type: "problem",
+    docs: {
+      description:
+        "JSX only as the return of a view, a hole, or a row's view: a setup (or a memo, an effect, an event) never creates elements."
+    },
+    messages: {
+      jsx: "JSX in {{where}}: elements are built by the view it returns (`return view(function* () { return <…/>; })`)."
+    },
+    schema: []
+  },
+  create(context) {
+    const where = {
+      setup: "a setup",
+      row: "a row's setup",
+      memo: "a $memo",
+      effect: "an $effect",
+      event: "an $event",
+      settled: "a $settled"
+    };
+    const check = node => {
+      // the outermost JSX only
+      let p = node.parent;
+      while (p) {
+        if (p.type === "JSXElement" || p.type === "JSXFragment") return;
+        if (
+          p.type === "FunctionExpression" ||
+          p.type === "ArrowFunctionExpression" ||
+          p.type === "FunctionDeclaration"
+        )
+          break;
+        p = p.parent;
+      }
+      if (!p) return;
+      let kind = blockKind(p);
+      if (!kind) {
+        // a plain function declared in a block: it is the block's code — but
+        // not inside JSX (a render callback a view hands on)
+        let q = p.parent;
+        while (
+          q &&
+          !(
+            q.type === "FunctionExpression" ||
+            q.type === "ArrowFunctionExpression" ||
+            q.type === "FunctionDeclaration"
+          )
+        ) {
+          if (
+            q.type === "JSXElement" ||
+            q.type === "JSXFragment" ||
+            q.type === "JSXExpressionContainer"
+          )
+            return;
+          q = q.parent;
+        }
+        kind = q ? blockKind(q) : null;
+      }
+      if (kind && NO_JSX_KINDS.has(kind))
+        context.report({ node, messageId: "jsx", data: { where: where[kind] } });
+    };
+    return { JSXElement: check, JSXFragment: check };
+  }
+};
+
 export const rules = {
   "no-throw": noThrow,
   "no-read-in-view-body": noReadInViewBody,
@@ -799,6 +875,7 @@ export const rules = {
   "no-dollar-block": noDollarBlock,
   "no-path-object-use": noPathObjectUse,
   "prefer-view-wrapper": preferViewWrapper,
+  "jsx-only-in-view": jsxOnlyInView,
   "typed-props-key": typedPropsKey
 };
 

@@ -2,9 +2,8 @@
 // a block): every template lives here, rendered in the browser from JSON.
 //
 // The router is created at module scope (as in the original) and the app's
-// tree is built in App's SETUP: a router created or rendered inside a view
-// would be re-created whenever the view re-rendered, and client navigation
-// would never complete.
+// tree is built by App's view (JSX only in a view, D-041); a view runs once
+// (D-032), so the router is not re-created.
 import { createRouter, defineRoute } from "@solidjs/router";
 import { $component, Loading, type Component, view } from "@solidjs/blocks";
 import Nav from "~/components/nav";
@@ -36,18 +35,21 @@ const Router = createRouter({
 });
 
 const App = $component(function* App() {
-  const rendered = (
-    <Router>
-      {props => (
-        <>
-          <Nav />
-          <Loading fallback={<div class="news-list-nav">Loading...</div>}>{props.children}</Loading>
-        </>
-      )}
-    </Router>
-  );
+  // JSX only in a view (D-041): the view runs once (D-032), so the router it
+  // builds is not re-created.
   return view(function* () {
-    return rendered;
+    return (
+      <Router>
+        {props => (
+          <>
+            <Nav />
+            <Loading fallback={<div class="news-list-nav">Loading...</div>}>
+              {props.children}
+            </Loading>
+          </>
+        )}
+      </Router>
+    );
   });
 });
 

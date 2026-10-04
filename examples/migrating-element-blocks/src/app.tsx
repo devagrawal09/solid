@@ -24,6 +24,10 @@ export const App = $component(function* App() {
   // Left panel — the `<Canvas />` JSX is evaluated once and stored in a
   // variable. Every `<Show>` slot references the same value, so the runtime
   // migrates a single DOM node between slots.
+  // D-041 says a setup never creates elements, and this example's point is an
+  // element held in a variable: kept as the original's, a recorded finding
+  // (DECISIONS.md, "D-041 and the migrating-element twin").
+  // eslint-disable-next-line @solidjs/blocks/jsx-only-in-view
   const hoistedCanvas = <Canvas />;
 
   return view(function* () {

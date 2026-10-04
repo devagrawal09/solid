@@ -372,6 +372,13 @@ export function accessor<T>(source: Source<T, boolean, any>): Accessor<T> {
  */
 export function perform<T>(target: Yieldable<any, T> | (() => T) | T): T {
   const x = target as any;
+  // D-041: JSX only in a view, a hole or a row's view; a hole performed
+  // while a setup runs is JSX built in the setup
+  if (__DEV__ && state.host === SETUP)
+    throw devError(
+      "JSX_IN_SETUP",
+      `<${state.name ?? "anonymous"}>: JSX in a setup. A setup creates state; elements are built by the view it returns (return view(function* () { return <…/>; })).`
+    );
   if (x != null) {
     if (x[READ] !== undefined) {
       if (!__DEV__) return readOf(x) as T;

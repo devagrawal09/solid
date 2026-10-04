@@ -240,6 +240,41 @@ tester.run("no-read-in-view-body (a wrapped view)", rules["no-read-in-view-body"
   ]
 });
 
+tester.run("jsx-only-in-view", rules["jsx-only-in-view"], {
+  valid: [
+    component("return view(function* () { return <p>{yield* n}</p>; });"),
+    // a render callback inside a view's JSX builds elements: fine
+    component(
+      "return function* () { return <Router>{props => <Loading>{props.children}</Loading>}</Router>; };"
+    ),
+    // a row's view
+    "const r = <For each={xs}>{function* (x) { return function* () { return <li />; }; }}</For>;",
+    // plain code outside blocks
+    "const el = () => <p />;"
+  ],
+  invalid: [
+    {
+      code: component(
+        "const header = <h1>{yield* title}</h1>; return function* () { return header; };"
+      ),
+      errors: [{ messageId: "jsx", data: { where: "a setup" } }]
+    },
+    {
+      // a plain function declared in the setup is the setup's code
+      code: component("const make = () => <h1 />; return function* () { return <p />; };"),
+      errors: [{ messageId: "jsx", data: { where: "a setup" } }]
+    },
+    {
+      code: "const r = <For each={xs}>{function* (x) { const el = <i />; return function* () { return el; }; }}</For>;",
+      errors: [{ messageId: "jsx", data: { where: "a row's setup" } }]
+    },
+    {
+      code: "const m = $memo(function* () { return <p />; });",
+      errors: [{ messageId: "jsx", data: { where: "a $memo" } }]
+    }
+  ]
+});
+
 tester.run("read-before-attempt", rules["read-before-attempt"], {
   valid: [
     "const m = $memo(function* () { const id = yield* props.id; return yield* attempt(() => f(id)); });",
