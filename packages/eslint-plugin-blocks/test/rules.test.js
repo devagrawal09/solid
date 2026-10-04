@@ -205,6 +205,41 @@ tester.run("no-path-object-use", rules["no-path-object-use"], {
   ]
 });
 
+tester.run("prefer-view-wrapper", rules["prefer-view-wrapper"], {
+  valid: [
+    component("return view(function* () { return <p />; });"),
+    "const r = <For each={xs}>{function* (x) { return view(function* () { return <i />; }); }}</For>;"
+  ],
+  invalid: [
+    {
+      code:
+        'import { $component } from "@solidjs/blocks";\n' +
+        component("return function* () { return <p />; };"),
+      output:
+        'import { $component, view } from "@solidjs/blocks";\n' +
+        component("return view(function* () { return <p />; });"),
+      errors: [{ messageId: "wrap" }]
+    },
+    {
+      // a row's view too, and an h view
+      code: "const r = <For each={xs}>{function* (x) { return function* () { return h('i'); }; }}</For>;",
+      output:
+        "const r = <For each={xs}>{function* (x) { return view(function* () { return h('i'); }); }}</For>;",
+      errors: [{ messageId: "wrap" }]
+    }
+  ]
+});
+
+tester.run("no-read-in-view-body (a wrapped view)", rules["no-read-in-view-body"], {
+  valid: [component("return view(function* () { return <p>{yield* n}</p>; });")],
+  invalid: [
+    {
+      code: component("return view(function* () { const v = yield* n; return <p>{v}</p>; });"),
+      errors: [{ messageId: "read" }]
+    }
+  ]
+});
+
 tester.run("read-before-attempt", rules["read-before-attempt"], {
   valid: [
     "const m = $memo(function* () { const id = yield* props.id; return yield* attempt(() => f(id)); });",

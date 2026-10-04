@@ -13,7 +13,8 @@ import {
   createContext,
   type Element,
   type Source,
-  type TypedProps
+  type TypedProps,
+  view
 } from "@solidjs/blocks";
 import { isServer } from "@solidjs/web";
 import type { Identity } from "./sources";
@@ -44,9 +45,9 @@ export const IdentityProvider = $component(function* IdentityProvider(
   yield* $settled(function* () {
     if (!isServer) yield* setMe(mint());
   });
-  return function* () {
+  return view(function* () {
     return <IdentityContext value={me}>{yield* props.children}</IdentityContext>;
-  };
+  });
 });
 
 /**

@@ -1,4 +1,12 @@
-import { $component, Errored, For, Loading, type Source, type TypedProps } from "@solidjs/blocks";
+import {
+  $component,
+  Errored,
+  For,
+  Loading,
+  type Source,
+  type TypedProps,
+  view
+} from "@solidjs/blocks";
 import type { ProfileError } from "./errors";
 
 export interface User {
@@ -10,19 +18,19 @@ export interface User {
 const Facts = $component(function* Facts(
   props: TypedProps<{ info: Source<string[], true, ProfileError> }, "Facts">
 ) {
-  return function* () {
+  return view(function* () {
     return (
       <ul>
         <For each={yield* props.info}>
           {function* (fact) {
-            return function* () {
+            return view(function* () {
               return <li>{yield* fact}</li>;
-            };
+            });
           }}
         </For>
       </ul>
     );
-  };
+  });
 });
 
 const Profile = $component(function* Profile(
@@ -31,7 +39,7 @@ const Profile = $component(function* Profile(
     "Profile"
   >
 ) {
-  return function* () {
+  return view(function* () {
     return (
       <>
         <h1>{yield* props.user.firstName}'s Profile</h1>
@@ -44,7 +52,7 @@ const Profile = $component(function* Profile(
         </Errored>
       </>
     );
-  };
+  });
 });
 
 export default Profile;

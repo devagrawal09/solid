@@ -1,4 +1,4 @@
-import { $component, $memo, attempt, lazy } from "@solidjs/blocks";
+import { $component, $memo, attempt, lazy, view } from "@solidjs/blocks";
 import type { User } from "./Profile";
 import { ProfileError } from "./errors";
 
@@ -39,9 +39,9 @@ export default $component(function* ProfilePage() {
     );
   });
 
-  return function* () {
+  return view(function* () {
     // Profile reads the user outside its own boundary: it is pending, so it
     // is rendered in call form, and this page is pending too.
     return <>{yield* Profile({ user, info })}</>;
-  };
+  });
 });

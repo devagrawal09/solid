@@ -1,6 +1,6 @@
 import { createUniqueId } from "solid-js";
 import { Portal } from "@solidjs/web";
-import { $component, $event, $signal } from "@solidjs/blocks";
+import { $component, $event, $signal, view } from "@solidjs/blocks";
 
 type Input = InputEvent & { currentTarget: HTMLInputElement };
 
@@ -24,7 +24,7 @@ const Settings = $component(function* Settings() {
     yield* setModalOpen(false);
   });
 
-  return function* () {
+  return view(function* () {
     return (
       <section onClick={count}>
         <h1>Settings</h1>
@@ -51,7 +51,7 @@ const Settings = $component(function* Settings() {
         )}
       </section>
     );
-  };
+  });
 });
 
 export default Settings;

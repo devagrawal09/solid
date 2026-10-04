@@ -1,4 +1,4 @@
-import { $cleanup, $component, $settled } from "@solidjs/blocks";
+import { $cleanup, $component, $settled, view } from "@solidjs/blocks";
 import { CANVAS_H, CANVAS_W, createLogoCanvasPainter, REVEAL_MS } from "./logoCanvas";
 
 export const Canvas = $component(function* Canvas() {
@@ -35,7 +35,7 @@ export const Canvas = $component(function* Canvas() {
     });
   });
 
-  return function* () {
+  return view(function* () {
     return (
       <canvas
         class="canvas"
@@ -47,5 +47,5 @@ export const Canvas = $component(function* Canvas() {
         }}
       />
     );
-  };
+  });
 });

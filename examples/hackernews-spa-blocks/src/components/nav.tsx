@@ -1,7 +1,7 @@
-import { $component } from "@solidjs/blocks";
+import { $component, view } from "@solidjs/blocks";
 
 const Nav = $component(function* Nav() {
-  return function* () {
+  return view(function* () {
     return (
       <header class="header">
         <nav class="inner">
@@ -26,7 +26,7 @@ const Nav = $component(function* Nav() {
         </nav>
       </header>
     );
-  };
+  });
 });
 
 export default Nav;

@@ -1,8 +1,8 @@
-import { $component, Show, type TypedProps } from "@solidjs/blocks";
+import { $component, Show, type TypedProps, view } from "@solidjs/blocks";
 import type { StoryDefinition } from "../types";
 
 const Story = $component(function* Story(props: TypedProps<{ story: StoryDefinition }, "Story">) {
-  return function* () {
+  return view(function* () {
     return (
       <li class="news-item">
         <span class="score">{yield* props.story.points}</span>
@@ -40,7 +40,7 @@ const Story = $component(function* Story(props: TypedProps<{ story: StoryDefinit
         </Show>
       </li>
     );
-  };
+  });
 });
 
 export default Story;

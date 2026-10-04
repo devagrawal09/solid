@@ -22,7 +22,8 @@ import {
   refresh,
   Show,
   type Source,
-  type TypedProps
+  type TypedProps,
+  view
 } from "@solidjs/blocks";
 import {
   CardDeclinedError,
@@ -66,13 +67,13 @@ const INITIAL_CART: CartItem[] = [
 const Orders = $component(function* Orders(
   props: TypedProps<{ orders: Source<Order[], true, OrdersError> }, "Orders">
 ) {
-  return function* () {
+  return view(function* () {
     return (
       <Show when={(yield* props.orders.length) > 0} fallback={<p class="empty">No orders yet.</p>}>
         <ul class="orders">
           <For each={yield* props.orders}>
             {function* (order) {
-              return function* () {
+              return view(function* () {
                 return (
                   <li>
                     <span class="pkg-name">{yield* order.id}</span>
@@ -84,13 +85,13 @@ const Orders = $component(function* Orders(
                     <span class="cart-price">${(yield* order.total).toFixed(2)}</span>
                   </li>
                 );
-              };
+              });
             }}
           </For>
         </ul>
       </Show>
     );
-  };
+  });
 });
 
 /** Fetching the orders failed: the color of the orders list's failure. */
@@ -184,7 +185,7 @@ export const Checkout = $component(function* Checkout() {
     yield* setDeclineCard(e.currentTarget.checked);
   });
 
-  return function* () {
+  return view(function* () {
     return (
       <section class="panel">
         <header>
@@ -211,7 +212,7 @@ export const Checkout = $component(function* Checkout() {
                   c[index].quantity++;
                 });
               });
-              return function* () {
+              return view(function* () {
                 return (
                   <div class="cart-row">
                     <span class="cart-name">{yield* item.name}</span>
@@ -232,7 +233,7 @@ export const Checkout = $component(function* Checkout() {
                     </span>
                   </div>
                 );
-              };
+              });
             }}
           </For>
           <div class="cart-row total">
@@ -270,7 +271,7 @@ export const Checkout = $component(function* Checkout() {
                 if (current === -1) return "";
                 return target < current ? "done" : target === current ? "active" : "";
               });
-              return function* () {
+              return view(function* () {
                 return (
                   <li
                     class={{
@@ -281,16 +282,16 @@ export const Checkout = $component(function* Checkout() {
                     {yield* step.label}
                   </li>
                 );
-              };
+              });
             }}
           </For>
         </ol>
 
         <Show when={yield* notice}>
           {function* (n) {
-            return function* () {
+            return view(function* () {
               return <p class={`notice ${yield* n.kind}`}>{yield* n.text}</p>;
-            };
+            });
           }}
         </Show>
 
@@ -303,5 +304,5 @@ export const Checkout = $component(function* Checkout() {
         </Errored>
       </section>
     );
-  };
+  });
 });

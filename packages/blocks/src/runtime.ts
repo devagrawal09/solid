@@ -1425,6 +1425,23 @@ export function $component<
   return component;
 }
 
+/**
+ * `return view(function* () { return <…/>; })`: a view, type-checked where
+ * it is written (D-054). Identity at run time. Without it a view's mistakes
+ * (an op a view may not perform — a creation, a write; a no-JSX view's read)
+ * are reported at the `$component(` call, with the whole setup's yield union;
+ * with it they are reported at the `view(` call, naming the op. Its colors
+ * are kept: the component is pending / failing as the view is.
+ */
+export function view<Y extends ViewOp = never, R = unknown>(
+  fn: () => Generator<Y, R, any>,
+  ..._rule: NoJsxViewRule<Y, R>
+): () => Generator<[R] extends [HView<any, any>] ? never : Y, R, any> {
+  // an `h` view's colors are its output's: its yields (refused above) are not
+  // passed on, so `$component` does not report the same mistake again
+  return fn as any;
+}
+
 /** What a view function yields (a setup may return one of several views). */
 export type ViewYield<V> = V extends () => Generator<infer Y, any, any> ? Y : never;
 /** What a view function returns. */

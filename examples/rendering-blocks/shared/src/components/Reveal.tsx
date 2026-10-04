@@ -9,7 +9,8 @@ import {
   Loading,
   Show,
   type Source,
-  type TypedProps
+  type TypedProps,
+  view
 } from "@solidjs/blocks";
 
 function delayedValue<T>(ms: number, value: T): Promise<T> {
@@ -19,14 +20,14 @@ function delayedValue<T>(ms: number, value: T): Promise<T> {
 const CardBody = $component(function* CardBody(
   props: TypedProps<{ title: string; value: Source<string, true, RevealError> }, "CardBody">
 ) {
-  return function* () {
+  return view(function* () {
     return (
       <div class="reveal-card">
         <strong>{yield* props.title}</strong>
         <div>{yield* props.value}</div>
       </div>
     );
-  };
+  });
 });
 
 /** A card\u0027s value failed: the color of its failure. */
@@ -49,7 +50,7 @@ const AsyncCard = $component(function* AsyncCard(
     );
   });
 
-  return function* () {
+  return view(function* () {
     return (
       // the Loading stays the Reveal's direct boundary; the card's failure is
       // handled inside it
@@ -60,7 +61,7 @@ const AsyncCard = $component(function* AsyncCard(
         })}
       </Loading>
     );
-  };
+  });
 });
 
 type Input = InputEvent & { currentTarget: HTMLInputElement };
@@ -81,7 +82,7 @@ const RevealPage = $component(function* RevealPage() {
     yield* setSeed(s => s + 1);
   });
 
-  return function* () {
+  return view(function* () {
     return (
       <>
         <h1>Reveal</h1>
@@ -182,7 +183,7 @@ const RevealPage = $component(function* RevealPage() {
         </Show>
       </>
     );
-  };
+  });
 });
 
 export default RevealPage;

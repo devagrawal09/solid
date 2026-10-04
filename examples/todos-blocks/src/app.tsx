@@ -22,7 +22,8 @@ import {
   Loading,
   readStore,
   Show,
-  type TypedProps
+  type TypedProps,
+  view
 } from "@solidjs/blocks";
 import { createTodos, type Todo } from "./todos";
 import { hashFilter, type Filter } from "./filter";
@@ -56,14 +57,14 @@ const Header = $component(function* Header() {
     input.value = "";
     yield* addTodo({ id, title, completed: false });
   });
-  return function* () {
+  return view(function* () {
     return (
       <header class="header">
         <h1>todos</h1>
         <input class="new-todo" placeholder="What needs to be done?" autofocus onKeyDown={submit} />
       </header>
     );
-  };
+  });
 });
 
 const TodoItem = $component(function* TodoItem(props: TypedProps<{ todo: Todo }, "TodoItem">) {
@@ -77,7 +78,7 @@ const TodoItem = $component(function* TodoItem(props: TypedProps<{ todo: Todo },
   const remove = $event(function* () {
     yield* removeTodo(yield* props.todo.id);
   });
-  return function* () {
+  return view(function* () {
     return (
       <li
         class={[
@@ -99,18 +100,18 @@ const TodoItem = $component(function* TodoItem(props: TypedProps<{ todo: Todo },
           <label>{yield* props.todo.title}</label>
           <Show when={yield* props.todo.error}>
             {function* (error) {
-              return function* () {
+              return view(function* () {
                 return (
                   <button class="retry" title={`Retry ${yield* error.type}`} onClick={retry} />
                 );
-              };
+              });
             }}
           </Show>
           <button class="destroy" onClick={remove} />
         </div>
       </li>
     );
-  };
+  });
 });
 
 const MainSection = $component(function* MainSection(
@@ -133,7 +134,7 @@ const MainSection = $component(function* MainSection(
   const toggle = $event(function* () {
     yield* toggleAll(!(yield* allCompleted));
   });
-  return function* () {
+  return view(function* () {
     return (
       <Show when={(yield* todos.length) > 0}>
         <section class="main">
@@ -151,7 +152,7 @@ const MainSection = $component(function* MainSection(
         </section>
       </Show>
     );
-  };
+  });
 });
 
 const Footer = $component(function* Footer(props: TypedProps<{ filter: Filter }, "Footer">) {
@@ -165,7 +166,7 @@ const Footer = $component(function* Footer(props: TypedProps<{ filter: Filter },
   const clear = $event(function* () {
     yield* clearCompleted();
   });
-  return function* () {
+  return view(function* () {
     return (
       <Show when={(yield* todos.length) > 0}>
         <footer class="footer">
@@ -197,12 +198,12 @@ const Footer = $component(function* Footer(props: TypedProps<{ filter: Filter },
         </footer>
       </Show>
     );
-  };
+  });
 });
 
 /** The app's section: its list and footer read the store, so it waits for it and fails with it. */
 const TodoApp = $component(function* TodoApp(props: TypedProps<{ filter: Filter }, "TodoApp">) {
-  return function* () {
+  return view(function* () {
     return (
       <section class="todoapp">
         <Header />
@@ -217,13 +218,13 @@ const TodoApp = $component(function* TodoApp(props: TypedProps<{ filter: Filter 
         }
       </section>
     );
-  };
+  });
 });
 
 export const App = $component(function* App() {
   const filter = yield* hashFilter();
   const todos = yield* createTodos();
-  return function* () {
+  return view(function* () {
     return (
       <TodosContext value={todos}>
         {Errored({
@@ -237,5 +238,5 @@ export const App = $component(function* App() {
         })}
       </TodosContext>
     );
-  };
+  });
 });

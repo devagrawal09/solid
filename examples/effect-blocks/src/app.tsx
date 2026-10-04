@@ -6,7 +6,8 @@ import {
   Errored,
   For,
   Show,
-  type TypedProps
+  type TypedProps,
+  view
 } from "@solidjs/blocks";
 import { Typeahead } from "./typeahead";
 import { Checkout } from "./checkout";
@@ -28,7 +29,7 @@ const LogPanel = $component(function* LogPanel(props: TypedProps<{ log: Log }, "
   const clear = $event(function* () {
     yield* (yield* props.log.clear)();
   });
-  return function* () {
+  return view(function* () {
     return (
       <aside class="log-panel">
         <header>
@@ -42,7 +43,7 @@ const LogPanel = $component(function* LogPanel(props: TypedProps<{ log: Log }, "
           <ul>
             <For each={yield* newestFirst}>
               {function* (entry) {
-                return function* () {
+                return view(function* () {
                   return (
                     <li class={`log-${yield* entry.kind}`}>
                       <span class="log-time">{yield* entry.time}</span>
@@ -50,14 +51,14 @@ const LogPanel = $component(function* LogPanel(props: TypedProps<{ log: Log }, "
                       <span class="log-msg">{yield* entry.message}</span>
                     </li>
                   );
-                };
+                });
               }}
             </For>
           </ul>
         </Show>
       </aside>
     );
-  };
+  });
 });
 
 export const App = $component(function* App() {
@@ -71,7 +72,7 @@ export const App = $component(function* App() {
   const showCheckout = $event(function* () {
     yield* setTab("checkout");
   });
-  return function* () {
+  return view(function* () {
     return (
       <Errored
         fallback={(err, reset) => (
@@ -114,5 +115,5 @@ export const App = $component(function* App() {
         </RuntimeContext>
       </Errored>
     );
-  };
+  });
 });

@@ -27,7 +27,8 @@ import {
   type TypedProps,
   type View,
   type EventHandler,
-  lazy
+  lazy,
+  view
 } from "@solidjs/blocks";
 
 declare const root: HTMLElement;
@@ -488,6 +489,43 @@ void failingRowsView;
 export const failingRowsOk = <Errored fallback="!">{FailingRows()}</Errored>;
 // @ts-expect-error as a tag the list is an element only when settled (a tag cannot carry colors)
 export const failingRowsTag = <For each={comments}>{failingRow}</For>;
+
+// --- view(): a view's mistake is reported at the view, not at $component (D-054) ----------------
+export const WrappedCreates = $component(function* () {
+  const [n] = yield* $signal(1);
+  // @ts-expect-error reported here, at the view, naming the op (Create<"signal"> is not a ViewOp)
+  return view(function* () {
+    const [m] = yield* $signal(0);
+    return (
+      <p>
+        {yield* n}
+        {yield* m}
+      </p>
+    );
+  });
+});
+// unwrapped, the same mistake is reported at the $component( call
+// @ts-expect-error reported here, forty lines up in a long setup
+export const UnwrappedCreates = $component(function* () {
+  const [n] = yield* $signal(1);
+  return function* () {
+    const [m] = yield* $signal(0);
+    return (
+      <p>
+        {yield* n}
+        {yield* m}
+      </p>
+    );
+  };
+});
+// a wrapped view keeps its colors
+export const WrappedPending = $component(function* () {
+  return view(function* () {
+    return <b>{(yield* pendingUser).name}</b>;
+  });
+});
+const wrappedPendingView: View<true, never> = WrappedPending();
+void wrappedPendingView;
 
 // --- paths through nullable values and nested sources --------------------------------------------
 export const Nullable = $component(function* (props: TypedProps<{ me: { name: string } | null }>) {

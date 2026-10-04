@@ -8,12 +8,14 @@
  *   read-before-attempt    a $memo reads before its first `attempt`
  *   no-unyielded-write     an operation acts only as `yield* op` (setters; with types, event calls and any op)
  *   no-foreign-reactive    no reactive state from plain Solid, the router or another library
+ *   prefer-view-wrapper    (warning) wrap a view in `view(…)` so its errors land where it is written
  *   no-path-object-use     a path is a read: no spread, no `===`, no `JSON.stringify` of one
  *   no-dollar-block        `$` / `$scope` are removed: bare `function*` holes and rows, `$memo` derivations (autofix)
  *   typed-props-key        exported components name their type-linker key
  */
 import {
   blockKind,
+  isViewCall,
   enclosingFunction,
   isCallTo,
   isCapitalizedCall,
@@ -742,6 +744,51 @@ const noPathObjectUse = {
   }
 };
 
+const preferViewWrapper = {
+  meta: {
+    type: "suggestion",
+    fixable: "code",
+    docs: {
+      description:
+        "Wrap a view in `view(function* () { … })`: its mistakes are reported where it is written, naming the op, instead of at the `$component(` call (D-054)."
+    },
+    messages: {
+      wrap: "wrap this view in `view(…)` so its type errors are reported here, not at the `$component(` call."
+    },
+    schema: []
+  },
+  create(context) {
+    const source = context.sourceCode;
+    return {
+      FunctionExpression(node) {
+        if (!node.generator || blockKind(node) !== "view") return;
+        if (isViewCall(node.parent) && node.parent.arguments[0] === node) return;
+        const blocks = source.ast.body.find(
+          s =>
+            s.type === "ImportDeclaration" &&
+            s.source.value === "@solidjs/blocks" &&
+            s.importKind !== "type"
+        );
+        context.report({
+          node,
+          messageId: "wrap",
+          fix: fixer => {
+            const fixes = [fixer.replaceText(node, `view(${source.getText(node)})`)];
+            if (!blocks) return fixes;
+            const imported = blocks.specifiers.some(
+              s => s.type === "ImportSpecifier" && s.local.name === "view"
+            );
+            const specs = blocks.specifiers.filter(s => s.type === "ImportSpecifier");
+            if (!imported && specs.length)
+              fixes.push(fixer.insertTextAfter(specs[specs.length - 1], ", view"));
+            return fixes;
+          }
+        });
+      }
+    };
+  }
+};
+
 export const rules = {
   "no-throw": noThrow,
   "no-read-in-view-body": noReadInViewBody,
@@ -751,6 +798,7 @@ export const rules = {
   "no-foreign-reactive": noForeignReactive,
   "no-dollar-block": noDollarBlock,
   "no-path-object-use": noPathObjectUse,
+  "prefer-view-wrapper": preferViewWrapper,
   "typed-props-key": typedPropsKey
 };
 
@@ -760,10 +808,18 @@ const plugin = {
   configs: {}
 };
 
-/** `recommended`: every rule as an error (flat config). */
+/** Rules `recommended` sets to warn (a suggestion, not a rule of the model). */
+const WARNINGS = new Set(["prefer-view-wrapper"]);
+
+/** `recommended`: every rule an error, but the suggestions (`WARNINGS`), which warn (flat config). */
 plugin.configs.recommended = {
   plugins: { "@solidjs/blocks": plugin },
-  rules: Object.fromEntries(Object.keys(rules).map(name => [`@solidjs/blocks/${name}`, "error"]))
+  rules: Object.fromEntries(
+    Object.keys(rules).map(name => [
+      `@solidjs/blocks/${name}`,
+      WARNINGS.has(name) ? "warn" : "error"
+    ])
+  )
 };
 
 export default plugin;

@@ -1,5 +1,5 @@
 import { type RouteParams, type RoutePreloadFuncArgs, type RouteProps } from "@solidjs/router";
-import { $component, $memo, attempt, For, Show, type TypedProps } from "@solidjs/blocks";
+import { $component, $memo, attempt, For, Show, type TypedProps, view } from "@solidjs/blocks";
 import Comment from "~/components/comment";
 import { getStory } from "~/lib/api";
 import { ApiError } from "~/lib/errors";
@@ -20,7 +20,7 @@ const Story = $component(function* Story(props: TypedProps<RouteProps<Path>, "St
       cause => new ApiError(cause)
     );
   });
-  return function* () {
+  return view(function* () {
     return (
       <div class="item-view">
         <div class="item-view-header">
@@ -48,7 +48,7 @@ const Story = $component(function* Story(props: TypedProps<RouteProps<Path>, "St
         </div>
       </div>
     );
-  };
+  });
 });
 
 export default Story;

@@ -6,7 +6,7 @@
 //
 // The hook is set only in the browser: the server half's call is a promise
 // of the branded iterable (in process there is no wire).
-import { $component, $event, $signal, type Source, type TypedProps } from "@solidjs/blocks";
+import { $component, $event, $signal, type Source, type TypedProps, view } from "@solidjs/blocks";
 import { isServer } from "@solidjs/web";
 import type { LiveSource, LiveSourceStatus } from "@solidjs/web/server-functions";
 
@@ -60,7 +60,7 @@ const StatusPill = $component(function* StatusPill(
   props: TypedProps<{ wire: Wire; label?: string }, "StatusPill">
 ) {
   const deaths = props.wire.deaths;
-  return function* () {
+  return view(function* () {
     return (
       <span
         class={`pill pill-${yield* props.wire.status}`}
@@ -74,7 +74,7 @@ const StatusPill = $component(function* StatusPill(
           : ""}
       </span>
     );
-  };
+  });
 });
 export default StatusPill;
 

@@ -13,7 +13,8 @@ import {
   Show,
   type HView,
   type View,
-  type Source
+  type Source,
+  view
 } from "@solidjs/blocks";
 import { h } from "@solidjs/blocks/h";
 
@@ -141,3 +142,12 @@ const listedSettled: View<false, never> = For({
   children: i => h("i", i)
 });
 void listedSettled;
+
+// view() holds an h view to the no-body rule where it is written (D-054)
+export const WrappedReads = $component(function* () {
+  const [n] = yield* $signal(1);
+  // @ts-expect-error [HVIEW_READ] at the view
+  return view(function* () {
+    return h("p", String(yield* n));
+  });
+});

@@ -1,4 +1,4 @@
-import { $cleanup, $component, $event, $settled, $signal } from "@solidjs/blocks";
+import { $cleanup, $component, $event, $settled, $signal, view } from "@solidjs/blocks";
 
 const Home = $component(function* Home() {
   const [s, set] = yield* $signal(0);
@@ -13,7 +13,7 @@ const Home = $component(function* Home() {
     yield* $cleanup(() => clearInterval(t));
   });
 
-  return function* () {
+  return view(function* () {
     return (
       <>
         <h1>Welcome to this Simple Routing Example</h1>
@@ -21,7 +21,7 @@ const Home = $component(function* Home() {
         <span>{yield* s}</span>
       </>
     );
-  };
+  });
 });
 
 export default Home;

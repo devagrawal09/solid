@@ -29,6 +29,7 @@ export {
   readStore,
   refresh,
   until,
+  view,
   type BlockContext
 } from "./runtime.js";
 /** @internal shared with the `h` entry (one runtime per app). */

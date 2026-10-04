@@ -68,8 +68,9 @@ function computeKind(fn) {
     if (name === "$") return fn.params.length > 0 ? "row" : "hole";
     if (name && CONSTRUCTORS[name]) return CONSTRUCTORS[name];
   }
-  // returned by a setup (or a row block's setup): the view
-  let ret = fn;
+  // returned by a setup (or a row block's setup): the view — also wrapped,
+  // `return view(function* () { … })` (D-054)
+  let ret = isViewCall(parent) && parent.arguments[0] === fn ? parent : fn;
   while (
     ret.parent.type === "ConditionalExpression" ||
     ret.parent.type === "LogicalExpression" ||
@@ -109,17 +110,31 @@ function computeKind(fn) {
   return null;
 }
 
+/** `view(fn)`: the typing wrapper of a view (D-054). */
+export function isViewCall(node) {
+  return (
+    !!node &&
+    node.type === "CallExpression" &&
+    node.callee.type === "Identifier" &&
+    node.callee.name === "view"
+  );
+}
+
 /** Whether a function returns a `function*` expression (from its own body, not a nested function). */
 function returnsGenerator(fn) {
   let found = false;
   const visit = node => {
     if (found || !node || typeof node.type !== "string") return;
     if (node !== fn.body && isFunction(node)) return;
+    const arg =
+      node.type === "ReturnStatement" && isViewCall(node.argument)
+        ? node.argument.arguments[0]
+        : node.argument;
     if (
       node.type === "ReturnStatement" &&
-      node.argument &&
-      node.argument.type === "FunctionExpression" &&
-      node.argument.generator
+      arg &&
+      arg.type === "FunctionExpression" &&
+      arg.generator
     ) {
       found = true;
       return;

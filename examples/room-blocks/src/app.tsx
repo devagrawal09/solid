@@ -3,7 +3,7 @@
 // returns it: a router created inside a view is re-created when the view
 // re-renders, and client navigation then never completes.
 import { createRouter } from "@solidjs/router";
-import { $component, Loading } from "@solidjs/blocks";
+import { $component, Loading, view } from "@solidjs/blocks";
 import { IdentityProvider } from "~/lib/identity";
 import { routes } from "~/routes";
 import "./app.css";
@@ -20,9 +20,9 @@ const App = $component(function* App() {
       </Router>
     </IdentityProvider>
   );
-  return function* () {
+  return view(function* () {
     return rendered;
-  };
+  });
 });
 
 export default App;

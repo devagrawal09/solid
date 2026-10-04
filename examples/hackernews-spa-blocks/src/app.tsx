@@ -6,7 +6,7 @@
 // would be re-created whenever the view re-rendered, and client navigation
 // would never complete.
 import { createRouter, defineRoute } from "@solidjs/router";
-import { $component, Loading, type Component } from "@solidjs/blocks";
+import { $component, Loading, type Component, view } from "@solidjs/blocks";
 import Nav from "~/components/nav";
 import Stories, { preload as preloadStories } from "~/routes/stories";
 import Story, { preload as preloadStory } from "~/routes/story";
@@ -46,9 +46,9 @@ const App = $component(function* App() {
       )}
     </Router>
   );
-  return function* () {
+  return view(function* () {
     return rendered;
-  };
+  });
 });
 
 export default App;

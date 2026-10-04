@@ -1,7 +1,7 @@
 // examples/migrating-element's App with @solidjs/blocks (JSX flavor). The
 // original keeps `App` and `render` in main.tsx; here `App` lives in this
 // module so the tests can mount it, and main.tsx only renders it.
-import { $component, $event, $signal, For, Show } from "@solidjs/blocks";
+import { $component, $event, $signal, For, Show, view } from "@solidjs/blocks";
 import { Canvas } from "./Canvas";
 
 type Slot = "hero" | "pip" | "dock";
@@ -26,7 +26,7 @@ export const App = $component(function* App() {
   // migrates a single DOM node between slots.
   const hoistedCanvas = <Canvas />;
 
-  return function* () {
+  return view(function* () {
     return (
       <main class="app">
         <header>
@@ -46,13 +46,13 @@ export const App = $component(function* App() {
                 const choose = $event(function* () {
                   yield* setSlot(yield* s);
                 });
-                return function* () {
+                return view(function* () {
                   return (
                     <button class={{ active: (yield* slot) === (yield* s) }} onClick={choose}>
                       {SLOT_LABELS[yield* s]}
                     </button>
                   );
-                };
+                });
               }}
             </For>
             <span class="hint">click either canvas to add a splat</span>
@@ -114,5 +114,5 @@ export const App = $component(function* App() {
         </footer>
       </main>
     );
-  };
+  });
 });

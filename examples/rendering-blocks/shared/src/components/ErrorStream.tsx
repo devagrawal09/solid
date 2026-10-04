@@ -8,7 +8,8 @@ import {
   Loading,
   type BlockSetter,
   type Source,
-  type TypedProps
+  type TypedProps,
+  view
 } from "@solidjs/blocks";
 import { ItemError } from "./errors";
 
@@ -50,9 +51,9 @@ function* item(props: TypedProps<{ id: string }>) {
 const Title = $component(function* Title(
   props: TypedProps<{ item: Source<Item, true, ItemError> }, "Title">
 ) {
-  return function* () {
+  return view(function* () {
     return <div>{yield* props.item.title}</div>;
-  };
+  });
 });
 
 function fallback(setId: BlockSetter<string | undefined>) {
@@ -76,20 +77,20 @@ const InnerBoundaryItem = $component(function* InnerBoundaryItem(
   props: TypedProps<{ id: string }, "InnerBoundaryItem">
 ) {
   const { item: loaded, setId } = yield* item(props);
-  return function* () {
+  return view(function* () {
     return (
       <Loading fallback={<div>Item Loading...</div>}>
         {Errored({ fallback: fallback(setId), children: () => Title({ item: loaded }) })}
       </Loading>
     );
-  };
+  });
 });
 
 const OuterBoundaryItem = $component(function* OuterBoundaryItem(
   props: TypedProps<{ id: string }, "OuterBoundaryItem">
 ) {
   const { item: loaded, setId } = yield* item(props);
-  return function* () {
+  return view(function* () {
     return (
       <Errored fallback={fallback(setId)}>
         {Loading({
@@ -98,11 +99,11 @@ const OuterBoundaryItem = $component(function* OuterBoundaryItem(
         })}
       </Errored>
     );
-  };
+  });
 });
 
 const ErrorStream = $component(function* ErrorStream() {
-  return function* () {
+  return view(function* () {
     return (
       <>
         <h1>Loading + Errored Streaming</h1>
@@ -122,7 +123,7 @@ const ErrorStream = $component(function* ErrorStream() {
         </div>
       </>
     );
-  };
+  });
 });
 
 export default ErrorStream;

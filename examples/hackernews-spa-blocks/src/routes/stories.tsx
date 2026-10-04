@@ -1,5 +1,5 @@
 import { type RoutePreloadFuncArgs, type RouteSectionProps } from "@solidjs/router";
-import { $component, $memo, attempt, For, Show, type TypedProps } from "@solidjs/blocks";
+import { $component, $memo, attempt, For, Show, type TypedProps, view } from "@solidjs/blocks";
 import Story from "~/components/story";
 import { getStories } from "~/lib/api";
 import type { StoryTypes } from "~/types";
@@ -33,7 +33,7 @@ const Stories = $component(function* Stories(props: TypedProps<RouteSectionProps
     );
   });
 
-  return function* () {
+  return view(function* () {
     return (
       <div class="news-view">
         <div class="news-list-nav">
@@ -76,7 +76,7 @@ const Stories = $component(function* Stories(props: TypedProps<RouteSectionProps
         </main>
       </div>
     );
-  };
+  });
 });
 
 export default Stories;

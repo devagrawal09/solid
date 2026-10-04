@@ -12,7 +12,8 @@ import {
   type Element,
   type Read,
   type Source,
-  type TypedProps
+  type TypedProps,
+  view
 } from "@solidjs/blocks";
 import { isServer } from "@solidjs/web";
 
@@ -67,11 +68,11 @@ function RouteHOC<P extends boolean, E>(Comp: Component<{}, P, E>) {
       });
     }
 
-    return function* () {
+    return view(function* () {
       return (
         <RouterContext value={{ location, setLocation, matches }}>{yield* Comp()}</RouterContext>
       );
-    };
+    });
   });
 }
 
@@ -89,13 +90,13 @@ const Link = $component(function* Link(
     window.history.pushState("", "", `/${path}`);
     yield* setLocation(path);
   });
-  return function* () {
+  return view(function* () {
     return (
       <a class="link" href={`/${yield* props.path}`} onClick={navigate}>
         {yield* props.children}
       </a>
     );
-  };
+  });
 });
 
 export { Link, RouteHOC, RouterContext, useRouter };

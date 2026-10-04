@@ -8,7 +8,8 @@ import {
   Repeat,
   type Path,
   type Source,
-  type TypedProps
+  type TypedProps,
+  view
 } from "@solidjs/blocks";
 import { StreamError } from "./errors";
 
@@ -45,29 +46,29 @@ async function* accumulate(): AsyncIterable<StreamItem[]> {
 const MemoList = $component(function* MemoList(
   props: TypedProps<{ items: Source<StreamItem[], true, unknown> }, "MemoList">
 ) {
-  return function* () {
+  return view(function* () {
     return (
       <ul id="memo-list">
         <For each={yield* props.items}>
           {function* (item) {
-            return function* () {
+            return view(function* () {
               return (
                 <li>
                   {yield* item.id}: {yield* item.text}
                 </li>
               );
-            };
+            });
           }}
         </For>
       </ul>
     );
-  };
+  });
 });
 
 const ProjList = $component(function* ProjList(
   props: TypedProps<{ count: Source<number, true, unknown>; rows: Path<StreamItem[]> }, "ProjList">
 ) {
-  return function* () {
+  return view(function* () {
     return (
       <ul id="proj-list">
         <Repeat count={yield* props.count}>
@@ -75,18 +76,18 @@ const ProjList = $component(function* ProjList(
             // A row exists only for an index the store already holds: its
             // reads are settled. The index is a source (D-055), read in the
             // holes that walk to the row (a setup does not read, D-042).
-            return function* () {
+            return view(function* () {
               return (
                 <li>
                   {yield* props.rows[yield* i].id}: {yield* props.rows[yield* i].text}
                 </li>
               );
-            };
+            });
           }}
         </Repeat>
       </ul>
     );
-  };
+  });
 });
 
 const Stream = $component(function* Stream() {
@@ -118,7 +119,7 @@ const Stream = $component(function* Stream() {
   // Repeat counts `length`), so a row's reads are settled.
   const rows = projItems as unknown as Path<StreamItem[]>;
 
-  return function* () {
+  return view(function* () {
     return (
       <>
         <h1>Async Iterable Streaming</h1>
@@ -147,7 +148,7 @@ const Stream = $component(function* Stream() {
         </div>
       </>
     );
-  };
+  });
 });
 
 export default Stream;

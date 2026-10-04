@@ -21,7 +21,8 @@ import {
   Loading,
   Show,
   type Source,
-  type TypedProps
+  type TypedProps,
+  view
 } from "@solidjs/blocks";
 import { searchPackages, TransientNetworkError, type Package } from "./api";
 import { runEffect } from "./solid-effect";
@@ -39,7 +40,7 @@ const Results = $component(function* Results(
   // Solid's `latest` / `isPending`, as sources: stale while revalidating.
   const list = latestOf(props.results);
   const searching = isPendingOf(props.results);
-  return function* () {
+  return view(function* () {
     return (
       <div class={{ results: true, stale: yield* searching }}>
         <Show
@@ -53,7 +54,7 @@ const Results = $component(function* Results(
           <ul>
             <For each={yield* list}>
               {function* (pkg) {
-                return function* () {
+                return view(function* () {
                   return (
                     <li>
                       <div>
@@ -63,14 +64,14 @@ const Results = $component(function* Results(
                       <span class="pkg-downloads">{formatDownloads(yield* pkg.downloads)}/wk</span>
                     </li>
                   );
-                };
+                });
               }}
             </For>
           </ul>
         </Show>
       </div>
     );
-  };
+  });
 });
 
 export const Typeahead = $component(function* Typeahead() {
@@ -92,7 +93,7 @@ export const Typeahead = $component(function* Typeahead() {
     yield* setQuery(e.currentTarget.value);
   });
 
-  return function* () {
+  return view(function* () {
     return (
       <section class="panel">
         <header>
@@ -112,7 +113,7 @@ export const Typeahead = $component(function* Typeahead() {
         />
         <Show when={(yield* query).trim()}>
           {function* (q) {
-            return function* () {
+            return view(function* () {
               // A boundary tag hands on nothing it does not handle, so the
               // Loading inside the Errored is a call; its children are a
               // getter so the results are created inside it.
@@ -133,10 +134,10 @@ export const Typeahead = $component(function* Typeahead() {
                   })}
                 </Errored>
               );
-            };
+            });
           }}
         </Show>
       </section>
     );
-  };
+  });
 });

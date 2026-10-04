@@ -1,5 +1,5 @@
 import { type RouteParams, type RoutePreloadFuncArgs, type RouteProps } from "@solidjs/router";
-import { $component, $memo, attempt, Show, type TypedProps } from "@solidjs/blocks";
+import { $component, $memo, attempt, Show, type TypedProps, view } from "@solidjs/blocks";
 import { getUser } from "~/lib/api";
 import { ApiError } from "~/lib/errors";
 
@@ -17,7 +17,7 @@ const User = $component(function* User(props: TypedProps<RouteProps<Path>, "User
       cause => new ApiError(cause)
     );
   });
-  return function* () {
+  return view(function* () {
     return (
       <div class="user-view">
         <h1>User : {(yield* user).id}</h1>
@@ -38,7 +38,7 @@ const User = $component(function* User(props: TypedProps<RouteProps<Path>, "User
         </p>
       </div>
     );
-  };
+  });
 });
 
 export default User;

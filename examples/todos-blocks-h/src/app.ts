@@ -17,7 +17,8 @@ import {
   Loading,
   readStore,
   Show,
-  type TypedProps
+  type TypedProps,
+  view
 } from "@solidjs/blocks";
 import { h } from "@solidjs/blocks/h";
 import { createTodos, type Todo } from "./todos";
@@ -48,7 +49,7 @@ const Header = $component(function* Header() {
     input.value = "";
     yield* addTodo({ id, title, completed: false });
   });
-  return function* () {
+  return view(function* () {
     return h(
       "header",
       { class: "header" },
@@ -60,7 +61,7 @@ const Header = $component(function* Header() {
         onKeyDown: submit
       })
     );
-  };
+  });
 });
 
 const TodoItem = $component(function* TodoItem(props: TypedProps<{ todo: Todo }, "TodoItem">) {
@@ -84,7 +85,7 @@ const TodoItem = $component(function* TodoItem(props: TypedProps<{ todo: Todo },
       }
     ];
   });
-  return function* () {
+  return view(function* () {
     return h(
       "li",
       { class: classes },
@@ -101,7 +102,7 @@ const TodoItem = $component(function* TodoItem(props: TypedProps<{ todo: Todo },
         Show({
           when: props.todo.error,
           children: function* (error) {
-            return function* () {
+            return view(function* () {
               return h("button", {
                 class: "retry",
                 title: function* () {
@@ -109,13 +110,13 @@ const TodoItem = $component(function* TodoItem(props: TypedProps<{ todo: Todo },
                 },
                 onClick: retry
               });
-            };
+            });
           }
         }),
         h("button", { class: "destroy", onClick: remove })
       )
     );
-  };
+  });
 });
 
 const MainSection = $component(function* MainSection(
@@ -141,7 +142,7 @@ const MainSection = $component(function* MainSection(
   const toggle = $event(function* () {
     yield* toggleAll(!(yield* allCompleted));
   });
-  return function* () {
+  return view(function* () {
     return Show({
       when: hasTodos,
       children: h(
@@ -162,7 +163,7 @@ const MainSection = $component(function* MainSection(
         )
       )
     });
-  };
+  });
 });
 
 const Footer = $component(function* Footer(props: TypedProps<{ filter: Filter }, "Footer">) {
@@ -193,7 +194,7 @@ const Footer = $component(function* Footer(props: TypedProps<{ filter: Filter },
         label
       )
     );
-  return function* () {
+  return view(function* () {
     return Show({
       when: hasTodos,
       children: h(
@@ -224,13 +225,13 @@ const Footer = $component(function* Footer(props: TypedProps<{ filter: Filter },
         })
       )
     });
-  };
+  });
 });
 
 export const App = $component(function* App() {
   const filter = yield* hashFilter();
   const todos = yield* createTodos();
-  return function* () {
+  return view(function* () {
     return h(
       Errored,
       {
@@ -258,5 +259,5 @@ export const App = $component(function* App() {
         )
       )
     );
-  };
+  });
 });

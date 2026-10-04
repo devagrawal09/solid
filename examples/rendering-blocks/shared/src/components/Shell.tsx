@@ -1,4 +1,4 @@
-import { $component, type Element, type TypedProps } from "@solidjs/blocks";
+import { $component, type Element, type TypedProps, view } from "@solidjs/blocks";
 import { HydrationScript } from "@solidjs/web";
 
 /**
@@ -13,7 +13,7 @@ import { HydrationScript } from "@solidjs/web";
 const Shell = $component(function* Shell(
   props: TypedProps<{ clientEntry: string; children: Element }, "Shell">
 ) {
-  return function* () {
+  return view(function* () {
     return (
       <html lang="en">
         <head>
@@ -29,7 +29,7 @@ const Shell = $component(function* Shell(
         <script type="module" src={yield* props.clientEntry} async></script>
       </html>
     );
-  };
+  });
 });
 
 export default Shell;

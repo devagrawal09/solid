@@ -1,4 +1,4 @@
-import { $component, For, Show, type Component, type TypedProps } from "@solidjs/blocks";
+import { $component, For, Show, type Component, type TypedProps, view } from "@solidjs/blocks";
 import type { CommentDefinition } from "~/types";
 import Toggle from "./toggle";
 
@@ -8,7 +8,7 @@ import Toggle from "./toggle";
 const Comment: Component<{ comment: CommentDefinition }, false, never> = $component(function* (
   props: TypedProps<{ comment: CommentDefinition }, "Comment">
 ) {
-  return function* () {
+  return view(function* () {
     return (
       <li class="comment">
         <div class="by">
@@ -25,7 +25,7 @@ const Comment: Component<{ comment: CommentDefinition }, false, never> = $compon
         </Show>
       </li>
     );
-  };
+  });
 });
 
 export default Comment;

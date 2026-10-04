@@ -22,7 +22,8 @@ import {
   Match,
   Switch,
   type Component,
-  type TypedProps
+  type TypedProps,
+  view
 } from "@solidjs/blocks";
 import { onCleanup } from "solid-js";
 
@@ -68,20 +69,20 @@ export const TriangleDemo = $component(function* TriangleDemo() {
     cancelAnimationFrame(f);
   });
 
-  return function* () {
+  return view(function* () {
     // the slow children wait on idle time, which may fail
     return (
       <Errored fallback={err => `Failed: ${err().message}`}>
         {Loading({ fallback: "Loading...", children: () => Container({ scale, seconds }) })}
       </Errored>
     );
-  };
+  });
 });
 
 const Container = $component(function* Container(
   props: TypedProps<{ scale: number; seconds: number }, "Container">
 ) {
-  return function* () {
+  return view(function* () {
     return (
       <div
         class="container"
@@ -92,7 +93,7 @@ const Container = $component(function* Container(
         {yield* Triangle({ x: 0, y: 0, s: 1000, children: props.seconds })}
       </div>
     );
-  };
+  });
 });
 
 // A recursive component needs its type spelled out (TypeScript cannot infer
@@ -128,7 +129,7 @@ const Triangle: Component<TriangleProps, true, IdleError> = $component(function*
   // view does not branch (D-032): the choice is a `<Switch>` over holes, and
   // the children's positions are read where they are created — in the holes
   // (the props never change, so each hole runs once).
-  return function* () {
+  return view(function* () {
     return (
       <Switch>
         <Match
@@ -179,7 +180,7 @@ const Triangle: Component<TriangleProps, true, IdleError> = $component(function*
         </Match>
       </Switch>
     );
-  };
+  });
 });
 
 const Dot = $component(function* Dot(props: TypedProps<TriangleProps, "Dot">) {
@@ -191,7 +192,7 @@ const Dot = $component(function* Dot(props: TypedProps<TriangleProps, "Dot">) {
     yield* setHover(false);
   });
 
-  return function* () {
+  return view(function* () {
     return (
       <div
         class="dot"
@@ -210,5 +211,5 @@ const Dot = $component(function* Dot(props: TypedProps<TriangleProps, "Dot">) {
         {(yield* hover) ? "**" + (yield* props.children) + "**" : yield* props.children}
       </div>
     );
-  };
+  });
 });

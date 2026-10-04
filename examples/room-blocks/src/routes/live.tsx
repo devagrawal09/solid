@@ -34,7 +34,8 @@ import {
   type EventHandler,
   type Path,
   type Source,
-  type TypedProps
+  type TypedProps,
+  view
 } from "@solidjs/blocks";
 import type { RouteSectionProps } from "@solidjs/router";
 import { useIdentity } from "~/lib/identity";
@@ -63,7 +64,7 @@ const Live = $component(function* Live(props: TypedProps<RouteSectionProps, "Liv
     const q = String((yield* props.location.query.room) || "lobby");
     return ROOMS.includes(q) ? q : "lobby";
   });
-  return function* () {
+  return view(function* () {
     return (
       <Errored
         fallback={err => (
@@ -75,12 +76,12 @@ const Live = $component(function* Live(props: TypedProps<RouteSectionProps, "Liv
         {LivePage({ room })}
       </Errored>
     );
-  };
+  });
 });
 export default Live;
 
 const LivePage = $component(function* LivePage(props: TypedProps<{ room: string }, "LivePage">) {
-  return function* () {
+  return view(function* () {
     return (
       <div class="room">
         {yield* Header({ room: props.room })}
@@ -95,7 +96,7 @@ const LivePage = $component(function* LivePage(props: TypedProps<{ room: string 
         </div>
       </div>
     );
-  };
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -119,7 +120,7 @@ const Header = $component(function* Header(props: TypedProps<{ room: string }, "
     const id = (yield* me)?.id;
     return id != null && (yield* who).members.some(m => m.id === id);
   });
-  return function* () {
+  return view(function* () {
     return (
       <header class="header">
         <div>
@@ -141,13 +142,13 @@ const Header = $component(function* Header(props: TypedProps<{ room: string }, "
         </div>
       </header>
     );
-  };
+  });
 });
 
 const Joined = $component(function* Joined(
   props: TypedProps<{ joined: Source<boolean, true, unknown>; me: Identity | null }, "Joined">
 ) {
-  return function* () {
+  return view(function* () {
     return (
       <Show
         when={yield* props.joined}
@@ -156,13 +157,13 @@ const Joined = $component(function* Joined(
         You are <b>{yield* props.me.name}</b>, here while this tab's connection is open.
       </Show>
     );
-  };
+  });
 });
 
 const Members = $component(function* Members(
   props: TypedProps<{ who: Source<Presence, true, unknown>; me: Identity | null }, "Members">
 ) {
-  return function* () {
+  return view(function* () {
     return (
       <>
         <span class="count">{yield* props.who.members.length}</span>
@@ -170,19 +171,19 @@ const Members = $component(function* Members(
         <ul class="members">
           <For each={yield* props.who.members}>
             {function* (m) {
-              return function* () {
+              return view(function* () {
                 return (
                   <li class={(yield* m.id) === (yield* props.me.id) ? "me" : ""}>
                     {yield* m.name}
                   </li>
                 );
-              };
+              });
             }}
           </For>
         </ul>
       </>
     );
-  };
+  });
 });
 
 // The chaos switch: asks the dev server to destroy the socket of every open
@@ -207,7 +208,7 @@ const Chaos = $component(function* Chaos() {
       yield* setLast(String(e));
     }
   });
-  return function* () {
+  return view(function* () {
     return (
       <span class="chaos">
         <button type="button" onClick={drop}>
@@ -218,7 +219,7 @@ const Chaos = $component(function* Chaos() {
         </Show>
       </span>
     );
-  };
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -269,20 +270,20 @@ const Chat = $component(function* Chat(props: TypedProps<{ room: string }, "Chat
   });
   // The first transcript arrives asynchronously: the store's reads are pending.
   const transcriptRows = store.messages;
-  return function* () {
+  return view(function* () {
     return (
       <>
         {yield* Transcript({ messages: transcriptRows, wire })}
         <Composer room={yield* props.room} post={post} sending={sending} error={error} />
       </>
     );
-  };
+  });
 });
 
 const Transcript = $component(function* Transcript(
   props: TypedProps<{ messages: Source<Row[], true, unknown>; wire: Wire }, "Transcript">
 ) {
-  return function* () {
+  return view(function* () {
     return (
       <section class="panel transcript">
         <div class="panel-head">
@@ -297,19 +298,19 @@ const Transcript = $component(function* Transcript(
         }
       </section>
     );
-  };
+  });
 });
 
 const Messages = $component(function* Messages(
   props: TypedProps<{ messages: Source<Row[], true, unknown> }, "Messages">
 ) {
   const me = yield* useIdentity();
-  return function* () {
+  return view(function* () {
     return (
       <ol class="messages">
         <For each={yield* props.messages}>
           {function* (m) {
-            return function* () {
+            return view(function* () {
               return (
                 <li
                   class={{
@@ -323,12 +324,12 @@ const Messages = $component(function* Messages(
                   <time class="muted">{new Date(yield* m.at).toLocaleTimeString()}</time>
                 </li>
               );
-            };
+            });
           }}
         </For>
       </ol>
     );
-  };
+  });
 });
 
 type Submit = SubmitEvent & { currentTarget: HTMLFormElement };
@@ -363,7 +364,7 @@ const Composer = $component(function* Composer(
   const input = $event(function* (e: Input) {
     yield* setText(e.currentTarget.value);
   });
-  return function* () {
+  return view(function* () {
     return (
       <form class="composer" onSubmit={submit}>
         <input
@@ -386,7 +387,7 @@ const Composer = $component(function* Composer(
         </Show>
       </form>
     );
-  };
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -395,7 +396,7 @@ const Composer = $component(function* Composer(
 const Directory = $component(function* Directory(
   props: TypedProps<{ current: string }, "Directory">
 ) {
-  return function* () {
+  return view(function* () {
     return (
       <section class="panel">
         <div class="panel-head">
@@ -406,7 +407,7 @@ const Directory = $component(function* Directory(
         </ul>
       </section>
     );
-  };
+  });
 });
 
 const DirectoryEntry = $component(function* DirectoryEntry(
@@ -420,7 +421,7 @@ const DirectoryEntry = $component(function* DirectoryEntry(
       cause => new LiveError(cause)
     );
   });
-  return function* () {
+  return view(function* () {
     return (
       <li class={(yield* props.name) === (yield* props.current) ? "current" : ""}>
         <a href={`/live?room=${yield* props.name}`}>#{yield* props.name}</a>
@@ -432,15 +433,15 @@ const DirectoryEntry = $component(function* DirectoryEntry(
         <span class={`dot dot-${yield* wire.status}`} title={yield* wire.status} />
       </li>
     );
-  };
+  });
 });
 
 const Count = $component(function* Count(
   props: TypedProps<{ who: Source<Presence, true, unknown> }, "Count">
 ) {
-  return function* () {
+  return view(function* () {
     return <>{yield* props.who.members.length}</>;
-  };
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -468,7 +469,7 @@ const Card = $component(function* Card(props: TypedProps<{ room: string }, "Card
       cause => new LiveError(cause)
     );
   });
-  return function* () {
+  return view(function* () {
     return (
       <section class="panel">
         <div class="panel-head">
@@ -484,7 +485,7 @@ const Card = $component(function* Card(props: TypedProps<{ room: string }, "Card
         }
       </section>
     );
-  };
+  });
 });
 
 const CardBody = $component(function* CardBody(
@@ -497,7 +498,7 @@ const CardBody = $component(function* CardBody(
     "CardBody"
   >
 ) {
-  return function* () {
+  return view(function* () {
     return (
       <>
         <p>
@@ -522,20 +523,20 @@ const CardBody = $component(function* CardBody(
         </p>
       </>
     );
-  };
+  });
 });
 
 const MemberCount = $component(function* MemberCount(
   props: TypedProps<{ members: Source<Member[], true, unknown> }, "MemberCount">
 ) {
   const n = props.members.length;
-  return function* () {
+  return view(function* () {
     return (
       <>
         {yield* n} member{(yield* n) === 1 ? "" : "s"} when the card was cut
       </>
     );
-  };
+  });
 });
 
 const ActivityLine = $component(function* ActivityLine(
@@ -546,15 +547,15 @@ const ActivityLine = $component(function* ActivityLine(
     const { of, tick } = yield* props.activity;
     return Array.from({ length: of }, (_, i) => i < tick);
   });
-  return function* () {
+  return view(function* () {
     return (
       <>
         <span class="ticks">
           <For each={yield* ticks}>
             {function* (on) {
-              return function* () {
+              return view(function* () {
                 return <span class={(yield* on) ? "tick on" : "tick"} />;
-              };
+              });
             }}
           </For>
         </span>
@@ -565,7 +566,7 @@ const ActivityLine = $component(function* ActivityLine(
         </span>
       </>
     );
-  };
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -579,7 +580,7 @@ const Summary = $component(function* Summary(props: TypedProps<{ room: string },
     yield* setAttempt(a => a + 1);
     reset();
   });
-  return function* () {
+  return view(function* () {
     return (
       <section class="panel">
         <div class="panel-head">
@@ -603,7 +604,7 @@ const Summary = $component(function* Summary(props: TypedProps<{ room: string },
         </Errored>
       </section>
     );
-  };
+  });
 });
 
 const SummaryText = $component(function* SummaryText(
@@ -620,9 +621,9 @@ const SummaryText = $component(function* SummaryText(
     },
     { ssrSource: "client" }
   );
-  return function* () {
+  return view(function* () {
     return <p>{yield* text}</p>;
-  };
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -637,7 +638,7 @@ const Archive = $component(function* Archive(props: TypedProps<{ room: string },
       cause => new ArchiveError(cause)
     );
   });
-  return function* () {
+  return view(function* () {
     return (
       <section class="panel">
         <div class="panel-head">
@@ -653,20 +654,20 @@ const Archive = $component(function* Archive(props: TypedProps<{ room: string },
         }
       </section>
     );
-  };
+  });
 });
 
 const ArchiveCount = $component(function* ArchiveCount(
   props: TypedProps<{ stats: { room: string; total: number } }, "ArchiveCount">
 ) {
-  return function* () {
+  return view(function* () {
     return (
       <p>
         {yield* props.stats.total} message{(yield* props.stats.total) === 1 ? "" : "s"} ever in #
         {yield* props.stats.room}
       </p>
     );
-  };
+  });
 });
 
 function describe(error: unknown): string {

@@ -7,7 +7,8 @@ import {
   attempt,
   For,
   isPendingOf,
-  type TypedProps
+  type TypedProps,
+  view
 } from "@solidjs/blocks";
 
 /** Fetching the feed failed: the color of its failure. */
@@ -55,7 +56,7 @@ async function fetchFeed(): Promise<Feed> {
 }
 
 const FeedCard = $component(function* FeedCard(props: TypedProps<{ feed: Feed }, "FeedCard">) {
-  return function* () {
+  return view(function* () {
     return (
       <div
         class={["feed-card", { provisional: !!(yield* props.feed.provisional) }]}
@@ -68,15 +69,15 @@ const FeedCard = $component(function* FeedCard(props: TypedProps<{ feed: Feed },
         <ul>
           <For each={yield* props.feed.items}>
             {function* (item) {
-              return function* () {
+              return view(function* () {
                 return <li>{yield* item.text}</li>;
-              };
+              });
             }}
           </For>
         </ul>
       </div>
     );
-  };
+  });
 });
 
 const Skeleton = $component(function* Skeleton() {
@@ -117,7 +118,7 @@ const Skeleton = $component(function* Skeleton() {
     yield* setVersion(v => v + 1);
   });
 
-  return function* () {
+  return view(function* () {
     return (
       <section class={["feed", { pending: (yield* refreshing) || (yield* storeRefreshing) }]}>
         <h1>Loading Value</h1>
@@ -146,7 +147,7 @@ const Skeleton = $component(function* Skeleton() {
         </button>
       </section>
     );
-  };
+  });
 });
 
 export default Skeleton;

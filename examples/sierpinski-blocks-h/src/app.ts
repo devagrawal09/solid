@@ -21,7 +21,8 @@ import {
   Loading,
   Show,
   type Component,
-  type TypedProps
+  type TypedProps,
+  view
 } from "@solidjs/blocks";
 import { h } from "@solidjs/blocks/h";
 import { onCleanup } from "solid-js";
@@ -68,20 +69,20 @@ export const TriangleDemo = $component(function* TriangleDemo() {
     cancelAnimationFrame(f);
   });
 
-  return function* () {
+  return view(function* () {
     // the slow children wait on idle time, which may fail
     return h(
       Errored,
       { fallback: err => `Failed: ${String(err())}` },
       h(Loading, { fallback: "Loading..." }, h(Container, { scale, seconds }))
     );
-  };
+  });
 });
 
 const Container = $component(function* Container(
   props: TypedProps<{ scale: number; seconds: number }, "Container">
 ) {
-  return function* () {
+  return view(function* () {
     return h(
       "div",
       {
@@ -94,7 +95,7 @@ const Container = $component(function* Container(
       },
       h(Triangle, { x: 0, y: 0, s: 1000, children: props.seconds })
     );
-  };
+  });
 });
 
 // A recursive component needs its type spelled out (TypeScript cannot infer
@@ -172,7 +173,7 @@ const Triangle: Component<TriangleProps, true, IdleError> = $component(function*
     { lazy: true }
   );
 
-  return function* () {
+  return view(function* () {
     return Show({
       when: function* () {
         return (yield* props.s) <= TARGET;
@@ -184,7 +185,7 @@ const Triangle: Component<TriangleProps, true, IdleError> = $component(function*
         h(Triangle, { x: right, y: bottom, s: half, children: slowChildren })
       ])
     });
-  };
+  });
 });
 
 const Dot = $component(function* Dot(props: TypedProps<TriangleProps, "Dot">) {
@@ -196,7 +197,7 @@ const Dot = $component(function* Dot(props: TypedProps<TriangleProps, "Dot">) {
     yield* setHover(false);
   });
 
-  return function* () {
+  return view(function* () {
     return h(
       "div",
       {
@@ -219,5 +220,5 @@ const Dot = $component(function* Dot(props: TypedProps<TriangleProps, "Dot">) {
         return (yield* hover) ? "**" + (yield* props.children) + "**" : yield* props.children;
       }
     );
-  };
+  });
 });
