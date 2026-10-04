@@ -24,7 +24,7 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 | D-012 | decided | No-JSX `h`/`html` flavor is first-class |
 | D-013 | decided | Rows and holes are bare `function*`; `$` and `$scope` removed |
 | D-014 | decided | `$optimistic` / `$optimisticStore` mirror `$signal` / `$store` |
-| D-015 | open | Repo layout for extraction (Q22) — **text lost** |
+| D-015 | decided | Extraction: new pnpm monorepo `solid-blocks` with twins and vendored originals (Q22 closed) |
 | D-016 | decided | Peer range `^2.0.0-rc`; twins' parity tests are the canary |
 | D-017 | decided | Perf not in the gate |
 | D-018 | dissolved | (open components) — dissolved by D-023 |
@@ -63,7 +63,10 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 | D-051 | decided | D-032 amended: JSX enforcement is runtime + lint; type-level form for `h` only |
 | D-052 | decided | `createContext(defaultValue)` wraps a plain value as a constant source |
 | D-053 | decided | `$effect` and `$settled` both stay: react vs run-once-after-settle |
-| D-054 | decided | `view()` / `setup()` zero-runtime typing wrappers for error locality |
+| D-054 | decided | `view()` zero-runtime typing wrapper for error locality (no `setup()`) |
+| D-055 | decided | A row receives `item: Source<T>` and `index: Source<number>` |
+| D-056 | decided | Props are a plain object type; `$component` maps fields to Sources; `TypedProps` removed |
+| D-057 | decided | Phase 2 starts after Phase 1B lands (Q23 closed) |
 
 ## Entries
 
@@ -138,7 +141,7 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 *Reasoning:* D-005 and symmetry with the existing pair. Whether `context()` and `createContext()` stay separate long-term is deferred until after Phase 1B. *Implementation:* Phase 1A item 5.
 
 ### D-015 — Repo layout for extraction
-**Open (Q22).** Original text **lost**; the handoff's recommendation was: a new pnpm monorepo `solid-blocks` with `packages/{blocks, vite-plugin-blocks, eslint-plugin-blocks}`, `examples/` twins plus vendored originals so the parity tests keep their oracle, the `@solidjs/web` JSX `.d.ts` vendored (today `types:jsx` builds it from `../web`), an exports-conditions matrix test, CI = the gate.
+**Decided (Dev, 2026-10-04; Q22 closed).** Original text was lost; re-decided as the handoff's recommendation: a new pnpm monorepo `solid-blocks` with `packages/{blocks, vite-plugin-blocks, eslint-plugin-blocks}`, `examples/` twins plus vendored originals so the parity tests keep their oracle, the `@solidjs/web` JSX `.d.ts` vendored (today `types:jsx` builds it from `../web`), an exports-conditions matrix test, CI = the gate.
 
 ### D-016 — Peer range and canary
 **Decided.** Peer dependency on Solid is `^2.0.0-rc`; the twins' parity tests are the canary for RC drift — a Solid change that breaks a twin is a finding, not a reason to pin.
@@ -328,15 +331,30 @@ Facts for the executor: the diff of `packages/compiler` + `packages/babel-plugin
 *Alternatives:* fold `$settled` into an `$effect` that reads nothing (loses the after-settle timing); rename `$settled`.
 *Reasoning:* the timing guarantee is the difference, and the twins use the one-shot form three times more — it is the common case, not a convenience.
 
-### D-054 — `view()` / `setup()` typing wrappers
-**Decided (Dev, 2026-10-04).** Optional zero-runtime wrappers that type-check a view (or a setup) in place, so a type error inside a hole lands on its own line instead of on the `$component(` call forty lines up with the whole yield union: `return view(function* () { return <div>{yield* props.todo.title}</div>; });`. Identity at runtime; the lint `prefer-view-wrapper` (warning) suggests them; the twins adopt them. The design review called this the biggest DX lever without a TS plugin.
+### D-054 — `view()` typing wrapper (no `setup()`)
+**Decided (Dev, 2026-10-04).** Optional zero-runtime wrappers that type-check a view (or a setup) in place, so a type error inside a hole lands on its own line instead of on the `$component(` call forty lines up with the whole yield union: `return view(function* () { return <div>{yield* props.todo.title}</div>; });`. Identity at runtime; the lint `prefer-view-wrapper` (warning) suggests it; the twins adopt it. *Amended (Dev, same day):* `view()` only — there is no `setup()` wrapper; the setup is the component function itself and its errors already land locally. The design review called this the biggest DX lever without a TS plugin.
 *Alternatives:* better branded-never messages at `$component` only; defer to Phase 4 to compare with a TS language-service route.
 *Reasoning:* cheap, local, removable; it does not preclude a plugin later. *Implementation:* Phase 1A item 9 (types + type tests showing the error location; lint; twin adoption; doc §1).
 
+### D-055 — A row receives `item: Source<T>` and `index: Source<number>`
+**Decided (Dev, 2026-10-04).** The row body of `<For>` (and the other list controls) is a setup (D-030) called with `item: Source<T, P, E>` and `index: Source<number>`: a keyed row's item can change in place, so it is reactive and read with `yield*` (`yield* todo.title` is a path read); the index moves when the list reorders. Consistent with D-042 (everything a block is given is reactive).
+*Alternatives:* a plain `item` value with the row re-created on item change (Solid's `For` semantics; the row's setup could not react to item changes); mirror each Solid control's own convention.
+*Reasoning:* one convention for every control, and it is the one the twins already use. *Implementation:* Phase 1A item 4 verification (type test on the row signature; runtime test: an in-place item change updates the row without re-creating it).
+
+### D-056 — Props are a plain object type; `TypedProps` removed
+**Decided (Dev, 2026-10-04).** A component declares its props as a plain object type — `$component(function* (props: { todo: Async<Todo, FetchError>; onToggle: (id: number) => void }) { … })` — and `$component` maps each field to `Source<T, false, never>` (bare) or `Source<T, true, E>` (`Async<T, E>`) at the type level. `TypedProps<P, Key>` is removed outright (not just its key, as D-023 first planned): nothing is left to wrap.
+*Alternatives:* keep a key-less `Props<>` wrapper as an explicit mapping step.
+*Reasoning:* D-005 — the wrapper existed for the linker key; without the key it is ceremony. *Implementation:* Phase 1B commit 1 (supersedes the "keys deprecated-but-accepted" step: `TypedProps` is deleted in commit 1 and the twins drop it in commit 2).
+
+### D-057 — Phase 2 starts after Phase 1B lands
+**Decided (Dev, 2026-10-04; Q23 closed).** Serial: Phase 2 (standalone plugin) begins once all of Phase 1B is fast-forwarded into `blocks-lib`. Both phases edit every twin's `vite.config` (1B removes `solidLink()`, Phase 2 adds `blocks()`); serial order avoids twelve guaranteed rebase conflicts and lets Phase 2 start from the linker-free twins.
+*Alternatives:* fully parallel; Phase 2's twin-free commits first, then wait for 1B's linker removal.
+*Reasoning:* the worktrees are cheap on this machine, but the merge conflicts are not worth the overlap.
+
 ## Open questions
 
-- **Q22** — repo layout for extraction (D-015).
-- **Q23** — start Phase 2 in parallel with Phase 1B (recommended: yes; cheap now that worktrees are not disk-bound).
+- ~~**Q22** — repo layout for extraction (D-015).~~ Decided (D-015).
+- ~~**Q23** — start Phase 2 in parallel with Phase 1B.~~ Decided: serial (D-057).
 - D-032 migration: the exact count of view-body read / branch sites per twin, from the lint's first run.
 - ~~Whether `context()` and `createContext()` stay separate long-term.~~ Decided: `context()` removed (D-036).
 - ~~Whether `no-unyielded-write` gets a sync exception for `start(call)` (D-021).~~ Moot: `start` removed (D-035).
