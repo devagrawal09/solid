@@ -16,15 +16,7 @@ import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const ALL = [
-  "sierpinski",
-  "migrating-element",
-  "effect",
-  "todos",
-  "room",
-  "hackernews-spa",
-  "rendering"
-];
+const ALL = ["sierpinski", "effect", "todos", "room", "hackernews-spa", "rendering"];
 // `<name>-blocks-h` twins (the no-JSX flavor) are measured too when present.
 const FLAVORS = ["-blocks", "-blocks-h"];
 const names = process.argv.slice(2).filter(a => !a.startsWith("--"));

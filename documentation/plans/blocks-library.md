@@ -1,6 +1,6 @@
 # Generator blocks as a library: `@solidjs/blocks`
 
-Status: implemented on `blocks-lib` (cut from `upstream/next` at 644eaf3b). Nine example twins run on it. This document is the reference for what the library is, what it enforces and where, what it costs, and what it cannot do without a blocks compiler.
+Status: implemented on `blocks-lib` (cut from `upstream/next` at 644eaf3b). Eight example twins run on it. This document is the reference for what the library is, what it enforces and where, what it costs, and what it cannot do without a blocks compiler.
 
 ## 1. What it is
 
@@ -169,7 +169,7 @@ What the numbers include: everything each operation does, jsdom's DOM work inclu
 
 ## 9. The twins
 
-Nine `examples/*-blocks` (JSX) and `*-blocks-h` (no-JSX) apps (chat, hackernews and notes, whose point was server components, were removed with D-058), each against its original: same markup, same behavior, the wire (server functions, frames, data layers) verbatim. Per twin: jsdom behavior tests; a differential parity test (one script against both apps, DOM compared after every step, only hydration markers normalized, plus app-specific clock / random normalization where stated); `typecheck`, lint with no `any`, `link:check`; `vite build` for every variant; for SSR apps a Chromium check against the original's production build (no console errors, no page errors, no hydration warnings, the same DOM after load and after every step; `scripts/example-blocks/browser.mjs`); client bytes (`scripts/example-blocks/bytes.mjs`).
+Eight `examples/*-blocks` (JSX) and `*-blocks-h` (no-JSX) apps (chat, hackernews and notes, whose point was server components, were removed with D-058; migrating-element, whose point is an element held as a value, with D-061), each against its original: same markup, same behavior, the wire (server functions, frames, data layers) verbatim. Per twin: jsdom behavior tests; a differential parity test (one script against both apps, DOM compared after every step, only hydration markers normalized, plus app-specific clock / random normalization where stated); `typecheck`, lint with no `any`, `link:check`; `vite build` for every variant; for SSR apps a Chromium check against the original's production build (no console errors, no page errors, no hydration warnings, the same DOM after load and after every step; `scripts/example-blocks/browser.mjs`); client bytes (`scripts/example-blocks/bytes.mjs`).
 
 Tests are behavior + parity (steps). Browser: Chromium steps against the original's production build (all pass; re-run after the last runtime change). Bytes: client JS, minified / gzip -9, original → twin.
 
@@ -177,7 +177,6 @@ Tests are behavior + parity (steps). Browser: Chromium steps against the origina
 | ------------------------ | ------ | -------------------------------------------------- | ------ | -----------: | ------------------------------ | ------------------------------------------------------------------------------------------- | --------------------------------------------------- |
 | sierpinski-blocks        | JSX    | CSR                                                | 6 + 1  |           11 | 5 steps                        | 15,761 → 18,113 (+14.9%)                                                                    | none                                                |
 | sierpinski-blocks-h      | no-JSX | CSR                                                | 6 + 1  |           11 | 5 steps                        | 15,761 → 22,986 (+45.8%)                                                                    | none                                                |
-| migrating-element-blocks | JSX    | CSR                                                | 7 + 1  |           12 | passes                         | 18,187 → 22,265 (+22.4%)                                                                    | none                                                |
 | effect-blocks            | JSX    | CSR                                                | 12 + 1 |           42 | 29 steps                       | 81,727 → 84,507 (+3.4%)                                                                     | none (verbatim Effect layer has `any`, lint-exempt) |
 | todos-blocks             | JSX    | CSR                                                | 7 + 1  |           27 | 16 steps                       | 32,171 → 34,622 (+7.6%)                                                                     | none                                                |
 | todos-blocks-h           | no-JSX | CSR                                                | 7 + 1  |           27 | 16 steps                       | 32,171 → 38,791 (+20.6%)                                                                    | none                                                |

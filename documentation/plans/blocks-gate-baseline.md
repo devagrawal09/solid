@@ -4,13 +4,13 @@ The gate is `scripts/blocks-gate.mjs` (`pnpm blocks:gate`). This file records th
 reference run used as the baseline; the machine-readable copy is
 [`blocks-gate-baseline.json`](./blocks-gate-baseline.json).
 
-**Reference summary: `41 pass / 2 fail / 0 skip in 76s`** (43 steps, `--jobs 3`,
-HEAD `9b358663` with D-058's twin removal applied, every step run with `TZ=UTC`).
+**Reference summary: `37 pass / 2 fail / 0 skip in 62s`** (39 steps, `--jobs 3`,
+HEAD `f38f95de` with D-061's twin removal applied, every step run with `TZ=UTC`).
 
-This baseline was regenerated under **D-058**: the three server-component twins
-(chat, hackernews, notes) were removed, so the gate has 9 twins and 43 steps
-(4 per twin, plus the 7 package / repo steps). The two reds are unchanged and
-still pre-existing (D-023, removed by Phase 1B). `repo:oxlint` passes.
+This baseline was regenerated under **D-061**: migrating-element-blocks was
+removed (after D-058 removed chat, hackernews and notes), so the gate has 8 twins
+and 39 steps (4 per twin, plus the 7 package / repo steps). The two reds are
+unchanged and still pre-existing (D-023, removed by Phase 1B). `repo:oxlint` passes.
 
 ## What "green" means
 
@@ -44,49 +44,45 @@ The JSON records the host zone (`environment.hostTZ`) and the overrides
 
 | Step | Result | Duration |
 | --- | --- | --- |
-| `twin:effect-blocks:test` | PASS | 4.6 s |
-| `twin:effect-blocks:typecheck` | PASS | 4.6 s |
-| `twin:effect-blocks:lint` | PASS | 3.4 s |
-| `twin:effect-blocks:link:check` | PASS | 3.1 s |
-| `twin:hackernews-spa-blocks:test` | PASS | 4.5 s |
-| `twin:hackernews-spa-blocks:typecheck` | PASS | 3.2 s |
-| `twin:hackernews-spa-blocks:lint` | PASS | 2.6 s |
-| `twin:hackernews-spa-blocks:link:check` | PASS | 1.8 s |
-| `twin:migrating-element-blocks:test` | PASS | 2.3 s |
-| `twin:migrating-element-blocks:typecheck` | PASS | 2.4 s |
-| `twin:migrating-element-blocks:lint` | PASS | 2.6 s |
-| `twin:migrating-element-blocks:link:check` | PASS | 2.0 s |
-| `twin:rendering-blocks:test` | PASS | 5.1 s |
-| `twin:rendering-blocks:typecheck` | PASS | 3.1 s |
-| `twin:rendering-blocks:lint` | PASS | 2.9 s |
-| `twin:rendering-blocks:link:check` | PASS | 1.9 s |
-| `twin:room-blocks:test` | PASS | 2.0 s |
+| `twin:effect-blocks:test` | PASS | 2.1 s |
+| `twin:effect-blocks:typecheck` | PASS | 2.6 s |
+| `twin:effect-blocks:lint` | PASS | 2.5 s |
+| `twin:effect-blocks:link:check` | PASS | 1.1 s |
+| `twin:hackernews-spa-blocks:test` | PASS | 2.6 s |
+| `twin:hackernews-spa-blocks:typecheck` | PASS | 2.2 s |
+| `twin:hackernews-spa-blocks:lint` | PASS | 2.2 s |
+| `twin:hackernews-spa-blocks:link:check` | PASS | 1.1 s |
+| `twin:rendering-blocks:test` | PASS | 3.9 s |
+| `twin:rendering-blocks:typecheck` | PASS | 2.0 s |
+| `twin:rendering-blocks:lint` | PASS | 2.2 s |
+| `twin:rendering-blocks:link:check` | PASS | 1.0 s |
+| `twin:room-blocks:test` | PASS | 1.9 s |
 | `twin:room-blocks:typecheck` | PASS | 1.8 s |
 | `twin:room-blocks:lint` | PASS | 2.1 s |
 | `twin:room-blocks:link:check` | PASS | 1.1 s |
-| `twin:sierpinski-blocks:test` | PASS | 11.7 s |
-| `twin:sierpinski-blocks:typecheck` | PASS | 2.3 s |
+| `twin:sierpinski-blocks:test` | PASS | 12.4 s |
+| `twin:sierpinski-blocks:typecheck` | PASS | 1.4 s |
 | `twin:sierpinski-blocks:lint` | PASS | 2.0 s |
-| `twin:sierpinski-blocks:link:check` | PASS | 1.4 s |
+| `twin:sierpinski-blocks:link:check` | PASS | 1.1 s |
 | `twin:sierpinski-blocks-h:test` | PASS | 12.0 s |
-| `twin:sierpinski-blocks-h:typecheck` | PASS | 4.3 s |
-| `twin:sierpinski-blocks-h:lint` | PASS | 3.1 s |
-| `twin:sierpinski-blocks-h:link:check` | PASS | 1.6 s |
-| `twin:todos-blocks:test` | PASS | 3.0 s |
-| `twin:todos-blocks:typecheck` | PASS | 2.9 s |
-| `twin:todos-blocks:lint` | PASS | 4.2 s |
-| `twin:todos-blocks:link:check` | PASS | 3.7 s |
-| `twin:todos-blocks-h:test` | PASS | 4.0 s |
-| `twin:todos-blocks-h:typecheck` | PASS | 3.0 s |
-| `twin:todos-blocks-h:lint` | PASS | 3.8 s |
-| `twin:todos-blocks-h:link:check` | PASS | 1.8 s |
-| `pkg:blocks:test` | PASS | 7.4 s |
-| `pkg:blocks-linker:test` | **FAIL** (known, pre-existing, D-023) | 12.1 s |
-| `pkg:eslint-plugin-blocks:test` | PASS | 2.4 s |
-| `pkg:babel-plugin:test` | PASS | 6.4 s |
-| `pkg:compiler:test` | **FAIL** (known, pre-existing, D-023) | 28.7 s |
-| `repo:prettier` | PASS | 4.3 s |
-| `repo:oxlint` | PASS | 0.7 s |
+| `twin:sierpinski-blocks-h:typecheck` | PASS | 2.4 s |
+| `twin:sierpinski-blocks-h:lint` | PASS | 2.3 s |
+| `twin:sierpinski-blocks-h:link:check` | PASS | 1.0 s |
+| `twin:todos-blocks:test` | PASS | 1.8 s |
+| `twin:todos-blocks:typecheck` | PASS | 1.4 s |
+| `twin:todos-blocks:lint` | PASS | 1.8 s |
+| `twin:todos-blocks:link:check` | PASS | 1.2 s |
+| `twin:todos-blocks-h:test` | PASS | 1.8 s |
+| `twin:todos-blocks-h:typecheck` | PASS | 2.4 s |
+| `twin:todos-blocks-h:lint` | PASS | 2.6 s |
+| `twin:todos-blocks-h:link:check` | PASS | 1.0 s |
+| `pkg:blocks:test` | PASS | 6.4 s |
+| `pkg:blocks-linker:test` | **FAIL** (known, pre-existing, D-023) | 11.2 s |
+| `pkg:eslint-plugin-blocks:test` | PASS | 1.4 s |
+| `pkg:babel-plugin:test` | PASS | 4.4 s |
+| `pkg:compiler:test` | **FAIL** (known, pre-existing, D-023) | 29.1 s |
+| `repo:prettier` | PASS | 1.9 s |
+| `repo:oxlint` | PASS | 0.5 s |
 
 Durations are per step, measured with 3 steps running at once, so they add up to
 more than the wall time. `repo:oxlint` takes well under 0.1 s.
@@ -96,7 +92,7 @@ more than the wall time. `repo:oxlint` takes well under 0.1 s.
 - **What it runs**:
   ```sh
   node_modules/.bin/oxlint packages/blocks packages/blocks-linker \
-    packages/eslint-plugin-blocks examples/<9 twins> \
+    packages/eslint-plugin-blocks examples/<8 twins> \
     --ignore-pattern '**/dist/**' --ignore-pattern '**/node_modules/**'
   ```
   It runs from the repo root, and the binary is resolved there only, never from
@@ -173,10 +169,10 @@ artifact is missing (see below).
 ## Step selection notes
 
 - **Twins**: `examples/*-blocks` and `examples/*-blocks-h` directories whose
-  `package.json` has `test`, `typecheck` and `lint` scripts. There are exactly 9
-  (12 before D-058 removed chat, hackernews and notes), and the gate fails if the
-  count is anything else: effect, hackernews-spa, migrating-element, rendering,
-  room, sierpinski, sierpinski-h, todos, todos-h. `examples/blocks-harness` (the shared helper)
+  `package.json` has `test`, `typecheck` and `lint` scripts. There are exactly 8
+  (12 before D-058 removed chat, hackernews and notes; 9 before D-061 removed
+  migrating-element), and the gate fails if the count is anything else: effect,
+  hackernews-spa, rendering, room, sierpinski, sierpinski-h, todos, todos-h. `examples/blocks-harness` (the shared helper)
   doesn't match the glob and has none of those scripts. Each twin has four steps:
   `test`, `typecheck`, `lint`, `link:check`, each run as `pnpm -C <dir> run <script>`.
 - **`pkg:babel-plugin:test`, `pkg:compiler:test`**: both run
@@ -201,6 +197,8 @@ artifact is missing (see below).
 
 ## Earlier runs
 
+- **Previous reference, after D-058, before D-061** (HEAD `9b358663` + the twin
+  removal): `41 pass / 2 fail / 0 skip in 76s` over 43 steps (9 twins). Same two reds.
 - **Previous reference, after D-037, before D-058** (HEAD `aeb2a1a6` + oxlint):
   `53 pass / 2 fail / 0 skip in 63s` over 55 steps (12 twins). Same two reds.
 - **Previous reference, before D-037** (HEAD `09fa9de5`, TZ pinned):
@@ -222,12 +220,12 @@ artifact is missing (see below).
 
 | | |
 | --- | --- |
-| HEAD | `9b3586638a52bb1c2bc0f1570a7387d44158ac31` (branch `bl/tighten`), plus the uncommitted D-058 twin removal, committed together with this baseline |
+| HEAD | `f38f95de066e7d8ceec055c0b2def13ec9f62d11` (branch `bl/tighten`), plus the uncommitted D-061 twin removal, committed together with this baseline |
 | node | v24.18.0 |
 | pnpm | 11.1.1 |
 | oxlint | 1.86.0 (root devDependency, `node_modules/.bin/oxlint`) |
 | OS | macOS 26.5.2 (darwin arm64) |
 | timezone | host `Asia/Calcutta` (IST, UTC+5:30); every step pinned to `TZ=UTC` |
 | jobs | `--jobs 3` (default) |
-| wall time | 76s (2026-10-04T09:44:51.439Z → 2026-10-04T09:46:07.821Z) |
+| wall time | 62s (2026-10-04T13:22:38.561Z → 2026-10-04T13:23:40.713Z) |
 | build before gate | `@solidjs/blocks` dist prebuilt by the caller; prebuilt `babel-plugin/index.js` and `compiler/compiler.node` used as found |
