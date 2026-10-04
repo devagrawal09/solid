@@ -205,6 +205,9 @@ importers:
       '@solidjs/vite-plugin':
         specifier: 3.0.0-next.35
         version: 3.0.0-next.35(@solidjs/web@packages+web)(@testing-library/jest-dom@6.9.1)(solid-js@packages+solid)(vite@7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0))
+      '@solidjs/vite-plugin-blocks':
+        specifier: workspace:*
+        version: link:../../packages/vite-plugin-blocks
       '@solidjs/web':
         specifier: workspace:*
         version: link:../../packages/web
@@ -289,6 +292,9 @@ importers:
       '@solidjs/vite-plugin':
         specifier: 3.0.0-next.35
         version: 3.0.0-next.35(@solidjs/web@packages+web)(@testing-library/jest-dom@6.9.1)(solid-js@packages+solid)(vite@8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0))
+      '@solidjs/vite-plugin-blocks':
+        specifier: workspace:*
+        version: link:../../packages/vite-plugin-blocks
       '@types/node':
         specifier: ^25.6.0
         version: 25.6.0
@@ -393,6 +399,9 @@ importers:
       '@solidjs/vite-plugin':
         specifier: 3.0.0-next.35
         version: 3.0.0-next.35(@solidjs/web@packages+web)(@testing-library/jest-dom@6.9.1)(solid-js@packages+solid)(vite@7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0))
+      '@solidjs/vite-plugin-blocks':
+        specifier: workspace:*
+        version: link:../../packages/vite-plugin-blocks
       '@solidjs/web':
         specifier: workspace:*
         version: link:../../packages/web
@@ -464,6 +473,9 @@ importers:
       '@solidjs/vite-plugin':
         specifier: 3.0.0-next.35
         version: 3.0.0-next.35(@solidjs/web@packages+web)(@testing-library/jest-dom@6.9.1)(solid-js@packages+solid)(vite@8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0))
+      '@solidjs/vite-plugin-blocks':
+        specifier: workspace:*
+        version: link:../../packages/vite-plugin-blocks
       '@types/node':
         specifier: ^25.6.0
         version: 25.6.0
@@ -518,6 +530,9 @@ importers:
       '@solidjs/vite-plugin':
         specifier: 3.0.0-next.35
         version: 3.0.0-next.35(@solidjs/web@packages+web)(@testing-library/jest-dom@6.9.1)(solid-js@packages+solid)(vite@7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0))
+      '@solidjs/vite-plugin-blocks':
+        specifier: workspace:*
+        version: link:../../packages/vite-plugin-blocks
       '@solidjs/web':
         specifier: workspace:*
         version: link:../../packages/web
@@ -614,6 +629,9 @@ importers:
       '@solidjs/vite-plugin':
         specifier: 3.0.0-next.35
         version: 3.0.0-next.35(@solidjs/web@packages+web)(@testing-library/jest-dom@6.9.1)(solid-js@packages+solid)(vite@7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0))
+      '@solidjs/vite-plugin-blocks':
+        specifier: workspace:*
+        version: link:../../packages/vite-plugin-blocks
       '@solidjs/web':
         specifier: workspace:*
         version: link:../../packages/web

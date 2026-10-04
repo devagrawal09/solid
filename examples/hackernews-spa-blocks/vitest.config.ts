@@ -2,6 +2,7 @@ import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vitest/config";
 import solid from "@solidjs/vite-plugin";
+import blocks from "@solidjs/vite-plugin-blocks";
 
 const examples = fileURLToPath(new URL("..", import.meta.url));
 
@@ -30,7 +31,7 @@ function exampleAlias(): Plugin {
 // router and every component run in process; SSR and hydration are covered
 // by the browser check (scripts/example-blocks/browser.mjs).
 export default defineConfig({
-  plugins: [exampleAlias(), solid()],
+  plugins: [exampleAlias(), blocks(), solid()],
   resolve: { conditions: ["development", "browser"] },
   test: {
     environment: "jsdom",

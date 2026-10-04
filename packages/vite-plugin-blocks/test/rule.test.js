@@ -31,7 +31,8 @@ const expected = (name, mode) =>
   readFileSync(join(fixtures, `compiled/${name}.${mode}.out`), "utf8");
 const compile = (code, filename, mode) =>
   compiler.transform(code, { filename, ...MODES[mode] }).code;
-const throughPlugin = (code, filename) => transform(code, { filename })?.code ?? code;
+// the rule alone: the compiler's rule had no lazy pass (that is tested in lazy.test.js)
+const throughPlugin = (code, filename) => transform(code, { filename, lazy: false })?.code ?? code;
 
 describe("fixture parity with the compiler's rule", () => {
   it("the refusal list is the pinned list", () => {
@@ -89,7 +90,7 @@ describe("transform()", () => {
   it("keeps TypeScript and the formatting: the output is the input plus the edits", () => {
     for (const [twin, file] of Object.entries(TWIN_SAMPLES)) {
       const source = readFileSync(join(fixtures, "twins", twin, basename(file)), "utf8");
-      const out = transform(source, { filename: twinFilename(twin, file) }).code;
+      const out = transform(source, { filename: twinFilename(twin, file), lazy: false }).code;
       const [first, ...rest] = out.split("\n");
       expect(first).toBe('import { perform as _$perform } from "@solidjs/blocks";');
       expect(rest.length).toBe(source.split("\n").length);

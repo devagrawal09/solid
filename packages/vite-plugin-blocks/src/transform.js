@@ -1,15 +1,17 @@
 // @ts-check
 /**
- * `transform(code, { filename, blocksModule })`: the rule applied to source
- * text. The source is parsed with Babel (TypeScript and JSX kept as written)
- * and only the rewritten spans are edited, so the output is the input plus
- * the edits — types, formatting and comments untouched — and the source map
- * is exact. `null` when nothing changed: a file with no `yield*` in JSX comes
+ * `transform(code, { filename, blocksModule })`: the rule, and the `lazy()`
+ * module-URL pass (D-047), applied to source text. The source is parsed with
+ * Babel (TypeScript and JSX kept as written) and only the rewritten spans are
+ * edited, so the output is the input plus the edits — types, formatting and
+ * comments untouched — and the source map is exact. `null` when nothing
+ * changed: a file with no `yield*` in JSX and no eligible `lazy` call comes
  * back byte-identical because it does not come back at all.
  */
 import babel from "@babel/core";
 import MagicString from "magic-string";
 import { BlocksRuleError, DEFAULT_BLOCKS_MODULE, blocksRule, performLocal } from "./rule.js";
+import { LAZY_PLACEHOLDER_PREFIX, lazyCalls } from "./lazy.js";
 
 /** @typedef {import("@babel/core").types.Program} Program */
 /** @typedef {import("@babel/core").NodePath<Program>} ProgramPath */
@@ -33,7 +35,8 @@ export function parserPlugins(filename) {
 /**
  * @typedef {object} TransformOptions
  * @property {string} filename the module's file name (picks the parser dialect; names the map's source)
- * @property {string} [blocksModule] the module `perform` is imported from (default `@solidjs/blocks`)
+ * @property {string} [blocksModule] the module `perform` and `lazy` come from (default `@solidjs/blocks`)
+ * @property {boolean} [lazy] the `lazy()` module-URL pass (default `true`)
  * @property {boolean} [sourceMap] produce a source map (default `true`)
  */
 
@@ -42,6 +45,18 @@ export function parserPlugins(filename) {
  * @property {string} code
  * @property {import("magic-string").SourceMap | null} map
  */
+
+/**
+ * Whether the text could need the transform at all: a `yield` (the rule, as
+ * the compiler's cheap pre-check) or a `lazy` from the blocks module (the
+ * lazy pass).
+ * @param {string} code
+ * @param {string} blocksModule
+ * @param {boolean} lazy
+ */
+export function mayTransform(code, blocksModule, lazy) {
+  return code.includes("yield") || (lazy && code.includes("lazy") && code.includes(blocksModule));
+}
 
 /**
  * Parse a module and hand back its program path.
@@ -80,8 +95,8 @@ export function transform(code, options) {
   const { filename } = options;
   if (!filename) throw new TypeError("transform: `filename` is required");
   const blocksModule = options.blocksModule ?? DEFAULT_BLOCKS_MODULE;
-  // Cheap pre-check, as the compiler's: no `yield`, nothing to rewrite.
-  if (!code.includes("yield")) return null;
+  const lazy = options.lazy ?? true;
+  if (!mayTransform(code, blocksModule, lazy)) return null;
 
   const program = parseProgram(code, filename);
   if (!program) return null;
@@ -96,9 +111,39 @@ export function transform(code, options) {
     });
     throw error;
   }
-  if (!holes.length) return null;
+  const calls = lazy ? lazyCalls(program, blocksModule) : [];
+  if (!holes.length && !calls.length) return null;
 
   const s = new MagicString(code);
+  if (holes.length) applyHoles(s, code, program, holes, blocksModule);
+  for (const { path, specifier, padOptions } of calls) {
+    // `lazy(fn)` → `lazy(fn, void 0, "__SOLID_LAZY_MODULE__:<specifier>")`,
+    // `lazy(fn, options)` → `lazy(fn, options, "…")`
+    const args = path.node.arguments;
+    const end = /** @type {number} */ (args[args.length - 1].end);
+    const placeholder = JSON.stringify(LAZY_PLACEHOLDER_PREFIX + specifier);
+    s.appendLeft(end, (padOptions ? ", void 0" : "") + ", " + placeholder);
+  }
+
+  return {
+    code: s.toString(),
+    map:
+      options.sourceMap === false
+        ? null
+        : s.generateMap({ source: filename, file: filename, includeContent: true, hires: true })
+  };
+}
+
+/**
+ * The rule's edits: each hole's `yield*` becomes `_$perform(`…`)` and the
+ * import is inserted.
+ * @param {MagicString} s
+ * @param {string} code
+ * @param {ProgramPath} program
+ * @param {import("@babel/core").NodePath<import("@babel/core").types.YieldExpression>[]} holes
+ * @param {string} blocksModule
+ */
+function applyHoles(s, code, program, holes, blocksModule) {
   const local = performLocal(program);
   for (const { node } of holes) {
     const start = /** @type {number} */ (node.start);
@@ -124,12 +169,4 @@ export function transform(code, options) {
     : program.node.interpreter?.end;
   if (after != null) s.appendLeft(after, "\n" + line);
   else s.prependLeft(0, line + "\n");
-
-  return {
-    code: s.toString(),
-    map:
-      options.sourceMap === false
-        ? null
-        : s.generateMap({ source: filename, file: filename, includeContent: true, hires: true })
-  };
 }

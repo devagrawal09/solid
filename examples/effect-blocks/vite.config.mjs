@@ -1,8 +1,9 @@
 import { defineConfig } from "vite";
 import solid from "@solidjs/vite-plugin";
+import blocks from "@solidjs/vite-plugin-blocks";
 
 export default defineConfig({
-  plugins: [solid()],
+  plugins: [blocks(), solid()],
   server: { port: 3008 },
   preview: { port: 3008 },
   test: {

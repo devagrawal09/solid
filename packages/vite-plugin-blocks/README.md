@@ -14,13 +14,24 @@ import solid from "@solidjs/vite-plugin";
 export default { plugins: [blocks(), solid()] };
 ```
 
-`blocks()` runs `enforce: "pre"`, before the JSX compiler. It skips a module whose source has no `function*` without parsing it, and returns `null` (no change) for a module with no hole. Its source map is chained by Vite with the compiler's, so a runtime error maps back to the authored line and column. Options: `blocksModule`, and `filter(file)` (by default `.js`/`.jsx`/`.ts`/`.tsx` and their `m`/`c` forms, outside `node_modules`).
+`blocks()` runs `enforce: "pre"`, before the JSX compiler. It skips a module whose source has no `function*` (and no `lazy` from the blocks module) without parsing it, and returns `null` (no change) for a module with no hole. Its source map is chained by Vite with the compiler's, so a runtime error maps back to the authored line and column. Options: `blocksModule`, `lazy`, and `filter(file)` (by default `.js`/`.jsx`/`.ts`/`.tsx` and their `m`/`c` forms, outside `node_modules`).
+
+## `lazy()` module URLs (D-047)
+
+`@solidjs/blocks` exports its own `lazy`, with Solid's signature `lazy(fn, options?, moduleUrl?)`. `@solidjs/vite-plugin` annotates `lazy(() => import("…"))` only when `lazy` comes from `solid-js`. So this plugin writes the same annotation for a `lazy` imported from the blocks module: `lazy(() => import("./Page"), void 0, "__SOLID_LAZY_MODULE__:./Page")`. `solid()` then resolves the placeholder to the project-relative module path, and the lazy component carries its `moduleUrl` for asset preloading and the hydration manifest. Eligibility mirrors the compiler's pass:
+
+- the callee is spelled `lazy` and is a named import of `lazy` from the blocks module;
+- the first argument returns `import("literal")`;
+- the call has one or two arguments.
+
+Option `lazy: false` turns the pass off.
 
 ## Exports
 
 - `blocks` (also the default export): the Vite plugin.
-- `babelPluginBlocks`: the rule as a Babel plugin, run before the JSX transform. Option: `blocksModule`.
-- `transform(code, { filename, blocksModule })`: the rule applied to source text. It returns `{ code, map }`, or `null` when the module has no `yield*` in JSX.
+- `babelPluginBlocks`: the rule and the lazy pass as a Babel plugin, run before the JSX transform. Options: `blocksModule`, `lazy`.
+- `transform(code, { filename, blocksModule, lazy })`: the rule and the lazy pass applied to source text. It returns `{ code, map }`, or `null` when the module has no `yield*` in JSX and no eligible `lazy` call.
+- `lazyCalls`, `applyLazyModuleUrl`, `LAZY_PLACEHOLDER_PREFIX`: the lazy pass's parts.
 - `blocksRule(program)`: the rule as one function. It classifies every `yield` of a Babel program that sits in JSX into holes and refusals. `applyBlocksRule` applies it to the AST.
 - `REFUSALS`, `BlocksRuleError`, `DEFAULT_BLOCKS_MODULE`.
 

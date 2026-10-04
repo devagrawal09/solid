@@ -46,6 +46,8 @@ export declare function applyBlocksRule(
 
 export interface BabelPluginBlocksOptions {
   blocksModule?: string;
+  /** The `lazy()` module-URL pass (default `true`; needs a file name). */
+  lazy?: boolean;
 }
 
 /** The rule as a Babel plugin; run it before the JSX transform. */
@@ -57,8 +59,10 @@ export declare function babelPluginBlocks(
 export interface TransformOptions {
   /** The module's file name: picks the parser dialect and names the map's source. */
   filename: string;
-  /** Where `perform` is imported from (default `"@solidjs/blocks"`). */
+  /** Where `perform` and `lazy` come from (default `"@solidjs/blocks"`). */
   blocksModule?: string;
+  /** The `lazy()` module-URL pass (default `true`). */
+  lazy?: boolean;
   /** Produce a source map (default `true`). */
   sourceMap?: boolean;
 }
@@ -75,8 +79,10 @@ export declare function transform(code: string, options: TransformOptions): Tran
 export declare function parserPlugins(filename: string): string[];
 
 export interface BlocksPluginOptions {
-  /** Where `perform` is imported from (default `"@solidjs/blocks"`). */
+  /** Where `perform` and `lazy` come from (default `"@solidjs/blocks"`). */
   blocksModule?: string;
+  /** Annotate `lazy(() => import("…"))` from the blocks module with its module URL (default `true`, D-047). */
+  lazy?: boolean;
   /** Which files to look at (default: `.js`/`.jsx`/`.ts`/`.tsx` and their `m`/`c` forms, outside `node_modules`). */
   filter?: (file: string) => boolean;
 }
@@ -84,3 +90,19 @@ export interface BlocksPluginOptions {
 /** The Vite plugin (`enforce: "pre"`): put it before `solid()`. */
 export declare function blocks(options?: BlocksPluginOptions): Plugin;
 export default blocks;
+
+/** `"__SOLID_LAZY_MODULE__:"`: `@solidjs/vite-plugin`'s frozen placeholder prefix. */
+export declare const LAZY_PLACEHOLDER_PREFIX: string;
+
+/** Every eligible `lazy(() => import("…"))` call from the blocks module. */
+export declare function lazyCalls(
+  program: NodePath<types.Program>,
+  blocksModule: string
+): { path: NodePath<types.CallExpression>; specifier: string; padOptions: boolean }[];
+
+/** The `lazy()` module-URL pass applied to a Babel program in place. */
+export declare function applyLazyModuleUrl(
+  program: NodePath<types.Program>,
+  t: typeof types,
+  blocksModule: string
+): boolean;

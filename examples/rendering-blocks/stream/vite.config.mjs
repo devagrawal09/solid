@@ -3,11 +3,12 @@ import { defineConfig } from "vite";
 // default, native lazy/refresh passes, solid-js/refresh HMR runtime, and
 // the built-in lazy() manifest handling (`virtual:solid-manifest`).
 import solid from "@solidjs/vite-plugin";
+import blocks from "@solidjs/vite-plugin-blocks";
 
 export default defineConfig({
   root: import.meta.dirname,
   publicDir: "../shared/static",
-  plugins: [solid({ ssr: true })],
+  plugins: [blocks(), solid({ ssr: true })],
   build: {
     // The plugin reads the client manifest from <root>/dist/client, so the
     // client build must use `--outDir dist/client` (see package.json).

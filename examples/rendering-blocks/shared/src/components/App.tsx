@@ -10,8 +10,8 @@ import { $component, isPendingOf, lazy, Match, Switch, view } from "@solidjs/blo
 import { Link, RouteHOC, useRouter } from "../router";
 import Profile from "./Profile";
 
-// @solidjs/vite-plugin's lazy() module-URL pass annotates only `lazy` imported
-// from "solid-js", so these carry no module URL (D-047's open point).
+// @solidjs/vite-plugin-blocks gives these calls the module URL that
+// @solidjs/vite-plugin's own pass writes only for `lazy` from "solid-js" (D-047).
 const Home = lazy(() => import("./Home"));
 const Settings = lazy(() => import("./Settings"));
 const Stream = lazy(() => import("./Stream"));
