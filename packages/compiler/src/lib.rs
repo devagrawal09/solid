@@ -15,7 +15,6 @@
 //! supported public contract.
 
 mod blocks_rule;
-mod blocks_summary;
 mod compiler;
 #[cfg(feature = "node")]
 mod config;
@@ -37,7 +36,6 @@ mod ssr;
 mod tsrx;
 mod universal;
 
-pub use blocks_summary::{SUMMARY_SCHEMA, SUMMARY_VERSION, summarize_blocks};
 pub use compiler::{
     CompileOptions, CompileOutput, Generate, Renderer, SourceNames, Syntax, Wrapper, compile,
 };

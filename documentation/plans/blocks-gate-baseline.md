@@ -4,16 +4,21 @@ The gate is `scripts/blocks-gate.mjs` (`pnpm blocks:gate`). This file records th
 reference run used as the baseline; the machine-readable copy is
 [`blocks-gate-baseline.json`](./blocks-gate-baseline.json).
 
-**Reference summary: `29 pass / 1 fail / 0 skip in 51s`** (30 steps, `--jobs 3`,
-HEAD `45fdd477` with Phase 1B commit 3's linker removal applied, every step run
-with `TZ=UTC`).
+**Reference summary: `30 pass / 0 fail / 0 skip in 48s`** (30 steps, `--jobs 3`,
+HEAD `45cdfdf9` with Phase 1B commit 4's `summarizeBlocks` removal applied and
+`compiler.node` rebuilt from it, every step run with `TZ=UTC`).
 
-This baseline was regenerated under **D-023** (Phase 1B commit 3): the type linker
-is removed, so each twin loses its `link:check` step and `pkg:blocks-linker:test`
-is gone. That is 39 → 30 steps: 3 per twin for the 8 twins, plus 6 package / repo
-steps. The `pkg:blocks-linker:test` red disappeared with its package. The one red
-left, `pkg:compiler:test`, is pre-existing and goes with `summarizeBlocks` in
-Phase 1B commit 4. `repo:oxlint` passes.
+**No red step remains.** Phase 1B removed the type linker and its compiler half
+(D-023):
+
+- **Commit 3** dropped each twin's `link:check` step and `pkg:blocks-linker:test`,
+  taking the gate from 39 to 30 steps: 3 per twin for the 8 twins, plus 6
+  package / repo steps. The `pkg:blocks-linker:test` red went with its package.
+- **Commit 4** removed `summarizeBlocks` from `@solidjs/compiler` and the test
+  behind the `pkg:compiler:test` red, so that step now passes: 5,986 tests, the
+  former 5,990 less the 4 in `blocks-summary.test.js`.
+
+`repo:oxlint` passes.
 
 ## What "green" means
 
@@ -27,7 +32,7 @@ node scripts/blocks-gate.mjs --baseline documentation/plans/blocks-gate-baseline
 
 With `--baseline` the gate prints `new reds` (PASS → FAIL; any of these makes it
 red), `fixed` (FAIL → PASS) and `unchanged`, and exits 0 iff there are no new reds.
-The red below is known and does not block. A step that is `SKIP` on a later
+A step that is `SKIP` on a later
 run (e.g. a missing build artifact) and wasn't `SKIP` here doesn't count as a new
 red under this rule, so look at it by hand. When a red is fixed (or its package is
 removed), regenerate the baseline
@@ -47,36 +52,36 @@ The JSON records the host zone (`environment.hostTZ`) and the overrides
 
 | Step | Result | Duration |
 | --- | --- | --- |
-| `twin:effect-blocks:test` | PASS | 1.7 s |
-| `twin:effect-blocks:typecheck` | PASS | 1.5 s |
-| `twin:effect-blocks:lint` | PASS | 1.8 s |
-| `twin:hackernews-spa-blocks:test` | PASS | 2.1 s |
+| `twin:effect-blocks:test` | PASS | 1.6 s |
+| `twin:effect-blocks:typecheck` | PASS | 1.3 s |
+| `twin:effect-blocks:lint` | PASS | 1.7 s |
+| `twin:hackernews-spa-blocks:test` | PASS | 2.0 s |
 | `twin:hackernews-spa-blocks:typecheck` | PASS | 1.4 s |
-| `twin:hackernews-spa-blocks:lint` | PASS | 1.6 s |
+| `twin:hackernews-spa-blocks:lint` | PASS | 1.7 s |
 | `twin:rendering-blocks:test` | PASS | 3.3 s |
 | `twin:rendering-blocks:typecheck` | PASS | 1.4 s |
-| `twin:rendering-blocks:lint` | PASS | 1.7 s |
-| `twin:room-blocks:test` | PASS | 1.5 s |
+| `twin:rendering-blocks:lint` | PASS | 1.6 s |
+| `twin:room-blocks:test` | PASS | 1.4 s |
 | `twin:room-blocks:typecheck` | PASS | 1.4 s |
 | `twin:room-blocks:lint` | PASS | 1.7 s |
-| `twin:sierpinski-blocks:test` | PASS | 11.1 s |
-| `twin:sierpinski-blocks:typecheck` | PASS | 0.9 s |
+| `twin:sierpinski-blocks:test` | PASS | 10.9 s |
+| `twin:sierpinski-blocks:typecheck` | PASS | 1.0 s |
 | `twin:sierpinski-blocks:lint` | PASS | 1.2 s |
-| `twin:sierpinski-blocks-h:test` | PASS | 11.1 s |
+| `twin:sierpinski-blocks-h:test` | PASS | 10.9 s |
 | `twin:sierpinski-blocks-h:typecheck` | PASS | 1.7 s |
-| `twin:sierpinski-blocks-h:lint` | PASS | 1.9 s |
-| `twin:todos-blocks:test` | PASS | 1.4 s |
-| `twin:todos-blocks:typecheck` | PASS | 1.1 s |
+| `twin:sierpinski-blocks-h:lint` | PASS | 1.8 s |
+| `twin:todos-blocks:test` | PASS | 1.3 s |
+| `twin:todos-blocks:typecheck` | PASS | 1.0 s |
 | `twin:todos-blocks:lint` | PASS | 1.3 s |
-| `twin:todos-blocks-h:test` | PASS | 1.4 s |
-| `twin:todos-blocks-h:typecheck` | PASS | 1.9 s |
-| `twin:todos-blocks-h:lint` | PASS | 2.1 s |
-| `pkg:blocks:test` | PASS | 7.5 s |
-| `pkg:eslint-plugin-blocks:test` | PASS | 1.3 s |
+| `twin:todos-blocks-h:test` | PASS | 1.3 s |
+| `twin:todos-blocks-h:typecheck` | PASS | 1.8 s |
+| `twin:todos-blocks-h:lint` | PASS | 2.0 s |
+| `pkg:blocks:test` | PASS | 7.4 s |
+| `pkg:eslint-plugin-blocks:test` | PASS | 1.4 s |
 | `pkg:babel-plugin:test` | PASS | 4.5 s |
-| `pkg:compiler:test` | **FAIL** (known, pre-existing; removed in 1B commit 4) | 30.4 s |
-| `repo:prettier` | PASS | 1.4 s |
-| `repo:oxlint` | PASS | 0.0 s |
+| `pkg:compiler:test` | PASS | 27.5 s |
+| `repo:prettier` | PASS | 1.5 s |
+| `repo:oxlint` | PASS | 0.1 s |
 
 Durations are per step, measured with 3 steps running at once, so they add up to
 more than the wall time.
@@ -115,20 +120,7 @@ more than the wall time.
 
 ## Failures
 
-### `pkg:compiler:test` (1 of 5990 tests)
-
-- `__tests__/blocks-summary.test.js > summarizeBlocks > gives each render site's props a value fact`:
-  expected `fails: ["NotFound", "Oops"]`, received `fails: ["*", "Oops"]`.
-
-The test source calls `attempt(() => load(id), NotFound)`, passing the error
-class itself as the handler. Commit `dfe692cf` added `handler_fails` to
-`packages/compiler/src/blocks_summary.rs`. It derives a handler's failure classes
-from what an arrow/function handler returns, and any other handler expression,
-including a bare identifier, falls through to `"*"` (unknown). The test was not
-updated in that commit. `blocks_summary` existed only to feed the linker, which
-is now removed; Phase 1B commit 4 removes it and this test (D-023, D-043). The
-step runs against the prebuilt `compiler.node`, and it has failed the same way on
-every run, so it is deterministic.
+None. The last two pre-existing reds are gone (see "Earlier runs").
 
 ## Skips
 
@@ -168,6 +160,13 @@ their built artifact is missing (see below).
 
 ## Earlier runs
 
+- **Phase 1B commit 3** (HEAD `45fdd477` + the linker removal): `29 pass / 1 fail /
+  0 skip in 51s` over 30 steps. The red was `pkg:compiler:test`:
+  `__tests__/blocks-summary.test.js > summarizeBlocks > gives each render site's
+  props a value fact` (expected `fails: ["NotFound", "Oops"]`, received
+  `["*", "Oops"]`). Commit `dfe692cf` had made `blocks_summary.rs` record a handler
+  passed by name as `*` without updating the test. It went away with
+  `summarizeBlocks` in commit 4.
 - **Previous reference, after D-061, before Phase 1B commit 3** (HEAD `f38f95de` +
   the twin removal): `37 pass / 2 fail / 0 skip in 62s` over 39 steps (4 per twin,
   `link:check` included). The reds were `pkg:blocks-linker:test` (3 staleness
@@ -195,12 +194,12 @@ their built artifact is missing (see below).
 
 | | |
 | --- | --- |
-| HEAD | `45fdd4770a529637d14a0c44aea0ed7ba258ddac` (branch `bl/colors`), plus the uncommitted linker removal, committed together with this baseline |
+| HEAD | `45cdfdf95802169b39f896965a81666957d8ebb6` (branch `bl/colors`), plus the uncommitted `summarizeBlocks` removal, committed together with this baseline |
 | node | v24.18.0 |
 | pnpm | 11.1.1 |
 | oxlint | 1.86.0 (root devDependency, `node_modules/.bin/oxlint`) |
 | OS | macOS 26.5.2 (darwin arm64) |
 | timezone | host `Asia/Calcutta` (IST, UTC+5:30); every step pinned to `TZ=UTC` |
 | jobs | `--jobs 3` (default) |
-| wall time | 51s (2026-10-04T17:23:55.864Z → 2026-10-04T17:24:46.976Z) |
-| build before gate | `@solidjs/blocks` dist prebuilt by the caller; prebuilt `babel-plugin/index.js` and `compiler/compiler.node` used as found |
+| wall time | 48s (2026-10-04T17:29:32.531Z → 2026-10-04T17:30:20.184Z) |
+| build before gate | `@solidjs/blocks` dist prebuilt by the caller; `babel-plugin/index.js` used as found; `compiler/compiler.node` rebuilt from commit 4's source (release cargo build, 2026-10-04 22:58 IST) |
