@@ -21,13 +21,16 @@ const Facts = $component(function* Facts(
   return view(function* () {
     return (
       <ul>
-        <For each={yield* props.info}>
-          {function* (fact) {
-            return view(function* () {
-              return <li>{yield* fact}</li>;
-            });
-          }}
-        </For>
+        {
+          yield* For({
+            each: props.info,
+            children: function* (fact) {
+              return view(function* () {
+                return <li>{yield* fact}</li>;
+              });
+            }
+          })
+        }
       </ul>
     );
   });
@@ -44,12 +47,25 @@ const Profile = $component(function* Profile(
       <>
         <h1>{yield* props.user.firstName}'s Profile</h1>
         <p>This section could be about you.</p>
-        <Errored fallback={err => <span class="error">{err().message}</span>}>
-          {Loading({
-            fallback: <span class="loader">Loading Info...</span>,
-            children: () => Facts({ info: props.info })
-          })}
-        </Errored>
+        {
+          yield* Errored({
+            fallback: err => <span class="error">{err().message}</span>,
+            children: function* () {
+              return (
+                <>
+                  {
+                    yield* Loading({
+                      fallback: <span class="loader">Loading Info...</span>,
+                      children: function* () {
+                        return <>{yield* Facts({ info: props.info })}</>;
+                      }
+                    })
+                  }
+                </>
+              );
+            }
+          })
+        }
       </>
     );
   });

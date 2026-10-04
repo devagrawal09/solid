@@ -69,27 +69,42 @@ const Orders = $component(function* Orders(
 ) {
   return view(function* () {
     return (
-      <Show when={(yield* props.orders.length) > 0} fallback={<p class="empty">No orders yet.</p>}>
-        <ul class="orders">
-          <For each={yield* props.orders}>
-            {function* (order) {
-              return view(function* () {
-                return (
-                  <li>
-                    <span class="pkg-name">{yield* order.id}</span>
-                    <span class="pkg-desc">
-                      {yield* order.items.length} line
-                      {(yield* order.items.length) === 1 ? "" : "s"} · placed{" "}
-                      {yield* order.placedAt}
-                    </span>
-                    <span class="cart-price">${(yield* order.total).toFixed(2)}</span>
-                  </li>
-                );
-              });
-            }}
-          </For>
-        </ul>
-      </Show>
+      <>
+        {
+          yield* Show({
+            when: function* () {
+              return (yield* props.orders.length) > 0;
+            },
+            fallback: <p class="empty">No orders yet.</p>,
+            children: function* () {
+              return (
+                <ul class="orders">
+                  {
+                    yield* For({
+                      each: props.orders,
+                      children: function* (order) {
+                        return view(function* () {
+                          return (
+                            <li>
+                              <span class="pkg-name">{yield* order.id}</span>
+                              <span class="pkg-desc">
+                                {yield* order.items.length} line
+                                {(yield* order.items.length) === 1 ? "" : "s"} · placed{" "}
+                                {yield* order.placedAt}
+                              </span>
+                              <span class="cart-price">${(yield* order.total).toFixed(2)}</span>
+                            </li>
+                          );
+                        });
+                      }
+                    })
+                  }
+                </ul>
+              );
+            }
+          })
+        }
+      </>
     );
   });
 });
@@ -198,44 +213,47 @@ export const Checkout = $component(function* Checkout() {
         </header>
 
         <div class="cart">
-          <For each={yield* cart}>
-            {function* (item, i) {
-              const decrement = $event(function* () {
-                const index = yield* i;
-                yield* setCart(c => {
-                  c[index].quantity--;
+          {
+            yield* For({
+              each: cart,
+              children: function* (item, i) {
+                const decrement = $event(function* () {
+                  const index = yield* i;
+                  yield* setCart(c => {
+                    c[index].quantity--;
+                  });
                 });
-              });
-              const increment = $event(function* () {
-                const index = yield* i;
-                yield* setCart(c => {
-                  c[index].quantity++;
+                const increment = $event(function* () {
+                  const index = yield* i;
+                  yield* setCart(c => {
+                    c[index].quantity++;
+                  });
                 });
-              });
-              return view(function* () {
-                return (
-                  <div class="cart-row">
-                    <span class="cart-name">{yield* item.name}</span>
-                    <span class="qty">
-                      <button
-                        disabled={(yield* inFlight) || (yield* item.quantity) <= 1}
-                        onClick={decrement}
-                      >
-                        −
-                      </button>
-                      {yield* item.quantity}
-                      <button disabled={yield* inFlight} onClick={increment}>
-                        +
-                      </button>
-                    </span>
-                    <span class="cart-price">
-                      ${((yield* item.price) * (yield* item.quantity)).toFixed(2)}
-                    </span>
-                  </div>
-                );
-              });
-            }}
-          </For>
+                return view(function* () {
+                  return (
+                    <div class="cart-row">
+                      <span class="cart-name">{yield* item.name}</span>
+                      <span class="qty">
+                        <button
+                          disabled={(yield* inFlight) || (yield* item.quantity) <= 1}
+                          onClick={decrement}
+                        >
+                          −
+                        </button>
+                        {yield* item.quantity}
+                        <button disabled={yield* inFlight} onClick={increment}>
+                          +
+                        </button>
+                      </span>
+                      <span class="cart-price">
+                        ${((yield* item.price) * (yield* item.quantity)).toFixed(2)}
+                      </span>
+                    </div>
+                  );
+                });
+              }
+            })
+          }
           <div class="cart-row total">
             <span class="cart-name">Total</span>
             <span class="cart-price">${(yield* total).toFixed(2)}</span>
@@ -247,61 +265,87 @@ export const Checkout = $component(function* Checkout() {
             <input type="checkbox" checked={yield* declineCard} onInput={toggleDecline} />
             Simulate card decline (typed <code>CardDeclinedError</code>)
           </label>
-          <Show
-            when={yield* inFlight}
-            fallback={
-              <button class="primary" onClick={place}>
-                Place order — ${(yield* total).toFixed(2)}
-              </button>
-            }
-          >
-            <button class="danger" onClick={cancel}>
-              Cancel checkout
-            </button>
-          </Show>
+          {
+            yield* Show({
+              when: inFlight,
+              fallback: function* () {
+                return (
+                  <button class="primary" onClick={place}>
+                    Place order — ${(yield* total).toFixed(2)}
+                  </button>
+                );
+              },
+              children: function* () {
+                return (
+                  <button class="danger" onClick={cancel}>
+                    Cancel checkout
+                  </button>
+                );
+              }
+            })
+          }
         </div>
 
         <ol class="steps">
-          <For each={STEPS}>
-            {function* (step) {
-              const state = yield* $memo(function* () {
-                const order: Phase[] = ["reserving", "charging", "finalizing"];
-                const current = order.indexOf(yield* phase);
-                const target = order.indexOf(yield* step.phase);
-                if (current === -1) return "";
-                return target < current ? "done" : target === current ? "active" : "";
-              });
-              return view(function* () {
-                return (
-                  <li
-                    class={{
-                      done: (yield* state) === "done",
-                      active: (yield* state) === "active"
-                    }}
-                  >
-                    {yield* step.label}
-                  </li>
-                );
-              });
-            }}
-          </For>
+          {
+            yield* For({
+              each: STEPS,
+              children: function* (step) {
+                const state = yield* $memo(function* () {
+                  const order: Phase[] = ["reserving", "charging", "finalizing"];
+                  const current = order.indexOf(yield* phase);
+                  const target = order.indexOf(yield* step.phase);
+                  if (current === -1) return "";
+                  return target < current ? "done" : target === current ? "active" : "";
+                });
+                return view(function* () {
+                  return (
+                    <li
+                      class={{
+                        done: (yield* state) === "done",
+                        active: (yield* state) === "active"
+                      }}
+                    >
+                      {yield* step.label}
+                    </li>
+                  );
+                });
+              }
+            })
+          }
         </ol>
 
-        <Show when={yield* notice}>
-          {function* (n) {
-            return view(function* () {
-              return <p class={`notice ${yield* n.kind}`}>{yield* n.text}</p>;
-            });
-          }}
-        </Show>
+        {
+          yield* Show({
+            when: notice,
+            children: function* (n) {
+              return view(function* () {
+                return <p class={`notice ${yield* n.kind}`}>{yield* n.text}</p>;
+              });
+            }
+          })
+        }
 
         <h3>Your orders</h3>
-        <Errored fallback={err => <p class="error">Could not load orders: {err().message}</p>}>
-          {Loading({
-            fallback: <p class="loading">Loading orders…</p>,
-            children: () => Orders({ orders })
-          })}
-        </Errored>
+        {
+          yield* Errored({
+            fallback: err => <p class="error">Could not load orders: {err().message}</p>,
+            children: function* () {
+              return (
+                <>
+                  {
+                    yield* Loading({
+                      fallback: <p class="loading">Loading orders…</p>,
+                      children: function* () {
+                        return <>{yield* Orders({ orders })}</>;
+                      }
+                    })
+                  }
+                </>
+              );
+            }
+          })
+        }
       </section>
     );
   });

@@ -120,7 +120,7 @@ export const Rows = $component(function* () {
 });
 
 // a flow control's source may be a bare function* hole: the output carries its coloring
-const shownPending: HView<true, never> = Show({
+const shownPending: View<true, never> = Show({
   when: function* () {
     return (yield* pendingUser).name;
   },

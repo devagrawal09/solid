@@ -54,12 +54,29 @@ const AsyncCard = $component(function* AsyncCard(
     return (
       // the Loading stays the Reveal's direct boundary; the card's failure is
       // handled inside it
-      <Loading fallback={<div class="loader">{yield* props.title} loading...</div>}>
-        {Errored({
-          fallback: err => <div class="error">{err().message}</div>,
-          children: () => CardBody({ title: props.title, value })
-        })}
-      </Loading>
+      <>
+        {
+          yield* Loading({
+            fallback: function* () {
+              return <div class="loader">{yield* props.title} loading...</div>;
+            },
+            children: function* () {
+              return (
+                <>
+                  {
+                    yield* Errored({
+                      fallback: err => <div class="error">{err().message}</div>,
+                      children: function* () {
+                        return <>{yield* CardBody({ title: props.title, value })}</>;
+                      }
+                    })
+                  }
+                </>
+              );
+            }
+          })
+        }
+      </>
     );
   });
 });
@@ -148,39 +165,50 @@ const RevealPage = $component(function* RevealPage() {
           <button onClick={restart}>Restart run</button>
         </div>
 
-        <Show when={yield* seed} keyed>
-          <h2>Primary Group</h2>
-          <p>
-            Three siblings under a single <code>{`<Reveal order="${yield* order}">`}</code>. Compare
-            how they swap in as each resolves.
-          </p>
-          <Reveal order={yield* order} collapsed={yield* collapsed}>
-            <div class="reveal-grid">
-              <AsyncCard title="A" delay={500} />
-              <AsyncCard title="B" delay={1100} />
-              <AsyncCard title="C" delay={1700} />
-            </div>
-          </Reveal>
+        {
+          yield* Show({
+            when: seed,
+            keyed: true,
+            children: function* () {
+              return (
+                <>
+                  <h2>Primary Group</h2>
+                  <p>
+                    Three siblings under a single <code>{`<Reveal order="${yield* order}">`}</code>.
+                    Compare how they swap in as each resolves.
+                  </p>
+                  <Reveal order={yield* order} collapsed={yield* collapsed}>
+                    <div class="reveal-grid">
+                      {yield* AsyncCard({ title: "A", delay: 500 })}
+                      {yield* AsyncCard({ title: "B", delay: 1100 })}
+                      {yield* AsyncCard({ title: "C", delay: 1700 })}
+                    </div>
+                  </Reveal>
 
-          <h2>Nested Group</h2>
-          <p>
-            The outer group uses <code>order="{yield* order}"</code>. The inner group is always{" "}
-            <code>order="natural"</code> — it registers as a single composite slot to the outer
-            group and, once the outer releases it, each inner card reveals on its own.
-          </p>
-          <Reveal order={yield* order} collapsed={yield* collapsed}>
-            <div class="reveal-grid">
-              <AsyncCard title="Outer-1" delay={700} />
-              <Reveal order="natural">
-                <div class="reveal-grid">
-                  <AsyncCard title="Inner-1" delay={900} />
-                  <AsyncCard title="Inner-2" delay={1300} />
-                </div>
-              </Reveal>
-              <AsyncCard title="Outer-2" delay={1500} />
-            </div>
-          </Reveal>
-        </Show>
+                  <h2>Nested Group</h2>
+                  <p>
+                    The outer group uses <code>order="{yield* order}"</code>. The inner group is
+                    always <code>order="natural"</code> — it registers as a single composite slot to
+                    the outer group and, once the outer releases it, each inner card reveals on its
+                    own.
+                  </p>
+                  <Reveal order={yield* order} collapsed={yield* collapsed}>
+                    <div class="reveal-grid">
+                      {yield* AsyncCard({ title: "Outer-1", delay: 700 })}
+                      <Reveal order="natural">
+                        <div class="reveal-grid">
+                          {yield* AsyncCard({ title: "Inner-1", delay: 900 })}
+                          {yield* AsyncCard({ title: "Inner-2", delay: 1300 })}
+                        </div>
+                      </Reveal>
+                      {yield* AsyncCard({ title: "Outer-2", delay: 1500 })}
+                    </div>
+                  </Reveal>
+                </>
+              );
+            }
+          })
+        }
       </>
     );
   });

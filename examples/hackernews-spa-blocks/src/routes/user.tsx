@@ -28,9 +28,16 @@ const User = $component(function* User(props: TypedProps<RouteProps<Path>, "User
           <li>
             <span class="label">Karma:</span> {(yield* user).karma}
           </li>
-          <Show when={(yield* user).about}>
-            <li innerHTML={(yield* user).about} class="about" />
-          </Show>
+          {
+            yield* Show({
+              when: function* () {
+                return (yield* user).about;
+              },
+              children: function* () {
+                return <li innerHTML={(yield* user).about} class="about" />;
+              }
+            })
+          }
         </ul>
         <p class="links">
           <a href={`https://news.ycombinator.com/submitted?id=${(yield* user).id}`}>submissions</a>{" "}

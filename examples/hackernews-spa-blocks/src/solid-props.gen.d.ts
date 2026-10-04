@@ -13,6 +13,7 @@ declare module "@solidjs/blocks" {
       story: { pending: false; fails: never; live: true; static: false };
     };
     "Toggle": {
+      children: { pending: false; fails: never; live: true; static: false };
     };
   }
 }

@@ -8,7 +8,7 @@
  * web renderer as it is, and the renderer does not drive generators; in
  * JSX the hole is the `yield*`.
  */
-import type { HView, PENDING, SettledView, VIEW, HVIEW } from "./types.js";
+import type { COMPONENT, HView, PENDING, SettledView, VIEW, HVIEW } from "./types.js";
 
 type NotCallable = {
   readonly call?: never;
@@ -38,3 +38,12 @@ export type Element =
   | boolean
   | null
   | undefined;
+
+/**
+ * What a JSX tag may name (D-067; the JSX namespace's `ElementType`): a DOM
+ * element, or a foreign (plain-Solid) component — the router, `Portal`,
+ * `HydrationScript`, a context provider. A block component (`$component`,
+ * `lazy`, the library's flow controls and boundaries — they carry the
+ * component brand) is called, never tagged (D-062): `{yield* Card({ todo })}`.
+ */
+export type TagType = string | (((props: any) => any) & { readonly [COMPONENT]?: never });

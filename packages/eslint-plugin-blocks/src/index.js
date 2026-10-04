@@ -775,6 +775,9 @@ const preferViewWrapper = {
       FunctionExpression(node) {
         if (!node.generator || blockKind(node) !== "view") return;
         if (isViewCall(node.parent) && node.parent.arguments[0] === node) return;
+        // a lazy view (`children: function* () { … }`, D-066) is typed by the
+        // call it is a prop of
+        if (node.parent.type === "Property") return;
         const blocks = source.ast.body.find(
           s =>
             s.type === "ImportDeclaration" &&
@@ -919,52 +922,75 @@ const noComponentTag = {
         if (nameNode.type === "JSXIdentifier" && !/^[A-Z]/.test(nameNode.name)) return;
         if (!isBlockComponent(context, nameNode)) return;
         const name = source.getText(nameNode);
-        const fixable = inGenerator(node);
+        // in a block the call is a hole's `yield*`; outside one (a root, a
+        // test, a module-level value) it is the plain call
+        const inBlock = inGenerator(node);
         context.report({
           node: node.openingElement,
           messageId: "tag",
           data: { name },
-          fix: !fixable
-            ? null
-            : fixer => {
-                const props = [];
-                let usesView = false;
-                for (const attr of node.openingElement.attributes) {
-                  if (attr.type === "JSXSpreadAttribute") {
-                    props.push(`...${source.getText(attr.argument)}`);
-                    continue;
-                  }
-                  const raw =
-                    attr.name.type === "JSXNamespacedName"
-                      ? `${attr.name.namespace.name}:${attr.name.name.name}`
-                      : attr.name.name;
-                  const key = IDENT.test(raw) ? raw : JSON.stringify(raw);
-                  const v = attr.value;
-                  if (v == null) props.push(`${key}: true`);
-                  else if (v.type === "Literal") props.push(`${key}: ${JSON.stringify(v.value)}`);
-                  else if (v.type === "JSXExpressionContainer") {
-                    if (v.expression.type === "JSXEmptyExpression") continue;
-                    props.push(`${key}: ${propValue(source, v.expression)}`);
-                  } else props.push(`${key}: ${source.getText(v)}`);
-                }
-                const children = childrenFromJsx(source, node.children);
-                if (children === null) return null;
-                if (children !== undefined) {
-                  props.push(`children: ${children}`);
-                  usesView = children.includes("return view(");
-                }
-                const call = props.length ? `${name}({ ${props.join(", ")} })` : `${name}()`;
-                const parent = node.parent;
-                const inJsx = parent.type === "JSXElement" || parent.type === "JSXFragment";
-                const fixes = [
-                  fixer.replaceText(node, inJsx ? `{yield* ${call}}` : `<>{yield* ${call}}</>`)
-                ];
-                if (usesView) {
-                  const imp = importView(context, fixer);
-                  if (imp) fixes.push(imp);
-                }
-                return fixes;
+          fix: fixer => {
+            const props = [];
+            let usesView = false;
+            for (const attr of node.openingElement.attributes) {
+              if (attr.type === "JSXSpreadAttribute") {
+                props.push(`...${source.getText(attr.argument)}`);
+                continue;
               }
+              const raw =
+                attr.name.type === "JSXNamespacedName"
+                  ? `${attr.name.namespace.name}:${attr.name.name.name}`
+                  : attr.name.name;
+              const key = IDENT.test(raw) ? raw : JSON.stringify(raw);
+              const v = attr.value;
+              if (v == null) props.push(`${key}: true`);
+              else if (v.type === "Literal") props.push(`${key}: ${JSON.stringify(v.value)}`);
+              else if (v.type === "JSXExpressionContainer") {
+                if (v.expression.type === "JSXEmptyExpression") continue;
+                props.push(`${key}: ${propValue(source, v.expression)}`);
+              } else props.push(`${key}: ${source.getText(v)}`);
+            }
+            const children = childrenFromJsx(source, node.children);
+            if (children === null) return null;
+            if (children !== undefined) {
+              props.push(`children: ${children}`);
+              usesView = children.includes("return view(");
+            }
+            const call = props.length ? `${name}({ ${props.join(", ")} })` : `${name}()`;
+            const parent = node.parent;
+            const inJsx = parent.type === "JSXElement" || parent.type === "JSXFragment";
+            // a tag given as a component's prop (`fallback={<Checkout />}`, or
+            // `fallback: <Checkout />` once the holder is a call) was built
+            // lazily, when the prop was read: it becomes a lazy view, so the
+            // component is set up only where (and when) the prop is shown
+            const asProp =
+              (parent.type === "JSXExpressionContainer" && parent.parent.type === "JSXAttribute") ||
+              (parent.type === "Property" &&
+                parent.value === node &&
+                parent.parent.type === "ObjectExpression" &&
+                parent.parent.parent.type === "CallExpression" &&
+                parent.parent.parent.callee.type === "Identifier" &&
+                /^[A-Z]/.test(parent.parent.parent.callee.name));
+            const fixes = [
+              fixer.replaceText(
+                node,
+                inBlock
+                  ? asProp
+                    ? `function* () {\nreturn <>{yield* ${call}}</>;\n}`
+                    : inJsx
+                      ? `{yield* ${call}}`
+                      : `<>{yield* ${call}}</>`
+                  : inJsx
+                    ? `{${call}}`
+                    : call
+              )
+            ];
+            if (usesView) {
+              const imp = importView(context, fixer);
+              if (imp) fixes.push(imp);
+            }
+            return fixes;
+          }
         });
       }
     };
@@ -1127,20 +1153,14 @@ const plugin = {
 
 /** Rules `recommended` sets to warn (a suggestion, not a rule of the model). */
 const WARNINGS = new Set(["prefer-view-wrapper"]);
-/**
- * Rules not in `recommended` yet: the call form's (D-062, D-065, D-066) land
- * in it with the twins' migration, in the same commit as the types that
- * refuse block component tags.
- */
-const PENDING = new Set(["no-component-tag", "no-read-in-prop", "component-children-generator"]);
-
 /** `recommended`: every rule an error, but the suggestions (`WARNINGS`), which warn (flat config). */
 plugin.configs.recommended = {
   plugins: { "@solidjs/blocks": plugin },
   rules: Object.fromEntries(
-    Object.keys(rules)
-      .filter(name => !PENDING.has(name))
-      .map(name => [`@solidjs/blocks/${name}`, WARNINGS.has(name) ? "warn" : "error"])
+    Object.keys(rules).map(name => [
+      `@solidjs/blocks/${name}`,
+      WARNINGS.has(name) ? "warn" : "error"
+    ])
   )
 };
 

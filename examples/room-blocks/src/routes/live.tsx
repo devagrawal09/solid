@@ -66,15 +66,20 @@ const Live = $component(function* Live(props: TypedProps<RouteSectionProps, "Liv
   });
   return view(function* () {
     return (
-      <Errored
-        fallback={err => (
-          <div class="room">
-            <p class="muted post-error">The page failed: {describe(err())}</p>
-          </div>
-        )}
-      >
-        {LivePage({ room })}
-      </Errored>
+      <>
+        {
+          yield* Errored({
+            fallback: err => (
+              <div class="room">
+                <p class="muted post-error">The page failed: {describe(err())}</p>
+              </div>
+            ),
+            children: function* () {
+              return <>{yield* LivePage({ room })}</>;
+            }
+          })
+        }
+      </>
     );
   });
 });
@@ -88,9 +93,9 @@ const LivePage = $component(function* LivePage(props: TypedProps<{ room: string 
         <div class="columns">
           <main class="main">{yield* Chat({ room: props.room })}</main>
           <aside class="side">
-            <Directory current={yield* props.room} />
+            {yield* Directory({ current: props.room })}
             {yield* Card({ room: props.room })}
-            <Summary room={yield* props.room} />
+            {yield* Summary({ room: props.room })}
             {yield* Archive({ room: props.room })}
           </aside>
         </div>
@@ -126,19 +131,28 @@ const Header = $component(function* Header(props: TypedProps<{ room: string }, "
         <div>
           <h1>#{yield* props.room}</h1>
           <p class="muted">
-            {yield* Loading({ fallback: "Joining…", children: () => Joined({ joined, me }) })} Open
-            another tab to be two people.
+            {
+              yield* Loading({
+                fallback: "Joining…",
+                children: function* () {
+                  return <>{yield* Joined({ joined, me })}</>;
+                }
+              })
+            }{" "}
+            Open another tab to be two people.
           </p>
         </div>
         <div class="presence">
           {
             yield* Loading({
               fallback: <span class="muted">joining…</span>,
-              children: () => Members({ who, me })
+              children: function* () {
+                return <>{yield* Members({ who, me })}</>;
+              }
             })
           }
-          <StatusPill wire={wire} label="presence" />
-          <Chaos />
+          {yield* StatusPill({ wire: wire, label: "presence" })}
+          {yield* Chaos()}
         </div>
       </header>
     );
@@ -150,12 +164,21 @@ const Joined = $component(function* Joined(
 ) {
   return view(function* () {
     return (
-      <Show
-        when={yield* props.joined}
-        fallback="Not in the room yet — your connection is what joins."
-      >
-        You are <b>{yield* props.me.name}</b>, here while this tab's connection is open.
-      </Show>
+      <>
+        {
+          yield* Show({
+            when: props.joined,
+            fallback: "Not in the room yet — your connection is what joins.",
+            children: function* () {
+              return (
+                <>
+                  You are <b>{yield* props.me.name}</b>, here while this tab's connection is open.
+                </>
+              );
+            }
+          })
+        }
+      </>
     );
   });
 });
@@ -169,17 +192,20 @@ const Members = $component(function* Members(
         <span class="count">{yield* props.who.members.length}</span>
         <span class="muted"> here · connection #{yield* props.who.connection}</span>
         <ul class="members">
-          <For each={yield* props.who.members}>
-            {function* (m) {
-              return view(function* () {
-                return (
-                  <li class={(yield* m.id) === (yield* props.me.id) ? "me" : ""}>
-                    {yield* m.name}
-                  </li>
-                );
-              });
-            }}
-          </For>
+          {
+            yield* For({
+              each: props.who.members,
+              children: function* (m) {
+                return view(function* () {
+                  return (
+                    <li class={(yield* m.id) === (yield* props.me.id) ? "me" : ""}>
+                      {yield* m.name}
+                    </li>
+                  );
+                });
+              }
+            })
+          }
         </ul>
       </>
     );
@@ -214,9 +240,14 @@ const Chaos = $component(function* Chaos() {
         <button type="button" onClick={drop}>
           Kill every connection
         </button>
-        <Show when={yield* last}>
-          <span class="muted"> {yield* last}</span>
-        </Show>
+        {
+          yield* Show({
+            when: last,
+            children: function* () {
+              return <span class="muted"> {yield* last}</span>;
+            }
+          })
+        }
       </span>
     );
   });
@@ -274,7 +305,7 @@ const Chat = $component(function* Chat(props: TypedProps<{ room: string }, "Chat
     return (
       <>
         {yield* Transcript({ messages: transcriptRows, wire })}
-        <Composer room={yield* props.room} post={post} sending={sending} error={error} />
+        {yield* Composer({ room: props.room, post: post, sending: sending, error: error })}
       </>
     );
   });
@@ -288,12 +319,14 @@ const Transcript = $component(function* Transcript(
       <section class="panel transcript">
         <div class="panel-head">
           <h2>Transcript</h2>
-          <StatusPill wire={yield* props.wire} />
+          {yield* StatusPill({ wire: props.wire })}
         </div>
         {
           yield* Loading({
             fallback: <p class="muted">loading…</p>,
-            children: () => Messages({ messages: props.messages })
+            children: function* () {
+              return <>{yield* Messages({ messages: props.messages })}</>;
+            }
           })
         }
       </section>
@@ -308,25 +341,28 @@ const Messages = $component(function* Messages(
   return view(function* () {
     return (
       <ol class="messages">
-        <For each={yield* props.messages}>
-          {function* (m) {
-            return view(function* () {
-              return (
-                <li
-                  class={{
-                    system: (yield* m.from) === "system",
-                    mine: (yield* m.from) === (yield* me)?.name,
-                    pending: !!(yield* m.pending)
-                  }}
-                >
-                  <span class="from">{yield* m.from}</span>
-                  <span class="text">{yield* m.text}</span>
-                  <time class="muted">{new Date(yield* m.at).toLocaleTimeString()}</time>
-                </li>
-              );
-            });
-          }}
-        </For>
+        {
+          yield* For({
+            each: props.messages,
+            children: function* (m) {
+              return view(function* () {
+                return (
+                  <li
+                    class={{
+                      system: (yield* m.from) === "system",
+                      mine: (yield* m.from) === (yield* me)?.name,
+                      pending: !!(yield* m.pending)
+                    }}
+                  >
+                    <span class="from">{yield* m.from}</span>
+                    <span class="text">{yield* m.text}</span>
+                    <time class="muted">{new Date(yield* m.at).toLocaleTimeString()}</time>
+                  </li>
+                );
+              });
+            }
+          })
+        }
       </ol>
     );
   });
@@ -377,14 +413,26 @@ const Composer = $component(function* Composer(
         <button type="submit" disabled={(yield* me) === null}>
           Send
         </button>
-        <Show when={yield* props.sending}>
-          <span class="muted sending">sending…</span>
-        </Show>
-        <Show when={yield* props.error}>
-          <span class="muted post-error" role="alert">
-            {yield* props.error}
-          </span>
-        </Show>
+        {
+          yield* Show({
+            when: props.sending,
+            children: function* () {
+              return <span class="muted sending">sending…</span>;
+            }
+          })
+        }
+        {
+          yield* Show({
+            when: props.error,
+            children: function* () {
+              return (
+                <span class="muted post-error" role="alert">
+                  {yield* props.error}
+                </span>
+              );
+            }
+          })
+        }
       </form>
     );
   });
@@ -403,7 +451,16 @@ const Directory = $component(function* Directory(
           <h2>Rooms</h2>
         </div>
         <ul class="directory">
-          <For each={ROOMS}>{name => <DirectoryEntry name={name} current={props.current} />}</For>
+          {
+            yield* For({
+              each: ROOMS,
+              children: function* (name) {
+                return view(function* () {
+                  return <>{yield* DirectoryEntry({ name: name, current: props.current })}</>;
+                });
+              }
+            })
+          }
         </ul>
       </section>
     );
@@ -426,9 +483,25 @@ const DirectoryEntry = $component(function* DirectoryEntry(
       <li class={(yield* props.name) === (yield* props.current) ? "current" : ""}>
         <a href={`/live?room=${yield* props.name}`}>#{yield* props.name}</a>
         <span class="count-small">
-          <Errored fallback="!">
-            {Loading({ fallback: "…", children: () => Count({ who }) })}
-          </Errored>
+          {
+            yield* Errored({
+              fallback: "!",
+              children: function* () {
+                return (
+                  <>
+                    {
+                      yield* Loading({
+                        fallback: "…",
+                        children: function* () {
+                          return <>{yield* Count({ who })}</>;
+                        }
+                      })
+                    }
+                  </>
+                );
+              }
+            })
+          }
         </span>
         <span class={`dot dot-${yield* wire.status}`} title={yield* wire.status} />
       </li>
@@ -474,13 +547,15 @@ const Card = $component(function* Card(props: TypedProps<{ room: string }, "Card
       <section class="panel">
         <div class="panel-head">
           <h2>Room card</h2>
-          <StatusPill wire={wire} />
+          {yield* StatusPill({ wire: wire })}
         </div>
         {
           yield* Loading({
             on: props.room,
             fallback: <p class="muted">loading card…</p>,
-            children: () => CardBody({ card, members, activity })
+            children: function* () {
+              return <>{yield* CardBody({ card, members, activity })}</>;
+            }
           })
         }
       </section>
@@ -509,7 +584,9 @@ const CardBody = $component(function* CardBody(
           {
             yield* Loading({
               fallback: <span class="muted">counting members…</span>,
-              children: () => MemberCount({ members: props.members })
+              children: function* () {
+                return <>{yield* MemberCount({ members: props.members })}</>;
+              }
             })
           }
         </p>
@@ -517,7 +594,9 @@ const CardBody = $component(function* CardBody(
           {
             yield* Loading({
               fallback: <span class="muted">sampling activity…</span>,
-              children: () => ActivityLine({ activity: props.activity })
+              children: function* () {
+                return <>{yield* ActivityLine({ activity: props.activity })}</>;
+              }
             })
           }
         </p>
@@ -551,13 +630,16 @@ const ActivityLine = $component(function* ActivityLine(
     return (
       <>
         <span class="ticks">
-          <For each={yield* ticks}>
-            {function* (on) {
-              return view(function* () {
-                return <span class={(yield* on) ? "tick on" : "tick"} />;
-              });
-            }}
-          </For>
+          {
+            yield* For({
+              each: ticks,
+              children: function* (on) {
+                return view(function* () {
+                  return <span class={(yield* on) ? "tick on" : "tick"} />;
+                });
+              }
+            })
+          }
         </span>
         <span class="muted">
           {" "}
@@ -587,21 +669,32 @@ const Summary = $component(function* Summary(props: TypedProps<{ room: string },
           <h2>Summary</h2>
           <span class="muted">undeclared</span>
         </div>
-        <Errored
-          fallback={(err, reset) => (
-            <div class="error">
-              <p>The stream died: {describe(err())}</p>
-              <button type="button" onClick={() => regenerate(reset)}>
-                Regenerate
-              </button>
-            </div>
-          )}
-        >
-          {Loading({
-            fallback: <p class="muted">summarizing…</p>,
-            children: () => SummaryText({ room: props.room, attempt: attemptNo })
-          })}
-        </Errored>
+        {
+          yield* Errored({
+            fallback: (err, reset) => (
+              <div class="error">
+                <p>The stream died: {describe(err())}</p>
+                <button type="button" onClick={() => regenerate(reset)}>
+                  Regenerate
+                </button>
+              </div>
+            ),
+            children: function* () {
+              return (
+                <>
+                  {
+                    yield* Loading({
+                      fallback: <p class="muted">summarizing…</p>,
+                      children: function* () {
+                        return <>{yield* SummaryText({ room: props.room, attempt: attemptNo })}</>;
+                      }
+                    })
+                  }
+                </>
+              );
+            }
+          })
+        }
       </section>
     );
   });
@@ -649,7 +742,9 @@ const Archive = $component(function* Archive(props: TypedProps<{ room: string },
           yield* Loading({
             on: props.room,
             fallback: <p class="muted">counting the archive (4s)…</p>,
-            children: () => ArchiveCount({ stats })
+            children: function* () {
+              return <>{yield* ArchiveCount({ stats })}</>;
+            }
           })
         }
       </section>

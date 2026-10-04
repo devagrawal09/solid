@@ -27,9 +27,16 @@ const Story = $component(function* Story(props: TypedProps<RouteProps<Path>, "St
           <a href={(yield* story).url} target="_blank">
             <h1>{(yield* story).title}</h1>
           </a>
-          <Show when={(yield* story).domain}>
-            <span class="host">({(yield* story).domain})</span>
-          </Show>
+          {
+            yield* Show({
+              when: function* () {
+                return (yield* story).domain;
+              },
+              children: function* () {
+                return <span class="host">({(yield* story).domain})</span>;
+              }
+            })
+          }
           <p class="meta">
             {(yield* story).points} points | by{" "}
             <a href={`/users/${(yield* story).user}`}>{(yield* story).user}</a>{" "}
@@ -43,7 +50,18 @@ const Story = $component(function* Story(props: TypedProps<RouteProps<Path>, "St
               : "No comments yet."}
           </p>
           <ul class="comment-children">
-            <For each={(yield* story).comments}>{comment => <Comment comment={comment} />}</For>
+            {
+              yield* For({
+                each: function* () {
+                  return (yield* story).comments;
+                },
+                children: function* (comment) {
+                  return view(function* () {
+                    return <>{yield* Comment({ comment: comment })}</>;
+                  });
+                }
+              })
+            }
           </ul>
         </div>
       </div>

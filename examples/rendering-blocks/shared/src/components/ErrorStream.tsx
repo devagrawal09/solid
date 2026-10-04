@@ -79,9 +79,27 @@ const InnerBoundaryItem = $component(function* InnerBoundaryItem(
   const { item: loaded, setId } = yield* item(props);
   return view(function* () {
     return (
-      <Loading fallback={<div>Item Loading...</div>}>
-        {Errored({ fallback: fallback(setId), children: () => Title({ item: loaded }) })}
-      </Loading>
+      <>
+        {
+          yield* Loading({
+            fallback: <div>Item Loading...</div>,
+            children: function* () {
+              return (
+                <>
+                  {
+                    yield* Errored({
+                      fallback: fallback(setId),
+                      children: function* () {
+                        return <>{yield* Title({ item: loaded })}</>;
+                      }
+                    })
+                  }
+                </>
+              );
+            }
+          })
+        }
+      </>
     );
   });
 });
@@ -92,12 +110,27 @@ const OuterBoundaryItem = $component(function* OuterBoundaryItem(
   const { item: loaded, setId } = yield* item(props);
   return view(function* () {
     return (
-      <Errored fallback={fallback(setId)}>
-        {Loading({
-          fallback: <div>Item Loading...</div>,
-          children: () => Title({ item: loaded })
-        })}
-      </Errored>
+      <>
+        {
+          yield* Errored({
+            fallback: fallback(setId),
+            children: function* () {
+              return (
+                <>
+                  {
+                    yield* Loading({
+                      fallback: <div>Item Loading...</div>,
+                      children: function* () {
+                        return <>{yield* Title({ item: loaded })}</>;
+                      }
+                    })
+                  }
+                </>
+              );
+            }
+          })
+        }
+      </>
     );
   });
 });
@@ -113,13 +146,13 @@ const ErrorStream = $component(function* ErrorStream() {
         </p>
         <h2>Errored inside Loading</h2>
         <div>
-          <InnerBoundaryItem id="1" />
-          <InnerBoundaryItem id="bad-item" />
+          {yield* InnerBoundaryItem({ id: "1" })}
+          {yield* InnerBoundaryItem({ id: "bad-item" })}
         </div>
         <h2>Errored outside Loading</h2>
         <div>
-          <OuterBoundaryItem id="1" />
-          <OuterBoundaryItem id="bad-item" />
+          {yield* OuterBoundaryItem({ id: "1" })}
+          {yield* OuterBoundaryItem({ id: "bad-item" })}
         </div>
       </>
     );

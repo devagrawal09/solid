@@ -67,13 +67,16 @@ const FeedCard = $component(function* FeedCard(props: TypedProps<{ feed: Feed },
           <span class="loading-dot" />
         </h2>
         <ul>
-          <For each={yield* props.feed.items}>
-            {function* (item) {
-              return view(function* () {
-                return <li>{yield* item.text}</li>;
-              });
-            }}
-          </For>
+          {
+            yield* For({
+              each: props.feed.items,
+              children: function* (item) {
+                return view(function* () {
+                  return <li>{yield* item.text}</li>;
+                });
+              }
+            })
+          }
         </ul>
       </div>
     );
@@ -135,11 +138,11 @@ const Skeleton = $component(function* Skeleton() {
         <div style={{ display: "flex", gap: "2em", "flex-wrap": "wrap" }}>
           <div>
             <h2>createMemo + loadingValue</h2>
-            <FeedCard feed={yield* feed} />
+            {yield* FeedCard({ feed: feed })}
           </div>
           <div>
             <h2>createStore + seedLoadingValue</h2>
-            <FeedCard feed={store} />
+            {yield* FeedCard({ feed: store })}
           </div>
         </div>
         <button type="button" onClick={refetch}>

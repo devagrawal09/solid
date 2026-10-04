@@ -81,6 +81,13 @@ tester.run("no-read-in-view-body", rules["no-read-in-view-body"], {
       errors: [{ messageId: "read" }]
     },
     {
+      // a component call's zero-arity children are a lazy view (D-066): no body reads
+      code: component(
+        "return view(function* () { return <>{yield* Show({ when: n, children: function* () { const v = yield* n; return <b>{v}</b>; } })}</>; });"
+      ),
+      errors: [{ messageId: "read" }]
+    },
+    {
       // a branch on a read: structure comes from flow controls
       code: "const r = <For each={xs}>{function* (x) { return function* () { if (yield* x.done) return <i />; return <b />; }; }}</For>;",
       errors: [{ messageId: "read" }]
@@ -243,6 +250,10 @@ tester.run("no-read-in-view-body (a wrapped view)", rules["no-read-in-view-body"
 tester.run("jsx-only-in-view", rules["jsx-only-in-view"], {
   valid: [
     component("return view(function* () { return <p>{yield* n}</p>; });"),
+    // a component call's zero-arity children / fallback are lazy views (D-066)
+    component(
+      "return view(function* () { return <>{yield* Show({ when: n, fallback: function* () { return <i />; }, children: function* () { return <b />; } })}</>; });"
+    ),
     // a render callback inside a view's JSX builds elements: fine
     component(
       "return function* () { return <Router>{props => <Loading>{props.children}</Loading>}</Router>; };"
@@ -320,9 +331,26 @@ tester.run("no-component-tag", rules["no-component-tag"], {
       errors: [{ messageId: "tag" }]
     },
     {
-      // outside a generator the call cannot be written yet: reported, not fixed
+      // a tag given as a prop was built when the prop was read: a lazy view
+      code:
+        imports +
+        Card +
+        component(
+          "return view(function* () { return <>{yield* Show({ when: x, fallback: <Card a={1} />, children: function* () { return <i />; } })}</>; });"
+        ),
+      output:
+        imports +
+        Card +
+        component(
+          "return view(function* () { return <>{yield* Show({ when: x, fallback: function* () {\nreturn <>{yield* Card({ a: 1 })}</>;\n}, children: function* () { return <i />; } })}</>; });"
+        ),
+      errors: [{ messageId: "tag" }]
+    },
+    {
+      // outside a block (a root, a test) it is the plain call
       code: imports + "const f = () => <Show when={x}><i /></Show>;",
-      output: null,
+      output:
+        imports + "const f = () => Show({ when: x, children: function* () {\nreturn <i />;\n} });",
       errors: [{ messageId: "tag" }]
     }
   ]

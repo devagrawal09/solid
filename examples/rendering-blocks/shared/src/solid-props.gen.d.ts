@@ -18,12 +18,13 @@ declare module "@solidjs/blocks" {
       info: { pending: false; fails: never; live: true; static: false };
     };
     "FeedCard": {
-      feed: { pending: false; fails: never; live: true; static: false };
+      feed: { pending: true; fails: import("./components/Skeleton").FeedError; live: true; static: false };
     };
     "InnerBoundaryItem": {
       id: { pending: false; fails: never; live: false; static: true };
     };
     "Link": {
+      children: { pending: false; fails: never; live: true; static: false };
       path: { pending: false; fails: never; live: false; static: true };
     };
     "MemoList": {

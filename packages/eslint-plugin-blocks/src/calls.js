@@ -96,7 +96,16 @@ export function containsYield(node) {
 
 /** A prop value in call form (D-065): a source as itself, a derived read as a hole. */
 export function propValue(source, expr) {
-  if (expr.type === "YieldExpression" && expr.delegate && expr.argument)
+  // a function is a value: a hole (`function* () { … }`) or a callback
+  if (/Function/.test(expr.type)) return source.getText(expr);
+  // `yield* src` with `src` a source or a path is the source itself; any
+  // other delegation (a helper's generator, `yield* matches("x")`) is a hole
+  if (
+    expr.type === "YieldExpression" &&
+    expr.delegate &&
+    expr.argument &&
+    (expr.argument.type === "Identifier" || expr.argument.type === "MemberExpression")
+  )
     return source.getText(expr.argument);
   const text = source.getText(expr);
   if (containsYield(expr)) return `function* () {\nreturn ${text};\n}`;
@@ -134,12 +143,27 @@ export function childrenFromFunction(source, fn) {
 
 /** A tag's JSX children as a component call's `children` (D-066), or null. */
 export function childrenFromJsx(source, children) {
-  const kids = children.filter(c => !(c.type === "JSXText" && !c.value.trim()));
+  // whitespace and `{/* comments */}` are not children
+  const kids = children.filter(
+    c =>
+      !(c.type === "JSXText" && !c.value.trim()) &&
+      !(c.type === "JSXExpressionContainer" && c.expression.type === "JSXEmptyExpression")
+  );
   if (!kids.length) return undefined;
   if (kids.length === 1 && kids[0].type === "JSXExpressionContainer") {
     const e = kids[0].expression;
     if (e.type === "FunctionExpression" || e.type === "ArrowFunctionExpression")
       return childrenFromFunction(source, e);
+    // a named row or render callback (`{comment}`), passed as it is
+    if (e.type === "Identifier") return source.getText(e);
+    // a view passed as a tag's child (`<Loading>{Card()}</Loading>`): in the
+    // lazy view it is delegated to, so its colors reach the component
+    if (
+      e.type === "CallExpression" &&
+      e.callee.type === "Identifier" &&
+      /^[A-Z]/.test(e.callee.name)
+    )
+      return `function* () {\nreturn <>{yield* ${source.getText(e)}}</>;\n}`;
   }
   const first = kids[0];
   const last = kids[kids.length - 1];

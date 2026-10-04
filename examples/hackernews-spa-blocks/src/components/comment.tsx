@@ -16,13 +16,37 @@ const Comment: Component<{ comment: CommentDefinition }, false, never> = $compon
           {yield* props.comment.time_ago} ago
         </div>
         <div class="text" innerHTML={yield* props.comment.content} />
-        <Show when={yield* props.comment.comments.length}>
-          <Toggle>
-            <For each={yield* props.comment.comments}>
-              {comment => <Comment comment={comment} />}
-            </For>
-          </Toggle>
-        </Show>
+        {
+          yield* Show({
+            when: props.comment.comments.length,
+            children: function* () {
+              return (
+                <>
+                  {
+                    yield* Toggle({
+                      children: function* () {
+                        return (
+                          <>
+                            {
+                              yield* For({
+                                each: props.comment.comments,
+                                children: function* (comment) {
+                                  return view(function* () {
+                                    return <>{yield* Comment({ comment: comment })}</>;
+                                  });
+                                }
+                              })
+                            }
+                          </>
+                        );
+                      }
+                    })
+                  }
+                </>
+              );
+            }
+          })
+        }
       </li>
     );
   });

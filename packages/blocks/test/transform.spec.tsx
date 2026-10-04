@@ -16,7 +16,8 @@ import {
   Loading,
   render,
   Show,
-  type TypedProps
+  type TypedProps,
+  view
 } from "@solidjs/blocks";
 import { toFailed } from "./failed.js";
 import { write } from "./write.js";
@@ -64,11 +65,22 @@ it("measured case: runs once, suspends to Loading, updates text and class indepe
     };
   });
   dispose = render(
-    () => (
-      <Errored fallback="!">
-        {Loading({ fallback: <i>loading</i>, children: () => Greeting() })}
-      </Errored>
-    ),
+    () =>
+      Errored({
+        fallback: "!",
+        children: function* () {
+          return (
+            <>
+              {Loading({
+                fallback: <i>loading</i>,
+                children: function* () {
+                  return <>{yield* Greeting()}</>;
+                }
+              })}
+            </>
+          );
+        }
+      }),
     root
   );
   flush();
@@ -126,26 +138,43 @@ it("props, stores, row blocks and hole blocks read with yield* in JSX", () => {
       return (
         <section>
           <ul>
-            <For each={yield* todos.list}>{todo => <Item todo={todo} />}</For>
+            {
+              yield* For({
+                each: todos.list,
+                children: function* (todo) {
+                  return view(function* () {
+                    return <>{yield* Item({ todo: todo })}</>;
+                  });
+                }
+              })
+            }
           </ul>
-          <For each={yield* todos.list}>
-            {function* (todo, i) {
-              const [seen] = yield* $signal("*");
-              return function* () {
-                return (
-                  <b>
-                    {yield* i}
-                    {yield* todo.title}
-                    {yield* seen}
-                  </b>
-                );
-              };
-            }}
-          </For>
+          {
+            yield* For({
+              each: todos.list,
+              children: function* (todo, i) {
+                const [seen] = yield* $signal("*");
+                return function* () {
+                  return (
+                    <b>
+                      {yield* i}
+                      {yield* todo.title}
+                      {yield* seen}
+                    </b>
+                  );
+                };
+              }
+            })
+          }
           <span>{yield* count}</span>
-          <Show when={yield* open}>
-            <button onClick={close}>close</button>
-          </Show>
+          {
+            yield* Show({
+              when: open,
+              children: function* () {
+                return <button onClick={close}>close</button>;
+              }
+            })
+          }
         </section>
       );
     };

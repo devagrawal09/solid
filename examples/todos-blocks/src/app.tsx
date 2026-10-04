@@ -98,15 +98,18 @@ const TodoItem = $component(function* TodoItem(props: TypedProps<{ todo: Todo },
             onInput={toggle}
           />
           <label>{yield* props.todo.title}</label>
-          <Show when={yield* props.todo.error}>
-            {function* (error) {
-              return view(function* () {
-                return (
-                  <button class="retry" title={`Retry ${yield* error.type}`} onClick={retry} />
-                );
-              });
-            }}
-          </Show>
+          {
+            yield* Show({
+              when: props.todo.error,
+              children: function* (error) {
+                return view(function* () {
+                  return (
+                    <button class="retry" title={`Retry ${yield* error.type}`} onClick={retry} />
+                  );
+                });
+              }
+            })
+          }
           <button class="destroy" onClick={remove} />
         </div>
       </li>
@@ -136,21 +139,41 @@ const MainSection = $component(function* MainSection(
   });
   return view(function* () {
     return (
-      <Show when={(yield* todos.length) > 0}>
-        <section class="main">
-          <input
-            id="toggle-all"
-            class="toggle-all"
-            type="checkbox"
-            checked={yield* allCompleted}
-            onChange={toggle}
-          />
-          <label for="toggle-all">Mark all as complete</label>
-          <ul class="todo-list">
-            <For each={yield* filtered}>{todo => <TodoItem todo={todo} />}</For>
-          </ul>
-        </section>
-      </Show>
+      <>
+        {
+          yield* Show({
+            when: function* () {
+              return (yield* todos.length) > 0;
+            },
+            children: function* () {
+              return (
+                <section class="main">
+                  <input
+                    id="toggle-all"
+                    class="toggle-all"
+                    type="checkbox"
+                    checked={yield* allCompleted}
+                    onChange={toggle}
+                  />
+                  <label for="toggle-all">Mark all as complete</label>
+                  <ul class="todo-list">
+                    {
+                      yield* For({
+                        each: filtered,
+                        children: function* (todo) {
+                          return view(function* () {
+                            return <>{yield* TodoItem({ todo: todo })}</>;
+                          });
+                        }
+                      })
+                    }
+                  </ul>
+                </section>
+              );
+            }
+          })
+        }
+      </>
     );
   });
 });
@@ -168,35 +191,59 @@ const Footer = $component(function* Footer(props: TypedProps<{ filter: Filter },
   });
   return view(function* () {
     return (
-      <Show when={(yield* todos.length) > 0}>
-        <footer class="footer">
-          <span class="todo-count">
-            <strong>{yield* remaining}</strong> {(yield* remaining) === 1 ? "item" : "items"} left
-          </span>
-          <ul class="filters">
-            <li>
-              <a href="#/" class={{ selected: (yield* props.filter) === "all" }}>
-                All
-              </a>
-            </li>
-            <li>
-              <a href="#/active" class={{ selected: (yield* props.filter) === "active" }}>
-                Active
-              </a>
-            </li>
-            <li>
-              <a href="#/completed" class={{ selected: (yield* props.filter) === "completed" }}>
-                Completed
-              </a>
-            </li>
-          </ul>
-          <Show when={(yield* completed) > 0}>
-            <button class="clear-completed" onClick={clear}>
-              Clear completed
-            </button>
-          </Show>
-        </footer>
-      </Show>
+      <>
+        {
+          yield* Show({
+            when: function* () {
+              return (yield* todos.length) > 0;
+            },
+            children: function* () {
+              return (
+                <footer class="footer">
+                  <span class="todo-count">
+                    <strong>{yield* remaining}</strong>{" "}
+                    {(yield* remaining) === 1 ? "item" : "items"} left
+                  </span>
+                  <ul class="filters">
+                    <li>
+                      <a href="#/" class={{ selected: (yield* props.filter) === "all" }}>
+                        All
+                      </a>
+                    </li>
+                    <li>
+                      <a href="#/active" class={{ selected: (yield* props.filter) === "active" }}>
+                        Active
+                      </a>
+                    </li>
+                    <li>
+                      <a
+                        href="#/completed"
+                        class={{ selected: (yield* props.filter) === "completed" }}
+                      >
+                        Completed
+                      </a>
+                    </li>
+                  </ul>
+                  {
+                    yield* Show({
+                      when: function* () {
+                        return (yield* completed) > 0;
+                      },
+                      children: function* () {
+                        return (
+                          <button class="clear-completed" onClick={clear}>
+                            Clear completed
+                          </button>
+                        );
+                      }
+                    })
+                  }
+                </footer>
+              );
+            }
+          })
+        }
+      </>
     );
   });
 });
@@ -206,14 +253,15 @@ const TodoApp = $component(function* TodoApp(props: TypedProps<{ filter: Filter 
   return view(function* () {
     return (
       <section class="todoapp">
-        <Header />
+        {yield* Header()}
         {
           yield* Loading({
             fallback: <p class="loading">Loading…</p>,
-            children: () => [
-              MainSection({ filter: props.filter }),
-              Footer({ filter: props.filter })
-            ]
+            children: function* () {
+              return (
+                <>{[MainSection({ filter: props.filter }), Footer({ filter: props.filter })]}</>
+              );
+            }
           })
         }
       </section>
@@ -234,7 +282,9 @@ export const App = $component(function* App() {
               <button onClick={reset}>Reset</button>
             </div>
           ),
-          children: () => TodoApp({ filter })
+          children: function* () {
+            return <>{yield* TodoApp({ filter })}</>;
+          }
         })}
       </TodosContext>
     );

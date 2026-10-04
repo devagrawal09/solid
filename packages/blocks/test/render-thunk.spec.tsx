@@ -101,9 +101,25 @@ for (const form of forms) {
       const App = $component(function* () {
         return function* () {
           return (
-            <Errored fallback="!">
-              {Loading({ fallback: <i>…</i>, children: () => Inner() })}
-            </Errored>
+            <>
+              {
+                yield* Errored({
+                  fallback: "!",
+                  children: function* () {
+                    return (
+                      <>
+                        {Loading({
+                          fallback: <i>…</i>,
+                          children: function* () {
+                            return <>{yield* Inner()}</>;
+                          }
+                        })}
+                      </>
+                    );
+                  }
+                })
+              }
+            </>
           );
         };
       });

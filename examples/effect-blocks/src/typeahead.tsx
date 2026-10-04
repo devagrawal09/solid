@@ -43,32 +43,46 @@ const Results = $component(function* Results(
   return view(function* () {
     return (
       <div class={{ results: true, stale: yield* searching }}>
-        <Show
-          when={(yield* list).length > 0}
-          fallback={
-            <p class="empty">
-              {(yield* searching) ? "Searching…" : `No packages match “${yield* props.query}”.`}
-            </p>
-          }
-        >
-          <ul>
-            <For each={yield* list}>
-              {function* (pkg) {
-                return view(function* () {
-                  return (
-                    <li>
-                      <div>
-                        <span class="pkg-name">{yield* pkg.name}</span>
-                        <span class="pkg-desc">{yield* pkg.description}</span>
-                      </div>
-                      <span class="pkg-downloads">{formatDownloads(yield* pkg.downloads)}/wk</span>
-                    </li>
-                  );
-                });
-              }}
-            </For>
-          </ul>
-        </Show>
+        {
+          yield* Show({
+            when: function* () {
+              return (yield* list).length > 0;
+            },
+            fallback: function* () {
+              return (
+                <p class="empty">
+                  {(yield* searching) ? "Searching…" : `No packages match “${yield* props.query}”.`}
+                </p>
+              );
+            },
+            children: function* () {
+              return (
+                <ul>
+                  {
+                    yield* For({
+                      each: list,
+                      children: function* (pkg) {
+                        return view(function* () {
+                          return (
+                            <li>
+                              <div>
+                                <span class="pkg-name">{yield* pkg.name}</span>
+                                <span class="pkg-desc">{yield* pkg.description}</span>
+                              </div>
+                              <span class="pkg-downloads">
+                                {formatDownloads(yield* pkg.downloads)}/wk
+                              </span>
+                            </li>
+                          );
+                        });
+                      }
+                    })
+                  }
+                </ul>
+              );
+            }
+          })
+        }
       </div>
     );
   });
@@ -111,32 +125,48 @@ export const Typeahead = $component(function* Typeahead() {
           onInput={onInput}
           autofocus
         />
-        <Show when={(yield* query).trim()}>
-          {function* (q) {
-            return view(function* () {
-              // A boundary tag hands on nothing it does not handle, so the
-              // Loading inside the Errored is a call; its children are a
-              // getter so the results are created inside it.
-              return (
-                <Errored
-                  fallback={(err, reset) => (
-                    <div class="error-box">
-                      <p>Search gave up after retries: {String(err())}</p>
-                      <button onClick={reset}>Try again</button>
-                    </div>
-                  )}
-                >
-                  {Loading({
-                    fallback: <p class="loading">Searching…</p>,
-                    get children() {
-                      return Results({ results, query: q });
+        {
+          yield* Show({
+            when: function* () {
+              return (yield* query).trim();
+            },
+            children: function* (q) {
+              return view(function* () {
+                // A boundary tag hands on nothing it does not handle, so the
+                // Loading inside the Errored is a call; its children are a
+                // getter so the results are created inside it.
+                return (
+                  <>
+                    {
+                      yield* Errored({
+                        fallback: (err, reset) => (
+                          <div class="error-box">
+                            <p>Search gave up after retries: {String(err())}</p>
+                            <button onClick={reset}>Try again</button>
+                          </div>
+                        ),
+                        children: function* () {
+                          return (
+                            <>
+                              {
+                                yield* Loading({
+                                  fallback: <p class="loading">Searching…</p>,
+                                  children: function* () {
+                                    return <>{yield* Results({ results, query: q })}</>;
+                                  }
+                                })
+                              }
+                            </>
+                          );
+                        }
+                      })
                     }
-                  })}
-                </Errored>
-              );
-            });
-          }}
-        </Show>
+                  </>
+                );
+              });
+            }
+          })
+        }
       </section>
     );
   });

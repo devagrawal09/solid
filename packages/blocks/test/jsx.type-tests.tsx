@@ -28,7 +28,10 @@ import {
   type Path,
   type TypedProps,
   type View,
+  type ChildView,
+  type Element,
   type EventHandler,
+  type Read,
   lazy,
   view
 } from "@solidjs/blocks";
@@ -61,7 +64,7 @@ export const Settled = $component(function* (props: TypedProps<{ label: string }
     );
   };
 });
-export const ok1 = <Settled label="a" />;
+export const ok1 = Settled({ label: "a" });
 
 // $event is an action: it takes arguments and returns a promise of its result
 const save = $event(function* (id: string, times: number) {
@@ -222,27 +225,52 @@ export const Seeded = $component(function* (props: TypedProps<{ id: string }>) {
   };
 });
 // never pending: an Errored alone renders it
-export const seededOk = <Errored fallback="!">{Seeded({ id: "1" })}</Errored>;
+export const seededOk = Errored({
+  fallback: "!",
+  children: function* () {
+    return <>{yield* Seeded({ id: "1" })}</>;
+  }
+});
 const pendingView: View<true, never> = Pending({ id: "1" });
 const fallibleView: View<true, NotFound> = Fallible({ id: "1" });
 void [pendingView, fallibleView];
 
-// @ts-expect-error Pending can suspend: not a valid JSX element outside a Loading
+// @ts-expect-error a block component is called, never a tag (D-062, D-067)
 export const bad1 = <Pending id="1" />;
+// called, its colors are its view's
+const calledPending: View<true, never> = Pending({ id: "1" });
+void calledPending;
 // @ts-expect-error a pending view is not an element
 export const bad2 = <div>{Pending({ id: "1" })}</div>;
-export const ok2 = <Loading fallback={<p>…</p>}>{Pending({ id: "1" })}</Loading>;
+export const ok2 = Loading({
+  fallback: <p>…</p>,
+  children: function* () {
+    return <>{yield* Pending({ id: "1" })}</>;
+  }
+});
 // the call form takes its content as a function (built inside the boundary)
 export const ok3 = (
-  <div>{Loading({ fallback: <p>…</p>, children: () => Pending({ id: "1" }) })}</div>
+  <div>
+    {Loading({
+      fallback: <p>…</p>,
+      children: function* () {
+        return <>{yield* Pending({ id: "1" })}</>;
+      }
+    })}
+  </div>
 );
 // @ts-expect-error Loading handles pending, not NotFound
-export const bad3 = <Loading>{Fallible({ id: "1" })}</Loading>;
-export const ok4 = (
-  <Errored fallback={err => <p>{err().kind}</p>}>
-    {Loading({ fallback: <p>…</p>, children: Fallible({ id: "1" }) })}
-  </Errored>
-);
+export const bad3: View<false, never> = Loading({
+  children: function* () {
+    return <>{yield* Fallible({ id: "1" })}</>;
+  }
+});
+export const ok4 = Errored({
+  fallback: err => <p>{err().kind}</p>,
+  children: function* () {
+    return <>{yield* Loading({ fallback: <p>…</p>, children: Fallible({ id: "1" }) })}</>;
+  }
+});
 
 // yield* Child(props) propagates to the parent
 export const Parent = $component(function* () {
@@ -251,18 +279,31 @@ export const Parent = $component(function* () {
   };
 });
 // @ts-expect-error Parent inherits Fallible's pending and failures
-export const bad4 = <Parent />;
-export const ok5 = (
-  <Errored fallback={<p>error</p>}>{Loading({ children: () => Parent() })}</Errored>
-);
+export const bad4: View<false, never> = Parent();
+export const ok5 = Errored({
+  fallback: <p>error</p>,
+  children: function* () {
+    return (
+      <>
+        {
+          yield* Loading({
+            children: function* () {
+              return <>{yield* Parent()}</>;
+            }
+          })
+        }
+      </>
+    );
+  }
+});
 
 // the root must be settled
 const ok5Root = $component(function* () {
   return function* () {
-    return <Settled label="x" />;
+    return <>{yield* Settled({ label: "x" })}</>;
   };
 });
-render(() => <Settled label="x" />, root);
+render(() => Settled({ label: "x" }), root);
 render(ok5Root, root);
 // @ts-expect-error Settled needs its props
 render(Settled, root);
@@ -325,21 +366,37 @@ export const PendingAttribute = $component(function* () {
   };
 });
 // @ts-expect-error PendingAttribute may be pending
-export const bad5 = <PendingAttribute />;
+export const bad5: View<false, never> = PendingAttribute();
 
 // --- row blocks ---------------------------------------------------------------------------------
 type Comment = { id: number; text: string; kids: Comment[] };
 declare const comments: Comment[];
 export const Rows = $component(function* () {
+  // recursive: its view's yields are spelled out (TypeScript cannot infer a
+  // type its own initializer references), as a recursive component's are
   function* comment(c: Source<Comment> & { kids: Source<Comment[]>; text: Source<string> }) {
     const [open] = yield* $signal(true);
-    return function* () {
+    return function* (): Generator<Read<false, never> | ChildView<false, never>, Element> {
       return (
         <li>
           {yield* c.text}
-          <Show when={yield* open}>
-            <For each={yield* c.kids}>{comment}</For>
-          </Show>
+          {
+            yield* Show({
+              when: open,
+              children: function* () {
+                return (
+                  <>
+                    {
+                      yield* For({
+                        each: c.kids,
+                        children: comment
+                      })
+                    }
+                  </>
+                );
+              }
+            })
+          }
         </li>
       );
     };
@@ -347,57 +404,82 @@ export const Rows = $component(function* () {
   return function* () {
     return (
       <ul>
-        <For each={comments}>{comment}</For>
-        <For each={comments}>
-          {function* (c, i) {
-            const [open, setOpen] = yield* $signal(false);
-            const toggle = $event(function* () {
-              yield* setOpen(o => !o);
-            });
-            return function* () {
-              return (
-                <li onClick={toggle}>
-                  {yield* i}: {yield* c.text} {(yield* open) ? "-" : "+"}
-                </li>
-              );
-            };
-          }}
-        </For>
-        <For each={comments}>{c => <Settled label={c.text} />}</For>
-        <For each={comments}>
-          {function* (c) {
-            // a row's body is a setup (as a $component's): a derivation is the row's $memo
-            const shout = yield* $memo(function* () {
-              return (yield* c.text).toUpperCase();
-            });
-            return function* () {
-              return <li title={yield* shout}>{yield* shout}</li>;
-            };
-          }}
-        </For>
-        <For each={comments}>
-          {/* @ts-expect-error a row's setup does not read: derive with $memo, read in the view */}
-          {function* (c) {
-            const text = yield* c.text;
-            return function* () {
-              return <li>{text}</li>;
-            };
-          }}
-        </For>
-        <Repeat count={2}>
-          {function* (i) {
-            return function* () {
-              return <b>{yield* i}</b>;
-            };
-          }}
-        </Repeat>
-        <For each={comments}>
-          {function* (c) {
-            return function* () {
-              return <li>{Loading({ children: () => Pending({ id: c.text }) })}</li>;
-            };
-          }}
-        </For>
+        {
+          yield* For({
+            each: comments,
+            children: comment
+          })
+        }
+        {
+          yield* For({
+            each: comments,
+            children: function* (c, i) {
+              const [open, setOpen] = yield* $signal(false);
+              const toggle = $event(function* () {
+                yield* setOpen(o => !o);
+              });
+              return function* () {
+                return (
+                  <li onClick={toggle}>
+                    {yield* i}: {yield* c.text} {(yield* open) ? "-" : "+"}
+                  </li>
+                );
+              };
+            }
+          })
+        }
+        {
+          yield* For({
+            each: comments,
+            children: function* (c) {
+              return view(function* () {
+                return <>{yield* Settled({ label: c.text })}</>;
+              });
+            }
+          })
+        }
+        {
+          yield* For({
+            each: comments,
+            children: function* (c) {
+              // a row's body is a setup (as a $component's): a derivation is the row's $memo
+              const shout = yield* $memo(function* () {
+                return (yield* c.text).toUpperCase();
+              });
+              return function* () {
+                return <li title={yield* shout}>{yield* shout}</li>;
+              };
+            }
+          })
+        }
+        {
+          yield* Repeat({
+            count: 2,
+            children: function* (i) {
+              return function* () {
+                return <b>{yield* i}</b>;
+              };
+            }
+          })
+        }
+        {
+          yield* For({
+            each: comments,
+            children: function* (c) {
+              return function* () {
+                return (
+                  <li>
+                    {Loading({
+                      children: function* () {
+                        return <>{yield* Pending({ id: c.text })}</>;
+                      }
+                    })}
+                  </li>
+                );
+              };
+            }
+          })
+        }
       </ul>
     );
   };
@@ -410,47 +492,53 @@ export const FlowHoles = $component(function* () {
   return function* () {
     return (
       <div>
-        <Show
-          when={function* () {
-            return (yield* n) > 1;
-          }}
-          fallback={<i>small</i>}
-        >
-          <b>big</b>
-        </Show>
-        <Show
-          when={function* () {
-            return (yield* list)[0];
-          }}
-        >
-          {function* (first) {
-            return function* () {
-              return <b>{yield* first}</b>;
-            };
-          }}
-        </Show>
-        <For
-          each={function* () {
-            return (yield* list).filter(x => x !== "b");
-          }}
-        >
-          {function* (item) {
-            return function* () {
-              return <li>{yield* item}</li>;
-            };
-          }}
-        </For>
-        <Repeat
-          count={function* () {
-            return yield* n;
-          }}
-        >
-          {function* (i) {
-            return function* () {
-              return <u>{yield* i}</u>;
-            };
-          }}
-        </Repeat>
+        {
+          yield* Show({
+            when: function* () {
+              return (yield* n) > 1;
+            },
+            fallback: <i>small</i>,
+            children: function* () {
+              return <b>big</b>;
+            }
+          })
+        }
+        {
+          yield* Show({
+            when: function* () {
+              return (yield* list)[0];
+            },
+            children: function* (first) {
+              return function* () {
+                return <b>{yield* first}</b>;
+              };
+            }
+          })
+        }
+        {
+          yield* For({
+            each: function* () {
+              return (yield* list).filter(x => x !== "b");
+            },
+            children: function* (item) {
+              return function* () {
+                return <li>{yield* item}</li>;
+              };
+            }
+          })
+        }
+        {
+          yield* Repeat({
+            count: function* () {
+              return yield* n;
+            },
+            children: function* (i) {
+              return function* () {
+                return <u>{yield* i}</u>;
+              };
+            }
+          })
+        }
       </div>
     );
   };
@@ -458,13 +546,28 @@ export const FlowHoles = $component(function* () {
 const pendingHole = function* () {
   return (yield* pendingUser).name;
 };
-// @ts-expect-error a JSX element is settled: a hole over a pending source is not
-export const pendingHoleBad = <Show when={pendingHole}>!</Show>;
+// in call form a hole over a pending source colors the flow control's view
+export const pendingHoleView: View<true, never> = Show({
+  when: pendingHole,
+  children: function* () {
+    return <>!</>;
+  }
+});
 
 // --- a pending row colors the holding view too (D-063) ------------------------------------------
 const pendingRow = function* (c: Path<Comment>) {
   return function* () {
-    return <li>{yield* Pending({ id: String(yield* c.id) })}</li>;
+    return (
+      <li>
+        {
+          yield* Pending({
+            id: function* () {
+              return String(yield* c.id);
+            }
+          })
+        }
+      </li>
+    );
   };
 };
 export const PendingRows = $component(function* () {
@@ -474,7 +577,12 @@ export const PendingRows = $component(function* () {
 });
 const pendingRowsView: View<true, never> = PendingRows();
 void pendingRowsView;
-export const pendingRowsOk = <Loading fallback="…">{PendingRows()}</Loading>;
+export const pendingRowsOk = Loading({
+  fallback: "…",
+  children: function* () {
+    return <>{yield* PendingRows()}</>;
+  }
+});
 
 // --- a row need not be settled: its failures join the view holding the list (D-059) ------------
 const failingRow = function* (c: Path<Comment>) {
@@ -495,8 +603,13 @@ export const FailingRows = $component(function* () {
 // a failing row colors the holding view
 const failingRowsView: View<false, NotFound> = FailingRows();
 void failingRowsView;
-export const failingRowsOk = <Errored fallback="!">{FailingRows()}</Errored>;
-// @ts-expect-error as a tag the list is an element only when settled (a tag cannot carry colors)
+export const failingRowsOk = Errored({
+  fallback: "!",
+  children: function* () {
+    return <>{yield* FailingRows()}</>;
+  }
+});
+// @ts-expect-error a block component is never a tag (D-062): a flow control is called
 export const failingRowsTag = <For each={comments}>{failingRow}</For>;
 
 // --- view(): a view's mistake is reported at the view, not at $component (D-054) ----------------
@@ -543,39 +656,55 @@ export const RowSignature = $component(function* () {
   return function* () {
     return (
       <ul>
-        <For each={yield* list}>
-          {function* (item, index) {
-            const sig: [
-              Is<typeof item, Path<{ id: number; text: string }>>,
-              Is<typeof index, Source<number>>
-            ] = [true, true];
-            void sig;
-            // both are sources: read with yield*, never as values
-            // @ts-expect-error an item is not its value
-            const text: string = item.text;
-            void text;
-            return function* () {
-              return (
-                <li>
-                  {yield* index}: {yield* item.text}
-                </li>
-              );
-            };
-          }}
-        </For>
-        <Repeat count={2}>
-          {function* (i) {
-            const sig: Is<typeof i, Source<number>> = true;
-            void sig;
-            return function* () {
-              return <b>{yield* i}</b>;
-            };
-          }}
-        </Repeat>
+        {
+          yield* For({
+            each: list,
+            children: function* (item, index) {
+              const sig: [
+                Is<typeof item, Path<{ id: number; text: string }>>,
+                Is<typeof index, Source<number>>
+              ] = [true, true];
+              void sig;
+              // both are sources: read with yield*, never as values
+              // @ts-expect-error an item is not its value
+              const text: string = item.text;
+              void text;
+              return function* () {
+                return (
+                  <li>
+                    {yield* index}: {yield* item.text}
+                  </li>
+                );
+              };
+            }
+          })
+        }
+        {
+          yield* Repeat({
+            count: 2,
+            children: function* (i) {
+              const sig: Is<typeof i, Source<number>> = true;
+              void sig;
+              return function* () {
+                return <b>{yield* i}</b>;
+              };
+            }
+          })
+        }
       </ul>
     );
   };
 });
+
+// a row's setup does not read: derive with $memo, read in the view
+const readsInRowSetup = function* (c: Path<Comment>) {
+  const text = yield* c.text;
+  return function* () {
+    return <li>{text}</li>;
+  };
+};
+// @ts-expect-error [ROW_SETUP_OP]
+export const badRowSetup = For({ each: comments, children: readsInRowSetup });
 
 // --- paths through nullable values and nested sources --------------------------------------------
 export const Nullable = $component(function* (props: TypedProps<{ me: { name: string } | null }>) {
@@ -594,7 +723,7 @@ export const Through = $component(function* (props: TypedProps<{ wire: typeof wi
   };
 });
 // @ts-expect-error the status may be pending and fail: so may Through's view
-export const bad6 = <Through wire={wire} />;
+export const bad6: View<false, never> = Through({ wire: wire });
 
 // --- a prop declared as a source states the coloring its readers handle ----------------------------
 export const Declared = $component(function* (
@@ -606,14 +735,40 @@ export const Declared = $component(function* (
 });
 declare const settledUser: Source<{ name: string }>;
 // callers pass any source within it (a settled one too) or the value
-export const ok6 = (
-  <Errored fallback="!">{Loading({ children: () => Declared({ user: settledUser }) })}</Errored>
-);
-export const ok7 = (
-  <Errored fallback="!">{Loading({ children: () => Declared({ user: { name: "a" } }) })}</Errored>
-);
+export const ok6 = Errored({
+  fallback: "!",
+  children: function* () {
+    return (
+      <>
+        {
+          yield* Loading({
+            children: function* () {
+              return <>{yield* Declared({ user: settledUser })}</>;
+            }
+          })
+        }
+      </>
+    );
+  }
+});
+export const ok7 = Errored({
+  fallback: "!",
+  children: function* () {
+    return (
+      <>
+        {
+          yield* Loading({
+            children: function* () {
+              return <>{yield* Declared({ user: { name: "a" } })}</>;
+            }
+          })
+        }
+      </>
+    );
+  }
+});
 // @ts-expect-error a declared source's reads are pending and may fail
-export const bad7 = <Declared user={settledUser} />;
+export const bad7: View<false, never> = Declared({ user: settledUser });
 
 // --- a memo over a promise of a stream is the stream's values (Solid flattens one level) ---------
 declare function stream(): Promise<AsyncIterable<number>>;
@@ -643,9 +798,14 @@ export const StreamedWithoutAttempt = $component(function* () {
 
 // --- lazy: pending while its chunk loads, and colored as the loaded component (D-047) -----------
 const LazyPending = lazy(() => Promise.resolve({ default: Pending }));
-// @ts-expect-error still pending: not a valid JSX element outside a Loading
-export const lazyBad = <LazyPending id="1" />;
-export const lazyOk = <Loading fallback="…">{LazyPending({ id: "1" })}</Loading>;
+// @ts-expect-error still pending: a lazy component is never a tag, and called it is pending
+export const lazyBad: View<false, never> = LazyPending({ id: "1" });
+export const lazyOk = Loading({
+  fallback: "…",
+  children: function* () {
+    return <>{yield* LazyPending({ id: "1" })}</>;
+  }
+});
 export const LazyHost = $component(function* () {
   return function* () {
     return <div>{yield* LazyPending({ id: "1" })}</div>;
@@ -656,7 +816,7 @@ void lazyHostView;
 // a view rendering a loading lazy is pending, even when the loaded component is settled
 const LazySettled = lazy(() => Promise.resolve({ default: Settled }));
 // @ts-expect-error pending while its chunk loads
-export const lazySettledBad = <LazySettled label="x" />;
+export const lazySettledBad: View<false, never> = LazySettled({ label: "x" });
 export const LazySettledHost = $component(function* () {
   return function* () {
     return <div>{yield* LazySettled({ label: "x" })}</div>;
@@ -670,7 +830,12 @@ const lazyFallibleView: View<true, NotFound> = LazyFallible({ id: "1" });
 void lazyFallibleView;
 // the export option and preload, as Solid's lazy
 const LazyNamed = lazy(() => Promise.resolve({ Settled }), { export: "Settled" });
-export const lazyNamedOk = <Loading fallback="…">{LazyNamed({ label: "x" })}</Loading>;
+export const lazyNamedOk = Loading({
+  fallback: "…",
+  children: function* () {
+    return <>{yield* LazyNamed({ label: "x" })}</>;
+  }
+});
 void LazyNamed.preload;
 
 // --- web's serializable attribute values (the router's action(), typed paths) ------------------
@@ -753,38 +918,102 @@ const Fetches = $component(function* () {
 export const bothHandled = Errored({
   catch: [ForbiddenE],
   fallback: "no access",
-  children: () =>
-    Errored({
-      catch: [NotFoundE],
-      fallback: err => {
-        const e: NotFoundE = err();
-        return <p>{e.kind}</p>;
-      },
-      children: () => Loading({ children: () => Fetches() })
-    })
+  children: function* () {
+    return (
+      <>
+        {
+          yield* Errored({
+            catch: [NotFoundE],
+            fallback: err => {
+              const e: NotFoundE = err();
+              return <p>{e.kind}</p>;
+            },
+            children: function* () {
+              return (
+                <>
+                  {
+                    yield* Loading({
+                      children: function* () {
+                        return <>{yield* Fetches()}</>;
+                      }
+                    })
+                  }
+                </>
+              );
+            }
+          })
+        }
+      </>
+    );
+  }
 });
 render(() => bothHandled, root);
 // only NotFound handled: ForbiddenE still fails the tree
 export const partlyHandled = Errored({
   catch: [NotFoundE],
   fallback: err => <p>{err().kind}</p>,
-  children: () => Loading({ children: () => Fetches() })
+  children: function* () {
+    return (
+      <>
+        {
+          yield* Loading({
+            children: function* () {
+              return <>{yield* Fetches()}</>;
+            }
+          })
+        }
+      </>
+    );
+  }
 });
 // @ts-expect-error ForbiddenE is unhandled: the tree may fail
 render(() => partlyHandled, root);
-export const tagHandled = (
-  <Errored catch={[NotFoundE, ForbiddenE]} fallback={err => <p>{err().kind}</p>}>
-    {Loading({ children: () => Fetches() })}
-  </Errored>
+export const tagHandled = Errored({
+  catch: [NotFoundE, ForbiddenE],
+  fallback: err => <p>{err().kind}</p>,
+  children: function* () {
+    return (
+      <>
+        {
+          yield* Loading({
+            children: function* () {
+              return <>{yield* Fetches()}</>;
+            }
+          })
+        }
+      </>
+    );
+  }
+});
+// @ts-expect-error ForbiddenE is unhandled: the view may fail
+export const tagPartly: View<false, never> = Errored({
+  catch: [NotFoundE],
+  fallback: err => <p>{err().kind}</p>,
+  children: function* () {
+    return (
+      <>
+        {
+          yield* Loading({
+            children: function* () {
+              return <>{yield* Fetches()}</>;
+            }
+          })
+        }
+      </>
+    );
+  }
+});
+render(
+  () =>
+    // @ts-expect-error async data outside a Loading: the tree would suspend
+    Errored({
+      fallback: "!",
+      children: function* () {
+        return <>{yield* Fetches()}</>;
+      }
+    }),
+  root
 );
-export const tagPartly = (
-  // @ts-expect-error tag form: ForbiddenE is unhandled
-  <Errored catch={[NotFoundE]} fallback={err => <p>{err().kind}</p>}>
-    {Loading({ children: () => Fetches() })}
-  </Errored>
-);
-// @ts-expect-error async data outside a Loading: the tree would suspend
-render(() => Errored({ fallback: "!", children: () => Fetches() }), root);
 
 // --- every failure type carries a literal kind (D-034) ------------------------------------------
 // two structurally identical classes would be one type to TypeScript, while
@@ -833,12 +1062,30 @@ const KindFails = $component(function* () {
 const onlyA = Errored({
   catch: [KindA],
   fallback: "a",
-  children: () => Loading({ children: () => KindFails() })
+  children: function* () {
+    return (
+      <>
+        {
+          yield* Loading({
+            children: function* () {
+              return <>{yield* KindFails()}</>;
+            }
+          })
+        }
+      </>
+    );
+  }
 });
 const stillB: View<false, KindB> = onlyA;
 void stillB;
 // @ts-expect-error a catch list needs classes with a literal kind
-export const plainCatch = Errored({ catch: [PlainA], fallback: "!", children: () => KindFails() });
+export const plainCatch = Errored({
+  catch: [PlainA],
+  fallback: "!",
+  children: function* () {
+    return <>{yield* KindFails()}</>;
+  }
+});
 
 // --- constant(value): a settled source that never fails (D-060) ---------------------------------
 const nobody = constant<{ name: string } | null>(null);

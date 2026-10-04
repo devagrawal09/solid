@@ -12,13 +12,26 @@ const Router = createRouter({ routes });
 const App = $component(function* App() {
   return view(function* () {
     return (
-      <IdentityProvider>
-        <Router>
-          {props => (
-            <Loading fallback={<div class="room muted">Loading…</div>}>{props.children}</Loading>
-          )}
-        </Router>
-      </IdentityProvider>
+      <>
+        {
+          yield* IdentityProvider({
+            children: function* () {
+              return (
+                <Router>
+                  {props =>
+                    Loading({
+                      fallback: <div class="room muted">Loading…</div>,
+                      children: function* () {
+                        return <>{props.children}</>;
+                      }
+                    })
+                  }
+                </Router>
+              );
+            }
+          })
+        }
+      </>
     );
   });
 });

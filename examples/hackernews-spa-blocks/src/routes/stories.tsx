@@ -37,42 +37,65 @@ const Stories = $component(function* Stories(props: TypedProps<RouteSectionProps
     return (
       <div class="news-view">
         <div class="news-list-nav">
-          <Show
-            when={(yield* page) > 1}
-            fallback={
-              <span class="page-link disabled" aria-disabled="true">
-                {"<"} prev
-              </span>
-            }
-          >
-            <a
-              class="page-link"
-              href={`/${yield* type}?page=${(yield* page) - 1}`}
-              aria-label="Previous Page"
-            >
-              {"<"} prev
-            </a>
-          </Show>
+          {
+            yield* Show({
+              when: function* () {
+                return (yield* page) > 1;
+              },
+              fallback: (
+                <span class="page-link disabled" aria-disabled="true">
+                  {"<"} prev
+                </span>
+              ),
+              children: function* () {
+                return (
+                  <a
+                    class="page-link"
+                    href={`/${yield* type}?page=${(yield* page) - 1}`}
+                    aria-label="Previous Page"
+                  >
+                    {"<"} prev
+                  </a>
+                );
+              }
+            })
+          }
           <span>page {yield* page}</span>
-          <Show
-            when={(yield* stories) && (yield* stories).length >= 29}
-            fallback={
-              <span class="page-link disabled" aria-disabled="true">
-                more {">"}
-              </span>
-            }
-          >
-            <a
-              class="page-link"
-              href={`/${yield* type}?page=${(yield* page) + 1}`}
-              aria-label="Next Page"
-            >
-              more {">"}
-            </a>
-          </Show>
+          {
+            yield* Show({
+              when: function* () {
+                return (yield* stories) && (yield* stories).length >= 29;
+              },
+              fallback: (
+                <span class="page-link disabled" aria-disabled="true">
+                  more {">"}
+                </span>
+              ),
+              children: function* () {
+                return (
+                  <a
+                    class="page-link"
+                    href={`/${yield* type}?page=${(yield* page) + 1}`}
+                    aria-label="Next Page"
+                  >
+                    more {">"}
+                  </a>
+                );
+              }
+            })
+          }
         </div>
         <main class="news-list">
-          <For each={yield* stories}>{story => <Story story={story} />}</For>
+          {
+            yield* For({
+              each: stories,
+              children: function* (story) {
+                return view(function* () {
+                  return <>{yield* Story({ story: story })}</>;
+                });
+              }
+            })
+          }
         </main>
       </div>
     );

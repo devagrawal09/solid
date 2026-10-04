@@ -307,9 +307,17 @@ export type TypedProps<P, K extends string = never> = {
  */
 export type PropsInput<P> = {
   [N in keyof P]: [P[N]] extends [Source<infer T, infer Pd, infer E>]
-    ? T | Source<T, Pd extends true ? boolean : false, E>
-    : P[N] | Source<P[N], boolean, any>;
+    ? T | Source<T, Pd extends true ? boolean : false, E> | HoleProp<T>
+    : P[N] | Source<P[N], boolean, any> | HoleProp<P[N]>;
 };
+/**
+ * A prop in call form may be a hole (D-065): a zero-arity `function*` the
+ * child reads with `yield*` like a source — the read happens inside the
+ * child, as a JSX tag's getter did (`Card({ total: function* () { return
+ * (yield* n) * 2; } })`). `children` is always one (D-066): a lazy view,
+ * `function* () { return <…/>; }`, built where the child reads it.
+ */
+export type HoleProp<T> = () => Generator<any, T, any>;
 
 /** The props type a `TypedProps` annotation declares. */
 export type PropsOf<TP> = unknown extends TP
@@ -341,7 +349,16 @@ export type Component<P = {}, Pd extends boolean = boolean, E = unknown> = ({} e
 /** A view generator's pending: its reads' and, for a no-JSX view, its output's. */
 export type ViewPending<VY, R> = PendingOf<VY | HOps<R>>;
 export type ViewFails<VY, R> = FailsOf<VY | HOps<R>>;
-type HOps<R> = R extends HView<infer P, infer E> ? ChildView<P, E> : never;
+/**
+ * The colors of what a view returns: `h` output's, or a flow control's view
+ * (an `h` view may return `Show({ … })` itself). A JSX element is settled.
+ */
+export type HOps<R> =
+  R extends HView<infer P, infer E>
+    ? ChildView<P, E>
+    : R extends View<infer P, infer E>
+      ? ChildView<P, E>
+      : never;
 
 /**
  * Output of the no-JSX renderer (`h`): its pending / failures are

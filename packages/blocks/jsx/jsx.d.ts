@@ -6,7 +6,7 @@
 
 import * as csstype from "csstype";
 import type { PropKey, WidenPropValue } from "./jsx-properties.js";
-import type { Element as BlocksElement } from "@solidjs/blocks";
+import type { Element as BlocksElement, TagType as BlocksTagType } from "@solidjs/blocks";
 
 /**
  * Originally based on JSX types for Surplus and Inferno and adapted for Solid.
@@ -130,6 +130,8 @@ declare global {
 }
 
 export namespace JSX {
+  /** D-067: a DOM element or a foreign component; a block component is called (D-062). */
+  type ElementType = BlocksTagType;
   // START - difference between `jsx.d.ts` and `jsx-h.d.ts`
   type FunctionMaybe<T = unknown> = { (): T } | T;
   interface FunctionElement {

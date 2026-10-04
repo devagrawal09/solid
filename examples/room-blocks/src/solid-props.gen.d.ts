@@ -46,6 +46,7 @@ declare module "@solidjs/blocks" {
       room: { pending: false; fails: never; live: true; static: false };
     };
     "IdentityProvider": {
+      children: { pending: false; fails: never; live: true; static: false };
     };
     "Joined": {
       joined: { pending: true; fails: import("./lib/errors").LiveError; live: true; static: false };

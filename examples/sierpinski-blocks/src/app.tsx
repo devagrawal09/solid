@@ -72,9 +72,27 @@ export const TriangleDemo = $component(function* TriangleDemo() {
   return view(function* () {
     // the slow children wait on idle time, which may fail
     return (
-      <Errored fallback={err => `Failed: ${err().message}`}>
-        {Loading({ fallback: "Loading...", children: () => Container({ scale, seconds }) })}
-      </Errored>
+      <>
+        {
+          yield* Errored({
+            fallback: err => `Failed: ${err().message}`,
+            children: function* () {
+              return (
+                <>
+                  {
+                    yield* Loading({
+                      fallback: "Loading...",
+                      children: function* () {
+                        return <>{yield* Container({ scale, seconds })}</>;
+                      }
+                    })
+                  }
+                </>
+              );
+            }
+          })
+        }
+      </>
     );
   });
 });
@@ -131,54 +149,98 @@ const Triangle: Component<TriangleProps, true, IdleError> = $component(function*
   // (the props never change, so each hole runs once).
   return view(function* () {
     return (
-      <Switch>
-        <Match
-          when={function* () {
-            return (yield* props.s) <= TARGET;
-          }}
-        >
-          {
-            // the dot reads the (possibly pending) seconds passed down: its
-            // view propagates into this one
-            yield* Dot({
-              x: (yield* props.x) - TARGET / 2,
-              y: (yield* props.y) - TARGET / 2,
-              s: TARGET,
-              children: props.children
-            })
-          }
-        </Match>
-        <Match
-          when={function* () {
-            return (yield* props.s) > TARGET;
-          }}
-        >
-          {
-            yield* Triangle({
-              x: props.x,
-              y: (yield* props.y) - (yield* props.s) / 4,
-              s: (yield* props.s) / 2,
-              children: slowChildren
-            })
-          }
-          {
-            yield* Triangle({
-              x: (yield* props.x) - (yield* props.s) / 2,
-              y: (yield* props.y) + (yield* props.s) / 4,
-              s: (yield* props.s) / 2,
-              children: slowChildren
-            })
-          }
-          {
-            yield* Triangle({
-              x: (yield* props.x) + (yield* props.s) / 2,
-              y: (yield* props.y) + (yield* props.s) / 4,
-              s: (yield* props.s) / 2,
-              children: slowChildren
-            })
-          }
-        </Match>
-      </Switch>
+      <>
+        {
+          yield* Switch({
+            children: function* () {
+              return (
+                <>
+                  {
+                    yield* Match({
+                      when: function* () {
+                        return (yield* props.s) <= TARGET;
+                      },
+                      children: function* () {
+                        return (
+                          <>
+                            {
+                              // the dot reads the (possibly pending) seconds passed down: its
+                              // view propagates into this one
+                              yield* Dot({
+                                x: function* () {
+                                  return (yield* props.x) - TARGET / 2;
+                                },
+                                y: function* () {
+                                  return (yield* props.y) - TARGET / 2;
+                                },
+                                s: TARGET,
+                                children: props.children
+                              })
+                            }
+                          </>
+                        );
+                      }
+                    })
+                  }
+                  {
+                    yield* Match({
+                      when: function* () {
+                        return (yield* props.s) > TARGET;
+                      },
+                      children: function* () {
+                        return (
+                          <>
+                            {
+                              yield* Triangle({
+                                x: props.x,
+                                y: function* () {
+                                  return (yield* props.y) - (yield* props.s) / 4;
+                                },
+                                s: function* () {
+                                  return (yield* props.s) / 2;
+                                },
+                                children: slowChildren
+                              })
+                            }
+                            {
+                              yield* Triangle({
+                                x: function* () {
+                                  return (yield* props.x) - (yield* props.s) / 2;
+                                },
+                                y: function* () {
+                                  return (yield* props.y) + (yield* props.s) / 4;
+                                },
+                                s: function* () {
+                                  return (yield* props.s) / 2;
+                                },
+                                children: slowChildren
+                              })
+                            }
+                            {
+                              yield* Triangle({
+                                x: function* () {
+                                  return (yield* props.x) + (yield* props.s) / 2;
+                                },
+                                y: function* () {
+                                  return (yield* props.y) + (yield* props.s) / 4;
+                                },
+                                s: function* () {
+                                  return (yield* props.s) / 2;
+                                },
+                                children: slowChildren
+                              })
+                            }
+                          </>
+                        );
+                      }
+                    })
+                  }
+                </>
+              );
+            }
+          })
+        }
+      </>
     );
   });
 });

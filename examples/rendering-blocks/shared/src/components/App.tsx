@@ -29,37 +29,157 @@ const App = RouteHOC(
         <>
           <ul class="inline">
             <li class={{ selected: yield* matches("index") }}>
-              <Link path="">Home</Link>
+              {
+                yield* Link({
+                  path: "",
+                  children: function* () {
+                    return <>Home</>;
+                  }
+                })
+              }
             </li>
             <li class={{ selected: yield* matches("profile") }}>
-              <Link path="profile">Profile</Link>
+              {
+                yield* Link({
+                  path: "profile",
+                  children: function* () {
+                    return <>Profile</>;
+                  }
+                })
+              }
             </li>
             <li class={{ selected: yield* matches("settings") }}>
-              <Link path="settings">Settings</Link>
+              {
+                yield* Link({
+                  path: "settings",
+                  children: function* () {
+                    return <>Settings</>;
+                  }
+                })
+              }
             </li>
             <li class={{ selected: yield* matches("stream") }}>
-              <Link path="stream">Stream</Link>
+              {
+                yield* Link({
+                  path: "stream",
+                  children: function* () {
+                    return <>Stream</>;
+                  }
+                })
+              }
             </li>
             <li class={{ selected: yield* matches("error-stream") }}>
-              <Link path="error-stream">Error Stream</Link>
+              {
+                yield* Link({
+                  path: "error-stream",
+                  children: function* () {
+                    return <>Error Stream</>;
+                  }
+                })
+              }
             </li>
             <li class={{ selected: yield* matches("reveal") }}>
-              <Link path="reveal">Reveal</Link>
+              {
+                yield* Link({
+                  path: "reveal",
+                  children: function* () {
+                    return <>Reveal</>;
+                  }
+                })
+              }
             </li>
             <li class={{ selected: yield* matches("skeleton") }}>
-              <Link path="skeleton">Skeleton</Link>
+              {
+                yield* Link({
+                  path: "skeleton",
+                  children: function* () {
+                    return <>Skeleton</>;
+                  }
+                })
+              }
             </li>
           </ul>
           <div class={["tab", { pending: yield* pending }]}>
-            <Switch>
-              <Match when={yield* matches("index")}>{yield* Home()}</Match>
-              <Match when={yield* matches("profile")}>{yield* Profile()}</Match>
-              <Match when={yield* matches("settings")}>{yield* Settings()}</Match>
-              <Match when={yield* matches("stream")}>{yield* Stream()}</Match>
-              <Match when={yield* matches("error-stream")}>{yield* ErrorStream()}</Match>
-              <Match when={yield* matches("reveal")}>{yield* RevealPage()}</Match>
-              <Match when={yield* matches("skeleton")}>{yield* Skeleton()}</Match>
-            </Switch>
+            {
+              yield* Switch({
+                children: function* () {
+                  return (
+                    <>
+                      {
+                        yield* Match({
+                          when: function* () {
+                            return yield* matches("index");
+                          },
+                          children: function* () {
+                            return <>{yield* Home()}</>;
+                          }
+                        })
+                      }
+                      {
+                        yield* Match({
+                          when: function* () {
+                            return yield* matches("profile");
+                          },
+                          children: function* () {
+                            return <>{yield* Profile()}</>;
+                          }
+                        })
+                      }
+                      {
+                        yield* Match({
+                          when: function* () {
+                            return yield* matches("settings");
+                          },
+                          children: function* () {
+                            return <>{yield* Settings()}</>;
+                          }
+                        })
+                      }
+                      {
+                        yield* Match({
+                          when: function* () {
+                            return yield* matches("stream");
+                          },
+                          children: function* () {
+                            return <>{yield* Stream()}</>;
+                          }
+                        })
+                      }
+                      {
+                        yield* Match({
+                          when: function* () {
+                            return yield* matches("error-stream");
+                          },
+                          children: function* () {
+                            return <>{yield* ErrorStream()}</>;
+                          }
+                        })
+                      }
+                      {
+                        yield* Match({
+                          when: function* () {
+                            return yield* matches("reveal");
+                          },
+                          children: function* () {
+                            return <>{yield* RevealPage()}</>;
+                          }
+                        })
+                      }
+                      {
+                        yield* Match({
+                          when: function* () {
+                            return yield* matches("skeleton");
+                          },
+                          children: function* () {
+                            return <>{yield* Skeleton()}</>;
+                          }
+                        })
+                      }
+                    </>
+                  );
+                }
+              })
+            }
           </div>
         </>
       );

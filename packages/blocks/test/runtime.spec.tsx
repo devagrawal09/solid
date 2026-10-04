@@ -37,7 +37,10 @@ import {
   Show,
   Switch,
   until,
-  type TypedProps
+  type ChildView,
+  type Element as BlocksElement,
+  type TypedProps,
+  view
 } from "@solidjs/blocks";
 import { createSignal as plainSignal } from "solid-js";
 import { INSTANCE, registerInstance } from "../src/runtime.js";
@@ -120,7 +123,14 @@ describe("views are fine-grained", () => {
         return <h3>Hello {perform(user).name}</h3>;
       };
     });
-    mount(() => <Loading fallback={<i>loading</i>}>{User()}</Loading>);
+    mount(() =>
+      Loading({
+        fallback: <i>loading</i>,
+        children: function* () {
+          return <>{yield* User()}</>;
+        }
+      })
+    );
     expect(root.innerHTML).toContain("<i>loading</i>");
     resolve({ name: "Ada" });
     await settle();
@@ -175,14 +185,17 @@ describe("views are fine-grained", () => {
       return function* () {
         return (
           <ul>
-            <For each={["a"]}>
-              {function* item(x) {
-                return function* () {
-                  const t = yield* x;
-                  return <li>{t}</li>;
-                };
-              }}
-            </For>
+            {
+              yield* For({
+                each: ["a"],
+                children: function* item(x) {
+                  return function* () {
+                    const t = yield* x;
+                    return <li>{t}</li>;
+                  };
+                }
+              })
+            }
           </ul>
         );
       };
@@ -197,9 +210,14 @@ describe("views are fine-grained", () => {
         return (
           <p>
             {perform(open) ? "open" : "closed"}
-            <Show when={perform(open)}>
-              <b>!</b>
-            </Show>
+            {
+              yield* Show({
+                when: open,
+                children: function* () {
+                  return <b>!</b>;
+                }
+              })
+            }
           </p>
         );
       };
@@ -336,7 +354,7 @@ describe("setup operations", () => {
         return <i>{perform(seeded)}</i>;
       };
     });
-    mount(() => <App start={21} />);
+    mount(() => App({ start: 21 }));
     expect(root.textContent).toBe("53");
     setA(5);
     flush();
@@ -381,11 +399,14 @@ describe("setup operations", () => {
           return <i>{perform(m)}</i>;
         };
       });
-      mount(() => (
-        <Loading fallback="…">
-          <App label="n=" />
-        </Loading>
-      ));
+      mount(() =>
+        Loading({
+          fallback: "…",
+          children: function* () {
+            return <>{yield* App({ label: "n=" })}</>;
+          }
+        })
+      );
       await settle();
       expect(root.textContent).toBe("n=2");
     }
@@ -542,11 +563,25 @@ describe("the runtime's other dev errors", () => {
         return <i>{perform(m)}</i>;
       };
     });
-    mount(() => (
-      <Loading fallback="…">
-        <Errored fallback={e => <b>{String(e())}</b>}>{Late()}</Errored>
-      </Loading>
-    ));
+    mount(() =>
+      Loading({
+        fallback: "…",
+        children: function* () {
+          return (
+            <>
+              {
+                yield* Errored({
+                  fallback: e => <b>{String(e())}</b>,
+                  children: function* () {
+                    return <>{yield* Late()}</>;
+                  }
+                })
+              }
+            </>
+          );
+        }
+      })
+    );
     await settle();
     expect(root.textContent).toMatch(/READ_AFTER_ATTEMPT/);
   });
@@ -596,7 +631,7 @@ describe("props", () => {
       const [user, setUser] = yield* $signal({ name: "a" });
       setName = name => write(() => setUser({ name }));
       return function* () {
-        return <Card user={user} tag="t" />;
+        return <>{yield* Card({ user: user, tag: "t" })}</>;
       };
     });
     mount(Parent);
@@ -644,7 +679,14 @@ describe("props", () => {
         return <i>{perform(n)}</i>;
       };
     });
-    mount(() => <Errored fallback={(e: any) => <b>{e().message}</b>}>{App()}</Errored>);
+    mount(() =>
+      Errored({
+        fallback: (e: any) => <b>{e().message}</b>,
+        children: function* () {
+          return <>{yield* App()}</>;
+        }
+      })
+    );
     flush();
     expect(root.textContent).toMatch(/UNYIELDED_WRITE\] a \$signal's setter in <Effecting>/);
   });
@@ -754,7 +796,14 @@ describe("props", () => {
         return <i>{perform(readStore(todos, t => t.join(",")))}</i>;
       };
     });
-    mount(() => <Loading fallback={<b>wait</b>}>{App()}</Loading>);
+    mount(() =>
+      Loading({
+        fallback: <b>wait</b>,
+        children: function* () {
+          return <>{yield* App()}</>;
+        }
+      })
+    );
     expect(root.textContent).toBe("wait");
     await settle();
     expect(root.textContent).toBe("t1");
@@ -922,7 +971,14 @@ describe("events", () => {
         return <p>ok</p>;
       };
     });
-    mount(() => <Errored fallback={(e: any) => <p>failed: {e().message}</p>}>{App()}</Errored>);
+    mount(() =>
+      Errored({
+        fallback: (e: any) => <p>failed: {e().message}</p>,
+        children: function* () {
+          return <>{yield* App()}</>;
+        }
+      })
+    );
     await save();
     await settle();
     expect((caught as Error).message).toBe("declined");
@@ -1070,7 +1126,14 @@ describe("events", () => {
         return <button onClick={click}>go</button>;
       };
     });
-    mount(() => <Errored fallback={(e: any) => <p>failed: {e().message}</p>}>{App()}</Errored>);
+    mount(() =>
+      Errored({
+        fallback: (e: any) => <p>failed: {e().message}</p>,
+        children: function* () {
+          return <>{yield* App()}</>;
+        }
+      })
+    );
     root.querySelector("button")!.click();
     await settle();
     expect(root.textContent).toBe("failed: nope");
@@ -1089,15 +1152,24 @@ describe("events", () => {
         return <i>{perform(m)}</i>;
       };
     });
-    mount(() => (
-      <Errored fallback={(e: any) => <p>outer: {e().message}</p>}>
-        {Errored({
-          catch: [NotFound],
-          fallback: (e: any) => <p>inner: {e().message}</p>,
-          children: () => Fails()
-        })}
-      </Errored>
-    ));
+    mount(() =>
+      Errored({
+        fallback: (e: any) => <p>outer: {e().message}</p>,
+        children: function* () {
+          return (
+            <>
+              {Errored({
+                catch: [NotFound],
+                fallback: (e: any) => <p>inner: {e().message}</p>,
+                children: function* () {
+                  return <>{yield* Fails()}</>;
+                }
+              })}
+            </>
+          );
+        }
+      })
+    );
     expect(root.textContent).toBe("inner: nf");
   });
 
@@ -1117,15 +1189,24 @@ describe("events", () => {
         return <i>{perform(m)}</i>;
       };
     });
-    mount(() => (
-      <Errored fallback={(e: any) => <p>outer: {e().message}</p>}>
-        {Errored({
-          catch: [NotFound],
-          fallback: (e: any) => <p>inner: {e().message}</p>,
-          children: () => Fails()
-        })}
-      </Errored>
-    ));
+    mount(() =>
+      Errored({
+        fallback: (e: any) => <p>outer: {e().message}</p>,
+        children: function* () {
+          return (
+            <>
+              {Errored({
+                catch: [NotFound],
+                fallback: (e: any) => <p>inner: {e().message}</p>,
+                children: function* () {
+                  return <>{yield* Fails()}</>;
+                }
+              })}
+            </>
+          );
+        }
+      })
+    );
     expect(root.textContent).toBe("outer: no");
   });
 
@@ -1144,17 +1225,26 @@ describe("events", () => {
         return <i>{perform(m)}</i>;
       };
     });
-    mount(() => (
-      <Errored
-        fallback={(e: any) => (
+    mount(() =>
+      Errored({
+        fallback: (e: any) => (
           <p>
             {e() instanceof LoadError ? "load" : "other"}: {e().message}
           </p>
-        )}
-      >
-        {Loading({ children: () => Loads() })}
-      </Errored>
-    ));
+        ),
+        children: function* () {
+          return (
+            <>
+              {Loading({
+                children: function* () {
+                  return <>{yield* Loads()}</>;
+                }
+              })}
+            </>
+          );
+        }
+      })
+    );
     await settle();
     expect(root.textContent).toBe("load: boom");
   });
@@ -1178,17 +1268,26 @@ describe("events", () => {
         return <i>{perform(m)}</i>;
       };
     });
-    mount(() => (
-      <Errored
-        fallback={(e: any) => (
+    mount(() =>
+      Errored({
+        fallback: (e: any) => (
           <p>
             {e() instanceof StreamError ? "stream" : "other"}: {e().message}
           </p>
-        )}
-      >
-        {Loading({ children: () => Streams() })}
-      </Errored>
-    ));
+        ),
+        children: function* () {
+          return (
+            <>
+              {Loading({
+                children: function* () {
+                  return <>{yield* Streams()}</>;
+                }
+              })}
+            </>
+          );
+        }
+      })
+    );
     await settle(6);
     expect(root.textContent).toBe("stream: cut");
   });
@@ -1206,7 +1305,14 @@ describe("events", () => {
         return <i>{perform(m)}</i>;
       };
     });
-    mount(() => <Errored fallback={(e: any) => <p>{e().message}</p>}>{App()}</Errored>);
+    mount(() =>
+      Errored({
+        fallback: (e: any) => <p>{e().message}</p>,
+        children: function* () {
+          return <>{yield* App()}</>;
+        }
+      })
+    );
     expect(root.textContent).toBe("missing");
   });
 });
@@ -1227,19 +1333,22 @@ describe("row blocks", () => {
       return function* () {
         return (
           <ul>
-            <For each={perform(store.items)}>
-              {function* (item, index) {
-                setups++;
-                return function* () {
-                  views++;
-                  return (
-                    <li>
-                      {perform(index)}:{perform(item.text)}
-                    </li>
-                  );
-                };
-              }}
-            </For>
+            {
+              yield* For({
+                each: store.items,
+                children: function* (item, index) {
+                  setups++;
+                  return function* () {
+                    views++;
+                    return (
+                      <li>
+                        {perform(index)}:{perform(item.text)}
+                      </li>
+                    );
+                  };
+                }
+              })
+            }
           </ul>
         );
       };
@@ -1271,23 +1380,26 @@ describe("row blocks", () => {
       return function* () {
         return (
           <ul>
-            <For each={perform(items)}>
-              {function* (item) {
-                // the row's body is a setup: it runs once per item, and the
-                // memo it creates is the row's (read by two holes, computed once)
-                yield* $effect(function* () {
-                  created.push(yield* $untrack(item.id));
-                });
-                const label = yield* $memo(function* () {
-                  const text = `${yield* item.text}${yield* suffix}`;
-                  computed.push(text);
-                  return text;
-                });
-                return function* () {
-                  return <li title={perform(label)}>{perform(label)}</li>;
-                };
-              }}
-            </For>
+            {
+              yield* For({
+                each: items,
+                children: function* (item) {
+                  // the row's body is a setup: it runs once per item, and the
+                  // memo it creates is the row's (read by two holes, computed once)
+                  yield* $effect(function* () {
+                    created.push(yield* $untrack(item.id));
+                  });
+                  const label = yield* $memo(function* () {
+                    const text = `${yield* item.text}${yield* suffix}`;
+                    computed.push(text);
+                    return text;
+                  });
+                  return function* () {
+                    return <li title={perform(label)}>{perform(label)}</li>;
+                  };
+                }
+              })
+            }
           </ul>
         );
       };
@@ -1329,10 +1441,17 @@ describe("row blocks", () => {
       const [items, set] = yield* $signal(["a", "b"]);
       setItems = v => write(() => set(v));
       return function* () {
-        return <ul>{perform(For({ each: perform(items), children: row }))}</ul>;
+        return <ul>{perform(For({ each: items, children: row }))}</ul>;
       };
     });
-    mount(() => <Errored fallback={(e: any) => <p>{e().message}</p>}>{List()}</Errored>);
+    mount(() =>
+      Errored({
+        fallback: (e: any) => <p>{e().message}</p>,
+        children: function* () {
+          return <>{yield* List()}</>;
+        }
+      })
+    );
     expect(root.textContent).toBe("ab");
     setItems(["a", "bad"]);
     flush();
@@ -1373,7 +1492,14 @@ describe("row blocks", () => {
         return <ul>{perform(For({ each: ["a", "slow"], children: row }))}</ul>;
       };
     });
-    mount(() => <Loading fallback={<i>loading</i>}>{List()}</Loading>);
+    mount(() =>
+      Loading({
+        fallback: <i>loading</i>,
+        children: function* () {
+          return <>{yield* List()}</>;
+        }
+      })
+    );
     expect(root.textContent).toBe("loading");
     resolve("done");
     await settle();
@@ -1385,14 +1511,15 @@ describe("row blocks", () => {
       return function* () {
         return (
           <ul>
-            <For each={[1]}>
-              {
+            {
+              yield* For({
+                each: [1],
                 // a row that returns its markup directly (no view): a dev error
-                function* () {
+                children: function* (_item: unknown) {
                   return <li />;
-                } as unknown as () => Generator<never, () => Generator<never, null>>
-              }
-            </For>
+                } as unknown as (item: unknown) => Generator<never, () => Generator<never, null>>
+              })
+            }
           </ul>
         );
       };
@@ -1413,23 +1540,26 @@ describe("row blocks", () => {
       return function* () {
         return (
           <ul>
-            <For each={perform(items)}>
-              {function* (item) {
-                setups++;
-                const [open, setOpen] = yield* $signal(false);
-                const toggle = $event(function* () {
-                  yield* setOpen(o => !o);
-                });
-                return function* () {
-                  views++;
-                  return (
-                    <li onClick={toggle}>
-                      {perform(item.text)} {perform(open) ? "[-]" : "[+]"}
-                    </li>
-                  );
-                };
-              }}
-            </For>
+            {
+              yield* For({
+                each: items,
+                children: function* (item) {
+                  setups++;
+                  const [open, setOpen] = yield* $signal(false);
+                  const toggle = $event(function* () {
+                    yield* setOpen(o => !o);
+                  });
+                  return function* () {
+                    views++;
+                    return (
+                      <li onClick={toggle}>
+                        {perform(item.text)} {perform(open) ? "[-]" : "[+]"}
+                      </li>
+                    );
+                  };
+                }
+              })
+            }
           </ul>
         );
       };
@@ -1472,7 +1602,16 @@ describe("row blocks", () => {
       return function* () {
         return (
           <ul>
-            <For each={perform(items)}>{row => <Row row={row} />}</For>
+            {
+              yield* For({
+                each: items,
+                children: function* (row) {
+                  return view(function* () {
+                    return <>{yield* Row({ row: row })}</>;
+                  });
+                }
+              })
+            }
           </ul>
         );
       };
@@ -1493,23 +1632,45 @@ describe("row blocks", () => {
     type C = { id: number; kids: C[] };
     const tree: C[] = [{ id: 1, kids: [{ id: 2, kids: [] }] }];
     const Thread = $component(function* () {
+      // recursive: its view's yields are spelled out
       function* comment(c: any) {
         const [open] = yield* $signal(true);
-        return function* () {
+        return function* (): Generator<ChildView<boolean, any>, BlocksElement> {
           return (
             <li>
               {perform(c.id)}
-              <Show when={perform(open)}>
-                <ul>
-                  <For each={perform(c.kids)}>{comment}</For>
-                </ul>
-              </Show>
+              {
+                yield* Show({
+                  when: open,
+                  children: function* () {
+                    return (
+                      <ul>
+                        {
+                          yield* For({
+                            each: c.kids,
+                            children: comment
+                          })
+                        }
+                      </ul>
+                    );
+                  }
+                })
+              }
             </li>
           );
         };
       }
       return function* () {
-        return <For each={tree}>{comment}</For>;
+        return (
+          <>
+            {
+              yield* For({
+                each: tree,
+                children: comment
+              })
+            }
+          </>
+        );
       };
     });
     mount(Thread);
@@ -1522,36 +1683,58 @@ describe("row blocks", () => {
       return function* () {
         return (
           <div>
-            <Show when={when()} keyed>
-              {function* (v: any) {
-                const [k] = yield* $signal("!");
-                return function* () {
-                  return (
-                    <b>
-                      {perform(v.name)}
-                      {perform(k)}
-                    </b>
-                  );
-                };
-              }}
-            </Show>
-            <Switch>
-              <Match when={when()}>
-                {function* (v: any) {
+            {
+              yield* Show({
+                when: function* () {
+                  return when();
+                },
+                keyed: true,
+                children: function* (v: any) {
+                  const [k] = yield* $signal("!");
                   return function* () {
-                    return <s>{perform(v.name)}</s>;
+                    return (
+                      <b>
+                        {perform(v.name)}
+                        {perform(k)}
+                      </b>
+                    );
                   };
-                }}
-              </Match>
-            </Switch>
-            <Repeat count={2}>
-              {function* (i) {
-                const [x] = yield* $signal(10);
-                return function* () {
-                  return <u>{perform(i) + perform(x)}</u>;
-                };
-              }}
-            </Repeat>
+                }
+              })
+            }
+            {
+              yield* Switch({
+                children: function* () {
+                  return (
+                    <>
+                      {
+                        yield* Match({
+                          when: function* () {
+                            return when();
+                          },
+                          children: function* (v: any) {
+                            return function* () {
+                              return <s>{perform(v.name)}</s>;
+                            };
+                          }
+                        })
+                      }
+                    </>
+                  );
+                }
+              })
+            }
+            {
+              yield* Repeat({
+                count: 2,
+                children: function* (i) {
+                  const [x] = yield* $signal(10);
+                  return function* () {
+                    return <u>{perform(i) + perform(x)}</u>;
+                  };
+                }
+              })
+            }
           </div>
         );
       };
@@ -1575,7 +1758,16 @@ describe("row blocks", () => {
         return <i>child</i>;
       };
     });
-    mount(() => <Show when={flag()}>{Child()}</Show>);
+    mount(() =>
+      Show({
+        when: function* () {
+          return flag();
+        },
+        children: function* () {
+          return <>{yield* Child()}</>;
+        }
+      })
+    );
     const i = root.querySelector("i");
     setFlag(2);
     flush();
@@ -1598,9 +1790,16 @@ describe("reads from JSX positions are never a view's or a setup's own", () => {
       return function* () {
         cardViews++;
         return (
-          <Loading fallback={<i>loading</i>}>
-            <b>{perform(v)}</b>
-          </Loading>
+          <>
+            {
+              yield* Loading({
+                fallback: <i>loading</i>,
+                children: function* () {
+                  return <b>{perform(v)}</b>;
+                }
+              })
+            }
+          </>
         );
       };
     });
@@ -1654,10 +1853,32 @@ describe("a view that is a function is a branch's content", () => {
     };
     mount(() => (
       <div>
-        <Show when={on()}>{Whole(nProps)}</Show>
-        <Switch>
-          <Match when={on()}>{perform(Page(nProps))}</Match>
-        </Switch>
+        {Show({
+          when: function* () {
+            return on();
+          },
+          children: function* () {
+            return <>{yield* Whole(nProps)}</>;
+          }
+        })}
+        {Switch({
+          children: function* () {
+            return (
+              <>
+                {
+                  yield* Match({
+                    when: function* () {
+                      return on();
+                    },
+                    children: function* () {
+                      return <>{perform(Page(nProps))}</>;
+                    }
+                  })
+                }
+              </>
+            );
+          }
+        })}
       </div>
     ));
     await settle();
@@ -1699,7 +1920,14 @@ describe("lazy", () => {
         return <div>{perform(Page({ label }))}</div>;
       };
     });
-    mount(() => <Loading fallback={<i>wait</i>}>{App()}</Loading>);
+    mount(() =>
+      Loading({
+        fallback: <i>wait</i>,
+        children: function* () {
+          return <>{yield* App()}</>;
+        }
+      })
+    );
     expect(root.textContent).toBe("wait");
     land({ default: Inner });
     await settle();
@@ -1716,6 +1944,47 @@ describe("lazy", () => {
 });
 
 describe("flow controls keep children lazy", () => {
+  it("a fallback written as a function* is a lazy view: its components set up when it shows (D-066)", () => {
+    let setups = 0;
+    const Late = $component(function* () {
+      setups++;
+      return view(function* () {
+        return <i>late</i>;
+      });
+    });
+    let set!: (v: boolean) => void;
+    const App = $component(function* () {
+      const [on, setOn] = yield* $signal(true);
+      set = v => write(() => setOn(v));
+      return view(function* () {
+        return (
+          <>
+            {
+              yield* Show({
+                when: on,
+                fallback: function* () {
+                  return <>{yield* Late()}</>;
+                },
+                children: function* () {
+                  return <b>on</b>;
+                }
+              })
+            }
+          </>
+        );
+      });
+    });
+    const root = document.createElement("div");
+    const dispose = render(App as any, root);
+    flush();
+    expect(root.textContent).toBe("on");
+    expect(setups).toBe(0);
+    set(false);
+    flush();
+    expect(root.textContent).toBe("late");
+    expect(setups).toBe(1);
+    dispose();
+  });
   it("element children are built when (and each time) the branch shows", () => {
     let built = 0;
     const node = document.createElement("b");
@@ -1728,13 +1997,30 @@ describe("flow controls keep children lazy", () => {
       return function* () {
         return (
           <div>
-            <Show when={which() === "a"}>
-              <p>{node}</p>
-            </Show>
-            <Show when={which() === "b"}>
-              <s>{node}</s>
-            </Show>
-            <Show when={which() === "c"}>{make("c")}</Show>
+            {
+              yield* Show({
+                when: which() === "a",
+                children: function* () {
+                  return <p>{node}</p>;
+                }
+              })
+            }
+            {
+              yield* Show({
+                when: which() === "b",
+                children: function* () {
+                  return <s>{node}</s>;
+                }
+              })
+            }
+            {
+              yield* Show({
+                when: which() === "c",
+                children: function* () {
+                  return <>{make("c")}</>;
+                }
+              })
+            }
           </div>
         );
       };
@@ -1765,7 +2051,14 @@ describe("computations created in a setup", () => {
       };
     });
     const [n, setN] = plainSignal(2);
-    mount(() => <Child n={n()} />);
+    // a plain Solid signal given as a hole: read inside the child (D-065)
+    mount(() =>
+      Child({
+        n: function* () {
+          return n();
+        }
+      })
+    );
     expect(root.textContent).toBe("4");
     setN(3);
     flush();
@@ -1801,7 +2094,17 @@ describe("Loading on a source", () => {
       });
       return function* () {
         return (
-          <div>{perform(Loading({ on: k, fallback: <i>wait</i>, children: () => Content() }))}</div>
+          <div>
+            {perform(
+              Loading({
+                on: k,
+                fallback: <i>wait</i>,
+                children: function* () {
+                  return <>{yield* Content()}</>;
+                }
+              })
+            )}
+          </div>
         );
       };
     });
@@ -1845,12 +2148,26 @@ describe("boundaries in call form", () => {
         return (
           <div>
             <p>shell</p>
-            {perform(Loading({ fallback: <i>inner</i>, children: () => Pending() }))}
+            {perform(
+              Loading({
+                fallback: <i>inner</i>,
+                children: function* () {
+                  return <>{yield* Pending()}</>;
+                }
+              })
+            )}
           </div>
         );
       };
     });
-    mount(() => <Loading fallback={<i>outer</i>}>{Page()}</Loading>);
+    mount(() =>
+      Loading({
+        fallback: <i>outer</i>,
+        children: function* () {
+          return <>{yield* Page()}</>;
+        }
+      })
+    );
     expect(root.textContent).toBe("shellinner");
     resolve("done");
     await settle();
@@ -1873,14 +2190,23 @@ describe("boundaries in call form", () => {
             {perform(
               Errored({
                 fallback: (e: () => unknown) => <i>{String((e() as Error).message)}</i>,
-                children: () => Failing()
+                children: function* () {
+                  return <>{yield* Failing()}</>;
+                }
               })
             )}
           </div>
         );
       };
     });
-    mount(() => <Errored fallback={<i>outer</i>}>{Page()}</Errored>);
+    mount(() =>
+      Errored({
+        fallback: <i>outer</i>,
+        children: function* () {
+          return <>{yield* Page()}</>;
+        }
+      })
+    );
     expect(root.textContent).toBe("nope");
   });
 
@@ -1907,37 +2233,62 @@ describe("flow controls take holes (D-038)", () => {
       return function* () {
         return (
           <div>
-            <Show
-              when={function* () {
-                return (yield* n) > 1;
-              }}
-              fallback={<i>small</i>}
-            >
-              <b>big</b>
-            </Show>
-            <Switch fallback={<s>odd</s>}>
-              <Match
-                when={function* () {
-                  return (yield* n) % 2 === 0;
-                }}
-              >
-                <s>even</s>
-              </Match>
-            </Switch>
-            <For
-              each={function* () {
-                return ["a", "b", "c"].slice(0, yield* n);
-              }}
-            >
-              {item => <u>{perform(item)}</u>}
-            </For>
-            <Repeat
-              count={function* () {
-                return yield* n;
-              }}
-            >
-              {i => <em>{perform(i)}</em>}
-            </Repeat>
+            {
+              yield* Show({
+                when: function* () {
+                  return (yield* n) > 1;
+                },
+                fallback: <i>small</i>,
+                children: function* () {
+                  return <b>big</b>;
+                }
+              })
+            }
+            {
+              yield* Switch({
+                fallback: <s>odd</s>,
+                children: function* () {
+                  return (
+                    <>
+                      {
+                        yield* Match({
+                          when: function* () {
+                            return (yield* n) % 2 === 0;
+                          },
+                          children: function* () {
+                            return <s>even</s>;
+                          }
+                        })
+                      }
+                    </>
+                  );
+                }
+              })
+            }
+            {
+              yield* For({
+                each: function* () {
+                  return ["a", "b", "c"].slice(0, yield* n);
+                },
+                children: function* (item) {
+                  return view(function* () {
+                    return <u>{perform(item)}</u>;
+                  });
+                }
+              })
+            }
+            {
+              yield* Repeat({
+                count: function* () {
+                  return yield* n;
+                },
+                children: function* (i) {
+                  return view(function* () {
+                    return <em>{perform(i)}</em>;
+                  });
+                }
+              })
+            }
           </div>
         );
       };
@@ -2039,7 +2390,14 @@ describe("untyped throws (D-019)", () => {
     for (const [where, C, host] of cases) {
       dispose?.();
       root.textContent = "";
-      mount(() => <Errored fallback={shown}>{C()}</Errored>);
+      mount(() =>
+        Errored({
+          fallback: shown,
+          children: function* () {
+            return <>{yield* C()}</>;
+          }
+        })
+      );
       flush();
       const text = root.textContent!;
       expect(text).toContain(`${where} broke`);
@@ -2081,7 +2439,14 @@ describe("untyped throws (D-019)", () => {
         return <p>{perform(m)}</p>;
       };
     });
-    mount(() => <Errored fallback={show}>{Raises()}</Errored>);
+    mount(() =>
+      Errored({
+        fallback: show,
+        children: function* () {
+          return <>{yield* Raises()}</>;
+        }
+      })
+    );
     expect(root.textContent).toBe("true:typed");
     dispose?.();
     root.textContent = "";
@@ -2096,7 +2461,14 @@ describe("untyped throws (D-019)", () => {
         return <p>{perform(a)}</p>;
       };
     });
-    mount(() => <Errored fallback={show}>{Attempts()}</Errored>);
+    mount(() =>
+      Errored({
+        fallback: show,
+        children: function* () {
+          return <>{yield* Attempts()}</>;
+        }
+      })
+    );
     expect(root.textContent).toBe("true:handled");
   });
 });
@@ -2121,11 +2493,25 @@ describe("host state is per run (re-entrancy)", () => {
         return <div>{perform(card)}</div>;
       };
     });
-    mount(() => (
-      <Loading fallback="…">
-        <Errored fallback={(e: any) => <i>{String(e())}</i>}>{App()}</Errored>
-      </Loading>
-    ));
+    mount(() =>
+      Loading({
+        fallback: "…",
+        children: function* () {
+          return (
+            <>
+              {
+                yield* Errored({
+                  fallback: (e: any) => <i>{String(e())}</i>,
+                  children: function* () {
+                    return <>{yield* App()}</>;
+                  }
+                })
+              }
+            </>
+          );
+        }
+      })
+    );
     expect(root.textContent).toBe("…");
     await settle();
     expect(root.textContent).toBe("Ada");
@@ -2151,7 +2537,14 @@ describe("attempt / isPending interplay", () => {
         return <i>{perform(m)}</i>;
       };
     });
-    mount(() => <Loading fallback="…">{App()}</Loading>);
+    mount(() =>
+      Loading({
+        fallback: "…",
+        children: function* () {
+          return <>{yield* App()}</>;
+        }
+      })
+    );
     set(2);
     flush();
     resolvers[0](100);

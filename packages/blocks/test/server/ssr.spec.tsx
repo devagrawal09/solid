@@ -29,7 +29,8 @@ import {
   Loading,
   perform,
   Show,
-  type TypedProps
+  type TypedProps,
+  view
 } from "@solidjs/blocks";
 import { Failed } from "../failed.js";
 
@@ -57,31 +58,46 @@ describe("server rendering", () => {
           <section onClick={click}>
             <h1>{perform(store.title)}</h1>
             <ul>
-              <For each={perform(items)}>{t => <Item text={t} />}</For>
+              {
+                yield* For({
+                  each: items,
+                  children: function* (t) {
+                    return view(function* () {
+                      return <>{yield* Item({ text: t })}</>;
+                    });
+                  }
+                })
+              }
             </ul>
-            <For each={perform(items)}>
-              {function* (t) {
-                const [n] = yield* $signal(1);
-                return function* () {
-                  return (
-                    <b>
-                      {perform(t)}
-                      {perform(n)}
-                    </b>
-                  );
-                };
-              }}
-            </For>
-            <Show when={perform(items).length > 1}>{() => <i>many</i>}</Show>
+            {
+              yield* For({
+                each: items,
+                children: function* (t) {
+                  const [n] = yield* $signal(1);
+                  return function* () {
+                    return (
+                      <b>
+                        {perform(t)}
+                        {perform(n)}
+                      </b>
+                    );
+                  };
+                }
+              })
+            }
+            {
+              yield* Show({
+                when: perform(items).length > 1,
+                children: function* () {
+                  return <i>many</i>;
+                }
+              })
+            }
           </section>
         );
       };
     });
-    const html = renderToString(() => (
-      <Theme value="dark">
-        <App />
-      </Theme>
-    ));
+    const html = renderToString(() => <Theme value="dark">{App()}</Theme>);
     expect(strip(html)).toBe(
       '<section><h1>list</h1><ul><li class="dark">a</li><li class="dark">b</li></ul><b>a1</b><b>b1</b><i>many</i></section>'
     );
@@ -95,7 +111,7 @@ describe("server rendering", () => {
         return <b>{v}</b>;
       };
     });
-    expect(() => renderToString(() => <ReadsInBody />)).toThrow(/READ_IN_VIEW.*<ReadsInBody>/);
+    expect(() => renderToString(() => ReadsInBody())).toThrow(/READ_IN_VIEW.*<ReadsInBody>/);
   });
 
   it("an async memo resolves on the server", async () => {
@@ -110,7 +126,14 @@ describe("server rendering", () => {
         return <h3>{perform(user).name}</h3>;
       };
     });
-    const html = await stream(() => <Loading fallback={<i>…</i>}>{User()}</Loading>);
+    const html = await stream(() =>
+      Loading({
+        fallback: <i>…</i>,
+        children: function* () {
+          return <>{yield* User()}</>;
+        }
+      })
+    );
     expect(strip(html)).toContain("<h3>Ada</h3>");
   });
 });

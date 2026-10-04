@@ -49,17 +49,20 @@ const MemoList = $component(function* MemoList(
   return view(function* () {
     return (
       <ul id="memo-list">
-        <For each={yield* props.items}>
-          {function* (item) {
-            return view(function* () {
-              return (
-                <li>
-                  {yield* item.id}: {yield* item.text}
-                </li>
-              );
-            });
-          }}
-        </For>
+        {
+          yield* For({
+            each: props.items,
+            children: function* (item) {
+              return view(function* () {
+                return (
+                  <li>
+                    {yield* item.id}: {yield* item.text}
+                  </li>
+                );
+              });
+            }
+          })
+        }
       </ul>
     );
   });
@@ -71,20 +74,23 @@ const ProjList = $component(function* ProjList(
   return view(function* () {
     return (
       <ul id="proj-list">
-        <Repeat count={yield* props.count}>
-          {function* (i) {
-            // A row exists only for an index the store already holds: its
-            // reads are settled. The index is a source (D-055), read in the
-            // holes that walk to the row (a setup does not read, D-042).
-            return view(function* () {
-              return (
-                <li>
-                  {yield* props.rows[yield* i].id}: {yield* props.rows[yield* i].text}
-                </li>
-              );
-            });
-          }}
-        </Repeat>
+        {
+          yield* Repeat({
+            count: props.count,
+            children: function* (i) {
+              // A row exists only for an index the store already holds: its
+              // reads are settled. The index is a source (D-055), read in the
+              // holes that walk to the row (a setup does not read, D-042).
+              return view(function* () {
+                return (
+                  <li>
+                    {yield* props.rows[yield* i].id}: {yield* props.rows[yield* i].text}
+                  </li>
+                );
+              });
+            }
+          })
+        }
       </ul>
     );
   });
@@ -131,7 +137,9 @@ const Stream = $component(function* Stream() {
             {
               yield* Loading({
                 fallback: <span class="loader">Loading memo...</span>,
-                children: () => MemoList({ items: memoItems })
+                children: function* () {
+                  return <>{yield* MemoList({ items: memoItems })}</>;
+                }
               })
             }
           </div>
@@ -141,7 +149,9 @@ const Stream = $component(function* Stream() {
             {
               yield* Loading({
                 fallback: <span class="loader">Loading projection...</span>,
-                children: () => ProjList({ count, rows })
+                children: function* () {
+                  return <>{yield* ProjList({ count, rows })}</>;
+                }
               })
             }
           </div>

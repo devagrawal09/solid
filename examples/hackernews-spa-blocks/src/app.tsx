@@ -42,10 +42,13 @@ const App = $component(function* App() {
       <Router>
         {props => (
           <>
-            <Nav />
-            <Loading fallback={<div class="news-list-nav">Loading...</div>}>
-              {props.children}
-            </Loading>
+            {Nav()}
+            {Loading({
+              fallback: <div class="news-list-nav">Loading...</div>,
+              children: function* () {
+                return <>{props.children}</>;
+              }
+            })}
           </>
         )}
       </Router>

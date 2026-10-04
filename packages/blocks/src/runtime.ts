@@ -489,11 +489,13 @@ function readPath(t: PathTarget): unknown {
   let v = t.getter ? t.root() : t.root;
   const path = t.path;
   for (let i = 0; i < path.length; i++) {
-    v = through(v);
+    v = throughHole(v);
     if (v == null) return undefined;
     v = v[path[i] as any];
   }
-  return through(v);
+  // a prop given as a hole (D-065) or a lazy view (`children`, D-066) is
+  // run here, in the reading computation, as a JSX tag's getter was
+  return throughHole(v);
 }
 
 /** Props as reads: `props.x` is a path reader over the raw props. */

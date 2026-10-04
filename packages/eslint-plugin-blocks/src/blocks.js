@@ -83,7 +83,9 @@ function computeKind(fn) {
     if (k === "setup" || k === "row") return "view";
   }
   if (parent.type === "JSXExpressionContainer") return "row";
-  // a flow control's render callback in the call form
+  // a component call's `children` (or a flow control's `fallback`): with
+  // parameters a row (`function* (item, index)`), without them a lazy view
+  // (D-066), rendered where the control shows it
   if (
     parent.type === "Property" &&
     parent.value === fn &&
@@ -91,7 +93,7 @@ function computeKind(fn) {
     parent.key.type === "Identifier" &&
     (parent.key.name === "children" || parent.key.name === "fallback")
   )
-    return "row";
+    return fn.params.length > 0 ? "row" : "view";
   if (fn.type === "FunctionDeclaration") {
     const outer = enclosingFunction(fn);
     const k = blockKind(outer);

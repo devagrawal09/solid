@@ -25,6 +25,8 @@ import {
 } from "solid-js";
 import {
   BOUNDARY,
+  isGeneratorFunction,
+  renderView,
   devError,
   READ,
   VIEW_MARK,
@@ -40,34 +42,50 @@ import type {
   Failure,
   KindCheck,
   FailsOf,
-  HoleOp,
-  HView,
+  HOps,
   Path,
   PendingOf,
-  Read,
   RowBlock,
-  RowFails,
-  RowPending,
-  SettledView,
   Source,
   View
 } from "./types.js";
 import type { Hole, OpsOfHole } from "./holes.js";
 
-/** No-JSX output of a flow control: its source's coloring joined with its content's. */
-type FlowOutput<P extends boolean, E, C> = HView<
-  PendingOf<Read<P, E> | OpsOfHole<C>>,
-  FailsOf<Read<P, E> | OpsOfHole<C>>
->;
-
-/** A no-JSX hole as a flow control's source prop: a bare zero-arity `function*`. */
-type GeneratorHole<Y, T> = () => Generator<Y, T, any>;
 /**
- * A flow control's source prop in JSX may be a hole too (D-038): a bare
- * zero-arity `function*` — `<Show when={function* () { return (yield* n) > 1; }}>`.
- * A JSX element is settled, so its hole is: it reads only settled sources.
+ * What a flow control's source prop reads as (D-065): a value, a source's
+ * value, or a hole's result.
  */
-type SettledHole<T> = GeneratorHole<Read<false, never>, T>;
+type ValueOf<W> =
+  W extends Source<infer T, any, any> ? T : W extends () => Generator<any, infer T, any> ? T : W;
+/**
+ * The colors a prop or `children` carries into the flow control's view: a
+ * source's read, a hole's or a lazy view's reads, a row's view's, a render
+ * callback's output's, content's (`h` output, a view).
+ */
+type Ops<V> = V extends (...args: any[]) => infer R
+  ? R extends Generator<any, any, any>
+    ? OpsOfHole<V>
+    : OpsOfHole<R>
+  : OpsOfHole<V>;
+/** A flow control's view: the colors of its sources and its content (D-059, D-063, D-062). */
+type FlowView<O> = View<PendingOf<O>, FailsOf<O>>;
+/** A row's colors: its view's yields and output's. */
+type RowOps<VY, R> = VY | HOps<R>;
+/**
+ * Content a flow control renders: anything `h` takes (not a generator — a
+ * generator is a lazy view or a row) or a JSX element.
+ */
+type Content = Exclude<Hole, (...args: any[]) => Generator<any, any, any>> | Element;
+/**
+ * `children` in call form (D-066): a lazy view `function* () { return <…/>; }`
+ * built inside the flow control (it may hold holes), content (`h` output, a
+ * view), or a render callback returning content (`h`). A row — a generator
+ * with the control's arguments — has its own overload.
+ */
+type Children<A extends unknown[]> =
+  | (() => Generator<any, Content, any>)
+  | Content
+  | ((...args: A) => Content);
 
 /** Flow controls are components (`h(For, …)`). */
 type Branded = { readonly [COMPONENT]: true };
@@ -77,6 +95,16 @@ function forward(props: any, adaptChildren: (children: unknown) => unknown): any
   const out: any = {};
   for (const key of Object.keys(props)) {
     if (key === "children") continue;
+    // A `fallback` written as a zero-arity `function*` is a lazy view, as
+    // `children` is (D-066): built when (and each time) the control shows it,
+    // never with the holding view — a fallback holding a component call
+    // (`fallback: function* () { return <>{yield* Checkout()}</>; }`) sets
+    // that component up only when the fallback is shown, as a tag did.
+    const v = props[key];
+    if (key === "fallback" && isGeneratorFunction(v) && v.length === 0) {
+      Object.defineProperty(out, key, { get: () => lazyView(v), enumerable: true });
+      continue;
+    }
     // A source passed straight to a flow control (`each={todos}` in `h`, or
     // a call `For({ each: todos, … })`) is read where the prop is read; so is
     // a bare `function*` hole (`Show({ when: function* () { … } })`).
@@ -105,6 +133,12 @@ function adapt(cb: unknown, args: (...raw: any[]) => unknown[], arity: number): 
   // A view that is a function (a lazy page's output, a flow
   // control's) is content, not a render callback.
   if ((cb as any)[VIEW_MARK] === true) return cb;
+  // A zero-arity generator is a lazy view (D-066): rendered where the
+  // control renders its content — a row takes the control's arguments.
+  // It is handed to Solid as a render callback (arity 1), which Solid calls
+  // untracked, once per shown branch — a zero-arity function would be
+  // inserted as a reactive thunk and re-rendered on every read it makes.
+  if (isGeneratorFunction(cb) && cb.length === 0) return (_value: unknown) => lazyView(cb);
   const row = isRowBlock(cb);
   if (!row && (cb as any)[READ] !== undefined) return cb;
   const run = row
@@ -117,60 +151,27 @@ function adapt(cb: unknown, args: (...raw: any[]) => unknown[], arity: number): 
 // --- For ------------------------------------------------------------------------------------------
 
 type EachOf<T> = T extends readonly (infer U)[] ? U : never;
-type ForProps<T extends readonly any[]> = {
-  each: T | undefined | null | false | Source<T | undefined | null | false, false, never>;
-  fallback?: Element;
-  keyed?: boolean | ((item: EachOf<T>) => any);
-};
+type ItemOf<W> = Path<EachOf<NonNullable<ValueOf<W>>>>;
 
 /**
- * `<For each={yield* todos}>{todo => <TodoItem todo={todo} />}</For>`, or
- * with per-row state, `{function* (todo) { setup; return function* () { view } }}`.
- * The row's item is a read (`yield* todo.title`), its index a source.
+ * `{yield* For({ each: todos, children: function* (todo) { setup; return
+ * view(function* () { … }); } })}`: `each` is a value, a source or a hole; a
+ * row's item is a path (D-055), its index a source. The rows' pending and
+ * failures join the list's view (D-059, D-063), and so the holding view.
  */
-function ForBlocks<T extends readonly any[], Y, VY, R>(
-  props: Omit<ForProps<T>, "each"> & {
-    each: SettledHole<T | undefined | null | false>;
-    children: RowBlock<[item: Path<EachOf<T>>, index: Source<number>], Y, VY, R>;
-  }
-): View<RowPending<VY, R>, RowFails<VY, R>>;
-function ForBlocks<T extends readonly any[]>(
-  props: Omit<ForProps<T>, "each"> & {
-    each: SettledHole<T | undefined | null | false>;
-    children: (item: Path<EachOf<T>>, index: Source<number>) => Element;
-  }
-): SettledView;
-function ForBlocks<T extends readonly any[], Y, VY, R>(
-  props: ForProps<T> & {
-    children: RowBlock<[item: Path<EachOf<T>>, index: Source<number>], Y, VY, R>;
-  }
-): View<RowPending<VY, R>, RowFails<VY, R>>;
-function ForBlocks<T extends readonly any[]>(
-  props: ForProps<T> & {
-    children: (item: Path<EachOf<T>>, index: Source<number>) => Element;
-  }
-): SettledView;
-/**
- * No-JSX, `each` a bare `function*` hole (`For({ each: function* () { … }, … })`):
- * the output carries the hole's coloring and the rows' `h` output's.
- */
-function ForBlocks<T extends readonly any[], Y extends HoleOp, C extends Hole>(props: {
-  each: GeneratorHole<Y, T | undefined | null | false>;
-  fallback?: Hole;
-  keyed?: boolean | ((item: EachOf<T>) => any);
-  children: (item: Path<EachOf<T>>, index: Source<number>) => C;
-}): FlowOutput<PendingOf<Y>, FailsOf<Y>, C>;
-/**
- * No-JSX (`For({ each: todos, children: todo => h(TodoItem, { todo }) })`):
- * `each` may be a pending source; the output carries its coloring and the
- * rows' `h` output's.
- */
-function ForBlocks<T extends readonly any[], P extends boolean, E, C extends Hole>(props: {
-  each: Source<T | undefined | null | false, P, E> | T | undefined | null | false;
-  fallback?: Hole;
-  keyed?: boolean | ((item: EachOf<T>) => any);
-  children: (item: Path<EachOf<T>>, index: Source<number>) => C;
-}): FlowOutput<P, E, C>;
+function ForBlocks<W, Y, VY, R, F = never>(props: {
+  each: W;
+  fallback?: F;
+  keyed?: boolean | ((item: EachOf<NonNullable<ValueOf<W>>>) => any);
+  children: RowBlock<[item: ItemOf<W>, index: Source<number>], Y, VY, R>;
+}): FlowView<Ops<W> | Ops<F> | RowOps<VY, R>>;
+/** `h`: `For({ each: todos, children: todo => h(TodoItem, { todo }) })`. */
+function ForBlocks<W, C extends Content, F = never>(props: {
+  each: W;
+  fallback?: F;
+  keyed?: boolean | ((item: EachOf<NonNullable<ValueOf<W>>>) => any);
+  children: (item: ItemOf<W>, index: Source<number>) => C;
+}): FlowView<Ops<W> | Ops<F> | OpsOfHole<C>>;
 function ForBlocks(props: any): any {
   const keyedFalse = props.keyed === false;
   return SolidFor(
@@ -189,30 +190,19 @@ function ForBlocks(props: any): any {
 
 // --- Repeat ---------------------------------------------------------------------------------------
 
-type RepeatProps = {
-  count: number | Source<number, false, never>;
+/** `{yield* Repeat({ count: n, children: function* (index) { … } })}`: the index is a source. */
+function RepeatBlocks<W, Y, VY, R, F = never>(props: {
+  count: W;
   from?: number | undefined;
-  fallback?: Element;
-};
-/** `<Repeat count={n}>{function* (index) { … }}</Repeat>`: the index is a source. */
-function RepeatBlocks<Y, VY, R>(
-  props: Omit<RepeatProps, "count"> & {
-    count: SettledHole<number>;
-    children: RowBlock<[index: Source<number>], Y, VY, R>;
-  }
-): View<RowPending<VY, R>, RowFails<VY, R>>;
-function RepeatBlocks(
-  props: Omit<RepeatProps, "count"> & {
-    count: SettledHole<number>;
-    children: ((index: Source<number>) => Element) | Element;
-  }
-): SettledView;
-function RepeatBlocks<Y, VY, R>(
-  props: RepeatProps & { children: RowBlock<[index: Source<number>], Y, VY, R> }
-): View<RowPending<VY, R>, RowFails<VY, R>>;
-function RepeatBlocks(
-  props: RepeatProps & { children: ((index: Source<number>) => Element) | Element }
-): SettledView;
+  fallback?: F;
+  children: RowBlock<[index: Source<number>], Y, VY, R>;
+}): FlowView<Ops<W> | Ops<F> | RowOps<VY, R>>;
+function RepeatBlocks<W, C extends Children<[index: Source<number>]>, F = never>(props: {
+  count: W;
+  from?: number | undefined;
+  fallback?: F;
+  children: C;
+}): FlowView<Ops<W> | Ops<F> | Ops<C>>;
 function RepeatBlocks(props: any): any {
   return SolidRepeat(
     forward(props, children => adapt(children, (index: number) => [rowArg(index, false)], 1))
@@ -221,59 +211,26 @@ function RepeatBlocks(props: any): any {
 
 // --- Show / Match -------------------------------------------------------------------------------
 
-/**
- * A condition: a settled value or source. A `function*` is never the value
- * itself (`T` would infer as the function): it is a hole, taken by the hole
- * overloads (D-038), which check that it is settled.
- */
-type Cond<T> = (T | undefined | null | false | Source<T | undefined | null | false, false, never>) &
-  NotAHole<T>;
-/** `T` is not a `function*` (one is a hole, never a value). */
-type NotAHole<T> = [T] extends [(...args: any[]) => Generator<any, any, any>] ? never : unknown;
-type ShowProps<T> = { when: Cond<T>; keyed?: boolean; fallback?: Element };
+type ValuePath<W> = Path<NonNullable<ValueOf<W>>>;
 
 /**
- * `<Show when={yield* user}>{u => <p>{yield* u.name}</p>}</Show>` — the
- * branch's value is a read — or a row block with its own setup.
+ * `{yield* Show({ when: user, children: function* (u) { … } })}` — a row
+ * whose value is a path — or a lazy view `children: function* () { return
+ * <…/>; }` built when the branch shows. `when` is a value, a source or a hole
+ * (`when: function* () { return (yield* n) > 1; }`).
  */
-type HoleShowProps<T> = {
-  when: SettledHole<T | undefined | null | false>;
+function ShowBlocks<W, Y, VY, R, F = never>(props: {
+  when: W;
   keyed?: boolean;
-  fallback?: Element;
-};
-/** `<Show when={function* () { … }}>`: the condition is a hole (D-038). */
-function ShowBlocks<T, Y, VY, R>(
-  props: HoleShowProps<T> & { children: RowBlock<[value: Path<NonNullable<T>>], Y, VY, R> }
-): View<RowPending<VY, R>, RowFails<VY, R>>;
-function ShowBlocks<T>(
-  props: HoleShowProps<T> & { children: Element | ((value: Path<NonNullable<T>>) => Element) }
-): SettledView;
-/**
- * No-JSX, `when` a bare `function*` hole (`Show({ when: function* () { … }, … })`):
- * the output carries the hole's coloring and the content's.
- */
-function ShowBlocks<T, Y extends HoleOp, C extends Hole>(props: {
-  when: GeneratorHole<Y, T | undefined | null | false>;
+  fallback?: F;
+  children: RowBlock<[value: ValuePath<W>], Y, VY, R>;
+}): FlowView<Ops<W> | Ops<F> | RowOps<VY, R>>;
+function ShowBlocks<W, C extends Children<[value: ValuePath<W>]>, F = never>(props: {
+  when: W;
   keyed?: boolean;
-  fallback?: Hole;
-  children: C | ((value: Path<NonNullable<T>>) => C);
-}): FlowOutput<PendingOf<Y>, FailsOf<Y>, C>;
-function ShowBlocks<T, Y, VY, R>(
-  props: ShowProps<T> & { children: RowBlock<[value: Path<NonNullable<T>>], Y, VY, R> }
-): View<RowPending<VY, R>, RowFails<VY, R>>;
-function ShowBlocks<T>(
-  props: ShowProps<T> & { children: Element | ((value: Path<NonNullable<T>>) => Element) }
-): SettledView;
-/**
- * No-JSX (`Show({ when: open, children: h(…) })`): `when` may be a pending
- * source; the output carries its coloring and the content's.
- */
-function ShowBlocks<T, P extends boolean, E, C extends Hole>(props: {
-  when: (Source<T | undefined | null | false, P, E> | T | undefined | null | false) & NotAHole<T>;
-  keyed?: boolean;
-  fallback?: Hole;
-  children: C | ((value: Path<NonNullable<T>>) => C);
-}): FlowOutput<P, E, C>;
+  fallback?: F;
+  children: C;
+}): FlowView<Ops<W> | Ops<F> | Ops<C>>;
 function ShowBlocks(props: any): any {
   const keyed = !!props.keyed;
   return SolidShow(
@@ -281,35 +238,51 @@ function ShowBlocks(props: any): any {
   );
 }
 
-/** `<Switch>` over `<Match>`es. */
-export const Switch: ((props: { fallback?: Element; children: Element }) => SettledView) & Branded =
-  SolidSwitch as any;
+/**
+ * `{yield* Switch({ fallback, children: function* () { return <>{yield*
+ * Match({ … })}…</>; } })}`: the first `Match` whose `when` holds.
+ */
+function SwitchBlocks<C extends Children<[]>, F = never>(props: {
+  fallback?: F;
+  children: C;
+}): FlowView<Ops<C> | Ops<F>>;
+function SwitchBlocks(props: any): any {
+  const children = content(props, "Switch");
+  const out: any = {};
+  for (const key of Object.keys(props))
+    if (key !== "children")
+      Object.defineProperty(out, key, { get: () => throughHole(props[key]), enumerable: true });
+  Object.defineProperty(out, "children", { get: children, enumerable: true });
+  return SolidSwitch(out);
+}
 
-type MatchProps<T> = { when: Cond<T>; keyed?: boolean };
-/** A branch of `<Switch>`; its render callback may be a row block. */
-function MatchBlocks<T, Y, VY, R>(
-  props: Omit<MatchProps<T>, "when"> & {
-    when: SettledHole<T | undefined | null | false>;
-    children: RowBlock<[value: Path<NonNullable<T>>], Y, VY, R>;
-  }
-): View<RowPending<VY, R>, RowFails<VY, R>>;
-function MatchBlocks<T>(
-  props: Omit<MatchProps<T>, "when"> & {
-    when: SettledHole<T | undefined | null | false>;
-    children: Element | ((value: Path<NonNullable<T>>) => Element);
-  }
-): SettledView;
-function MatchBlocks<T, Y, VY, R>(
-  props: MatchProps<T> & { children: RowBlock<[value: Path<NonNullable<T>>], Y, VY, R> }
-): View<RowPending<VY, R>, RowFails<VY, R>>;
-function MatchBlocks<T>(
-  props: MatchProps<T> & { children: Element | ((value: Path<NonNullable<T>>) => Element) }
-): SettledView;
+/** A branch of `Switch`; its children a row (its value a path) or a lazy view. */
+function MatchBlocks<W, Y, VY, R>(props: {
+  when: W;
+  keyed?: boolean;
+  children: RowBlock<[value: ValuePath<W>], Y, VY, R>;
+}): FlowView<Ops<W> | RowOps<VY, R>>;
+function MatchBlocks<W, C extends Children<[value: ValuePath<W>]>>(props: {
+  when: W;
+  keyed?: boolean;
+  children: C;
+}): FlowView<Ops<W> | Ops<C>>;
 function MatchBlocks(props: any): any {
   const keyed = !!props.keyed;
   return SolidMatch(
     forward(props, children => adapt(children, (value: any) => [rowArg(value, !keyed)], 1))
   );
+}
+
+/**
+ * A lazy view (D-066): `children: function* () { return <…/>; }`, rendered as
+ * a view where the control renders its content (inside its branch, its
+ * boundary, its context) — what a JSX tag's children getter did.
+ */
+function lazyView(body: any): unknown {
+  // built untracked, as a component is (`createComponent`): what it reads
+  // while it is built is its holes', never the reader's
+  return untrack(() => renderView(body, "children"));
 }
 
 // --- boundaries ---------------------------------------------------------------------------------
@@ -343,6 +316,8 @@ function content(props: any, name: string): () => unknown {
   const d = Object.getOwnPropertyDescriptor(props, "children");
   if (!d || d.get) return () => props.children;
   const v = d.value;
+  // the call form's children (D-066): a lazy view, built inside the boundary
+  if (isGeneratorFunction(v) && v.length === 0) return () => lazyView(v);
   if (
     typeof v === "function" &&
     v[READ] === undefined &&
@@ -365,12 +340,11 @@ function content(props: any, name: string): () => unknown {
  * `on` may be a source (`Loading({ on: props.room, … })`): it is read where
  * Solid's `Loading` reads it, so the call form keys the boundary too.
  */
-function LoadingBlocks(props: { fallback?: Element; on?: unknown; children: Element }): SettledView;
-function LoadingBlocks<P extends boolean, E>(props: {
-  fallback?: Element;
+function LoadingBlocks<C, F = never>(props: {
+  fallback?: F;
   on?: unknown;
-  children: View<P, E> | readonly View<P, E>[] | (() => View<P, E> | readonly View<P, E>[]);
-}): View<false, E>;
+  children: C;
+}): View<PendingOf<Ops<F>>, FailsOf<Ops<C> | Ops<F>>>;
 function LoadingBlocks(props: any): any {
   const children = content(props, "Loading");
   // `on` may be a source: every other prop is read through where it is read
@@ -394,19 +368,15 @@ function LoadingBlocks(props: any): any {
  * its own color: give each class a member of its own (`readonly kind =
  * "not-found"`), or TypeScript cannot tell two of them apart.
  */
-function ErroredBlocks<P extends boolean, E, C extends readonly ErrorClass<Failure>[]>(props: {
-  catch: C & KindCheck<InstanceType<C[number]>>;
-  fallback: Element | ((error: Accessor<InstanceType<C[number]>>, reset: () => void) => Element);
-  children: View<P, E> | readonly View<P, E>[] | (() => View<P, E> | readonly View<P, E>[]);
-}): View<P, Exclude<E, InstanceType<C[number]>>>;
-function ErroredBlocks(props: {
-  fallback: Element | ((error: Accessor<unknown>, reset: () => void) => Element);
-  children: Element;
-}): SettledView;
-function ErroredBlocks<P extends boolean, E>(props: {
-  fallback: Element | ((error: Accessor<E>, reset: () => void) => Element);
-  children: View<P, E> | readonly View<P, E>[] | (() => View<P, E> | readonly View<P, E>[]);
-}): View<P, never>;
+function ErroredBlocks<C, K extends readonly ErrorClass<Failure>[]>(props: {
+  catch: K & KindCheck<InstanceType<K[number]>>;
+  fallback: Content | ((error: Accessor<InstanceType<K[number]>>, reset: () => void) => Content);
+  children: C;
+}): View<PendingOf<Ops<C>>, Exclude<FailsOf<Ops<C>>, InstanceType<K[number]>>>;
+function ErroredBlocks<C>(props: {
+  fallback: Content | ((error: Accessor<FailsOf<Ops<C>>>, reset: () => void) => Content);
+  children: C;
+}): View<PendingOf<Ops<C>>, never>;
 function ErroredBlocks(props: any): any {
   const children = content(props, "Errored");
   const fallback = props.fallback as any;
@@ -456,5 +426,6 @@ export const For: typeof ForBlocks & Branded = untracked(ForBlocks);
 export const Repeat: typeof RepeatBlocks & Branded = untracked(RepeatBlocks);
 export const Show: typeof ShowBlocks & Branded = untracked(ShowBlocks);
 export const Match: typeof MatchBlocks & Branded = untracked(MatchBlocks);
+export const Switch: typeof SwitchBlocks & Branded = untracked(SwitchBlocks);
 export const Loading: typeof LoadingBlocks & Branded = untracked(LoadingBlocks);
 export const Errored: typeof ErroredBlocks & Branded = untracked(ErroredBlocks);
