@@ -12,6 +12,7 @@ import {
   render,
   Show,
   type HView,
+  type View,
   type Source
 } from "@solidjs/blocks";
 import { h } from "@solidjs/blocks/h";
@@ -132,7 +133,8 @@ const shownSettled: HView<false, never> = Show({
   children: h("b", "x")
 });
 void shownSettled;
-const listedSettled: HView<false, never> = For({
+// settled: a settled hole and settled rows (a view, as the JSX form gives)
+const listedSettled: View<false, never> = For({
   each: function* () {
     return [1, 2];
   },

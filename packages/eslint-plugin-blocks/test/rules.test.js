@@ -58,6 +58,13 @@ tester.run("no-read-in-view-body", rules["no-read-in-view-body"], {
     "const m = $memo(function* () { const v = yield* n; return v; });",
     // a row's setup is not its view (its reads are READ_IN_SETUP's, a type error)
     "const r = <For each={xs}>{function* (x) { const d = yield* $memo(function* () { return yield* x.a; }); return function* () { return <i>{yield* d}</i>; }; }}</For>;",
+    // h: an h view (no JSX) is held by its type, [HVIEW_READ], not the lint (D-049)
+    component(
+      "const [n] = yield* $signal(1); return function* () { return h('p', String(yield* n)); };"
+    ),
+    component(
+      "return function* () { return For({ each: xs, children: function* (x) { return function* () { return h('li', yield* x.a); }; } }); };"
+    ),
     // h: the reads are in bare function* holes
     component(
       "const [n] = yield* $signal(1); return function* () { return h('p', { class: function* () { return (yield* n) > 1 ? 'big' : ''; } }, n, function* () { return (yield* n) * 2; }); };"
@@ -79,26 +86,15 @@ tester.run("no-read-in-view-body", rules["no-read-in-view-body"], {
       errors: [{ messageId: "read" }]
     },
     {
-      code: component("return function* () { const c = yield* Child({}); return c; };"),
+      code: component(
+        "return function* () { const c = yield* Child({}); return <div>{c}</div>; };"
+      ),
       errors: [{ messageId: "child" }]
-    },
-    {
-      // h: a read in the view itself, in an argument and in a call-form row's view
-      code: component(
-        "const [n] = yield* $signal(1); return function* () { return h('p', String(yield* n)); };"
-      ),
-      errors: [{ messageId: "read" }]
-    },
-    {
-      code: component(
-        "return function* () { return For({ each: xs, children: function* (x) { return function* () { return h('li', yield* x.a); }; } }); };"
-      ),
-      errors: [{ messageId: "read" }]
     },
     {
       // a setup returning one of two views, and a row bound to a const in the setup
       code: component(
-        "const row = function* (x) { return function* () { return h('li', yield* x); }; }; return mode ? function* () { return h('p', yield* n); } : function* () { return h('i'); };"
+        "const row = function* (x) { return function* () { const t = yield* x; return <li>{t}</li>; }; }; return mode ? function* () { return <p>{String(yield* n)}</p>; } : function* () { const v = yield* n; return <i>{v}</i>; };"
       ),
       errors: [{ messageId: "read" }, { messageId: "read" }]
     }

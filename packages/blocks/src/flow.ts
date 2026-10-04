@@ -49,6 +49,12 @@ type FlowOutput<P extends boolean, E, C> = HView<
 
 /** A no-JSX hole as a flow control's source prop: a bare zero-arity `function*`. */
 type GeneratorHole<Y, T> = () => Generator<Y, T, any>;
+/**
+ * A flow control's source prop in JSX may be a hole too (D-038): a bare
+ * zero-arity `function*` — `<Show when={function* () { return (yield* n) > 1; }}>`.
+ * A JSX element is settled, so its hole is: it reads only settled sources.
+ */
+type SettledHole<T> = GeneratorHole<Read<false, never>, T>;
 
 /** Flow controls are components (`h(For, …)`). */
 type Branded = { readonly [COMPONENT]: true };
@@ -110,6 +116,18 @@ type ForProps<T extends readonly any[]> = {
  * The row's item is a read (`yield* todo.title`), its index a source.
  */
 function ForBlocks<T extends readonly any[], Y, VY, R>(
+  props: Omit<ForProps<T>, "each"> & {
+    each: SettledHole<T | undefined | null | false>;
+    children: RowBlock<[item: Path<EachOf<T>>, index: Source<number>], Y, VY, R>;
+  }
+): SettledView;
+function ForBlocks<T extends readonly any[]>(
+  props: Omit<ForProps<T>, "each"> & {
+    each: SettledHole<T | undefined | null | false>;
+    children: (item: Path<EachOf<T>>, index: Source<number>) => Element;
+  }
+): SettledView;
+function ForBlocks<T extends readonly any[], Y, VY, R>(
   props: ForProps<T> & {
     children: RowBlock<[item: Path<EachOf<T>>, index: Source<number>], Y, VY, R>;
   }
@@ -165,6 +183,18 @@ type RepeatProps = {
 };
 /** `<Repeat count={n}>{function* (index) { … }}</Repeat>`: the index is a source. */
 function RepeatBlocks<Y, VY, R>(
+  props: Omit<RepeatProps, "count"> & {
+    count: SettledHole<number>;
+    children: RowBlock<[index: Source<number>], Y, VY, R>;
+  }
+): SettledView;
+function RepeatBlocks(
+  props: Omit<RepeatProps, "count"> & {
+    count: SettledHole<number>;
+    children: ((index: Source<number>) => Element) | Element;
+  }
+): SettledView;
+function RepeatBlocks<Y, VY, R>(
   props: RepeatProps & { children: RowBlock<[index: Source<number>], Y, VY, R> }
 ): SettledView;
 function RepeatBlocks(
@@ -178,13 +208,33 @@ function RepeatBlocks(props: any): any {
 
 // --- Show / Match -------------------------------------------------------------------------------
 
-type Cond<T> = T | undefined | null | false | Source<T | undefined | null | false, false, never>;
+/**
+ * A condition: a settled value or source. A `function*` is never the value
+ * itself (`T` would infer as the function): it is a hole, taken by the hole
+ * overloads (D-038), which check that it is settled.
+ */
+type Cond<T> = (T | undefined | null | false | Source<T | undefined | null | false, false, never>) &
+  NotAHole<T>;
+/** `T` is not a `function*` (one is a hole, never a value). */
+type NotAHole<T> = [T] extends [(...args: any[]) => Generator<any, any, any>] ? never : unknown;
 type ShowProps<T> = { when: Cond<T>; keyed?: boolean; fallback?: Element };
 
 /**
  * `<Show when={yield* user}>{u => <p>{yield* u.name}</p>}</Show>` — the
  * branch's value is a read — or a row block with its own setup.
  */
+type HoleShowProps<T> = {
+  when: SettledHole<T | undefined | null | false>;
+  keyed?: boolean;
+  fallback?: Element;
+};
+/** `<Show when={function* () { … }}>`: the condition is a hole (D-038). */
+function ShowBlocks<T, Y, VY, R>(
+  props: HoleShowProps<T> & { children: RowBlock<[value: Path<NonNullable<T>>], Y, VY, R> }
+): SettledView;
+function ShowBlocks<T>(
+  props: HoleShowProps<T> & { children: Element | ((value: Path<NonNullable<T>>) => Element) }
+): SettledView;
 /**
  * No-JSX, `when` a bare `function*` hole (`Show({ when: function* () { … }, … })`):
  * the output carries the hole's coloring and the content's.
@@ -206,7 +256,7 @@ function ShowBlocks<T>(
  * source; the output carries its coloring and the content's.
  */
 function ShowBlocks<T, P extends boolean, E, C extends Hole>(props: {
-  when: Source<T | undefined | null | false, P, E> | T | undefined | null | false;
+  when: (Source<T | undefined | null | false, P, E> | T | undefined | null | false) & NotAHole<T>;
   keyed?: boolean;
   fallback?: Hole;
   children: C | ((value: Path<NonNullable<T>>) => C);
@@ -224,6 +274,18 @@ export const Switch: ((props: { fallback?: Element; children: Element }) => Sett
 
 type MatchProps<T> = { when: Cond<T>; keyed?: boolean };
 /** A branch of `<Switch>`; its render callback may be a row block. */
+function MatchBlocks<T, Y, VY, R>(
+  props: Omit<MatchProps<T>, "when"> & {
+    when: SettledHole<T | undefined | null | false>;
+    children: RowBlock<[value: Path<NonNullable<T>>], Y, VY, R>;
+  }
+): SettledView;
+function MatchBlocks<T>(
+  props: Omit<MatchProps<T>, "when"> & {
+    when: SettledHole<T | undefined | null | false>;
+    children: Element | ((value: Path<NonNullable<T>>) => Element);
+  }
+): SettledView;
 function MatchBlocks<T, Y, VY, R>(
   props: MatchProps<T> & { children: RowBlock<[value: Path<NonNullable<T>>], Y, VY, R> }
 ): SettledView;

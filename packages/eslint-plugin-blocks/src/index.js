@@ -72,10 +72,33 @@ const noThrow = {
 };
 
 /**
- * A view has no body (D-032): `function* () { return <…/>; }`. Every read is
- * a hole — a `yield*` in a JSX expression or attribute, or (`h` / `html`) a
- * bare `function*` hole, whose own `yield*`s are its, not the view's.
+ * A JSX view has no body (D-032): `function* () { return <…/>; }`. Every
+ * read is a hole — a `yield*` in a JSX expression or attribute. An `h` view
+ * (no JSX in its body) is the type's (`[HVIEW_READ]`, D-049), not this rule's.
  */
+/** Whether a function's body holds JSX (an `h` view holds none). */
+const jsxViews = new WeakMap();
+function isJsxView(fn) {
+  if (jsxViews.has(fn)) return jsxViews.get(fn);
+  let found = false;
+  const visit = node => {
+    if (found || !node || typeof node.type !== "string") return;
+    if (node.type === "JSXElement" || node.type === "JSXFragment") {
+      found = true;
+      return;
+    }
+    for (const key of Object.keys(node)) {
+      if (key === "parent") continue;
+      const v = node[key];
+      if (Array.isArray(v)) v.forEach(visit);
+      else if (v && typeof v.type === "string") visit(v);
+    }
+  };
+  visit(fn.body);
+  jsxViews.set(fn, found);
+  return found;
+}
+
 const noReadInViewBody = {
   meta: {
     type: "problem",
@@ -96,6 +119,8 @@ const noReadInViewBody = {
         if (!node.delegate) return;
         if (kindAt(node) !== "view") return;
         if (jsxPosition(node)) return;
+        // an `h` view is held by its type (`[HVIEW_READ]`), not the lint (D-049)
+        if (!isJsxView(enclosingFunction(node))) return;
         context.report({
           node,
           messageId: isCapitalizedCall(node.argument) ? "child" : "read"

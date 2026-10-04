@@ -1608,6 +1608,61 @@ describe("boundaries in call form", () => {
   });
 });
 
+describe("flow controls take holes (D-038)", () => {
+  it("Show / Match when, For each and Repeat count may be a bare function* hole", () => {
+    let set!: (v: number) => void;
+    const App = $component(function* () {
+      const [n, setN] = yield* $signal(1);
+      set = v => write(setN(v));
+      return function* () {
+        return (
+          <div>
+            <Show
+              when={function* () {
+                return (yield* n) > 1;
+              }}
+              fallback={<i>small</i>}
+            >
+              <b>big</b>
+            </Show>
+            <Switch fallback={<s>odd</s>}>
+              <Match
+                when={function* () {
+                  return (yield* n) % 2 === 0;
+                }}
+              >
+                <s>even</s>
+              </Match>
+            </Switch>
+            <For
+              each={function* () {
+                return ["a", "b", "c"].slice(0, yield* n);
+              }}
+            >
+              {item => <u>{perform(item)}</u>}
+            </For>
+            <Repeat
+              count={function* () {
+                return yield* n;
+              }}
+            >
+              {i => <em>{perform(i)}</em>}
+            </Repeat>
+          </div>
+        );
+      };
+    });
+    mount(App);
+    expect(root.textContent).toBe("smallodda0");
+    set(2);
+    flush();
+    expect(root.textContent).toBe("bigevenab01");
+    set(3);
+    flush();
+    expect(root.textContent).toBe("bigoddabc012");
+  });
+});
+
 describe("derivations", () => {
   it("a derivation several holes read is a $memo: it runs once per change", () => {
     let set!: (v: number) => void;

@@ -381,6 +381,64 @@ export const Rows = $component(function* () {
   };
 });
 
+// --- flow controls take a hole as well as a source (D-038) --------------------------------------
+export const FlowHoles = $component(function* () {
+  const [n] = yield* $signal(1);
+  const [list] = yield* $signal(["a", "b"]);
+  return function* () {
+    return (
+      <div>
+        <Show
+          when={function* () {
+            return (yield* n) > 1;
+          }}
+          fallback={<i>small</i>}
+        >
+          <b>big</b>
+        </Show>
+        <Show
+          when={function* () {
+            return (yield* list)[0];
+          }}
+        >
+          {function* (first) {
+            return function* () {
+              return <b>{yield* first}</b>;
+            };
+          }}
+        </Show>
+        <For
+          each={function* () {
+            return (yield* list).filter(x => x !== "b");
+          }}
+        >
+          {function* (item) {
+            return function* () {
+              return <li>{yield* item}</li>;
+            };
+          }}
+        </For>
+        <Repeat
+          count={function* () {
+            return yield* n;
+          }}
+        >
+          {function* (i) {
+            return function* () {
+              return <u>{yield* i}</u>;
+            };
+          }}
+        </Repeat>
+      </div>
+    );
+  };
+});
+const pendingHole = function* () {
+  return (yield* pendingUser).name;
+};
+// @ts-expect-error a JSX element is settled: a hole over a pending source is not
+export const pendingHoleBad = <Show when={pendingHole}>!</Show>;
+
 // --- paths through nullable values and nested sources --------------------------------------------
 export const Nullable = $component(function* (props: TypedProps<{ me: { name: string } | null }>) {
   return function* () {
