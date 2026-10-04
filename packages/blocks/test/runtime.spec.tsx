@@ -1188,6 +1188,50 @@ describe("events", () => {
 });
 
 describe("row blocks", () => {
+  it("an in-place item change updates the row without re-creating it (D-055)", () => {
+    let edit!: (text: string) => void;
+    let setups = 0;
+    let views = 0;
+    const List = $component(function* List() {
+      const [store, setStore] = yield* $store({ items: [{ text: "a" }, { text: "b" }] });
+      edit = text =>
+        write(() =>
+          setStore(s => {
+            s.items[0].text = text;
+          })
+        );
+      return function* () {
+        return (
+          <ul>
+            <For each={perform(store.items)}>
+              {function* (item, index) {
+                setups++;
+                return function* () {
+                  views++;
+                  return (
+                    <li>
+                      {perform(index)}:{perform(item.text)}
+                    </li>
+                  );
+                };
+              }}
+            </For>
+          </ul>
+        );
+      };
+    });
+    mount(List);
+    const first = root.querySelector("li")!;
+    expect(root.textContent).toBe("0:a1:b");
+    edit("A");
+    flush();
+    expect(root.textContent).toBe("0:A1:b");
+    // the same row, its setup and view run once: only the hole re-ran
+    expect(root.querySelector("li")).toBe(first);
+    expect(setups).toBe(2);
+    expect(views).toBe(2);
+  });
+
   it("a row memo is created once per item", () => {
     let setItems!: (v: { id: number; text: string }[]) => void;
     let setText!: (v: string) => void;

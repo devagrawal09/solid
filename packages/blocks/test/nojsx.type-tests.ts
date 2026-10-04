@@ -12,6 +12,7 @@ import {
   render,
   Show,
   type HView,
+  type Path,
   type View,
   type Source,
   view
@@ -150,4 +151,25 @@ export const WrappedReads = $component(function* () {
   return view(function* () {
     return h("p", String(yield* n));
   });
+});
+
+// the h form's row signature is the JSX form's (D-055)
+type Is<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+export const HRowSignature = $component(function* () {
+  const [list] = yield* $signal([{ id: 1 }]);
+  return function* () {
+    return For({
+      each: list,
+      children: function* (item, index) {
+        const sig: [Is<typeof item, Path<{ id: number }>>, Is<typeof index, Source<number>>] = [
+          true,
+          true
+        ];
+        void sig;
+        return function* () {
+          return h("li", item.id, index);
+        };
+      }
+    });
+  };
 });

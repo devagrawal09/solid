@@ -527,6 +527,47 @@ export const WrappedPending = $component(function* () {
 const wrappedPendingView: View<true, never> = WrappedPending();
 void wrappedPendingView;
 
+// --- a row receives item: Source<T> (a path) and index: Source<number> (D-055) -----------------
+type Is<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+export const RowSignature = $component(function* () {
+  const [list] = yield* $signal([{ id: 1, text: "a" }]);
+  return function* () {
+    return (
+      <ul>
+        <For each={yield* list}>
+          {function* (item, index) {
+            const sig: [
+              Is<typeof item, Path<{ id: number; text: string }>>,
+              Is<typeof index, Source<number>>
+            ] = [true, true];
+            void sig;
+            // both are sources: read with yield*, never as values
+            // @ts-expect-error an item is not its value
+            const text: string = item.text;
+            void text;
+            return function* () {
+              return (
+                <li>
+                  {yield* index}: {yield* item.text}
+                </li>
+              );
+            };
+          }}
+        </For>
+        <Repeat count={2}>
+          {function* (i) {
+            const sig: Is<typeof i, Source<number>> = true;
+            void sig;
+            return function* () {
+              return <b>{yield* i}</b>;
+            };
+          }}
+        </Repeat>
+      </ul>
+    );
+  };
+});
+
 // --- paths through nullable values and nested sources --------------------------------------------
 export const Nullable = $component(function* (props: TypedProps<{ me: { name: string } | null }>) {
   return function* () {
