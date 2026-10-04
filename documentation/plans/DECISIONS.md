@@ -74,6 +74,9 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 | D-062 | decided | Components are called, not tagged; JSX tags are DOM elements only |
 | D-063 | decided | Pending rows propagate like failing rows; `[UNSETTLED_ROW]` removed |
 | D-064 | decided | `latest` removed (D-048 reversed) |
+| D-065 | decided | Call-form props take a source, a hole or a settled value; no inline read in an argument |
+| D-066 | decided | A component call's `children` is always a generator (lazy view; rows for lists) |
+| D-067 | decided | Tags are DOM elements and foreign Solid components; block components are called (brand check) |
 
 ## Entries
 
@@ -412,6 +415,21 @@ Consequences: F1 (server-component props in event/`ref` positions) disappears �
 **Decided (Dev, 2026-10-04; reverses D-048).** `$event(body, { latest: true })` is removed with its tests and doc mention: too many footguns — the superseded run resolving `undefined` where the type says a result was the first, and the fixes (propagating supersession to waiters, or a `SupersededError` color on every `latest` event) each add a rule. Events are independent runs, full stop; a search box that wants latest-wins reads the input through a `$memo` (which already closes superseded runs) and renders that.
 *Alternatives:* keep `latest` with supersession propagating to waiters; keep it with a typed `SupersededError`.
 *Reasoning:* D-005/D-006 — one event semantics, no corner cases. *Implementation:* Phase 1A follow-up 2 (revert `476f703c` minus its test for independent runs).
+
+### D-065 — Call-form props take a source, a hole or a settled value
+**Decided (Dev, 2026-10-04; D-062 rule 1).** A JSX tag wraps each dynamic attribute in a getter, so the read happens inside the child; a call evaluates its arguments first, in the parent — `Show({ when: (yield* n) > 0 })` would read in the parent's hole and re-create `Show` and its subtree on every change. So a prop value in call form is a `Source`, a zero-arity `function*` hole (D-038 generalised from flow controls to every component prop: `Card({ total: function* () { return (yield* n) * 2; } })`), or a plain settled value; the child reads it with `yield*` like any prop (D-042). A `yield*` inside a call's argument is a lint error: `no-read-in-prop` ("read in a prop: pass the source, or a hole").
+*Alternatives:* a named `$memo` per derived prop in the caller's setup.
+*Reasoning:* D-038 and D-042 made consistent — everything a component is given is reactive, and derived values have one form everywhere.
+
+### D-066 — A component call's `children` is always a generator
+**Decided (Dev, 2026-10-04; D-062 rule 2).** A tag builds its children inside the parent component — after it set its context, or decided to show them; a call would build plain-JSX children eagerly in the caller (`IdentityProvider({ children: <Router/> })` builds the router and its `useIdentity()` consumers before the provider sets its context; `Show({ children: <Panel/> })` builds while hidden). So `children` in call form is always a generator: `children: function* () { return <p>{yield* x}</p>; }` — a lazy view that may contain holes; lists take `children: function* (item, index)` rows (D-055). There is no plain-JSX children form; arrow render callbacks become row generators.
+*Alternatives:* allow plain JSX children when they contain no holes (two forms, and the provider case still builds eagerly).
+*Reasoning:* one form, always lazy — what the tag did implicitly; the verbosity is the cost of call form.
+
+### D-067 — Tags are DOM elements and foreign Solid components; block components are called
+**Decided (Dev, 2026-10-04; D-062 rule 3).** Solid's own components (`Router`, `Portal`, `HydrationScript`, context providers, Solid's `Reveal` — 11 twin sites) return Solid's `JSX.Element` and need Solid-style lazy props, so `yield*` cannot take them. Rule: a JSX tag is for things that are not blocks — DOM elements and foreign (plain-Solid) components; a block component is called. Enforcement: block components already carry a component mark; the JSX namespace rejects *branded block components* as tags (a type error), not every non-intrinsic tag; lint `no-component-tag` (error, autofix tag → call) for block components only. Foreign components have no colors to track, so nothing is lost at their tags.
+*Alternatives:* a typed bridge to call them (`adopt()`, removed by D-047); library wrappers for the few in use.
+*Reasoning:* it states the real boundary — the model vs plain Solid — instead of hiding it behind a bridge or wrappers that grow with every foreign component. D-062 stands as written with these three rules; its migration (116 tags: 65 flow controls/boundaries, ~40 block components, 11 foreign) proceeds.
 
 ## Phase 1A findings (agent report, items 4c–8; verbatim, 2026-10-04)
 
