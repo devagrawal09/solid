@@ -4,8 +4,21 @@ The JSX transform's one rule for [`@solidjs/blocks`](../blocks) (D-003): inside 
 
 This is the strict dialect's transform; the compiler route (`experiment/iterable-signals`) is the ergonomic one.
 
+## Use
+
+```js
+// vite.config.mjs
+import blocks from "@solidjs/vite-plugin-blocks";
+import solid from "@solidjs/vite-plugin";
+
+export default { plugins: [blocks(), solid()] };
+```
+
+`blocks()` runs `enforce: "pre"`, before the JSX compiler. It skips a module whose source has no `function*` without parsing it, and returns `null` (no change) for a module with no hole. Its source map is chained by Vite with the compiler's, so a runtime error maps back to the authored line and column. Options: `blocksModule`, and `filter(file)` (by default `.js`/`.jsx`/`.ts`/`.tsx` and their `m`/`c` forms, outside `node_modules`).
+
 ## Exports
 
+- `blocks` (also the default export): the Vite plugin.
 - `babelPluginBlocks`: the rule as a Babel plugin, run before the JSX transform. Option: `blocksModule`.
 - `transform(code, { filename, blocksModule })`: the rule applied to source text. It returns `{ code, map }`, or `null` when the module has no `yield*` in JSX.
 - `blocksRule(program)`: the rule as one function. It classifies every `yield` of a Babel program that sits in JSX into holes and refusals. `applyBlocksRule` applies it to the AST.

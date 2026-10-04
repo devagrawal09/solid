@@ -1,3 +1,4 @@
+import type { Plugin } from "vite";
 import type { NodePath, PluginObj, types } from "@babel/core";
 import type { SourceMap } from "magic-string";
 
@@ -72,3 +73,14 @@ export declare function transform(code: string, options: TransformOptions): Tran
 
 /** Babel parser plugins for a file name. */
 export declare function parserPlugins(filename: string): string[];
+
+export interface BlocksPluginOptions {
+  /** Where `perform` is imported from (default `"@solidjs/blocks"`). */
+  blocksModule?: string;
+  /** Which files to look at (default: `.js`/`.jsx`/`.ts`/`.tsx` and their `m`/`c` forms, outside `node_modules`). */
+  filter?: (file: string) => boolean;
+}
+
+/** The Vite plugin (`enforce: "pre"`): put it before `solid()`. */
+export declare function blocks(options?: BlocksPluginOptions): Plugin;
+export default blocks;
