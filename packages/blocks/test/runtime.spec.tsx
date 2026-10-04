@@ -1944,6 +1944,42 @@ describe("lazy", () => {
 });
 
 describe("flow controls keep children lazy", () => {
+  it("a hole prop is read in the child, as a source is: a change updates the hole, the child is not re-created (D-065)", () => {
+    let setups = 0;
+    const Total = $component(function* (props: TypedProps<{ n: number }>) {
+      setups++;
+      return view(function* () {
+        return <b>{yield* props.n}</b>;
+      });
+    });
+    let set!: (v: number) => void;
+    const App = $component(function* () {
+      const [n, setN] = yield* $signal(1);
+      set = v => write(() => setN(v));
+      return view(function* () {
+        return (
+          <p>
+            {
+              yield* Total({
+                n: function* () {
+                  return (yield* n) * 2;
+                }
+              })
+            }
+          </p>
+        );
+      });
+    });
+    const root = document.createElement("div");
+    const dispose = render(App as any, root);
+    flush();
+    expect(root.textContent).toBe("2");
+    set(5);
+    flush();
+    expect(root.textContent).toBe("10");
+    expect(setups).toBe(1);
+    dispose();
+  });
   it("a fallback written as a function* is a lazy view: its components set up when it shows (D-066)", () => {
     let setups = 0;
     const Late = $component(function* () {

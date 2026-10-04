@@ -1100,3 +1100,60 @@ export const ReadsConstant = $component(function* () {
 });
 // settled: an element as it is
 export const readsConstantOk = <div>{ReadsConstant()}</div>;
+
+// --- the call form: tags are DOM elements and foreign components; a block component is called,
+// its props are sources, holes or values, its children a generator (D-065, D-066, D-067) --------
+const Total = $component(function* (props: TypedProps<{ n: number; label: string }>) {
+  return view(function* () {
+    return (
+      <p>
+        {yield* props.label}: {yield* props.n}
+      </p>
+    );
+  });
+});
+const count = constant(2);
+// a value, a source, a hole: each is a prop
+export const totalValue: View<false, never> = Total({ n: 1, label: "n" });
+export const totalSource: View<false, never> = Total({ n: count, label: "n" });
+export const totalHole = Total({
+  n: function* () {
+    return (yield* count) * 2;
+  },
+  label: "twice"
+});
+export const totalHoleBad = Total({
+  // @ts-expect-error a hole returns the prop's type
+  n: function* () {
+    return "two";
+  },
+  label: "n"
+});
+// @ts-expect-error a block component is never a tag, flow controls included (D-067)
+export const showTag = <Show when={true}>{<b />}</Show>;
+// a foreign (plain-Solid) component stays a tag
+const Foreign = (p: { title: string; children?: Element }) => (
+  <section title={p.title}>{p.children}</section>
+);
+export const foreignTag = (
+  <Foreign title="t">
+    <b />
+  </Foreign>
+);
+// children are a lazy view (D-066): its holes are its own, its colors the call's
+export const lazyChildren: View<true, never> = Show({
+  when: true,
+  children: function* () {
+    return <>{yield* Pending({ id: "1" })}</>;
+  }
+});
+// a fallback may be a lazy view too
+export const lazyFallback: View<true, never> = Show({
+  when: count,
+  fallback: function* () {
+    return <>{yield* Pending({ id: "2" })}</>;
+  },
+  children: function* () {
+    return <b />;
+  }
+});
