@@ -11,7 +11,6 @@
     "paths": {
       "@solidjs/blocks": ["./src/index.ts"],
       "@solidjs/blocks/h": ["./src/h.ts"],
-      "@solidjs/blocks/html": ["./src/html.ts"],
       "@solidjs/blocks/jsx-runtime": ["./jsx/jsx-runtime.d.ts"]
     }
   },

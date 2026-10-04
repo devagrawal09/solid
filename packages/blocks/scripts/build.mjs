@@ -1,12 +1,12 @@
 // Builds the runtime variants: client / server × production / development,
-// plus the `h` and `html` entries (which import the runtime through the
+// plus the `h` entry (which imports the runtime through the
 // package's own name, so an app holds one copy of the runtime state).
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const external = ["solid-js", "@solidjs/web", "@solidjs/h", "@solidjs/html", "@solidjs/blocks"];
+const external = ["solid-js", "@solidjs/web", "@solidjs/h", "@solidjs/blocks"];
 
 const variants = [
   { entry: "src/index.ts", out: "dist/blocks.js", dev: false, server: false },
@@ -15,8 +15,6 @@ const variants = [
   { entry: "src/index.ts", out: "dist/server.dev.js", dev: true, server: true },
   { entry: "src/h.ts", out: "dist/h.js", dev: false, server: false },
   { entry: "src/h.ts", out: "dist/h.dev.js", dev: true, server: false },
-  { entry: "src/html.ts", out: "dist/html.js", dev: false, server: false },
-  { entry: "src/html.ts", out: "dist/html.dev.js", dev: true, server: false },
   { entry: "src/jsx-runtime.ts", out: "dist/jsx-runtime.js", dev: false, server: false }
 ];
 

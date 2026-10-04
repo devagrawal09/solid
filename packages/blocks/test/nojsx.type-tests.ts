@@ -1,5 +1,5 @@
 /**
- * The strict rules, no-JSX flavor (`h`, `html`) — checked by `tsc`, never
+ * The strict rules, no-JSX flavor (`h`) — checked by `tsc`, never
  * executed.
  */
 import {
@@ -15,7 +15,6 @@ import {
   type Source
 } from "@solidjs/blocks";
 import { h } from "@solidjs/blocks/h";
-import { html } from "@solidjs/blocks/html";
 
 declare const root: HTMLElement;
 declare function fetchUser(): Promise<{ name: string }>;
@@ -56,8 +55,6 @@ export const badValue = h("a", { href: 5 });
 export const thunkChild = h("p", () => 1);
 // @ts-expect-error a plain thunk attribute
 export const thunkAttr = h("p", { title: () => "x" });
-// @ts-expect-error a plain thunk hole in html
-export const thunkHtml = html`<p>${() => 1}</p>`;
 
 // a view does not read (D-032): a no-JSX view yields nothing
 // @ts-expect-error [HVIEW_READ]
@@ -85,21 +82,10 @@ export const Pending = $component(function* () {
     });
   };
 });
-export const PendingHtml = $component(function* () {
-  const user = pendingUser;
-  const name = yield* $memo(function* () {
-    return (yield* user).name;
-  });
-  return function* () {
-    return html`<p>${name}</p>`;
-  };
-});
 const pendingOut: HView<true, never> = h("p", Pending());
 void pendingOut;
 // @ts-expect-error the root would suspend
 render(() => Pending(), root);
-// @ts-expect-error the root would suspend
-render(() => PendingHtml(), root);
 render(() => Loading({ children: Pending() }), root);
 export const handled = h("div", Loading({ fallback: "…", children: Pending() }));
 const handledOut: HView<false, never> = handled;

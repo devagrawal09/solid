@@ -33,7 +33,7 @@ export {
   until,
   type BlockContext
 } from "./runtime.js";
-/** @internal shared with the `h` / `html` entries (one runtime per app). */
+/** @internal shared with the `h` entry (one runtime per app). */
 export {
   READ,
   VIEW_MARK,

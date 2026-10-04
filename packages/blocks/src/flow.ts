@@ -50,7 +50,7 @@ type FlowOutput<P extends boolean, E, C> = HView<
 /** A no-JSX hole as a flow control's source prop: a bare zero-arity `function*`. */
 type GeneratorHole<Y, T> = () => Generator<Y, T, any>;
 
-/** Flow controls are components (`<${For} …>` in `html`, `h(For, …)`). */
+/** Flow controls are components (`h(For, …)`). */
 type Branded = { readonly [COMPONENT]: true };
 
 /** Forward every prop as a getter, replacing `children` (and `fallback` when given). */

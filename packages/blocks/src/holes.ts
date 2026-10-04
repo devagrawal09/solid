@@ -1,6 +1,6 @@
 /*
  * Shared by the no-JSX renderers: what a hole may hold, and how a value is
- * handed to Solid's `h` / `html`.
+ * handed to Solid's `h`.
  *
  * A hole is a source (`$signal` / `$memo` accessor, store or prop path, a
  * `readStore` selection), a bare zero-arity `function*` (a hole of its own),
@@ -22,7 +22,7 @@ import type {
 } from "./types.js";
 
 /**
- * A child `h` / `html` accept: a static node or value, a source, a bare
+ * A child `h` accepts: a static node or value, a source, a bare
  * `function*` hole, a child view, or an array of them. Not a plain
  * object (that is an attributes object) and not a plain thunk (a hidden read).
  */
@@ -39,23 +39,6 @@ export type Hole =
   | View<boolean, any>
   | readonly Hole[]
   | ((...args: any[]) => Generator<any, any, any>);
-
-/**
- * A component `html` accepts in a tag position (`<${For} …>`): a
- * `$component` or one of this library's flow controls. Other components go
- * through `html.define({ … })`.
- */
-export type ComponentHole = { readonly [COMPONENT]: true };
-
-/**
- * A value in an `html` template: a hole, an `$event` handler, a component,
- * or a static attribute value (a class / style object). Still no plain thunk.
- */
-export type HtmlValue =
-  | Hole
-  | EventHandler<any, any>
-  | ComponentHole
-  | { readonly [key: string]: unknown; readonly call?: never; readonly apply?: never };
 
 export type OpsOfHole<V> = V extends { readonly [COMPONENT]: true } | EventHandler<any, any>
   ? never

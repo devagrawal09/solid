@@ -22,7 +22,6 @@ export default defineConfig({
     alias: [
       { find: /^@solidjs\/blocks$/, replacement: resolve(src, "index.ts") },
       { find: /^@solidjs\/blocks\/h$/, replacement: resolve(src, "h.ts") },
-      { find: /^@solidjs\/blocks\/html$/, replacement: resolve(src, "html.ts") },
       { find: /^@solidjs\/blocks\/jsx-runtime$/, replacement: resolve(src, "jsx-runtime.ts") },
       // @solidjs/h's jsx-runtime imports its package by name
       { find: /^@solidjs\/h$/, replacement: resolve(import.meta.dirname, "../h/dist/h.js") }

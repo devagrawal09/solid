@@ -26,7 +26,7 @@ export declare const SOURCE: unique symbol;
 export declare const VIEW: unique symbol;
 /** Phantom brand of typed props (carries the declared props type). */
 export declare const PROPS: unique symbol;
-/** Phantom brand of no-JSX (`h` / `html`) output. */
+/** Phantom brand of no-JSX (`h`) output. */
 export declare const HVIEW: unique symbol;
 /** Phantom brand of `$event` handlers (a plain function is not one). */
 export declare const EVENT: unique symbol;
@@ -146,7 +146,7 @@ export type EventOp =
   | Wait
   | EventCallOp<boolean, boolean, any>
   | Raise<any>;
-/** Operations a no-JSX hole (a bare `function*` given to `h` / `html`) may perform: reads. */
+/** Operations a no-JSX hole (a bare `function*` given to `h`) may perform: reads. */
 export type HoleOp = Read<boolean, any> | Raise<any>;
 
 // --- folding a yield union ---------------------------------------------------------
@@ -351,7 +351,7 @@ export type ViewFails<VY, R> = FailsOf<VY | HOps<R>>;
 type HOps<R> = R extends HView<infer P, infer E> ? ChildView<P, E> : never;
 
 /**
- * Output of the no-JSX renderers (`h`, `html`): its pending / failures are
+ * Output of the no-JSX renderer (`h`): its pending / failures are
  * the union of its holes'.
  */
 export interface HView<P extends boolean = boolean, E = unknown> {

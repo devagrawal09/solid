@@ -3,7 +3,7 @@
  * that may still be pending or fail is not, until a `Loading` / `Errored`
  * handles it (or `yield*` moves it into the enclosing view). Plain thunks
  * are not elements either (a thunk in a hole is a hidden read): a hole is a
- * `yield*` in JSX, or a source / a bare `function*` in `h` / `html`. A bare
+ * `yield*` in JSX, or a source / a bare `function*` in `h`. A bare
  * `function*` is not a JSX child: the JSX transform hands a child to the
  * web renderer as it is, and the renderer does not drive generators; in
  * JSX the hole is the `yield*`.

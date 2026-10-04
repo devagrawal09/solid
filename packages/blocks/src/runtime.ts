@@ -206,7 +206,7 @@ function checkRead(inJsx: boolean): void {
   if (!inJsx && view !== null && host === VIEW && getObserver() === null)
     throw devError(
       "READ_IN_VIEW",
-      `<${view}>: read outside a JSX position. A view has no body: read in a hole ({yield* …} in JSX, a bare function* in h / html), branch with <Show> / <Match>, derive with a $memo in the setup.`
+      `<${view}>: read outside a JSX position. A view has no body: read in a hole ({yield* …} in JSX, a bare function* in h), branch with <Show> / <Match>, derive with a $memo in the setup.`
     );
   if (state.resumed)
     throw devError(
@@ -1134,7 +1134,7 @@ function runHole(body: () => Generator<unknown, unknown, unknown>): unknown {
 
 /**
  * @internal A bare zero-arity `function*` in a hole position (a child or an
- * attribute value of `h` / `html`, a flow control's source prop): one
+ * attribute value of `h`, a flow control's source prop): one
  * computation's read, not memoized, readable as a source.
  */
 export function holeOf(body: () => Generator<unknown, unknown, unknown>): any {
@@ -1217,9 +1217,9 @@ export type ViewYield<V> = V extends () => Generator<infer Y, any, any> ? Y : ne
 export type ViewReturn<V> = V extends () => Generator<any, infer R, any> ? R : never;
 
 /**
- * A no-JSX view (one returning `h` / `html` output) has no body (D-032): it
+ * A no-JSX view (one returning `h` output) has no body (D-032): it
  * yields nothing — every read is a hole (a source, or a bare `function*`
- * given to `h` / `html`), a child is `h(Child, props)`. Its pending and
+ * given to `h`), a child is `h(Child, props)`. Its pending and
  * failures are its output's. Violations surface as a missing argument naming
  * the rule. (A JSX view cannot be held to this by its type: TypeScript sees a
  * `yield*` in a JSX position — a hole, after the transform — as the view's
@@ -1230,7 +1230,7 @@ export type NoJsxViewRule<VY, R> = [R] extends [HView<any, any>]
   ? [VY] extends [never]
     ? []
     : [
-        error: "[HVIEW_READ] a no-JSX view does not read: pass the source, or a bare function* hole, to h / html"
+        error: "[HVIEW_READ] a no-JSX view does not read: pass the source, or a bare function* hole, to h"
       ]
   : [];
 
