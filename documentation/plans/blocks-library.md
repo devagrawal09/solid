@@ -9,7 +9,7 @@ Generator blocks — `$component(function* (props) { setup; return function* () 
 | Package                                      | What                                                                                                                                                         | Kind                       |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------- |
 | `@solidjs/blocks`                            | runtime interpreter, strict types, flow controls, render / hydrate, a settled-only JSX namespace, the no-JSX `h` wrapper, an automatic JSX runtime | userland (public API only) |
-| `@solidjs/compiler`, `@solidjs/babel-plugin` | **one syntactic rule** in both JSX transforms (`yield*` inside JSX → `perform(…)`) | compiler |
+| `@solidjs/vite-plugin-blocks`                | **one syntactic rule**, run before Solid's JSX compiler (`yield*` inside JSX → `perform(…)`), as a Vite plugin, a Babel plugin and a `transform()`; also the library `lazy`'s module URL (D-003, D-043, D-047) | transform |
 | `@solidjs/eslint-plugin-blocks`              | thirteen rules for what TypeScript cannot express | lint |
 
 ### Surface
@@ -76,7 +76,7 @@ The flavors share everything above the DOM. A block component is called in both,
 | A row's body is a setup (D-030): it creates (a `$memo` is the row's) and returns its view; its view may fail or pend (D-059, D-063: its colors join the flow control's output — `{yield* For({ … })}` carries them into the holding view, a `Loading` / `Errored` above the list takes them) | `RowBlock` / `RowCheck` (`[ROW_SETUP_OP]`, `[ROW_VIEW_OP]`; `[UNSETTLED_ROW]` removed); row overloads return `View<RowPending<VY, R>, RowFails<VY, R>>` | `ROW_VIEW`, `READ_IN_SETUP` | — | type-tests "a pending row colors the holding view too (D-063)", "a row's setup does not read", "a row need not be settled: its failures join the view holding the list (D-059)"; runtime "a row memo is created once per item", "a row's body returns its view, as a setup does", "a row's raise reaches the Errored above the list, or re-throws with none (D-059)", "a pending row reaches the Loading above the list (D-063)", "an in-place item change updates the row without re-creating it (D-055)"; type-tests "a row receives item: Source<T> (a path) and index: Source<number> (D-055)" (JSX and `h`) |
 | Rows and holes are bare `function*`s; `$` / `$scope` are removed (D-013)                                        | not exported                                                                   | —                                                  | `no-dollar-block` (autofix)                      | lint tests; type-tests "a bare function* is not a JSX child"; nojsx "a bare function* is a hole: a child, an attribute value, a flow control's source"                                                                                |
 | A prop's colors are declared; a call passes only what the declaration admits (D-023, D-024, D-029, D-068; §6) | `Props<{ … }>` maps a bare type to `Read<false, never>` and `Source<T, E, P>` to `Read<P, E>`; `PropsInput` refuses a pending or failing value for a settled prop (`[SETTLED_PROP]`); `PropsCheck` (`[FAILURE_KIND]`) | — | — | type-tests "declared prop colors" (a bare prop's reads, the four forms, acceptance and refusal, a pending hole does not pass a settled prop, two error classes of one shape, `[FAILURE_KIND]` declarations, generic pass-through keeps the caller's colors, forwarding into a bare prop is an error, a declared failure needs no boundary at any position), "a declared source's reads are pending and may fail"; nojsx "declared prop colors at h(Comp, props)" (and `children` in the props object) |
-| `yield*` in JSX only where the transform makes a hole                                                           | —                                                                              | —                                                  | `yield-in-jsx-hole` (= the transform's refusals) | compiler + Babel + lint all run `tests/blocks-rule-fixtures.json`                                                                                                                                                                    |
+| `yield*` in JSX only where the transform makes a hole                                                           | —                                                                              | —                                                  | `yield-in-jsx-hole` (= the transform's refusals) | the plugin and the lint both run `packages/vite-plugin-blocks/test/fixtures/rule.json`                                                                                                                                                                    |
 | `$cleanup` in a setup or an effect; `yield* Ctx` in a setup                                                     | op types per host                                                              | `CLEANUP_OUTSIDE_OWNER`, `CONTEXT_OUTSIDE_SETUP`   | —                                                | runtime "operations in the wrong host"                                                                                                                                                                                               |
 | JSX only in a view, a hole or a row's view; a setup never creates elements (D-041) | — | `JSX_IN_SETUP` (a hole performed while a setup runs) | `jsx-only-in-view` | runtime "JSX in a setup is JSX_IN_SETUP (D-041)"; lint tests |
 | A setup returns its view; a plain `yield` is not an operation; paths are read-only                              | setup return type; `Yieldable` ops                                             | `COMPONENT_VIEW`, `NOT_AN_OPERATION`, `PATH_WRITE` | —                                                | runtime "operations in the wrong host", "a setup returns its view; a path is not writable"                                                                                                                                           |
@@ -108,7 +108,40 @@ Every twin lints `src` (the rendering twin `shared/src`) with the recommended se
 
 ## 5. The JSX transform's rule
 
-One syntactic rule, in the native compiler (`packages/compiler/src/blocks_rule.rs`) and `@solidjs/babel-plugin`: inside a JSX expression container or attribute value, `yield* e` becomes `perform(e)`, imported from the configured `blocksModule` (default `@solidjs/blocks`). The read becomes its own hole, and the view generator runs once. Refused (a compile error with a code): an event prop (`BLOCKS_YIELD_IN_EVENT`), `ref` (`BLOCKS_YIELD_IN_REF`), a spread attribute (`BLOCKS_YIELD_IN_SPREAD`), a spread child (`BLOCKS_YIELD_IN_SPREAD_CHILD`), and a plain `yield` (`BLOCKS_PLAIN_YIELD_IN_JSX`). The list is `packages/compiler/tests/blocks-rule-fixtures.json` (versioned), shared by the Rust tests, the Babel tests and the lint rule's parity test.
+One syntactic rule, in `@solidjs/vite-plugin-blocks` (D-003; `vite-plugin-solid-blocks` at extraction, D-011). It runs before Solid's JSX compiler, whose packages carry nothing of blocks since D-043.
+
+**The rule.** Inside a JSX expression container or attribute value, `yield* e` becomes `perform(e)`, imported from `blocksModule` (default `@solidjs/blocks`). Each read becomes its own hole: the JSX compiler sees a call and treats it as dynamic, and the view generator, with no `yield` left, runs once.
+
+- The rule is purely syntactic. It applies to the JSX of DOM elements and of foreign Solid components (D-067).
+- A block-component call written as a hole, `{yield* Card({ todo })}` (D-062), is one hole: `perform(Card({ todo }))`, with its argument left as written. A read inside that argument is a lint error, `no-read-in-prop` (D-065).
+- A `yield*` inside a function nested in the JSX belongs to that function, not to this JSX. A row or lazy view's own JSX has its own holes.
+- The rule does not know hosts. A hole performed while a setup is the host is the runtime's `[JSX_IN_SETUP]` (D-041).
+
+**Refused**, as a compile error with a code:
+
+| Position | Code |
+| --- | --- |
+| an event prop | `BLOCKS_YIELD_IN_EVENT` |
+| `ref` | `BLOCKS_YIELD_IN_REF` |
+| a spread attribute | `BLOCKS_YIELD_IN_SPREAD` |
+| a spread child | `BLOCKS_YIELD_IN_SPREAD_CHILD` |
+| a plain `yield` | `BLOCKS_PLAIN_YIELD_IN_JSX` |
+
+The message lists every refusal as `[CODE] message (line:column)`.
+
+**Where it runs.**
+
+- `blocks()` is the Vite plugin: `plugins: [blocks(), solid()]`, with `enforce: "pre"`. It skips a module whose source has no `function*` without parsing it.
+- `babelPluginBlocks` is the same rule for a Babel pipeline.
+- `transform(code, { filename })` is the rule on text. It edits only the rewritten spans, so TypeScript and formatting are kept and the source map is exact. It returns `null` when nothing changes, so a module with no hole comes back byte-identical.
+- The `perform` import goes just before the module's first statement, on that statement's line, so no line moves (D-031 note).
+- Every JSX twin's Vite and Vitest configs run `blocks()` before `solid()`, and so do `packages/blocks`' own test configs and the runtime-cost harness. The `h` twins have no JSX, and the plugin leaves each of their files alone (tested).
+
+**The oracle.** Until D-043 the rule also lived in the fork's native compiler (`blocks_rule.rs`) and `@solidjs/babel-plugin`. The plugin was lifted from the Babel copy and checked against the Rust rule: compiling the plugin's output reproduced the Rust rule's compiled output byte for byte. That held for the rule's 15 cases (5 refusal codes) and one file per JSX twin, in `dom` and `ssr` modes, and for every JSX file of the six JSX twins, with nothing normalized. Refusals matched the compiler's message, position included.
+
+Those outputs are checked in under `packages/vite-plugin-blocks/test/fixtures/` and are the oracle now. They were regenerated once, when the import moved onto the first statement's line. The ESLint rule `yield-in-jsx-hole` reports the same list and is tested against the same `rule.json`.
+
+**`lazy` module URLs (D-047).** `@solidjs/vite-plugin` writes the `__SOLID_LAZY_MODULE__` placeholder only for `solid-js`'s `lazy`. The plugin writes the same third argument for `lazy(() => import("…"))` from the blocks module, and `solid()` resolves it. So a code-split block component carries its `moduleUrl` (rendering-blocks' pages, tested on the client and the server).
 
 ## 6. Declared colors
 
@@ -230,7 +263,7 @@ The pitfalls the experiment branch's ports hit (a `$component` view under `<For>
 
 ## 10. Changesets
 
-`.changeset/blocks-library.md` (`@solidjs/blocks`, `@solidjs/eslint-plugin-blocks`: new packages; `@solidjs/blocks-linker` was dropped from it when the linker was removed before release) and `.changeset/compiler-blocks-rule.md` (`@solidjs/compiler`, `@solidjs/babel-plugin`: the JSX transform's block rule; `summarizeBlocks`, never released, was removed from it in Phase 1B).
+`.changeset/blocks-library.md` (`@solidjs/blocks`, `@solidjs/eslint-plugin-blocks`: new packages; `@solidjs/blocks-linker` was dropped from it when the linker was removed before release) and `.changeset/vite-plugin-blocks.md` (`@solidjs/vite-plugin-blocks`: new package, the JSX transform's block rule and the `lazy` module-URL pass). `.changeset/compiler-blocks-rule.md`, which announced the rule in `@solidjs/compiler` and `@solidjs/babel-plugin`, was deleted with the rule (D-043): neither package changes from upstream, and nothing of it was released.
 
 `.changeset/blocks-typed-failures-v2.md` (`@solidjs/blocks`, `@solidjs/eslint-plugin-blocks`: minor) documents commits 57d05dda and dfe692cf: `attempt(fn, onError)`, `Errored catch`, `$event` as an action returning an `EventCall`, the new `$optimistic` / `$optimisticStore` / `$projection` / `$dynamic` / `refresh` / `start` / `until`, the removal of `read` / `paths` / `accessor` / `$flush`, and the `no-unyielded-write` and `no-foreign-reactive` lint rules. (Its `@solidjs/compiler` patch, which was for `summarizeBlocks` only, was removed in Phase 1B.)
 

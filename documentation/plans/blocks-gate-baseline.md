@@ -4,21 +4,24 @@ The gate is `scripts/blocks-gate.mjs` (`pnpm blocks:gate`). This file records th
 reference run used as the baseline; the machine-readable copy is
 [`blocks-gate-baseline.json`](./blocks-gate-baseline.json).
 
-**Reference summary: `30 pass / 0 fail / 0 skip in 48s`** (30 steps, `--jobs 3`,
-HEAD `45cdfdf9` with Phase 1B commit 4's `summarizeBlocks` removal applied and
-`compiler.node` rebuilt from it, every step run with `TZ=UTC`).
+**Reference summary: `30 pass / 0 fail / 0 skip in 26s`** (30 steps, `--jobs 3`, Phase 2
+commit 4 `013d20ce` (D-043) with commit 5's gate change applied and committed
+together with this baseline, `compiler.node` rebuilt from the pristine upstream
+compiler, every step run with `TZ=UTC`).
 
-**No red step remains.** Phase 1B removed the type linker and its compiler half
-(D-023):
+**Phase 2 changed the step list** (still 30 steps):
 
-- **Commit 3** dropped each twin's `link:check` step and `pkg:blocks-linker:test`,
-  taking the gate from 39 to 30 steps: 3 per twin for the 8 twins, plus 6
-  package / repo steps. The `pkg:blocks-linker:test` red went with its package.
-- **Commit 4** removed `summarizeBlocks` from `@solidjs/compiler` and the test
-  behind the `pkg:compiler:test` red, so that step now passes: 5,986 tests, the
-  former 5,990 less the 4 in `blocks-summary.test.js`.
-
-`repo:oxlint` passes.
+- **Added:** `pkg:vite-plugin-blocks:test` and `pkg:vite-plugin-blocks:typecheck`
+  (Phase 2 commit 1). `packages/vite-plugin-blocks` joined the prettier and oxlint
+  directories.
+- **Dropped:** `pkg:babel-plugin:test` and `pkg:compiler:test` (Phase 2 commit 5).
+  Since D-043 both packages are byte-identical to upstream `644eaf3b` and carry
+  nothing of blocks. Every twin and `pkg:blocks:test` compile through their built
+  artifacts, so a broken build still turns the gate red.
+- **Comparison rule:** a step the baseline does not have must PASS to be green.
+  Before this, a FAIL on a step missing from the baseline was listed under "not in
+  baseline" and the run still printed GREEN; it happened once, as a flake of the
+  new `pkg:vite-plugin-blocks:test`.
 
 ## What "green" means
 
@@ -30,8 +33,8 @@ pnpm exec turbo run build --filter=@solidjs/blocks --force   # the gate never bu
 node scripts/blocks-gate.mjs --baseline documentation/plans/blocks-gate-baseline.json
 ```
 
-With `--baseline` the gate prints `new reds` (PASS → FAIL; any of these makes it
-red), `fixed` (FAIL → PASS) and `unchanged`, and exits 0 iff there are no new reds.
+With `--baseline` the gate prints `new reds` (PASS → FAIL, or FAIL on a step the
+baseline does not have; any of these makes it red), `fixed` (FAIL → PASS) and `unchanged`, and exits 0 iff there are no new reds.
 A step that is `SKIP` on a later
 run (e.g. a missing build artifact) and wasn't `SKIP` here doesn't count as a new
 red under this rule, so look at it by hand. When a red is fixed (or its package is
@@ -52,36 +55,36 @@ The JSON records the host zone (`environment.hostTZ`) and the overrides
 
 | Step | Result | Duration |
 | --- | --- | --- |
-| `twin:effect-blocks:test` | PASS | 1.6 s |
+| `twin:effect-blocks:test` | PASS | 1.9 s |
 | `twin:effect-blocks:typecheck` | PASS | 1.3 s |
-| `twin:effect-blocks:lint` | PASS | 1.7 s |
-| `twin:hackernews-spa-blocks:test` | PASS | 2.0 s |
+| `twin:effect-blocks:lint` | PASS | 1.6 s |
+| `twin:hackernews-spa-blocks:test` | PASS | 2.2 s |
 | `twin:hackernews-spa-blocks:typecheck` | PASS | 1.4 s |
-| `twin:hackernews-spa-blocks:lint` | PASS | 1.7 s |
-| `twin:rendering-blocks:test` | PASS | 3.3 s |
-| `twin:rendering-blocks:typecheck` | PASS | 1.4 s |
+| `twin:hackernews-spa-blocks:lint` | PASS | 1.6 s |
+| `twin:rendering-blocks:test` | PASS | 3.4 s |
+| `twin:rendering-blocks:typecheck` | PASS | 1.3 s |
 | `twin:rendering-blocks:lint` | PASS | 1.6 s |
-| `twin:room-blocks:test` | PASS | 1.4 s |
+| `twin:room-blocks:test` | PASS | 1.5 s |
 | `twin:room-blocks:typecheck` | PASS | 1.4 s |
 | `twin:room-blocks:lint` | PASS | 1.7 s |
-| `twin:sierpinski-blocks:test` | PASS | 10.9 s |
+| `twin:sierpinski-blocks:test` | PASS | 11.1 s |
 | `twin:sierpinski-blocks:typecheck` | PASS | 1.0 s |
 | `twin:sierpinski-blocks:lint` | PASS | 1.2 s |
-| `twin:sierpinski-blocks-h:test` | PASS | 10.9 s |
-| `twin:sierpinski-blocks-h:typecheck` | PASS | 1.7 s |
+| `twin:sierpinski-blocks-h:test` | PASS | 11.0 s |
+| `twin:sierpinski-blocks-h:typecheck` | PASS | 1.6 s |
 | `twin:sierpinski-blocks-h:lint` | PASS | 1.8 s |
-| `twin:todos-blocks:test` | PASS | 1.3 s |
+| `twin:todos-blocks:test` | PASS | 1.4 s |
 | `twin:todos-blocks:typecheck` | PASS | 1.0 s |
 | `twin:todos-blocks:lint` | PASS | 1.3 s |
 | `twin:todos-blocks-h:test` | PASS | 1.3 s |
 | `twin:todos-blocks-h:typecheck` | PASS | 1.8 s |
-| `twin:todos-blocks-h:lint` | PASS | 2.0 s |
-| `pkg:blocks:test` | PASS | 7.4 s |
+| `twin:todos-blocks-h:lint` | PASS | 2.1 s |
+| `pkg:blocks:test` | PASS | 7.5 s |
 | `pkg:eslint-plugin-blocks:test` | PASS | 1.4 s |
-| `pkg:babel-plugin:test` | PASS | 4.5 s |
-| `pkg:compiler:test` | PASS | 27.5 s |
+| `pkg:vite-plugin-blocks:test` | PASS | 1.6 s |
+| `pkg:vite-plugin-blocks:typecheck` | PASS | 1.2 s |
 | `repo:prettier` | PASS | 1.5 s |
-| `repo:oxlint` | PASS | 0.1 s |
+| `repo:oxlint` | PASS | 0.0 s |
 
 Durations are per step, measured with 3 steps running at once, so they add up to
 more than the wall time.
@@ -91,17 +94,20 @@ more than the wall time.
 - **What it runs**:
   ```sh
   node_modules/.bin/oxlint packages/blocks packages/eslint-plugin-blocks \
-    examples/<8 twins> \
+    packages/vite-plugin-blocks examples/<8 twins> \
     --ignore-pattern '**/dist/**' --ignore-pattern '**/node_modules/**'
   ```
   It runs from the repo root, and the binary is resolved there only, never from
   `PATH`. The config is the root `.oxlintrc.json`, picked up automatically. It
   turns `require-yield` off for `examples/*-blocks/**`, `examples/*-blocks-h/**`,
-  `examples/blocks-harness/**` and `packages/blocks/**`. With the linker's
-  fixtures gone, no `require-yield` warning remains.
-- **Result: PASS** (exit 0). It reports **17 warnings and 0 errors**. oxlint fails
+  `examples/blocks-harness/**`, `packages/blocks/**` and
+  `packages/vite-plugin-blocks/test/fixtures/**` (the plugin's twin snapshots). No
+  `require-yield` warning remains.
+- **Result: PASS** (exit 0). It reports **19 warnings and 0 errors**. oxlint fails
   only on errors (the gate doesn't pass `--deny-warnings`). Warnings by rule:
-  - 13 × `eslint(no-unused-vars)`:
+  - 14 × `eslint(no-unused-vars)` (the list below is the 1B count; Phase 2 adds
+    the 2 in `todos-blocks/src/app.tsx`'s snapshot under
+    `packages/vite-plugin-blocks/test/fixtures/twins/`):
     - `packages/blocks/src/runtime.ts` (5)
     - `examples/room-blocks/tests/app.test.tsx` (2)
     - `examples/room-blocks/tests/browser.steps.mjs` (2)
@@ -124,8 +130,7 @@ None. The last two pre-existing reds are gone (see "Earlier runs").
 
 ## Skips
 
-None in this run. `pkg:babel-plugin:test` and `pkg:compiler:test` SKIP only when
-their built artifact is missing (see below).
+None.
 
 ## Step selection notes
 
@@ -138,28 +143,34 @@ their built artifact is missing (see below).
   none of those scripts. Each twin has three steps: `test`, `typecheck`, `lint`
   (`link:check` went with the linker, D-023), each run as
   `pnpm -C <dir> run <script>`.
-- **`pkg:babel-plugin:test`, `pkg:compiler:test`**: both run
-  `vitest run --maxWorkers=2` in the package rather than the package's `test`
-  script. The babel-plugin `test` script typechecks and then rollup-builds
-  `index.js`. The compiler `test` script runs three `cargo test` passes plus a napi
-  debug build, which takes minutes and builds. The gate must not build, so these
-  steps test the artifacts that are already built (`packages/babel-plugin/index.js`,
-  `packages/compiler/compiler.node`, both gitignored). A step SKIPs with a reason
-  when its artifact is missing. **Caveat:** neither artifact is rebuilt by
-  `turbo run build --filter=@solidjs/blocks`, so after compiler or babel-plugin
-  source changes they can be stale. Rebuild them (`pnpm -C packages/babel-plugin
-  run build`, `pnpm -C packages/compiler run build`) before trusting these two
-  steps.
+- **Packages**: `pkg:blocks:test` (the package's `test` script: dev, prod and server
+  vitest configs, then the type tests), `pkg:eslint-plugin-blocks:test`,
+  `pkg:vite-plugin-blocks:test` and `pkg:vite-plugin-blocks:typecheck`, each as
+  `pnpm -C <dir> run <script>`. Solid's own compilers are not gated since D-043 (see
+  above). The built `packages/compiler/compiler.node` and
+  `packages/babel-plugin/index.js` (both gitignored) are still what the twins compile
+  with, and `turbo run build --filter=@solidjs/blocks` rebuilds neither.
 - **`repo:prettier`**: `prettier --check` with the root `format` glob
   `**/*.[tj]s?(x)` under each scoped directory, plus `scripts/blocks-gate.mjs`.
   `.gitignore` (dist/, node_modules/) is honoured. (`.prettierignore`, which kept
   the linker's `*.gen.d.ts` byte-for-byte, went with the linker.)
-- **`--fast`**: twin `typecheck` + `lint` (16 steps), `pkg:blocks:test` and
-  `repo:prettier`, 18 steps in total. It drops twin `test`, the other package
+- **`--fast`**: twin `typecheck` + `lint` (16 steps), `pkg:blocks:test`,
+  `pkg:vite-plugin-blocks:typecheck` and `repo:prettier`, 19 steps in total. It drops twin `test`, the other package
   suites and oxlint.
 
 ## Earlier runs
 
+- **Phase 2 commits 1–4** (`a6575ff8`, `188a99fb`, `5770f1a5`, `013d20ce`):
+  `32 pass / 0 fail / 0 skip` each, over the 30 baseline steps plus the two
+  `pkg:vite-plugin-blocks` steps. One run on commit 4's tree had
+  `pkg:vite-plugin-blocks:test` FAIL and still printed GREEN, because the step was
+  not in the baseline. It was a race: the plugin's test Vite servers shared a
+  `node_modules/.vite` cache with each other and with a twin's test run. Each test
+  server now has its own `cacheDir`, and the comparison rule above counts such a
+  failure as red.
+- **Phase 1B reference** (HEAD `45cdfdf9` + the `summarizeBlocks` removal):
+  `30 pass / 0 fail / 0 skip in 48s` over 30 steps, `pkg:babel-plugin:test` and
+  `pkg:compiler:test` included (5,986 compiler tests).
 - **Phase 1B commit 3** (HEAD `45fdd477` + the linker removal): `29 pass / 1 fail /
   0 skip in 51s` over 30 steps. The red was `pkg:compiler:test`:
   `__tests__/blocks-summary.test.js > summarizeBlocks > gives each render site's
@@ -194,12 +205,12 @@ their built artifact is missing (see below).
 
 | | |
 | --- | --- |
-| HEAD | `45cdfdf95802169b39f896965a81666957d8ebb6` (branch `bl/colors`), plus the uncommitted `summarizeBlocks` removal, committed together with this baseline |
+| HEAD | `013d20ce` (branch `bl/plugin`, Phase 2 commit 4), plus Phase 2 commit 5's gate change and docs, committed together with this baseline |
 | node | v24.18.0 |
 | pnpm | 11.1.1 |
 | oxlint | 1.86.0 (root devDependency, `node_modules/.bin/oxlint`) |
 | OS | macOS 26.5.2 (darwin arm64) |
 | timezone | host `Asia/Calcutta` (IST, UTC+5:30); every step pinned to `TZ=UTC` |
 | jobs | `--jobs 3` (default) |
-| wall time | 48s (2026-10-04T17:29:32.531Z → 2026-10-04T17:30:20.184Z) |
-| build before gate | `@solidjs/blocks` dist prebuilt by the caller; `babel-plugin/index.js` used as found; `compiler/compiler.node` rebuilt from commit 4's source (release cargo build, 2026-10-04 22:58 IST) |
+| wall time | 26s (2026-10-04T18:22:33.560Z → 2026-10-04T18:22:59.947Z) |
+| build before gate | `@solidjs/blocks` dist prebuilt by the caller (orchestrator, after the last install); `compiler/compiler.node` built from the pristine upstream source with `cargo build --release` (stable 1.99) and copied by hand, 2026-10-04 23:38 IST; `babel-plugin/index.js` rebuilt from the pristine source (rollup; last written 23:42 IST, by the install's `prepare`) |

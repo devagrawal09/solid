@@ -21,8 +21,9 @@
 //   --jobs <n>          steps run concurrently (default 3; vitest steps already
 //                       use 2 workers each, so keep this modest)
 //   --baseline <path>   compare against an earlier --json file. "Green" means no
-//                       step is FAIL that was PASS in the baseline; the exit code
-//                       follows that instead of "any FAIL".
+//                       step is FAIL that was PASS in the baseline, and no step
+//                       the baseline lacks is FAIL; the exit code follows that
+//                       instead of "any FAIL".
 //   --help              print this text
 //
 // Exit code: 0 when green, 1 otherwise (2 on bad arguments).
@@ -163,8 +164,8 @@ function buildSteps(twins) {
       cwd: root,
       ...pnpmRun("packages/eslint-plugin-blocks", "test")
     },
-    // The JSX transform's rule as a standalone plugin (D-003): fixture parity with the
-    // compiler's rule, the Vite plugin, the lazy module-URL pass.
+    // The JSX transform's rule as a standalone plugin (D-003, D-043): fixture parity with
+    // the checked-in outputs, the Vite plugin, the lazy module-URL pass.
     {
       name: "pkg:vite-plugin-blocks:test",
       cwd: root,
@@ -178,30 +179,9 @@ function buildSteps(twins) {
     }
   );
 
-  // Solid's two JSX compilers, which compile every twin after blocks() has run (since D-043
-  // they carry nothing of blocks). Their `test` scripts build first (babel: tsc + rollup;
-  // compiler: cargo test + napi build), which the gate must not do, so these run the vitest
-  // half of the script against the already-built artifact and SKIP when it is absent.
-  const babelArtifact = "packages/babel-plugin/index.js";
-  steps.push({
-    name: "pkg:babel-plugin:test",
-    cwd: root,
-    cmd: "pnpm",
-    args: ["-C", "packages/babel-plugin", "exec", "vitest", "run", "--maxWorkers=2"],
-    skip: existsSync(join(root, babelArtifact))
-      ? null
-      : `${babelArtifact} not built (run \`pnpm -C packages/babel-plugin run build\`)`
-  });
-  const compilerArtifact = "packages/compiler/compiler.node";
-  steps.push({
-    name: "pkg:compiler:test",
-    cwd: root,
-    cmd: "pnpm",
-    args: ["-C", "packages/compiler", "exec", "vitest", "run", "--maxWorkers=2"],
-    skip: existsSync(join(root, compilerArtifact))
-      ? null
-      : `${compilerArtifact} not built (run \`pnpm -C packages/compiler run build\`)`
-  });
+  // Solid's own JSX compilers (@solidjs/babel-plugin, @solidjs/compiler) are not gated
+  // here: since D-043 they are pristine upstream and carry nothing of blocks, and every twin
+  // compiles through the built artifacts, so a broken build reaches the twins' tests.
 
   const dirs = LINT_DIRS(twins);
   steps.push({
@@ -360,8 +340,11 @@ if (opts.baseline) {
   const added = [];
   for (const s of steps) {
     const was = before.get(s.name);
-    if (was === undefined) added.push(s.name);
-    else if (s.status === "FAIL" && was === "PASS") newReds.push(s.name);
+    if (was === undefined) {
+      added.push(s.name);
+      // a step the baseline does not have yet must pass to be green
+      if (s.status === "FAIL") newReds.push(s.name);
+    } else if (s.status === "FAIL" && was === "PASS") newReds.push(s.name);
     else if (s.status === "PASS" && was === "FAIL") fixed.push(s.name);
     else unchanged.push(s.name);
   }

@@ -12,7 +12,7 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 | --- | --- | --- |
 | D-001 | decided | Destination: standalone npm packages, not a PR to solidjs/solid |
 | D-002 | decided | Audience: Dev as designer — a design lab; rigor over polish |
-| D-003 | decided | JSX rule shipped as our own small Babel/Vite plugin |
+| D-003 | implemented (Phase 2) | JSX rule shipped as our own small Babel/Vite plugin (`@solidjs/vite-plugin-blocks`) |
 | D-004 | decided | Solid PUBLIC API only, hard rule |
 | D-005 | decided | One way per thing: remove aliases/overloads |
 | D-006 | decided | Maximal strictness; no `read()`/`accessor()` escape hatches |
@@ -40,7 +40,7 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 | D-028 | decided | A setter called outside a block run throws in dev |
 | D-029 | implemented (1B) | Pass-through props: explicit generics first; `Inherit<T>` only if the count is high (7 components: not yet) |
 | D-030 | decided | A row body is a setup |
-| D-031 | decided | The JSX transform stays (D-003 stands) |
+| D-031 | implemented (Phase 2) | The JSX transform stays (D-003 stands); no compiler off switch was needed |
 | D-032 | decided | A view has no body: reads only in JSX positions, structure only via flow controls |
 | D-033 | decided | No boundary = the failure is re-thrown; D-019 reworded |
 | D-034 | decided | Error types carry a literal `kind`; one `Failure` constraint at every `E` entry point |
@@ -52,11 +52,11 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 | D-040 | implemented (1B) | A declared prop color is permission only |
 | D-041 | decided | JSX only in view / hole / row returns; a setup never creates elements |
 | D-042 | decided | All props are reactive; no static prop kind; `$snapshot` removed; `$untrack` in reactive scopes only |
-| D-043 | decided | After plugin parity, the fork's compiler and babel-plugin go back to pristine upstream |
+| D-043 | implemented (Phase 2) | After plugin parity, the fork's compiler and babel-plugin go back to pristine upstream (empty diff against `644eaf3b`) |
 | D-044 | moot | `$dynamic` removed by D-058 |
 | D-045 | decided | Parity is the only Solid-drift canary; no golden snapshots |
 | D-046 | decided | `html`` ` flavor dropped; `h()` is the no-JSX flavor (D-012 amended) |
-| D-047 | decided | `@solidjs/blocks` exports `lazy` (colored); `adopt()` removed |
+| D-047 | decided; module-URL pass implemented (Phase 2) | `@solidjs/blocks` exports `lazy` (colored); `adopt()` removed |
 | D-048 | reversed | `latest` removed by D-064 |
 | D-049 | decided | `h` flavor: the no-body rule is type-level only (`[HVIEW_READ]`) |
 | D-050 | decided | D-013 amended: in JSX the hole is `yield*` only |
@@ -95,6 +95,12 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 **Decided.** The one JSX-transform rule (`yield* e` inside a JSX expression/attribute in a generator → `perform(e)` from `blocksModule`) ships as a small standalone plugin (`vite-plugin-solid-blocks`, Phase 2) with no dependency on `@solidjs/compiler`/`@solidjs/babel-plugin` carrying it.
 *Alternatives:* keep the rule in the Rust compiler and babel-plugin (where it is at baseline); require the compiler route.
 *Reasoning:* D-001 — a standalone package cannot depend on an unreleased upstream transform. The Rust implementation stays as the oracle for fixture parity. *Status:* decided; implementation is Phase 2.
+
+*Implemented (Phase 2, `bl/plugin`).* The package is `packages/vite-plugin-blocks`, named `@solidjs/vite-plugin-blocks` in the repo and `vite-plugin-solid-blocks` at extraction. Its only runtime dependencies are `@babel/core` and `magic-string`; `@solidjs/blocks` is a peer.
+
+- **The rule** is lifted from the Babel copy into one function, `blocksRule(program)`, which classifies holes and refusals. Two appliers share it: `babelPluginBlocks` rewrites the AST, and `transform(code, { filename, blocksModule })` edits only the rewritten spans, so TypeScript and formatting are kept, the source map is exact, and it returns `null` when nothing changes.
+- **The Vite plugin** `blocks()` runs `enforce: "pre"` before `solid()`. It skips a module with no `function*` unparsed, and its map chains through Vite.
+- **Commits.** `a6575ff8`: package and fixture parity. `188a99fb`: Vite plugin, source-map test, a no-op over the 683 fixture files of Solid's compilers. `5770f1a5`: twins wired, plus D-047's module-URL pass. `013d20ce`: D-043.
 
 ### D-004 — Solid PUBLIC API only
 **Decided, hard rule.** The runtime uses only exported, documented Solid 2 API. Anything the model needs that the public API cannot express is recorded in `blocks-library.md` §7 (Limitations) rather than reached for through internals.
@@ -278,6 +284,14 @@ The count is in D-023's validation. 3 components only forward a colored prop, an
 
 *Note (Phase 2, 2026-10-04): the `perform` import's line.* While the Rust rule is the parity oracle, the plugin's `import { perform as _$perform } from "@solidjs/blocks";` takes its own first line, as the compiler's rule inserts it. On line 1 next to the code, a first-line comment would become the import's trailing comment and the compiled output would no longer be byte-identical to the rule's. The cost: compiler error messages in files with holes are one line late; runtime stack traces map exactly (the source map carries the shift). After D-043 removes the rule, the import is placed without shifting lines and the checked-in outputs are regenerated (they are the oracle then).
 
+*Implemented (Phase 2).* No compiler off switch was added. The plugin runs first, so the Rust rule idled behind it. Commit `5770f1a5` tested that: for every JSX file of the six JSX twins, plugin + compiler output equalled compiler-alone output, byte for byte, in dom, ssr and hydratable modes.
+
+**The import line.** In `013d20ce` the import moved to just before the module's first statement, on that statement's line, after any hashbang, directive prologue and leading comments.
+
+- Prepending it to line 1 was tried first. oxc then printed a first-line `//` comment as the import's trailing comment and dropped it from the compiled output. That loses a first-line pragma such as `/** @jsxImportSource … */`, so it was rejected.
+- The compiled outputs were regenerated against the upstream compiler. 16 of 26 are byte-identical to the Rust rule's. In the other 10, the only change is the import line coming after the leading comments instead of before them; the lines are otherwise the same.
+- The refusal messages in `rule.json` are the Rust rule's, unchanged.
+
 ### D-032 — A view has no body
 **Decided (Dev, 2026-10-04).** A view is `function* () { return <…/>; }`. Every read is a `yield*` directly in a JSX position (a hole); there is no `yield*` outside JSX, no `if`/early `return`, no local computation. All structure comes from flow controls (`<Show>`, `<Match>`, `<For>`, …), which take sources directly. The `h`/`html` flavor follows the same rule with explicit `function*` holes.
 Consequences: (1) the whole-view read concept is deleted — `VY` is always `never`, so `ViewPending<VY, R>` collapses to `PendingOf<HOps<R>>`; a view is never pending or failing on its own, only its holes are; the runtime's whole-view detection (`viewRunning`/`jsxRead`, the machinery `a5faef57` patched) is repurposed into a dev error and otherwise removed (1A item 3 shrinks accordingly). (2) Enforcement at three levels: types (`Read` is not a `ViewOp`; type test "a view does not read"), dev runtime (`[READ_IN_VIEW] <Component>: read outside a JSX position`), lint `no-read-in-view-body` (error, in `recommended`). (3) Doc §3 row "A view reads; it does not create or write" becomes "A view does not read, create, write or branch; its holes read". (4) Twins migrate view-body reads and `if (yield* …)` branches (6 by grep) to holes and flow controls; the lint's first run gives the exact site count, which is recorded here.
@@ -344,6 +358,38 @@ Facts for the executor: the diff of `packages/compiler` + `packages/babel-plugin
 *Alternatives:* keep the Rust rule as the oracle, disabled by default; keep both as supported routes (twins gated under both).
 *Reasoning:* a reference implementation nobody ships drifts; checked-in outputs don't. *Implementation:* Phase 2's last commit (sequenced after the plugin's parity commit); `summarizeBlocks` alone goes earlier, in 1B.
 
+*Implemented (Phase 2, `013d20ce`).* `git diff 644eaf3b -- packages/compiler packages/babel-plugin` is empty.
+
+- **Removed:** 5 added files (`blocks_rule.rs`, `tests/blocks-rule-fixtures.json`, `__tests__/blocks-rule.test.js`, `src/shared/blocks-rule.ts`, `test/blocks-rule.spec.js`). 16 modified files are restored to upstream: the `blocks_module` plumbing, the babel hooks, and the hunks classified below. The `compiler-blocks-rule.md` changeset is deleted.
+
+**Classifying the non-blocks hunks.** The diff touched `src/directives/` (`transform.rs`, `validate.rs`), `src/dom/` (`dynamics.rs`, `element.rs`), `src/refresh/transform.rs` and `src/tsrx/` (`lower.rs`, `semantic.rs`). All of it is formatting:
+
+- Running `rustfmt --edition 2024` (toolchain 1.97.1) over each upstream file reproduces the fork's file byte for byte, for all 7.
+- All of them came in with the blocks-linker commit `8099d934`, a crate-wide format; no other commit touched them.
+- `compiler.rs`'s `pub(crate)` on `parse_program` and `source_type_for_filename` came from the same commit, for `blocks_summary.rs`, and has had no other user since 1B removed that file.
+
+So all of it is blocks residue with no semantic content, and it is restored. Nothing was left in place.
+
+**Validation:**
+
+- `cargo test` passes with stable 1.99 on all three feature sets: default (55), `--no-default-features` (9 + 3), and `--no-default-features --features tsrx` (48 + 3 + 15 + 9).
+- The compiler's vitest suite passes, 41 files and 5,938 tests. babel-plugin: `tsc`, rollup build, 268 tests.
+- clippy and rustfmt were not run: no Rust file was edited, only restored byte for byte.
+- `compiler.node` was built with `cargo build --release` and copied by hand, because the napi CLI hits `spawn EPERM` in the agent sandbox. The orchestrator re-runs the napi build outside it.
+
+**Consumers moved to the plugin:**
+
+- every JSX twin's Vite and Vitest configs (Phase 2 commit 3);
+- `packages/blocks`' three vitest configs and the runtime-cost harness. Both import the plugin by path, because the plugin devDepends on `@solidjs/blocks` and a dependency the other way would make a cycle in the workspace graph;
+- `eslint-plugin-blocks`' refusal-parity test, which now runs the plugin's `transform()` against `rule.json` (devDependency `@solidjs/compiler` → `@solidjs/vite-plugin-blocks`).
+
+**Gate (D-008, D-037 amended in commit 5).**
+
+- `pkg:babel-plugin:test` and `pkg:compiler:test` are dropped: both packages are upstream, and the twins compile through their artifacts.
+- `pkg:vite-plugin-blocks:test` and `:typecheck` are in.
+- A FAIL on a step the baseline lacks now counts as red. It had printed GREEN once, on a cache race since fixed.
+- Baseline: 30 steps, all passing.
+
 ### D-044 — `$dynamic` returns a colored component
 **Decided (Dev, 2026-10-04).** `$dynamic(body)` no longer returns a plain `SolidComponent`. Its body's colors are already known (`Y extends MemoOp` may read pending sources; `SyncReturn<R>` routes failures through `attempt`); the returned component now carries them, and rendering it in a view (`<Reply/>`, or `h(Reply)`) contributes `PendingOf<Y> | FailsOf<Y>` to the enclosing view's hole ops — the same mechanism holes use, so a view rendering a pending `$dynamic` is pending in its type. Runtime is unchanged (Solid's `dynamic()`; pending reaches the nearest boundary per D-040). Facts that settled it: 9 twin files use `$dynamic`, none has a boundary of its own, and the type said settled.
 *Alternatives:* document as a §7 limitation; require a settled body (kills the server-component-call use that motivated `$dynamic`).
@@ -363,6 +409,12 @@ Facts for the executor: the diff of `packages/compiler` + `packages/babel-plugin
 **Decided (Dev, 2026-10-04).** The library exports its own `lazy`, wrapping `solid-js`'s with the same signature (`preload` / `moduleUrl` kept, so the Vite plugin's module-URL pass still works); the result is a block component colored **pending while its chunk loads**, unioned with the inner block component's own declared colors, and usable in call form (`{yield* Home()}`) as before. `adopt()` — "a component this library did not create, usable in call form" — is deleted: all 7 twin uses were `adopt(lazy(…))` (`rendering-blocks`), the general case had none, and its return type dropped the chunk-loading pending (the D-044 gap one level up). Foreign non-lazy components have no bridge; if a twin needs one, that is the finding.
 *Alternatives:* blocks `lazy` plus keep `adopt` as the general bridge; keep `adopt` and overload it on Solid's lazy return type (`T & { preload; moduleUrl? }`).
 *Reasoning:* Dev: if it is for lazy, build it into lazy; D-004 forbids patching Solid's, so the library wraps it; D-005 removes the now-unused bridge. *Implementation:* Phase 1A item 4d with D-044 (type test "a view rendering a loading `lazy` is pending"; the 7 sites change import only).
+
+*Module URL (Phase 2, `5770f1a5`).* The 1A finding below said the module-URL pass belongs in the Phase 2 plugin; it now writes it.
+
+- `@solidjs/vite-plugin-blocks` gives `lazy(() => import("…"))` from the blocks module the annotation `@solidjs/vite-plugin` writes for `solid-js`'s `lazy`: a third argument `"__SOLID_LAZY_MODULE__:<spec>"`, with `void 0` filling an omitted options slot. `solid()` resolves it to the project-relative path.
+- Eligibility mirrors the compiler's `lazy.rs`.
+- Tested through Vite: the fixture's lazy components carry `moduleUrl` on the client and the server, and all 7 of rendering-blocks' lazy calls (six pages in `App.tsx`, `Profile` in `Profile/index.tsx`) resolve to `shared/src/components/<Page>.tsx`.
 
 Migration count (1A item 4c, after D-058 removed the server-component twins, 2026-10-04): 16 `$snapshot` sites in 6 files — effect 1, rendering 3, room 0 (both of its sites were in the removed server-component page), sierpinski 6, sierpinski-h 6, plus 6 in the package's tests. **`$untrack` was needed at 0 twin sites** (used only in the package's tests and type tests): every site had a reactive form — a seed became `$signal<T | undefined>(undefined)` plus a `$memo` falling back to the prop (rendering's router `url`, ErrorStream's `id`); a config read moved into the holes that use it (sierpinski's positions, rendering's `Repeat` index walking `props.rows[yield* i]`); a structure chosen from props became a flow control over a hole (sierpinski's leaf-or-branch: `<Switch>`/`<Match>` in JSX, `Show` in `h`, with the children's positions read in holes or — in `h`, where a component prop takes a value or a source — lazy memos, and the slow-children memo `{ lazy: true }` so a leaf never starts its idle work); a callback prop moved into the event that calls it (effect's `(yield* props.log.clear)()`). By D-042's own rule `$untrack` is therefore a D-005 candidate (kept: the decision adds it, and the rendering router's `url` read is the one place "taken once" would be the faithful spelling — it is read tracked, since the prop never changes).
 
@@ -522,3 +574,4 @@ Rulings on these are D-058+ once taken; the D-013 and D-032 findings from items 
 | 2026-10-04 | `blocks-lib` @ `b03535f6` (container) | Lost unpushed with the container (disk full). Contents: this file, the gate script and baseline, the v2 changeset, HANDOFF.md. |
 | 2026-10-04 | `bl/bootstrap` off `dfe692cf` | Reconstruction of the lost commits from the handoff: `09fa9de5` changeset, `08d7a7d3` gate + baseline, `f26f5ca2` gitlink removal (D-022), then this file (`da03be74`); D-030…D-033 added after the design review. ff'd into `blocks-lib` and pushed to `fork` at `da03be74`; the review commit follows. |
 | 2026-10-04 | `bl/tighten`, `bl/colors` (container) | Provisioned, no commits landed; recreated on demand. |
+| 2026-10-04 | `bl/plugin` off `blocks-lib` + the 1B HANDOFF commit | Phase 2: `a6575ff8` package and fixture parity, `188a99fb` Vite plugin, `5770f1a5` twins and lazy module URLs, `013d20ce` D-043, then the docs and baseline commit. |

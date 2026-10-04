@@ -67,3 +67,15 @@ While the fork's Rust rule was the parity oracle, the import took a line of its 
 - `compiled/`: the JSX compiler's output, in `dom` and `ssr` (hydratable) modes, for each accepted case and each twin file.
 
 They were generated once from the fork's Rust compiler while it carried the rule (D-043), and the plugin's output, compiled, reproduced every one byte for byte. When D-043 removed the rule, the compiled outputs were regenerated with the new import placement. 16 of the 26 are unchanged; in the other 10 the import line comes after the leading comments instead of before them. `test/fixtures/generate.mjs` records this. The tests compile the plugin's output with Solid's compiler and compare byte for byte, with nothing normalized. Refusals must match the Rust rule's message, position included.
+
+## Status
+
+In-repo package, `0.0.0`, unreleased. Its runtime dependencies are `@babel/core` and `magic-string`. Its peers are `@solidjs/blocks` (the module the rewritten code imports `perform` from) and, optionally, `vite`.
+
+The tests also use, as devDependencies:
+
+- `@solidjs/compiler`, to compile the plugin's output for the parity checks;
+- `@solidjs/vite-plugin` and `vite`, for the source-map and `lazy` tests;
+- the twins' sources, for the `h`-twin no-op check and the rendering twin's lazy pages. Those tests skip when `examples/` is absent.
+
+There is no build step: `src/` is plain ESM with JSDoc types, checked by `tsc --checkJs`, and `src/index.d.ts` is written by hand.
