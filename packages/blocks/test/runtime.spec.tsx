@@ -439,6 +439,26 @@ describe("the runtime's other dev errors", () => {
     }
   });
 
+  devIt("a path is a read, not an object: enumerating or changing it is PATH_OBJECT", () => {
+    const p = rowArg({ user: { name: "Ada" }, items: ["a"] }, false) as any;
+    expect(() => ({ ...p.user })).toThrow(/PATH_OBJECT/);
+    expect(() => Object.keys(p)).toThrow(/PATH_OBJECT/);
+    expect(() => Object.getOwnPropertyDescriptor(p, "user")).toThrow(/PATH_OBJECT/);
+    expect(() => Object.defineProperty(p, "x", { value: 1 })).toThrow(/PATH_OBJECT/);
+    expect(() => delete p.user).toThrow(/PATH_OBJECT/);
+  });
+
+  it("a path printed or coerced describes itself", () => {
+    const p = rowArg({ user: { name: "Ada" }, items: ["a"] }, false) as any;
+    expect(String(p.user.name)).toBe("[path .user.name]");
+    expect(`${p.items[0]}`).toBe("[path .items[0]]");
+    expect(JSON.stringify({ v: p.user })).toBe('{"v":"[path .user]"}');
+    expect(String(p)).toBe("[path (root)]");
+    // still a read: yield* gives the value
+    expect([...p.user.name]).toEqual([]);
+    expect(perform(p.user.name)).toBe("Ada");
+  });
+
   devIt("a memo's reads after its first async attempt are errors", async () => {
     const Late = $component(function* () {
       const [n] = yield* $signal(1);

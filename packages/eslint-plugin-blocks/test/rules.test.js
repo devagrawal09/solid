@@ -174,6 +174,41 @@ tester.run("no-dollar-block", rules["no-dollar-block"], {
   ]
 });
 
+tester.run("no-path-object-use", rules["no-path-object-use"], {
+  valid: [
+    // reads compare and spread values
+    component(
+      "const [s] = yield* $store({ a: { b: 1 } }); const m = yield* $memo(function* () { return { ...(yield* s.a) }; }); return function* () { return <p title={JSON.stringify(yield* s.a)}>{(yield* s.a.b) === 1 ? 'one' : ''}</p>; };"
+    ),
+    // passing a path on is fine; so is spreading the props object (not a path)
+    "const C = $component(function* (props) { return function* () { return <Child {...props} user={props.user} />; }; });",
+    // a plain object with the same shape is not a path
+    "const s = { a: 1 }; const t = { ...s }; s.a === 1;"
+  ],
+  invalid: [
+    {
+      code: "const C = $component(function* (props) { const m = yield* $memo(function* () { return { ...props.user }; }); return function* () { return <p />; }; });",
+      errors: [{ messageId: "spread" }]
+    },
+    {
+      code: component(
+        "const [s] = yield* $store({ a: 1 }); const m = yield* $memo(function* () { return s.a === 1; }); return function* () { return <p {...s} />; };"
+      ),
+      errors: [{ messageId: "compare" }, { messageId: "spread" }]
+    },
+    {
+      code: "const r = <For each={xs}>{function* (x) { return function* () { return <i>{JSON.stringify(x)}</i>; }; }}</For>;",
+      errors: [{ messageId: "stringify" }]
+    },
+    {
+      code: component(
+        "const p = yield* $projection(function* (d) {}, { a: [1] }); const m = yield* $memo(function* () { return p.a[0] !== undefined; }); return function* () { return <p />; };"
+      ),
+      errors: [{ messageId: "compare" }]
+    }
+  ]
+});
+
 tester.run("read-before-attempt", rules["read-before-attempt"], {
   valid: [
     "const m = $memo(function* () { const id = yield* props.id; return yield* attempt(() => f(id)); });",

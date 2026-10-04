@@ -8,6 +8,7 @@
  *   read-before-attempt    a $memo reads before its first `attempt`
  *   no-unyielded-write     an operation acts only as `yield* op` (setters; with types, event calls and any op)
  *   no-foreign-reactive    no reactive state from plain Solid, the router or another library
+ *   no-path-object-use     a path is a read: no spread, no `===`, no `JSON.stringify` of one
  *   no-dollar-block        `$` / `$scope` are removed: bare `function*` holes and rows, `$memo` derivations (autofix)
  *   typed-props-key        exported components name their type-linker key
  */
@@ -607,6 +608,117 @@ const noDollarBlock = {
   }
 };
 
+/** The variable an identifier resolves to, or null. */
+function resolve(context, identifier) {
+  let s = context.sourceCode.getScope(identifier);
+  while (s) {
+    const variable = s.set.get(identifier.name);
+    if (variable) return variable;
+    s = s.upper;
+  }
+  return null;
+}
+
+/**
+ * What a binding holds, as far as paths go: "path" (a store or a projection,
+ * a row's argument — the binding itself is a path), "props" (a setup's props:
+ * each key is a path, the object is not), or null.
+ */
+function pathBinding(context, identifier) {
+  const variable = resolve(context, identifier);
+  const def = variable && variable.defs[0];
+  if (!def) return null;
+  if (def.type === "Parameter") {
+    const fn = def.node;
+    const index = fn.params.findIndex(p => p === def.name || (p.left && p.left === def.name));
+    const kind = blockKind(fn);
+    if (kind === "row") return "path";
+    if (kind === "setup" && index === 0) return "props";
+    return null;
+  }
+  if (def.type === "Variable") {
+    const decl = def.node;
+    const init = decl.init;
+    if (!init || init.type !== "YieldExpression" || !init.delegate) return null;
+    if (
+      decl.id.type === "ArrayPattern" &&
+      decl.id.elements[0] === def.name &&
+      isCallTo(init.argument, ["$store", "$optimisticStore"])
+    )
+      return "path";
+    if (decl.id === def.name && isCallTo(init.argument, ["$projection"])) return "path";
+  }
+  return null;
+}
+
+/** Whether an expression is a path (syntactically): a store, a row argument, a prop, or a key of one. */
+function isPathExpression(context, node) {
+  let n = node;
+  while (n.type === "TSNonNullExpression" || n.type === "TSAsExpression") n = n.expression;
+  if (n.type === "ChainExpression") n = n.expression;
+  if (n.type === "Identifier") return pathBinding(context, n) === "path";
+  if (n.type !== "MemberExpression") return false;
+  let root = n;
+  while (root.type === "MemberExpression") root = root.object;
+  if (root.type !== "Identifier") return false;
+  const binding = pathBinding(context, root);
+  return binding === "path" || binding === "props";
+}
+
+const noPathObjectUse = {
+  meta: {
+    type: "problem",
+    docs: {
+      description:
+        "A path (a prop, a store or a row argument, or a key of one) is a read, not an object: spreading it, comparing it with `===` or `JSON.stringify`-ing it never sees the data."
+    },
+    messages: {
+      spread:
+        "spreading a path copies no data (it is a read, not an object): spread `yield* {{text}}`, or pass the path on as it is.",
+      compare:
+        "a path is a read, not a value: compare `(yield* {{text}})`, not the path (two paths are never the same object).",
+      stringify:
+        "`JSON.stringify` of a path gives its description, not its data: stringify `yield* {{text}}`."
+    },
+    schema: []
+  },
+  create(context) {
+    const text = node => {
+      const t = context.sourceCode.getText(node);
+      return t.length > 40 ? t.slice(0, 37) + "..." : t;
+    };
+    const check = (node, messageId) => {
+      if (node && isPathExpression(context, node))
+        context.report({ node, messageId, data: { text: text(node) } });
+    };
+    return {
+      SpreadElement(node) {
+        check(node.argument, "spread");
+      },
+      JSXSpreadAttribute(node) {
+        check(node.argument, "spread");
+      },
+      BinaryExpression(node) {
+        if (!["===", "!==", "==", "!="].includes(node.operator)) return;
+        check(node.left, "compare");
+        check(node.right, "compare");
+      },
+      CallExpression(node) {
+        const c = node.callee;
+        if (
+          c.type === "MemberExpression" &&
+          !c.computed &&
+          c.object.type === "Identifier" &&
+          c.object.name === "JSON" &&
+          c.property.type === "Identifier" &&
+          c.property.name === "stringify"
+        )
+          check(node.arguments[0], "stringify");
+      }
+    };
+  }
+};
+
 export const rules = {
   "no-throw": noThrow,
   "no-read-in-view-body": noReadInViewBody,
@@ -615,6 +727,7 @@ export const rules = {
   "no-unyielded-write": noUnyieldedWrite,
   "no-foreign-reactive": noForeignReactive,
   "no-dollar-block": noDollarBlock,
+  "no-path-object-use": noPathObjectUse,
   "typed-props-key": typedPropsKey
 };
 

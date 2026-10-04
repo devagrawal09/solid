@@ -11,7 +11,8 @@
  * - the `children` (or an `Errored`'s `fallback`) of a flow control called
  *   directly (`For({ each, children: function* (item) { … } })`, → row);
  * - a generator declared inside a setup or a row (a named row block → row),
- *   or bound there to a `const` and taking parameters (→ row).
+ *   or bound there to a `const`, taking parameters and returning a
+ *   `function*` (its view) (→ row; a generator helper returning a value is not).
  */
 
 export const CONSTRUCTORS = {
@@ -95,12 +96,43 @@ function computeKind(fn) {
     const k = blockKind(outer);
     if (k === "setup" || k === "row") return "row";
   }
-  if (parent.type === "VariableDeclarator" && parent.init === fn && fn.params.length > 0) {
+  if (
+    parent.type === "VariableDeclarator" &&
+    parent.init === fn &&
+    fn.params.length > 0 &&
+    returnsGenerator(fn)
+  ) {
     const outer = enclosingFunction(fn);
     const k = blockKind(outer);
     if (k === "setup" || k === "row") return "row";
   }
   return null;
+}
+
+/** Whether a function returns a `function*` expression (from its own body, not a nested function). */
+function returnsGenerator(fn) {
+  let found = false;
+  const visit = node => {
+    if (found || !node || typeof node.type !== "string") return;
+    if (node !== fn.body && isFunction(node)) return;
+    if (
+      node.type === "ReturnStatement" &&
+      node.argument &&
+      node.argument.type === "FunctionExpression" &&
+      node.argument.generator
+    ) {
+      found = true;
+      return;
+    }
+    for (const key of Object.keys(node)) {
+      if (key === "parent") continue;
+      const v = node[key];
+      if (Array.isArray(v)) v.forEach(visit);
+      else if (v && typeof v.type === "string") visit(v);
+    }
+  };
+  visit(fn.body);
+  return found;
 }
 
 /** The block kind of the function a node sits in (null outside blocks). */

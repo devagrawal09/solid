@@ -326,11 +326,44 @@ interface PathTarget {
   getter: boolean;
   path: PropertyKey[];
 }
+/** Node's `util.inspect` hook (`console.log(path)` in Node, test failure output). */
+const INSPECT = Symbol.for("nodejs.util.inspect.custom");
+
+/** A readable description of a path: `[path .user.name]`, `[path .items[0]]`. */
+function describePath(t: PathTarget): string {
+  let keys = "";
+  for (const key of t.path)
+    keys +=
+      typeof key === "symbol"
+        ? `[${String(key)}]`
+        : /^\d+$/.test(String(key))
+          ? `[${String(key)}]`
+          : `.${String(key)}`;
+  return `[path ${keys || "(root)"}]`;
+}
+
+/**
+ * A path is a read, not an object: enumerating it, describing its keys,
+ * defining or deleting one would see the proxy's own fields (or nothing),
+ * never the data. In development each is `PATH_OBJECT`; in production the
+ * path shows no keys and refuses the change.
+ */
+function pathObject(what: string): never {
+  throw devError(
+    "PATH_OBJECT",
+    `a path is a read, not an object (${what}): read it with yield* and use the value.`
+  );
+}
+
 const pathHandler: ProxyHandler<PathTarget> = {
   get(t, key) {
     if (key === READ) return PATH_READ;
     if (key === PATH_TARGET) return t;
     if (key === Symbol.iterator) return sourceIterator;
+    // printed or coerced (a template literal, String(path), JSON, a log),
+    // a path describes itself instead of failing to convert
+    if (key === Symbol.toPrimitive || key === INSPECT) return () => describePath(t);
+    if (key === "toString" || key === "toJSON") return () => describePath(t);
     if (typeof key === "symbol" || key === "then") return undefined;
     return makePath(t.root, t.getter, t.path.length ? [...t.path, key] : [key]);
   },
@@ -339,6 +372,22 @@ const pathHandler: ProxyHandler<PathTarget> = {
   },
   set() {
     throw devError("PATH_WRITE", "a path reads; write through the setter.");
+  },
+  ownKeys() {
+    if (__DEV__) pathObject("its keys were listed: a spread, Object.keys, a for…in");
+    return [];
+  },
+  getOwnPropertyDescriptor(_t, key) {
+    if (__DEV__) pathObject(`a descriptor of ${String(key)} was asked for`);
+    return undefined;
+  },
+  defineProperty(_t, key) {
+    if (__DEV__) pathObject(`${String(key)} was defined on it`);
+    return false;
+  },
+  deleteProperty(_t, key) {
+    if (__DEV__) pathObject(`${String(key)} was deleted from it`);
+    return false;
   }
 };
 function makePath(root: any, getter: boolean, path: PropertyKey[]): any {
