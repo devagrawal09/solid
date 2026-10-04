@@ -53,7 +53,7 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 | D-041 | decided | JSX only in view / hole / row returns; a setup never creates elements |
 | D-042 | decided | All props are reactive; no static prop kind; `$snapshot` removed; `$untrack` in reactive scopes only |
 | D-043 | decided | After plugin parity, the fork's compiler and babel-plugin go back to pristine upstream |
-| D-044 | decided | `$dynamic` returns a colored component |
+| D-044 | moot | `$dynamic` removed by D-058 |
 | D-045 | decided | Parity is the only Solid-drift canary; no golden snapshots |
 | D-046 | decided | `html`` ` flavor dropped; `h()` is the no-JSX flavor (D-012 amended) |
 | D-047 | decided | `@solidjs/blocks` exports `lazy` (colored); `adopt()` removed |
@@ -67,6 +67,8 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 | D-055 | decided | A row receives `item: Source<T>` and `index: Source<number>` |
 | D-056 | decided | Props are a plain object type; `$component` maps fields to Sources; `TypedProps` removed |
 | D-057 | decided | Phase 2 starts after Phase 1B lands (Q23 closed) |
+| D-058 | decided | No server-component support in the model; SC twins removed or converted; `$dynamic` removed; D-044 moot |
+| D-059 | decided | A row need not be settled: a row's failure propagates to the view holding the `<For>` |
 
 ## Entries
 
@@ -363,6 +365,17 @@ Facts for the executor: the diff of `packages/compiler` + `packages/babel-plugin
 
 Async `$memo` is emulated over `createMemo` + `latest`/`isPending` → needs a deterministic pending-flip ordering test. The SSR path skips whole-view detection → needs a both-sides top-level-read hydration test. The JSX rule applies syntactically anywhere in a generator → lint "JSX only in views" or assert the host in `perform`. Refusals should be listed in one "what you can't write in a view" table. Port the experiment branch's `$`-block conformance harness (`packages/web/test`) as a semantics pin independent of the twins. Error-locality helpers (`view()`/`setup()` wrappers) are the biggest DX lever without a TS plugin.
 
+
+### D-058 — No server-component support in the blocks model
+**Decided (Dev, 2026-10-04).** Server components are out of scope for this model: the idea is that a future compiler finds inert regions and turns them into server components automatically, so the user never thinks about it. Twins whose point is server components are removed; a twin that merely *fetches* server data (server functions, SSR) stays. Disposition, from the survey (`"use server"` files / frame references / `$dynamic` users): **removed** — `examples/notes-blocks` (the RSC notes demo as Solid Server Components; its original is an SC demo too, so a converted twin would have no parity oracle), `examples/hackernews-blocks` (HN as Server Components over frame streams; `hackernews-spa-blocks` is already the same app client-rendered over server functions), `examples/chat-blocks` (a simulated LLM chat as Server Components). **Converted** — `examples/room-blocks`: keep the live server functions (server data), drop the one live server component; if that proves to be most of the app, remove it too and say so. **Kept** — hackernews-spa, effect, rendering (server data / SSR only), todos, todos-h, sierpinski, sierpinski-h, migrating-element (client only). `$dynamic` is removed with them: every call site was `attempt(() => <server-component call>)` and nothing else used it (D-005). Twin count 12 → 8 (+ room if the conversion holds).
+Consequences: F1 (server-component props in event/`ref` positions) disappears — hydration-claim stubs only exist for server components — so D-042 applies as written; D-044 is moot; the `blocks-linker` fixture `gap` and any harness/gate references to the removed twins are deleted; the gate baseline is regenerated.
+*Alternatives:* keep server components with an attach-by-value rule for event/ref positions (F1-A); convert every SC twin to client + server functions (no parity oracle for the converted ones).
+*Reasoning:* Dev: server components are a compiler concern, not a model concern. *Implementation:* Phase 1A follow-up (same agent session).
+
+### D-059 — A row need not be settled
+**Decided (Dev, 2026-10-04).** A row's view may fail: a failure raised in a `<For>` (or `Repeat`) row propagates to the view holding the `<For>` — the `<For>` element's failure type is the union of its rows' failure types, which joins the enclosing view's, and at runtime the failure reaches the nearest `<Errored>` above the list or re-throws at the root (D-033). The "row must be settled" constraint is removed for failures; pending rows are unchanged by this decision (report if they prove to be the same wall). Closes F2: with `$dynamic` gone (D-058) the remaining colored elements are the library's `lazy` (pending) and `Async` props (1B), both of which propagate the same way.
+*Alternatives:* require an `<Errored>` per failing row (B); accept failing elements at every position with root reporting (C, the general form — D-059 is its row-specific instance; extend to other positions only when a twin needs it).
+*Reasoning:* the runtime already propagates; the types should say what the runtime does. *Implementation:* Phase 1A follow-up (types + type test "a failing row colors the holding view"; runtime test: a row's `raise` reaches an `<Errored>` above the `<For>`).
 
 ## Phase 1A findings (agent report, items 4c–8; verbatim, 2026-10-04)
 
