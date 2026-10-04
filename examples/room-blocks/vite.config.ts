@@ -3,9 +3,6 @@ import type { ServerResponse } from "node:http";
 import { defineConfig, type Plugin } from "vite";
 import solid from "@solidjs/vite-plugin";
 import basicSsl from "@vitejs/plugin-basic-ssl";
-// The blocks type linker: keeps src/solid-props.gen.d.ts current in dev and
-// fails `vite build` when the committed file is stale.
-import solidLink from "@solidjs/blocks-linker/vite";
 
 // HTTP/2 in dev. Live sources hold a connection each and a browser allows
 // six per origin under HTTP/1.1; Vite speaks HTTP/2 when `server.https` is
@@ -53,7 +50,6 @@ export default defineConfig({
   server: { port: 3016, https: https ? {} : undefined },
   plugins: [
     chaos(),
-    solidLink(),
     ...(https ? [basicSsl()] : []),
     solid({
       start: {},

@@ -4,7 +4,7 @@
 
 ```bash
 pnpm test         # behavior (7) + parity against examples/hackernews-spa (1): URL + DOM after 15 steps
-pnpm typecheck && pnpm lint && pnpm link:check && pnpm build
+pnpm typecheck && pnpm lint && pnpm build
 node ../../scripts/example-blocks/browser.mjs hackernews-spa                   # 13 steps
 node ../../scripts/example-blocks/browser.mjs hackernews-spa --variant thread  # the 1,406-comment thread
 ```

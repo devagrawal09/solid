@@ -8,11 +8,11 @@ What changes in the no-JSX flavor:
 - Components are given to `h` (`h(Triangle, { x, y, s, children: slowChildren })`) and created where the output is materialized; a branch returns the fragment `h([a, b, c])`.
 - The pending coloring flows through `h`: a triangle's output is pending (its branches read an async memo), so `TriangleDemo` must wrap the container in `h(Loading, …)` — without it `render(TriangleDemo, …)` is a type error.
 
-The generated `src/solid-props.gen.d.ts` is identical to the JSX twin's: the linker reads `h(Component, { … })` render sites like JSX tags.
+`TriangleProps` is the JSX twin's: `children: Source<number, IdleError, true>`. `h(Component, { children })` checks it like any prop.
 
 ```bash
 pnpm test         # behavior (6) + parity against examples/sierpinski (1)
-pnpm typecheck && pnpm lint && pnpm link:check && pnpm build
+pnpm typecheck && pnpm lint && pnpm build
 node ../../scripts/example-blocks/browser.mjs sierpinski --twin -blocks-h   # after building both
 ```
 

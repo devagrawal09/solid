@@ -46,8 +46,7 @@ import type {
   Path,
   PendingOf,
   RowBlock,
-  Source,
-  View
+  Source
 } from "./types.js";
 import type { Hole, OpsOfHole } from "./holes.js";
 

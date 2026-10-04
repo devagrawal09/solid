@@ -4,7 +4,7 @@
 
 ```bash
 pnpm test         # behavior (8) + parity against examples/rendering (1): DOM after 29 steps (CSR)
-pnpm typecheck && pnpm lint && pnpm link:check
+pnpm typecheck && pnpm lint
 pnpm build        # csr:build + stream:build + string:build
 node ../../scripts/example-blocks/browser.mjs rendering --variant csr|stream|string   # 34 steps each
 ```

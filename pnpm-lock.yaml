@@ -202,9 +202,6 @@ importers:
       '@solidjs/blocks':
         specifier: workspace:*
         version: link:../../packages/blocks
-      '@solidjs/blocks-linker':
-        specifier: workspace:*
-        version: link:../../packages/blocks-linker
       '@solidjs/vite-plugin':
         specifier: 3.0.0-next.35
         version: 3.0.0-next.35(@solidjs/web@packages+web)(@testing-library/jest-dom@6.9.1)(solid-js@packages+solid)(vite@7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0))
@@ -289,9 +286,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/solid
     devDependencies:
-      '@solidjs/blocks-linker':
-        specifier: workspace:*
-        version: link:../../packages/blocks-linker
       '@solidjs/vite-plugin':
         specifier: 3.0.0-next.35
         version: 3.0.0-next.35(@solidjs/web@packages+web)(@testing-library/jest-dom@6.9.1)(solid-js@packages+solid)(vite@8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0))
@@ -396,9 +390,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/blocks
     devDependencies:
-      '@solidjs/blocks-linker':
-        specifier: workspace:*
-        version: link:../../packages/blocks-linker
       '@solidjs/vite-plugin':
         specifier: 3.0.0-next.35
         version: 3.0.0-next.35(@solidjs/web@packages+web)(@testing-library/jest-dom@6.9.1)(solid-js@packages+solid)(vite@7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0))
@@ -470,9 +461,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/solid
     devDependencies:
-      '@solidjs/blocks-linker':
-        specifier: workspace:*
-        version: link:../../packages/blocks-linker
       '@solidjs/vite-plugin':
         specifier: 3.0.0-next.35
         version: 3.0.0-next.35(@solidjs/web@packages+web)(@testing-library/jest-dom@6.9.1)(solid-js@packages+solid)(vite@8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0))
@@ -527,9 +515,6 @@ importers:
       '@solidjs/blocks':
         specifier: workspace:*
         version: link:../../packages/blocks
-      '@solidjs/blocks-linker':
-        specifier: workspace:*
-        version: link:../../packages/blocks-linker
       '@solidjs/vite-plugin':
         specifier: 3.0.0-next.35
         version: 3.0.0-next.35(@solidjs/web@packages+web)(@testing-library/jest-dom@6.9.1)(solid-js@packages+solid)(vite@7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0))
@@ -566,9 +551,6 @@ importers:
       '@solidjs/blocks':
         specifier: workspace:*
         version: link:../../packages/blocks
-      '@solidjs/blocks-linker':
-        specifier: workspace:*
-        version: link:../../packages/blocks-linker
       '@solidjs/h':
         specifier: workspace:*
         version: link:../../packages/h
@@ -629,9 +611,6 @@ importers:
       '@solidjs/blocks':
         specifier: workspace:*
         version: link:../../packages/blocks
-      '@solidjs/blocks-linker':
-        specifier: workspace:*
-        version: link:../../packages/blocks-linker
       '@solidjs/vite-plugin':
         specifier: 3.0.0-next.35
         version: 3.0.0-next.35(@solidjs/web@packages+web)(@testing-library/jest-dom@6.9.1)(solid-js@packages+solid)(vite@7.3.3(@types/node@25.6.0)(lightningcss@1.33.0)(terser@5.49.0))
@@ -668,9 +647,6 @@ importers:
       '@solidjs/blocks':
         specifier: workspace:*
         version: link:../../packages/blocks
-      '@solidjs/blocks-linker':
-        specifier: workspace:*
-        version: link:../../packages/blocks-linker
       '@solidjs/h':
         specifier: workspace:*
         version: link:../../packages/h
@@ -759,28 +735,6 @@ importers:
       solid-js:
         specifier: workspace:*
         version: link:../solid
-
-  packages/blocks-linker:
-    dependencies:
-      '@solidjs/compiler':
-        specifier: workspace:*
-        version: link:../compiler
-    devDependencies:
-      '@solidjs/blocks':
-        specifier: workspace:*
-        version: link:../blocks
-      '@solidjs/web':
-        specifier: workspace:*
-        version: link:../web
-      solid-js:
-        specifier: workspace:*
-        version: link:../solid
-      typescript:
-        specifier: ^6.0.2
-        version: 6.0.3
-      vite:
-        specifier: ^8.0.0
-        version: 8.1.5(@types/node@25.6.0)(esbuild@0.27.7)(terser@5.49.0)
 
   packages/compiler:
     devDependencies:

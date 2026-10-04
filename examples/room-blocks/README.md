@@ -4,7 +4,7 @@
 
 ```bash
 pnpm test         # behavior (4) + parity against examples/room (1): DOM + draft after 13 steps on /live
-pnpm typecheck && pnpm lint && pnpm link:check && pnpm build
+pnpm typecheck && pnpm lint && pnpm build
 node ../../scripts/example-blocks/browser.mjs room    # after building both (production servers)
 ```
 
@@ -14,8 +14,8 @@ node ../../scripts/example-blocks/browser.mjs room    # after building both (pro
 - **The router is created in `App`'s setup** and the view returns it. `routes.ts` passes each route through `route()`: the router is plain Solid and cannot see a block's coloring, so `route()` states what it may be — pending (the app's `<Loading>` is above it), never failing.
 - **What a `<Loading>` covers is its own component**, handed to the boundary as a view: `<Loading>{Members({ who, me })}</Loading>`, or in the call form `Loading({ fallback, children: () => Members({ who, me }) })` — the content is a function so it is built inside the boundary.
 - **Failures are typed.** A memo over a stream or a promise may fail with anything, so every panel that reads a live source may fail. The original lets that reach the app root; here `/live`'s page is wrapped in an `Errored` at its root, each directory row handles its own (a `For` row is settled), and the summary keeps its own `Errored`. With no failure, the markup is the original's.
-- **Where the type linker cannot see an async value, the prop says so**: `who: Source<Presence, true, unknown>` (a memo returning `wire.watch(presence(…))` — a method call the syntax takes as synchronous). The linker's facts and a declared source join.
-- **`live`'s call type is the answer itself** (`RoomCard & { onstatus }`), not a stream of it: the card memo is widened to `Source<RoomCard, boolean, unknown>` (an upcast, not a cast).
+- **A prop given pending or failing data says so** (D-068): `who: Source<Presence, LiveError, true>`. The components that only forward a live source (`Transcript`, `CardBody`'s `members` / `activity`) take its color from their caller with type parameters (D-029), as do the components they forward it to.
+- **`live`'s call type is the answer itself** (`RoomCard & { onstatus }`), not a stream of it: the card memo routes it through `attempt(…, cause => new LiveError(cause))`, as presence does, and is widened to `Source<RoomCard, LiveError, boolean>` (an upcast, not a cast).
 - **A row is settled**: the card's ticks read the (pending) activity once, into one flag per tick, and the rows read their flag.
 - **Posting on `/live` is Solid's**: `createOptimisticStore`, `createOptimistic`, `action` + `until` are used as they are (the library has no optimistic forms); blocks read the store through `paths<…, true>` and the flag through `read`. The composer shows `latestOf(text)`.
 - **Identity outside the provider is "nobody"** (the original throws; a setup does not fail).

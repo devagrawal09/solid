@@ -15,7 +15,7 @@
 //                       (repeatable; a step matching any of them runs)
 //   --fast              run only the quick subset: twin:*:typecheck, twin:*:lint,
 //                       pkg:blocks:test and repo:prettier (skips twin tests,
-//                       twin link checks, the other package suites and oxlint)
+//                       the other package suites and oxlint)
 //   --json <path>       write machine-readable results to <path>
 //   --jobs <n>          steps run concurrently (default 3; vitest steps already
 //                       use 2 workers each, so keep this modest)
@@ -98,7 +98,7 @@ function fail(message) {
 // ---------------------------------------------------------------------------
 // Steps
 
-const TWIN_SCRIPTS = ["test", "typecheck", "lint", "link:check"];
+const TWIN_SCRIPTS = ["test", "typecheck", "lint"];
 const EXPECTED_TWINS = 8;
 
 function readJson(path) {
@@ -135,7 +135,6 @@ function resolveOxlint() {
 
 const LINT_DIRS = twins => [
   "packages/blocks",
-  "packages/blocks-linker",
   "packages/eslint-plugin-blocks",
   ...twins.map(t => `examples/${t}`)
 ];
@@ -157,7 +156,6 @@ function buildSteps(twins) {
 
   steps.push(
     { name: "pkg:blocks:test", cwd: root, fast: true, ...pnpmRun("packages/blocks", "test") },
-    { name: "pkg:blocks-linker:test", cwd: root, ...pnpmRun("packages/blocks-linker", "test") },
     {
       name: "pkg:eslint-plugin-blocks:test",
       cwd: root,
@@ -196,8 +194,8 @@ function buildSteps(twins) {
     cwd: root,
     fast: true,
     cmd: "pnpm",
-    // Same glob as the root `format` script; .gitignore + .prettierignore are honoured by
-    // default (dist/, node_modules/, *.gen.d.ts).
+    // Same glob as the root `format` script; .gitignore is honoured by default (dist/,
+    // node_modules/).
     args: [
       "exec",
       "prettier",

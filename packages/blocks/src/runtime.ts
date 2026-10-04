@@ -54,7 +54,6 @@ import type {
   BlockSetter,
   BlockStoreSetter,
   Cleanup,
-  Component,
   ComponentView,
   ContextRead,
   Create,

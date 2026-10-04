@@ -12,13 +12,10 @@
     "start": "vite preview",
     "test": "vitest run --maxWorkers=2",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "lint": "eslint src",
-    "link": "solid-link",
-    "link:check": "solid-link --check"
+    "lint": "eslint src"
   },
   "devDependencies": {
     "@solidjs/blocks": "workspace:*",
-    "@solidjs/blocks-linker": "workspace:*",
     "@solidjs/vite-plugin": "3.0.0-next.35",
     "@solidjs/web": "workspace:*",
     "@types/node": "^25.6.0",

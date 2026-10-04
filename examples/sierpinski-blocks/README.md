@@ -9,13 +9,12 @@ What the library's rules change in the source:
 - **Events are `$event`s**, the timer and frame callbacks included.
 - The idle-callback cleanup stays a plain `onCleanup` inside the `attempt` thunk (it runs under the memo).
 
-The type linker's output, `src/solid-props.gen.d.ts`, is committed: the seconds passed down the recursion are pending (`Triangle.children`, `Dot.children`), which is why the leaf renders its dot with `{yield* Dot(…)}`.
+The seconds passed down the recursion are pending and may fail, so `TriangleProps` declares them: `children: Source<number, IdleError, true>` (D-068). That is why the leaf renders its dot with `{yield* Dot(…)}`.
 
 ```bash
 pnpm test         # behavior (6) + differential parity against examples/sierpinski (1)
 pnpm typecheck    # stock tsc
 pnpm lint         # @solidjs/eslint-plugin-blocks + no explicit any
-pnpm link:check   # the committed linker output is current
 pnpm build
 node ../../scripts/example-blocks/browser.mjs sierpinski   # Chromium, original vs twin
 ```

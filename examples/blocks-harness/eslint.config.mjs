@@ -7,7 +7,7 @@ import blocks from "@solidjs/eslint-plugin-blocks";
 // `files`: the block code (default `src/`).
 export default function blocksConfig(extra = [], files = ["src/**/*.{ts,tsx}"]) {
   return [
-    { ignores: ["dist/**", "**/*.gen.d.ts", "node_modules/**"] },
+    { ignores: ["dist/**", "node_modules/**"] },
     {
       files,
       languageOptions: {

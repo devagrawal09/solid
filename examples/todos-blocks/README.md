@@ -13,6 +13,6 @@ What the library's rules change in the source:
 
 ```bash
 pnpm test         # behavior (7) + parity against examples/todos (1): DOM after 27 steps, failures and retries included
-pnpm typecheck && pnpm lint && pnpm link:check && pnpm build
+pnpm typecheck && pnpm lint && pnpm build
 node ../../scripts/example-blocks/browser.mjs todos
 ```

@@ -15,7 +15,6 @@
  *   prefer-view-wrapper    (warning) wrap a view in `view(…)` so its errors land where it is written
  *   no-path-object-use     a path is a read: no spread, no `===`, no `JSON.stringify` of one
  *   no-dollar-block        `$` / `$scope` are removed: bare `function*` holes and rows, `$memo` derivations (autofix)
- *   typed-props-key        exported components name their type-linker key
  */
 import {
   childrenFromFunction,
@@ -386,63 +385,6 @@ const noForeignReactive = {
             data: { name, source: node.source.value, hint: use ? ` Use ${use}.` : "" }
           });
         }
-      }
-    };
-  }
-};
-
-const typedPropsKey = {
-  meta: {
-    type: "suggestion",
-    fixable: "code",
-    docs: {
-      description:
-        'An exported $component names its type-linker key: `TypedProps<P, "Name">`, so callers\' coloring reaches its props.'
-    },
-    messages: {
-      key: 'name this component\'s type-linker key: `TypedProps<…, "{{name}}">`.'
-    },
-    schema: [
-      {
-        type: "object",
-        properties: { require: { enum: ["exported", "all"] } },
-        additionalProperties: false
-      }
-    ]
-  },
-  create(context) {
-    const mode = (context.options[0] && context.options[0].require) || "exported";
-    return {
-      CallExpression(node) {
-        if (!isCallTo(node, ["$component"])) return;
-        const fn = node.arguments[0];
-        if (!fn || !fn.generator || !fn.params[0]) return;
-        const annotation =
-          fn.params[0].typeAnnotation && fn.params[0].typeAnnotation.typeAnnotation;
-        if (!annotation || annotation.type !== "TSTypeReference") return;
-        const typeName = annotation.typeName;
-        if (typeName.type !== "Identifier" || typeName.name !== "TypedProps") return;
-        const args = annotation.typeArguments || annotation.typeParameters;
-        if (!args || args.params.length !== 1) return;
-        const declarator = node.parent;
-        if (
-          !declarator ||
-          declarator.type !== "VariableDeclarator" ||
-          declarator.id.type !== "Identifier"
-        )
-          return;
-        const name = declarator.id.name;
-        const exported =
-          declarator.parent &&
-          declarator.parent.parent &&
-          declarator.parent.parent.type === "ExportNamedDeclaration";
-        if (mode === "exported" && !exported) return;
-        context.report({
-          node: annotation,
-          messageId: "key",
-          data: { name },
-          fix: fixer => fixer.insertTextAfter(args.params[0], `, "${name}"`)
-        });
       }
     };
   }
@@ -1141,8 +1083,7 @@ export const rules = {
   "jsx-only-in-view": jsxOnlyInView,
   "no-component-tag": noComponentTag,
   "no-read-in-prop": noReadInProp,
-  "component-children-generator": componentChildrenGenerator,
-  "typed-props-key": typedPropsKey
+  "component-children-generator": componentChildrenGenerator
 };
 
 const plugin = {

@@ -540,28 +540,6 @@ tester.run("no-foreign-reactive", rules["no-foreign-reactive"], {
   ]
 });
 
-tester.run("typed-props-key", rules["typed-props-key"], {
-  valid: [
-    'export const UserCard = $component(function* (props: TypedProps<{ user: User }, "UserCard">) { return function* () { return <p />; }; });',
-    "const Local = $component(function* (props: TypedProps<{ user: User }>) { return function* () { return <p />; }; });"
-  ],
-  invalid: [
-    {
-      code: "export const UserCard = $component(function* (props: TypedProps<{ user: User }>) { return function* () { return <p />; }; });",
-      output:
-        'export const UserCard = $component(function* (props: TypedProps<{ user: User }, "UserCard">) { return function* () { return <p />; }; });',
-      errors: [{ messageId: "key" }]
-    },
-    {
-      code: "const Local = $component(function* (props: TypedProps<{ a: 1 }>) { return function* () { return <p />; }; });",
-      options: [{ require: "all" }],
-      output:
-        'const Local = $component(function* (props: TypedProps<{ a: 1 }, "Local">) { return function* () { return <p />; }; });',
-      errors: [{ messageId: "key" }]
-    }
-  ]
-});
-
 // --- the lint's refusals ARE the transform's refusals --------------------------------------------------
 const fixtures = JSON.parse(
   readFileSync(
