@@ -88,6 +88,7 @@ export type {
   Receipt,
   RowBlock,
   RowFails,
+  RowPending,
   SettledSource,
   SettledView,
   SetupOp,

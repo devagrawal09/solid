@@ -1356,6 +1356,30 @@ describe("row blocks", () => {
     expect(String(thrown)).toMatch(/row bad/);
   });
 
+  it("a pending row reaches the Loading above the list (D-063)", async () => {
+    let resolve!: (v: string) => void;
+    const row = function* (item: any) {
+      const shown = yield* $memo(function* () {
+        const v: string = yield* item;
+        if (v !== "slow") return v;
+        return yield* attempt(() => new Promise<string>(r => (resolve = r)), toError);
+      });
+      return function* () {
+        return <li>{perform(shown)}</li>;
+      };
+    };
+    const List = $component(function* List() {
+      return function* () {
+        return <ul>{perform(For({ each: ["a", "slow"], children: row }))}</ul>;
+      };
+    });
+    mount(() => <Loading fallback={<i>loading</i>}>{List()}</Loading>);
+    expect(root.textContent).toBe("loading");
+    resolve("done");
+    await settle();
+    expect(root.textContent).toBe("adone");
+  });
+
   devIt("a row's body returns its view, as a setup does", () => {
     const Rows = $component(function* () {
       return function* () {

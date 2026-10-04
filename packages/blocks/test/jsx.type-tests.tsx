@@ -392,14 +392,6 @@ export const Rows = $component(function* () {
           }}
         </Repeat>
         <For each={comments}>
-          {/* @ts-expect-error the row's view is pending: handle it inside the row */}
-          {function* (c) {
-            return function* () {
-              return <li>{yield* Pending({ id: String(yield* c.id) })}</li>;
-            };
-          }}
-        </For>
-        <For each={comments}>
           {function* (c) {
             return function* () {
               return <li>{Loading({ children: () => Pending({ id: c.text }) })}</li>;
@@ -468,6 +460,21 @@ const pendingHole = function* () {
 };
 // @ts-expect-error a JSX element is settled: a hole over a pending source is not
 export const pendingHoleBad = <Show when={pendingHole}>!</Show>;
+
+// --- a pending row colors the holding view too (D-063) ------------------------------------------
+const pendingRow = function* (c: Path<Comment>) {
+  return function* () {
+    return <li>{yield* Pending({ id: String(yield* c.id) })}</li>;
+  };
+};
+export const PendingRows = $component(function* () {
+  return function* () {
+    return <ul>{yield* For({ each: comments, children: pendingRow })}</ul>;
+  };
+});
+const pendingRowsView: View<true, never> = PendingRows();
+void pendingRowsView;
+export const pendingRowsOk = <Loading fallback="…">{PendingRows()}</Loading>;
 
 // --- a row need not be settled: its failures join the view holding the list (D-059) ------------
 const failingRow = function* (c: Path<Comment>) {
