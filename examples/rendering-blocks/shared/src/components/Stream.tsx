@@ -2,7 +2,6 @@ import {
   $component,
   $memo,
   $projection,
-  $snapshot,
   attempt,
   For,
   Loading,
@@ -74,13 +73,12 @@ const ProjList = $component(function* ProjList(
         <Repeat count={yield* props.count}>
           {function* (i) {
             // A row exists only for an index the store already holds: its
-            // reads are settled.
-            const index = yield* $snapshot(i);
-            const row = props.rows[index];
+            // reads are settled. The index is a source (D-055), read in the
+            // holes that walk to the row (a setup does not read, D-042).
             return function* () {
               return (
                 <li>
-                  {yield* row.id}: {yield* row.text}
+                  {yield* props.rows[yield* i].id}: {yield* props.rows[yield* i].text}
                 </li>
               );
             };

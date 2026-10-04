@@ -6,10 +6,11 @@
 import { flush } from "solid-js";
 import {
   $component,
+  $effect,
   $event,
   $memo,
   $signal,
-  $snapshot,
+  $untrack,
   $store,
   attempt,
   For,
@@ -250,7 +251,9 @@ describe("h argument shapes", () => {
   it("a prop holding an array or a store is passed as it is", () => {
     let seen: unknown;
     const Child = $component(function* (props: TypedProps<{ list: string[] }>) {
-      seen = yield* $snapshot(props.list);
+      yield* $effect(function* () {
+        seen = yield* $untrack(props.list);
+      });
       return function* () {
         return h("span", "ok");
       };

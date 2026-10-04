@@ -17,7 +17,7 @@ import {
   lazy,
   $settled,
   $signal,
-  $snapshot,
+  $untrack,
   $store,
   attempt,
   createContext,
@@ -309,16 +309,47 @@ describe("setup operations", () => {
     expect(root.textContent).toBe("a true 0");
   });
 
-  devIt("$snapshot takes a value in a setup; setup reads are dev errors", () => {
-    const Child = $component(function* (props: TypedProps<{ start: number }>) {
-      const start = yield* $snapshot(props.start);
-      const [n] = yield* $signal(start * 2);
+  it("$untrack reads once, untracked, in a memo, an effect and an event (D-042)", async () => {
+    let setA!: (v: number) => void;
+    let setB!: (v: number) => void;
+    let fire!: () => Promise<unknown>;
+    const seen: number[] = [];
+    let memoRuns = 0;
+    const App = $component(function* (props: TypedProps<{ start: number }>) {
+      const [a, sa] = yield* $signal(1);
+      const [b, sb] = yield* $signal(10);
+      setA = v => write(() => sa(v));
+      setB = v => write(() => sb(v));
+      // seeded from a prop, taken once: the memo does not re-run when it changes
+      const seeded = yield* $memo(function* () {
+        memoRuns++;
+        return (yield* $untrack(props.start)) * 2 + (yield* $untrack(a)) + (yield* b);
+      });
+      yield* $effect(function* () {
+        seen.push(yield* $untrack(a));
+      });
+      fire = $event(function* () {
+        seen.push(yield* $untrack(b));
+      });
       return function* () {
-        return <i>{perform(n)}</i>;
+        return <i>{perform(seeded)}</i>;
       };
     });
-    mount(() => <Child start={21} />);
-    expect(root.textContent).toBe("42");
+    mount(() => <App start={21} />);
+    expect(root.textContent).toBe("53");
+    setA(5);
+    flush();
+    // a is read untracked everywhere: nothing re-runs
+    expect(root.textContent).toBe("53");
+    expect(memoRuns).toBe(1);
+    setB(20);
+    flush();
+    expect(root.textContent).toBe("67");
+    await fire();
+    expect(seen).toEqual([1, 20]);
+  });
+
+  devIt("a setup does not read, tracked or not: READ_IN_SETUP, UNTRACK_IN_SETUP", () => {
     // @ts-expect-error a setup does not read (Read is not a SetupOp)
     const Bad = $component(function* (props: TypedProps<{ start: number }>) {
       const v = yield* props.start;
@@ -327,7 +358,37 @@ describe("setup operations", () => {
       };
     });
     expect(() => createRoot(() => Bad({ start: 1 }))).toThrow(/READ_IN_SETUP/);
+    // @ts-expect-error $untrack is a read too: not a SetupOp
+    const Untracks = $component(function* Untracks(props: TypedProps<{ start: number }>) {
+      const v = yield* $untrack(props.start);
+      return function* () {
+        return <i>{v}</i>;
+      };
+    });
+    expect(() => createRoot(() => Untracks({ start: 1 }))).toThrow(/UNTRACK_IN_SETUP\] <Untracks>/);
   });
+
+  devIt(
+    "$untrack after a memo's async attempt is not READ_AFTER_ATTEMPT (it does not track)",
+    async () => {
+      const App = $component(function* (props: TypedProps<{ label: string }>) {
+        const m = yield* $memo(function* () {
+          const n = yield* attempt(() => Promise.resolve(2), toError);
+          return `${yield* $untrack(props.label)}${n}`;
+        });
+        return function* () {
+          return <i>{perform(m)}</i>;
+        };
+      });
+      mount(() => (
+        <Loading fallback="…">
+          <App label="n=" />
+        </Loading>
+      ));
+      await settle();
+      expect(root.textContent).toBe("n=2");
+    }
+  );
 
   devIt("creating outside a setup and writing in a memo are dev errors", () => {
     // @ts-expect-error a view only reads (Create is not a ViewOp)
@@ -480,13 +541,15 @@ describe("the runtime's other dev errors", () => {
 });
 
 describe("setups inside a parent's first view run", () => {
-  it("a child's $snapshot is not a read at the parent view's top level", () => {
+  it("a child's setup (and its memo's first pass) is not a read at the parent view's top level", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     let parentRuns = 0;
     const Leaf = $component(function* (props: TypedProps<{ n: number }>) {
-      const n = yield* $snapshot(props.n);
+      const n = yield* $memo(function* () {
+        return yield* props.n;
+      });
       return function* () {
-        return <i>{n}</i>;
+        return <i>{perform(n)}</i>;
       };
     });
     const Parent = $component(function* () {
@@ -1095,8 +1158,9 @@ describe("row blocks", () => {
               {function* (item) {
                 // the row's body is a setup: it runs once per item, and the
                 // memo it creates is the row's (read by two holes, computed once)
-                const id = yield* $snapshot(item.id);
-                created.push(id);
+                yield* $effect(function* () {
+                  created.push(yield* $untrack(item.id));
+                });
                 const label = yield* $memo(function* () {
                   const text = `${yield* item.text}${yield* suffix}`;
                   computed.push(text);

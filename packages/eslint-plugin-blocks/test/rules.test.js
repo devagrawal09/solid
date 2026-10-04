@@ -209,7 +209,9 @@ tester.run("read-before-attempt", rules["read-before-attempt"], {
   valid: [
     "const m = $memo(function* () { const id = yield* props.id; return yield* attempt(() => f(id)); });",
     "const m = $memo(function* () { const u = yield* attempt(() => f()); if (!u) yield* raise(new E()); return u; });",
-    "const e = $event(function* () { yield* attempt(() => f()); const v = yield* n; });"
+    "const e = $event(function* () { yield* attempt(() => f()); const v = yield* n; });",
+    // an untracked read after an attempt tracks nothing: fine
+    "const m = $memo(function* () { const u = yield* attempt(() => f()); return u + (yield* $untrack(n)); });"
   ],
   invalid: [
     {

@@ -3,7 +3,6 @@ import {
   $event,
   $memo,
   $signal,
-  $snapshot,
   Errored,
   For,
   Show,
@@ -18,11 +17,16 @@ import { SearchConfigLive } from "./api";
 type Tab = "typeahead" | "checkout";
 
 // The fiber log is block state the app's setup creates (Effect programs
-// write it through `log()`); the panel reads its entries and clears it.
+// write it through `log()`); the panel reads its entries and clears it. The
+// prop is read where it is used (D-042): its entries in a memo and holes,
+// its `clear` event inside the event that calls it.
 const LogPanel = $component(function* LogPanel(props: TypedProps<{ log: Log }, "LogPanel">) {
-  const { entries, clear } = yield* $snapshot(props.log);
+  const entries = props.log.entries;
   const newestFirst = yield* $memo(function* () {
     return [...(yield* entries)].reverse();
+  });
+  const clear = $event(function* () {
+    yield* (yield* props.log.clear)();
   });
   return function* () {
     return (

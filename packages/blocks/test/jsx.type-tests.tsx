@@ -11,6 +11,7 @@ import {
   $optimistic,
   $optimisticStore,
   $signal,
+  $untrack,
   $store,
   attempt,
   Errored,
@@ -72,6 +73,32 @@ export const ReadsInSetup = $component(function* () {
   const v = yield* count;
   return function* () {
     return <p>{v}</p>;
+  };
+});
+// @ts-expect-error $untrack is not a SetupOp: a setup never reads, tracked or not (D-042)
+export const UntracksInSetup = $component(function* (props: TypedProps<{ start: number }>) {
+  const v = yield* $untrack(props.start);
+  return function* () {
+    return <p>{v}</p>;
+  };
+});
+// it reads once in a memo, an effect, an event, a hole
+export const Untracks = $component(function* (props: TypedProps<{ start: number }>) {
+  const doubled = yield* $memo(function* () {
+    return (yield* $untrack(props.start)) * 2;
+  });
+  yield* $effect(function* () {
+    void (yield* $untrack(props.start));
+  });
+  const log = $event(function* () {
+    return yield* $untrack(props.start);
+  });
+  return function* () {
+    return (
+      <p onClick={log}>
+        {yield* doubled} {yield* $untrack(props.start)}
+      </p>
+    );
   };
 });
 // @ts-expect-error a view does not create

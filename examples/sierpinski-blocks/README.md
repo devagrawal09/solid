@@ -4,7 +4,7 @@
 
 What the library's rules change in the source:
 
-- **Setup creates, view reads.** A triangle chooses its structure from its position props. The original destructures `props` in the component body; here the setup takes those values with `$snapshot` (the value at creation, untracked — what the destructuring did) and returns the leaf view or the branch view.
+- **Setup creates, holes read.** A triangle chooses its structure from its position props. The original destructures `props` in the component body; here a setup does not read (D-042) and a view does not branch (D-032), so the leaf-or-branch choice is a `<Switch>` over holes and the children's positions are read in the holes that create them (the props never change: each runs once). The slow children's memo is `lazy`: a leaf never starts the idle-time work.
 - **Pending travels with the view.** The branch memos wait for an idle callback, so a triangle may be pending (`Component<TriangleProps, true, never>`, spelled out because the component is recursive). A view that reads a pending child is pending too, so the container markup moved into `Container` and the boundary receives it as a pending view: `<Loading fallback="Loading...">{Container({ scale, seconds })}</Loading>`.
 - **Events are `$event`s**, the timer and frame callbacks included.
 - The idle-callback cleanup stays a plain `onCleanup` inside the `attempt` thunk (it runs under the memo).

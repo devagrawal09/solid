@@ -2,10 +2,10 @@
 // @solidjs/blocks (JSX flavor). Same markup, same timing, same behavior.
 //
 // What the library's rules change in the source (see the README):
-// - A setup does not read, so the structure a triangle chooses from its
-//   position props (`let { x, y, s } = props` in the original) is taken with
-//   `$snapshot` — the value at creation, untracked, exactly the original's
-//   destructuring — and the setup returns the leaf view or the branch view.
+// - A setup does not read (D-042) and a view does not branch (D-032): the
+//   leaf-or-branch choice the original makes from its destructured props is
+//   a `<Switch>` over holes, and the positions are read in the holes that
+//   create the children (the props never change, so each runs once).
 // - `<Loading><div class="container">…<Triangle/></div></Loading>`: a view
 //   that reads a pending child is pending itself, so the container moves
 //   into its own component and the boundary receives it as a pending view.
@@ -16,10 +16,11 @@ import {
   $event,
   $memo,
   $signal,
-  $snapshot,
   attempt,
   Errored,
   Loading,
+  Match,
+  Switch,
   type Component,
   type TypedProps
 } from "@solidjs/blocks";
@@ -101,60 +102,87 @@ const Container = $component(function* Container(
 const Triangle: Component<TriangleProps, true, IdleError> = $component(function* (
   props: TypedProps<TriangleProps, "Triangle">
 ) {
-  const x = yield* $snapshot(props.x);
-  const y = yield* $snapshot(props.y);
-  let s = yield* $snapshot(props.s);
-  if (s <= TARGET) {
-    // The dot reads the (possibly pending) seconds passed down: its view
-    // propagates into this one.
-    return function* () {
-      return (
-        <>
+  // Created here, computed only when a branch reads it (`lazy`): a leaf
+  // never starts the idle-time work.
+  const slowChildren = yield* $memo(
+    function* () {
+      const seconds = yield* props.children;
+      return yield* attempt(
+        () =>
+          new Promise<number>(res => {
+            const t = requestIdleCallback(() => {
+              const e = performance.now() + 0.8;
+              while (performance.now() < e) {}
+              res(seconds);
+            });
+            onCleanup(() => cancelIdleCallback(t));
+          }),
+        cause => new IdleError(cause)
+      );
+    },
+    { lazy: true }
+  );
+
+  // The original destructures its position once (`let { x, y, s } = props`)
+  // and returns the leaf or the branch. A setup does not read (D-042) and a
+  // view does not branch (D-032): the choice is a `<Switch>` over holes, and
+  // the children's positions are read where they are created — in the holes
+  // (the props never change, so each hole runs once).
+  return function* () {
+    return (
+      <Switch>
+        <Match
+          when={function* () {
+            return (yield* props.s) <= TARGET;
+          }}
+        >
           {
+            // the dot reads the (possibly pending) seconds passed down: its
+            // view propagates into this one
             yield* Dot({
-              x: x - TARGET / 2,
-              y: y - TARGET / 2,
+              x: (yield* props.x) - TARGET / 2,
+              y: (yield* props.y) - TARGET / 2,
               s: TARGET,
               children: props.children
             })
           }
-        </>
-      );
-    };
-  }
-  s = s / 2;
-
-  const slowChildren = yield* $memo(function* () {
-    const seconds = yield* props.children;
-    return yield* attempt(
-      () =>
-        new Promise<number>(res => {
-          const t = requestIdleCallback(() => {
-            const e = performance.now() + 0.8;
-            while (performance.now() < e) {}
-            res(seconds);
-          });
-          onCleanup(() => cancelIdleCallback(t));
-        }),
-      cause => new IdleError(cause)
-    );
-  });
-
-  return function* () {
-    return (
-      <>
-        {yield* Triangle({ x, y: y - s / 2, s, children: slowChildren })}
-        {yield* Triangle({ x: x - s, y: y + s / 2, s, children: slowChildren })}
-        {yield* Triangle({ x: x + s, y: y + s / 2, s, children: slowChildren })}
-      </>
+        </Match>
+        <Match
+          when={function* () {
+            return (yield* props.s) > TARGET;
+          }}
+        >
+          {
+            yield* Triangle({
+              x: props.x,
+              y: (yield* props.y) - (yield* props.s) / 4,
+              s: (yield* props.s) / 2,
+              children: slowChildren
+            })
+          }
+          {
+            yield* Triangle({
+              x: (yield* props.x) - (yield* props.s) / 2,
+              y: (yield* props.y) + (yield* props.s) / 4,
+              s: (yield* props.s) / 2,
+              children: slowChildren
+            })
+          }
+          {
+            yield* Triangle({
+              x: (yield* props.x) + (yield* props.s) / 2,
+              y: (yield* props.y) + (yield* props.s) / 4,
+              s: (yield* props.s) / 2,
+              children: slowChildren
+            })
+          }
+        </Match>
+      </Switch>
     );
   };
 });
 
 const Dot = $component(function* Dot(props: TypedProps<TriangleProps, "Dot">) {
-  const x = yield* $snapshot(props.x);
-  const y = yield* $snapshot(props.y);
-  const s = yield* $snapshot(props.s);
   const [hover, setHover] = yield* $signal(false);
   const onEnter = $event(function* () {
     yield* setHover(true);
@@ -168,12 +196,12 @@ const Dot = $component(function* Dot(props: TypedProps<TriangleProps, "Dot">) {
       <div
         class="dot"
         style={{
-          width: s + "px",
-          height: s + "px",
-          left: x + "px",
-          top: y + "px",
-          "border-radius": s / 2 + "px",
-          "line-height": s + "px",
+          width: (yield* props.s) + "px",
+          height: (yield* props.s) + "px",
+          left: (yield* props.x) + "px",
+          top: (yield* props.y) + "px",
+          "border-radius": (yield* props.s) / 2 + "px",
+          "line-height": (yield* props.s) + "px",
           background: (yield* hover) ? "#ff0" : "#61dafb"
         }}
         onMouseEnter={onEnter}

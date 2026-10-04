@@ -3,7 +3,6 @@ import {
   $event,
   $memo,
   $signal,
-  $snapshot,
   attempt,
   Errored,
   Loading,
@@ -31,14 +30,15 @@ function loadItem(id: string): Promise<Item> {
 }
 
 /**
- * One item: its id is its own state, seeded from the prop (`$snapshot`), and
+ * One item: its id is its own state until it is set, the prop's before (read
+ * where the item is derived: a setup does not read, D-042), and
  * the load is an `attempt` that declares its failure (`ItemError`), so the
  * boundaries' types know what they handle.
  */
 function* item(props: TypedProps<{ id: string }>) {
-  const [id, setId] = yield* $signal(yield* $snapshot(props.id));
+  const [chosen, setId] = yield* $signal<string | undefined>(undefined);
   const item = yield* $memo(function* () {
-    const current = yield* id;
+    const current = (yield* chosen) ?? (yield* props.id);
     return yield* attempt(
       () => loadItem(current),
       cause => new ItemError(cause)
@@ -55,7 +55,7 @@ const Title = $component(function* Title(
   };
 });
 
-function fallback(setId: BlockSetter<string>) {
+function fallback(setId: BlockSetter<string | undefined>) {
   return (error: () => ItemError, reset: () => void) => {
     const retry = $event(function* () {
       yield* setId("1");

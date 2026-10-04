@@ -5,7 +5,6 @@ import {
   $event,
   $memo,
   $signal,
-  $snapshot,
   createContext,
   type BlockSetter,
   type Component,
@@ -48,10 +47,16 @@ const RouterContext = createContext<RouterValue | undefined>(undefined);
 
 function RouteHOC<P extends boolean, E>(Comp: Component<{}, P, E>) {
   return $component(function* Router(props: TypedProps<{ url?: string }, "Router">) {
-    // The URL a server render starts from, taken once.
-    const url = yield* $snapshot(props.url);
-    const initialPath = url ?? (isServer ? "/" : window.location.pathname);
-    const [location, setLocation] = yield* $signal(initialPath.slice(1) || "index");
+    // The location the router navigated to, or none yet: then the URL a
+    // server render starts from (a prop: read where the location is derived,
+    // D-042), else the document's.
+    const [navigated, setLocation] = yield* $signal<string | undefined>(undefined);
+    const location = yield* $memo(function* () {
+      const path = yield* navigated;
+      if (path !== undefined) return path;
+      const url = yield* props.url;
+      return (url ?? (isServer ? "/" : window.location.pathname)).slice(1) || "index";
+    });
     const matches = function* (match: string) {
       return match === ((yield* location) || "index");
     };

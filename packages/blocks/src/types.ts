@@ -92,12 +92,6 @@ export interface Cleanup {
 export interface ContextRead {
   readonly [KIND]: "context";
 }
-/** `$snapshot(x)`: the current value, untracked, in a setup. */
-export interface Snapshot<P extends boolean = boolean, E = unknown> {
-  readonly [KIND]: "snapshot";
-  readonly [PENDING]: P;
-  readonly [FAILS]: E;
-}
 /** `yield* Child(props)`: the child's pending and failures, propagated. */
 export interface ChildView<P extends boolean = boolean, E = unknown> {
   readonly [KIND]: "child";
@@ -114,11 +108,10 @@ export type AnyOp =
   | Create<string>
   | Cleanup
   | ContextRead
-  | Snapshot<boolean, any>
   | ChildView<boolean, any>;
 
-/** Operations a component's (or a row block's) setup may perform. */
-export type SetupOp = Create<string> | Cleanup | ContextRead | Snapshot<boolean, any>;
+/** Operations a component's (or a row block's) setup may perform: it creates, never reads (D-042). */
+export type SetupOp = Create<string> | Cleanup | ContextRead;
 /**
  * What a JSX view's generator yields, as TypeScript sees it: the reads and
  * child views of its holes (each `yield*` in a JSX position, which the

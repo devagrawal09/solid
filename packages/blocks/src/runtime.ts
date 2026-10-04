@@ -72,7 +72,6 @@ import type {
   Read,
   Receipt as ReceiptType,
   SetupOp,
-  Snapshot,
   Source,
   TypedStore,
   ViewFails,
@@ -206,7 +205,7 @@ let state: HostState = {
 /**
  * Run `run` as `host`, with a state of its own: every place the runtime
  * drives block code (a setup, a view, a hole, a memo's run and resumption,
- * an effect run, an event's steps, a snapshot) goes through here. In
+ * an effect run, an event's steps, an untracked read) goes through here. In
  * development a plain throw out of the run is `UNTYPED_THROW` (D-019).
  */
 function runAs<T>(
@@ -268,7 +267,7 @@ function checkRead(inJsx: boolean): void {
   if (!inJsx && host === SETUP && getObserver() === null)
     throw devError(
       "READ_IN_SETUP",
-      "a setup creates; it does not read. Read in the view, a $memo or an $effect (or take a value with $snapshot)."
+      "a setup creates; it does not read. Read in the view's holes, a $memo, an $effect or an $event (once, untracked: yield* $untrack(source))."
     );
   // The same for a view's top level: a computation the view's run created
   // (a flow control reading its props, a hole's first pass) reads for itself.
@@ -1077,29 +1076,40 @@ export function $cleanup(fn: () => void): Yieldable<Cleanup, void> {
   return new CleanupOp(fn) as any;
 }
 
-class SnapshotOp {
+class UntrackOp {
   constructor(readonly target: unknown) {}
-  *[Symbol.iterator](): Generator<never, unknown, unknown> {
+  *[Symbol.iterator](): Generator<unknown, unknown, unknown> {
+    const { host, sink, view, jsx, name, receipts } = state;
+    if (__DEV__ && host === SETUP)
+      throw devError(
+        "UNTRACK_IN_SETUP",
+        `<${name ?? "anonymous"}>: a setup never reads, tracked or not (D-042). Take the value once where a block reads: yield* $untrack(source) in a hole, a $memo, an $effect or an $event.`
+      );
+    // an event's reads are untracked already (and wait for a pending source)
+    if (host === EVENT) return yield* eventRead(this.target);
+    // untracked, so a read after a memo's async attempt is fine
     return runAs(
-      NONE,
-      () => untrack(() => through(this.target)),
-      null,
-      null,
+      host,
+      () => untrack(() => readOf(this.target)),
+      sink,
+      view,
+      jsx,
       false,
-      false,
-      state.name
+      name,
+      receipts
     );
   }
 }
 /**
- * `yield* $snapshot(props.mode)` in a setup: the current value, untracked —
- * for structure chosen once at creation. Its pending / failures are the
- * component's.
+ * `yield* $untrack(props.initial)`: read a source once, untracked — "take the
+ * value and ignore its updates" (D-042), as Solid's `untrack`. A read op: in
+ * a hole, a `$memo`, an `$effect` or an `$event`; never in a setup, which
+ * does not read (its pending / failures are the read's).
  */
-export function $snapshot<T, P extends boolean, E>(
+export function $untrack<T, P extends boolean, E>(
   source: Source<T, P, E>
-): Yieldable<Snapshot<P, E>, T> {
-  return new SnapshotOp(source) as any;
+): Yieldable<Read<P, E>, T> {
+  return new UntrackOp(source) as any;
 }
 
 // --- context ------------------------------------------------------------------------------
@@ -1366,8 +1376,8 @@ export function $component<
   ..._rule: NoJsxViewRule<ViewYield<V>, ViewReturn<V>>
 ): Component<
   PropsOf<TP>,
-  ViewPending<ViewYield<V> | Extract<Y, Snapshot<any, any>>, ViewReturn<V>>,
-  ViewFails<ViewYield<V> | Extract<Y, Snapshot<any, any>>, ViewReturn<V>>
+  ViewPending<ViewYield<V>, ViewReturn<V>>,
+  ViewFails<ViewYield<V>, ViewReturn<V>>
 > {
   const component: any = function (props?: object) {
     return untrack(() => {
