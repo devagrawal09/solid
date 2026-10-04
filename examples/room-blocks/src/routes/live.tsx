@@ -311,8 +311,10 @@ const Chat = $component(function* Chat(props: Props<{ room: string }>) {
   });
 });
 
-const Transcript = $component(function* Transcript(
-  props: Props<{ messages: Source<Row[], LiveError, true>; wire: Wire }>
+// Transcript only forwards the messages: it takes their color from its caller
+// (D-029), and Messages, which reads them, is generic for the same reason.
+const Transcript = $component(function* Transcript<E, P extends boolean>(
+  props: Props<{ messages: Source<Row[], E, P>; wire: Wire }>
 ) {
   return view(function* () {
     return (
@@ -334,8 +336,8 @@ const Transcript = $component(function* Transcript(
   });
 });
 
-const Messages = $component(function* Messages(
-  props: Props<{ messages: Source<Row[], LiveError, true> }>
+const Messages = $component(function* Messages<E, P extends boolean>(
+  props: Props<{ messages: Source<Row[], E, P> }>
 ) {
   const me = yield* useIdentity();
   return view(function* () {
@@ -561,11 +563,13 @@ const Card = $component(function* Card(props: Props<{ room: string }>) {
   });
 });
 
-const CardBody = $component(function* CardBody(
+// CardBody reads the card and only forwards members and activity: those take
+// their color from the caller (D-029), as the two components reading them do.
+const CardBody = $component(function* CardBody<E, P extends boolean>(
   props: Props<{
     card: Source<{ topic: string; connection: number }, LiveError, true>;
-    members: Source<Member[], LiveError, true>;
-    activity: Source<Activity, LiveError, true>;
+    members: Source<Member[], E, P>;
+    activity: Source<Activity, E, P>;
   }>
 ) {
   return view(function* () {
@@ -600,8 +604,8 @@ const CardBody = $component(function* CardBody(
   });
 });
 
-const MemberCount = $component(function* MemberCount(
-  props: Props<{ members: Source<Member[], LiveError, true> }>
+const MemberCount = $component(function* MemberCount<E, P extends boolean>(
+  props: Props<{ members: Source<Member[], E, P> }>
 ) {
   const n = props.members.length;
   return view(function* () {
@@ -613,8 +617,8 @@ const MemberCount = $component(function* MemberCount(
   });
 });
 
-const ActivityLine = $component(function* ActivityLine(
-  props: Props<{ activity: Source<Activity, LiveError, true> }>
+const ActivityLine = $component(function* ActivityLine<E, P extends boolean>(
+  props: Props<{ activity: Source<Activity, E, P> }>
 ) {
   // A row is settled: the (pending) activity is read once, into one flag per tick.
   const ticks = yield* $memo(function* () {

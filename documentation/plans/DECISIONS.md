@@ -191,6 +191,34 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 *Alternatives:* keep the whole-program linker (infers colors across modules, needs a build step and generated files, and was the one pre-existing gate red); a TS language-service plugin.
 *Reasoning:* the linker reproduced, with a generator and a check script, what a declared annotation gives for free and locally; the generated files were the main source of twin drift. *Validation:* after migrating the 12 twins, report Async-vs-total prop counts per twin — if most props need the annotation, the decision is wrong and must be said so, never papered over with `any`. The same report counts pass-through components that needed a generic signature (D-029). *Implementation:* Phase 1B.
 
+**Validation (1B, `bl/colors`).** Counted with the TypeScript checker over every `Props<…>` declaration in the twins' sources (tests and setup helpers excluded). "Colored" is a prop declared `Source<T, E, P>` with `E ≠ never` or `P ≠ false`; a settled `Path<T>` declaration is not a color.
+
+| Twin | Components with props | Props | Colored **before** (linker-inferred / declared `Source<…>` at `fbd9fb97`, union) | Colored **after** (declared) | of which generic (D-029) | Generic components | Boundaries added for typing |
+| --- | ---: | ---: | --- | ---: | ---: | ---: | ---: |
+| effect | 3 | 4 | 1 / 2, 2 | 2 | 0 | 0 | 0 |
+| hackernews-spa | 6 | 15 | 0 / 0, 0 | 0 | 0 | 0 | 0 |
+| rendering | 13 | 19 | 3 / 7, 8 | 8 | 2 | 2 | 0 |
+| room | 23 | 37 | 8 / 10, 11 | 11 | 6 | 5 | 0 |
+| sierpinski | 3 | 10 | 2 / 0, 2 | 2 | 0 | 0 | 0 |
+| sierpinski-h | 3 | 10 | 2 / 0, 2 | 2 | 0 | 0 | 0 |
+| todos | 4 | 4 | 0 / 0, 0 | 0 | 0 | 0 | 0 |
+| todos-h | 3 | 3 | 0 / 0, 0 | 0 | 0 | 0 | 0 |
+| **all** | **58** | **102** | **16 / 19, 25** | **25** | **8** | **7** | **0** |
+
+The "before" column is from the last linker run. The first figure is the 16 props the linker inferred as pending or failing (the preliminary survey's "~16 of ~85": the linker listed only keyed components' props). The second is the props already declared with a colored `Source<…>` in `TypedProps`, which the linker could not override. Their union is the colors the twins actually had. The declared colors after the migration are the same 25 props, so no prop gained or lost a color. Three changed shape:
+
+- rendering's `FeedCard.feed` is `Source<Feed, FeedError>` (sync, may fail). The linker had said pending, but its callers pass a `loadingValue` memo and a `seedLoadingValue` projection, neither of which is pending.
+- room's seven `Source<…, true, unknown>` declarations now name `LiveError` (D-034). Room's `Card` memo now routes its stream through `attempt(…, cause => new LiveError(cause))`, as presence's already did, instead of being widened to `unknown`.
+- effect's `Results.results` declares `SearchError | TransientError` instead of `unknown`.
+
+**Finding: the annotation is the minority.** 25 of 102 props are colored, a quarter. Most of them sit in the two twins that exist to show async data: rendering (8 of 19) and room (11 of 37). Three twins have none. D-023 holds.
+
+**Finding (D-029): generics spread to the readers.** 3 components only forward a colored prop: room's `Transcript.messages`, room's `CardBody.members` and `.activity` (it reads `card`), and rendering's `Profile.info` (it reads `user`). The body of a generic component is checked for every color, so it can forward only into a prop that accepts every color, which means another generic. So the 4 components that read those props (`Messages`, `MemberCount`, `ActivityLine`, `Facts`) became generic too: 7 generic components carrying 8 generic props. Their bodies are unchanged, apart from `Profile`, whose own `Errored` fallback reads `err().message` and so needs `E extends Failure`. At this count `Inherit<T>` would save 7 type-parameter lists, so it does not earn its machinery yet. The rule worth stating is "a generic forwards only into a generic" (in `blocks-library.md` §6).
+
+**Finding (`h`): call a generic component directly.** `h(Comp, props)` reads `ReturnType<Comp>`, which TypeScript computes for a generic function by erasing its type parameters to their constraints. So `h(Generic, { todo })` gets `boolean` / `unknown` colors. In an `h` view a generic component is called instead (`h("ul", Generic({ todo }))`), which keeps the caller's colors. No `h` twin has a generic component.
+
+No twin needed a boundary, a cast or an `any` for typing. A declared failure needs no boundary at any position: `render` / `hydrate` accept a root that may fail but not one that is pending.
+
 ### D-024 — Bare prop type is settled
 **Decided.** A prop typed `T` is settled and never fails; `Async<T, E = never>` is the opt-in. Reads inside the child: bare → `Read<false, never>`, `Async<T, E>` → `Read<true, E>`. Pass-through carries the parent's declared color.
 *Alternatives:* bare = "unknown color" (what the linker inferred); bare = async.
