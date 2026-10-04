@@ -65,7 +65,7 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 | D-053 | decided | `$effect` and `$settled` both stay: react vs run-once-after-settle |
 | D-054 | decided | `view()` zero-runtime typing wrapper for error locality (no `setup()`) |
 | D-055 | decided | A row receives `item: Source<T>` and `index: Source<number>` |
-| D-056 | decided | Props are a plain object type; `$component` maps fields to Sources; `TypedProps` removed |
+| D-056 | amended | by D-068: a plain annotation cannot be remapped by `$component` (TS); `Props<>` does the mapping |
 | D-057 | decided | Phase 2 starts after Phase 1B lands (Q23 closed) |
 | D-058 | decided | No server-component support in the model; SC twins removed or converted; `$dynamic` removed; D-044 moot |
 | D-059 | decided | A row need not be settled: a row's failure propagates to the view holding the `<For>` |
@@ -77,6 +77,7 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 | D-065 | decided | Call-form props take a source, a hole or a settled value; no inline read in an argument |
 | D-066 | decided | A component call's `children` is always a generator (lazy view; rows for lists) |
 | D-067 | decided | Tags are DOM elements and foreign Solid components; block components are called (brand check) |
+| D-068 | decided | D-056 amended: `Props<{…}>` wrapper; colors declared as `Source<T, E = never, P = false>`; no `Async` |
 
 ## Entries
 
@@ -432,6 +433,11 @@ Consequences: F1 (server-component props in event/`ref` positions) disappears �
 *Alternatives:* a typed bridge to call them (`adopt()`, removed by D-047); library wrappers for the few in use.
 *Reasoning:* it states the real boundary — the model vs plain Solid — instead of hiding it behind a bridge or wrappers that grow with every foreign component. D-062 stands as written with these three rules; its migration (116 tags: 65 flow controls/boundaries, ~40 block components, 11 foreign) proceeds.
 *Foreign components that remain tags after the migration (12 sites).* `Router` ×2 (hackernews-spa-blocks, room-blocks); Solid's `Reveal` ×3, `Portal`, `HydrationScript`, and the `RouterContext` provider (rendering-blocks); `HydrationScript` and the `IdentityContext` provider (room-blocks); the `TodosContext` provider (todos-blocks); the `RuntimeContext` provider (effect-blocks).
+
+### D-068 — D-056 amended: `Props<{…}>`, `Source<T, E = never, P = false>`, no `Async`
+**Decided (Dev, 2026-10-04; from the Phase 1B agent's finding).** D-056 asked for a plain object annotation with `$component` mapping each field to a Source; TypeScript gives a body exactly the parameter type written, and nothing the called function declares can change it (checked with tsc: `props.label` is `string` inside the body and `yield*` iterates its characters). The mapping must be visible in the annotation, so: (1) a key-less wrapper `Props<{ todo: Source<Todo, FetchError, true>; label: string }>` — today's `TypedProps<P, K>` with the linker's `ColorOf<K, N>` lookup replaced by each field's own declared color; it is the only spelling that also carries D-029's pass-through generics (`function* <E, P extends boolean>(props: Props<{ todo: Source<Todo, E, P> }>)`); ~67 annotation sites. (2) Colors are declared with the one general type, parameters reordered to `Source<T, E = never, P extends boolean = false>`: `E` carries information and reads like `Result<T, E>`, `P` is a flag and goes last; the forms are bare `T` (settled, D-024), `Source<T, E>` (sync, may fail — e.g. a validating `$memo`), `Source<T, E, true>` (may be pending, may fail — the common async case under D-034), `Source<T, never, true>` (pending, never fails — rare). (3) No `Async<T, E>` alias (D-005: a second spelling that named only one corner). Variance and the call-site message are unchanged. Implementation note: `Component<…>` becomes a plain function type so a generic component keeps its type parameters (today `$component` drops them); D-067's tag check recognises a block component by its `View` return type instead of the brand; `$component`'s no-JSX rest parameter is to be checked against that.
+*Alternatives:* a curried explicit type argument (cannot express D-029); annotating the variable with `Component<…>` (colors written twice); every field declared as a source type (breaks D-024's bare = settled).
+*Reasoning:* the wrapper is the one thing that can do the field→Source mapping; one type for all four color corners. *Implementation:* Phase 1B commit 1 (the `Source` reorder across the library is inside that commit; site count reported).
 
 ## Phase 1A findings (agent report, items 4c–8; verbatim, 2026-10-04)
 
