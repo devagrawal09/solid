@@ -1,5 +1,6 @@
 // The room twin driven through jsdom over the in-process fake wire (see
-// vitest.config.ts): both pages, identity and presence, posting (the
+// vitest.config.ts): the live page (the original's `/` server component is
+// not part of the twin, D-058), identity and presence, posting (the
 // optimistic row held for the echo), the chaos switch's reconnects, the
 // undeclared summary's failure and regeneration, the nested-async card, and
 // the archive's room-keyed boundary.
@@ -19,43 +20,6 @@ afterEach(() => {
 
 const text = (selector: string) => app.root.querySelector(selector)?.textContent ?? null;
 const input = () => app.root.querySelector<HTMLInputElement>(".composer input")!;
-
-describe("/ (the live server component)", () => {
-  it("renders the panel, mints the tab's identity, joins and enables the composer", async () => {
-    start("/");
-    expect(text(".room")).toContain("Room, rendered on the server");
-    await advance(50);
-    expect(text(".room-panel h2")).toBe("#lobby");
-    expect(text(".presence-row .count")).toBe("1");
-    expect(app.root.querySelector(".presence-row .me")).not.toBeNull();
-    expect(input().disabled).toBe(false);
-    expect(input().placeholder).toBe("Message #lobby");
-    expect(text(".pill")).toBe("room · connected");
-  });
-
-  it("a post reaches the transcript as the panel's markup; the draft clears", async () => {
-    start("/");
-    await advance(50);
-    await type(app, "hi there");
-    await submit(app);
-    await advance(50);
-    const rows = [...app.root.querySelectorAll(".room-panel .messages li")];
-    expect(rows.at(-1)!.className).toBe("mine");
-    expect(rows.at(-1)!.querySelector(".text")!.textContent).toBe("hi there");
-    expect(input().value).toBe("");
-  });
-
-  it("the chaos switch: a reconnect is a new render, counted on the pill", async () => {
-    start("/");
-    await advance(50);
-    const before = text(".room-panel .panel-head .muted");
-    await click(app, ".chaos button");
-    await advance(50);
-    expect(text(".chaos .muted")).toBe(" dropped 1");
-    expect(text(".pill")).toBe("room · connected (1 reconnect)");
-    expect(text(".room-panel .panel-head .muted")).not.toBe(before);
-  });
-});
 
 describe("/live (live data sources)", () => {
   it("presence joins once the identity exists; directory, card and archive land", async () => {
@@ -110,8 +74,11 @@ describe("/live (live data sources)", () => {
     expect(text(".header .pill")).toBe("presence · connected (1 reconnect)");
     await click(app, ".error button");
     await advance(5000);
-    // (the rooms are module state: earlier tests posted in #lobby)
-    expect(text(".side")).toMatch(/Attempt 2: \d+ (person has|people have) posted/);
+    // (the rooms are module state: whether an earlier test posted in #lobby
+    // depends on the order the tests run in)
+    expect(text(".side")).toMatch(
+      /Attempt 2: (nobody has said anything|\d+ (person has|people have) posted)/
+    );
   });
 
   it("switching rooms keys the archive's boundary: the new room's fallback shows at once", async () => {

@@ -23,7 +23,7 @@ function seeded(seed: number) {
   };
 }
 
-export function install(path = "/") {
+export function install(path = "/live?room=design") {
   vi.useFakeTimers({ now: START });
   vi.spyOn(Math, "random").mockImplementation(seeded(42));
   sessionStorage.clear();
@@ -91,19 +91,9 @@ export function snapshot(app: Mounted): string {
 export type Step = [name: string, run: (app: Mounted) => Promise<unknown> | unknown];
 
 export const steps: Step[] = [
-  // `/`: the room as a live server component
-  ["mount /", () => advance(0)],
-  ["the panel renders, the tab mints its identity and joins", () => advance(50)],
-  ["type a draft", app => type(app, "hello from the test")],
-  ["send it", app => submit(app)],
-  ["the transcript carries it", () => advance(50)],
-  ["type another draft", app => type(app, "half-typed")],
-  ["kill every connection", app => click(app, ".chaos button")],
-  ["the panel reconnects (a new render)", () => advance(50)],
-  ["switch to #design", app => click(app, '.rooms-inline a[href="/?room=design"]')],
-  ["#design renders", () => advance(50)],
-  // `/live`: the same room from live data sources
-  ["go to /live", app => click(app, 'a[href="/live?room=design"]')],
+  // `/live`: the room from live data sources (the original's `/`, a live
+  // server component, is not part of the twin: D-058)
+  ["mount /live", () => advance(0)],
   ["shell sources land", () => advance(50)],
   ["the card's members land", () => advance(700)],
   ["the activity samples", () => advance(2000)],

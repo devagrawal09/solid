@@ -1,6 +1,6 @@
 {
   "name": "room-blocks-example",
-  "description": "examples/room (live server functions, a live server component) with @solidjs/blocks (JSX flavor): same sources, markup and behavior",
+  "description": "examples/room's /live page (live server functions) with @solidjs/blocks (JSX flavor): same sources, markup and behavior; the original's live server component is not part of the twin (D-058)",
   "version": "0.0.0",
   "private": true,
   "author": "Ryan Carniato",

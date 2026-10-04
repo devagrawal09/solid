@@ -99,7 +99,7 @@ function fail(message) {
 // Steps
 
 const TWIN_SCRIPTS = ["test", "typecheck", "lint", "link:check"];
-const EXPECTED_TWINS = 12;
+const EXPECTED_TWINS = 9;
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));

@@ -22,11 +22,8 @@ const ALL = [
   "effect",
   "todos",
   "room",
-  "chat",
   "hackernews-spa",
-  "hackernews",
-  "rendering",
-  "notes"
+  "rendering"
 ];
 // `<name>-blocks-h` twins (the no-JSX flavor) are measured too when present.
 const FLAVORS = ["-blocks", "-blocks-h"];
@@ -84,7 +81,9 @@ for (const name of names.length ? names : ALL) {
         y = b[variant] ?? { error: "missing" };
       const cell = v => (v.error ? `error: ${v.error}` : `${v.min} / ${v.gz}`);
       const pct =
-        x.gz && y.gz ? `${y.gz >= x.gz ? "+" : ""}${(((y.gz - x.gz) / x.gz) * 100).toFixed(1)}%` : "–";
+        x.gz && y.gz
+          ? `${y.gz >= x.gz ? "+" : ""}${(((y.gz - x.gz) / x.gz) * 100).toFixed(1)}%`
+          : "–";
       console.log(`| ${name}${flavor} | ${variant} | ${cell(x)} | ${cell(y)} | ${pct} |`);
     }
   }

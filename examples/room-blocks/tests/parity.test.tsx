@@ -23,9 +23,6 @@ it("renders the same DOM as the original after every step", async () => {
   b.dispose();
   const at = (name: string) => original[steps.findIndex(s => s[0] === name)];
   // the script reaches the states it compares
-  expect(at("the panel renders, the tab mints its identity and joins")).toContain("render #");
-  expect(at("the transcript carries it")).toContain("hello from the test");
-  expect(at("the panel reconnects (a new render)")).toContain("(1 reconnect)");
   expect(at("shell sources land")).toContain("connection #");
   expect(at("post on /live (optimistic, held for the echo)")).toContain("live post");
   expect(at("the echo lands")).toContain("live post");

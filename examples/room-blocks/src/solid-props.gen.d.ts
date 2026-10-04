@@ -64,11 +64,6 @@ declare module "@solidjs/blocks" {
     "Messages": {
       messages: { pending: false; fails: never; live: true; static: false };
     };
-    "Panel": {
-      me: { pending: false; fails: never; live: true; static: false };
-      room: { pending: false; fails: never; live: true; static: false };
-      wire: { pending: false; fails: never; live: true; static: false };
-    };
     "StatusPill": {
       label: { pending: false; fails: never; live: false; static: true };
       wire: { pending: false; fails: never; live: true; static: false };

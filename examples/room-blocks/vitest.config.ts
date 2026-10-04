@@ -27,7 +27,7 @@ function exampleAlias(): Plugin {
 // The tests run both apps client-only in jsdom: no `start` entries and no
 // server-function transform. `@solidjs/web/server-functions` is the
 // in-process fake in tests/fake-server-functions.ts, so the `"use server"`
-// bodies (the sources, the live server component) run here against the
+// bodies (the live sources) run here against the
 // in-memory rooms. The wire itself — SSR, hydration, event streams, morphs —
 // is covered by the browser check (scripts/example-blocks/browser.mjs).
 export default defineConfig({

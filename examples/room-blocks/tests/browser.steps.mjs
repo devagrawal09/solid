@@ -34,24 +34,6 @@ const quiet = page => page.waitForTimeout(500);
 
 export const steps = [
   [
-    "load /: the panel is in the document, hydrates, the tab joins",
-    async (page, { base }) => {
-      await page.goto(base + "/");
-      await page.waitForSelector(".room-panel .members li.me", { timeout: 20000 });
-      await page.waitForSelector(".composer input:not([disabled])");
-      await quiet(page);
-    }
-  ],
-  [
-    "post from the composer: the row arrives as markup",
-    async page => {
-      await page.fill(".composer input", "hello from the browser");
-      await page.click(".composer button");
-      await page.waitForSelector(".room-panel .messages li.mine");
-      await quiet(page);
-    }
-  ],
-  [
     // Over the production harness (HTTP/1.1: six connections per origin) the
     // /live page's seven live sources do not connect in headless Chromium —
     // the original's as well as the twin's — so this compares the streamed

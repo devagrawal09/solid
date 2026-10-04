@@ -1,6 +1,6 @@
 # Generator blocks as a library: `@solidjs/blocks`
 
-Status: implemented on `blocks-lib` (cut from `upstream/next` at 644eaf3b). Twelve example twins run on it. This document is the reference for what the library is, what it enforces and where, what it costs, and what it cannot do without a blocks compiler.
+Status: implemented on `blocks-lib` (cut from `upstream/next` at 644eaf3b). Nine example twins run on it. This document is the reference for what the library is, what it enforces and where, what it costs, and what it cannot do without a blocks compiler.
 
 ## 1. What it is
 
@@ -136,7 +136,7 @@ The `version` field exists for exactly these additions; the linker refuses a sum
 ## 7. Limitations (without the blocks compiler)
 
 - **No islands.** Hydration is Solid's: every hydrated component runs. Island boundaries need per-handler reads / writes (see the table) and a compiler to split chunks.
-- **No automatic server components.** A server component is written as one (`"use server"` returning a `$component`); nothing infers that a component with inert inputs could render on the server.
+- **No server components** (D-058). The blocks model has none: the idea is that a future compiler finds inert regions and turns them into server components itself. Server *data* (server functions, SSR) is supported; the twins whose point was server components (chat, hackernews, notes) were removed, and room's twin keeps only its live-server-function page.
 - **No runtime tiers.** The app ships the full runtime plus the interpreter; selecting a sync-only or smaller runtime needs a whole-graph capability proof and a compiler to lower blocks.
 - **Interpretation cost** (section 8): generator objects per setup / view / row, proxy paths for props and stores, one `perform` call per hole.
 - **An effect cannot trigger an async event** (D-035, `start()` removed): an `$effect` delegates only to a synchronous event; work that must wait is modelled as an event calling an event, or as a `$memo`.
@@ -164,7 +164,7 @@ What the numbers include: everything each operation does, jsdom's DOM work inclu
 
 ## 9. The twins
 
-Twelve `examples/*-blocks` (JSX) and `*-blocks-h` (no-JSX) apps, each against its original: same markup, same behavior, the wire (server functions, frames, data layers) verbatim. Per twin: jsdom behavior tests; a differential parity test (one script against both apps, DOM compared after every step, only hydration markers normalized, plus app-specific clock / random normalization where stated); `typecheck`, lint with no `any`, `link:check`; `vite build` for every variant; for SSR apps a Chromium check against the original's production build (no console errors, no page errors, no hydration warnings, the same DOM after load and after every step; `scripts/example-blocks/browser.mjs`); client bytes (`scripts/example-blocks/bytes.mjs`).
+Nine `examples/*-blocks` (JSX) and `*-blocks-h` (no-JSX) apps (chat, hackernews and notes, whose point was server components, were removed with D-058), each against its original: same markup, same behavior, the wire (server functions, frames, data layers) verbatim. Per twin: jsdom behavior tests; a differential parity test (one script against both apps, DOM compared after every step, only hydration markers normalized, plus app-specific clock / random normalization where stated); `typecheck`, lint with no `any`, `link:check`; `vite build` for every variant; for SSR apps a Chromium check against the original's production build (no console errors, no page errors, no hydration warnings, the same DOM after load and after every step; `scripts/example-blocks/browser.mjs`); client bytes (`scripts/example-blocks/bytes.mjs`).
 
 Tests are behavior + parity (steps). Browser: Chromium steps against the original's production build (all pass; re-run after the last runtime change). Bytes: client JS, minified / gzip -9, original → twin.
 
@@ -176,12 +176,9 @@ Tests are behavior + parity (steps). Browser: Chromium steps against the origina
 | effect-blocks            | JSX    | CSR                                                | 12 + 1 |           42 | 29 steps                       | 81,727 → 84,507 (+3.4%)                                                                     | none (verbatim Effect layer has `any`, lint-exempt) |
 | todos-blocks             | JSX    | CSR                                                | 7 + 1  |           27 | 16 steps                       | 32,171 → 34,622 (+7.6%)                                                                     | none                                                |
 | todos-blocks-h           | no-JSX | CSR                                                | 7 + 1  |           27 | 16 steps                       | 32,171 → 38,791 (+20.6%)                                                                    | none                                                |
-| room-blocks              | JSX    | SSR, live server functions + live server component | 7 + 1  |           23 | 3 steps                        | 111,464 → 114,634 (+2.8%)                                                                   | none                                                |
-| chat-blocks              | JSX    | SSR, server components (frames)                    | 7 + 1  |           18 | 7 steps                        | 67,944 → 70,223 (+3.4%)                                                                     | none                                                |
+| room-blocks              | JSX    | SSR, live server functions (the original's `/live`; its live server component page is not in the twin, D-058) | 4 + 1  |           13 | 1 step (the streamed `/live` document) | 111,464 → 114,634 (+2.8%) (before D-058; not re-measured) | none |
 | hackernews-spa-blocks    | JSX    | SSR + SPA                                          | 7 + 1  |           15 | 13 steps + thread variant 4    | 80,855 → 83,499 (+3.3%)                                                                     | none                                                |
-| hackernews-blocks        | JSX    | SSR, server components (frames)                    | 7 + 1  |           15 | 13 steps + thread variant 4    | 102,461 → 106,200 (+3.6%)                                                                   | none                                                |
 | rendering-blocks         | JSX    | CSR / stream / string                              | 8 + 1  |           29 | 34 steps per variant (3)       | csr 37,845 → 41,285 (+9.1%); stream 46,741 → 48,975 (+4.8%); string 46,785 → 49,044 (+4.8%) | none                                                |
-| notes-blocks             | JSX    | SSR, server components + single-flight mutations   | 8 + 1  |           18 | 12 steps + mutations variant 8 | 115,978 → 120,644 (+4.0%)                                                                   | none                                                |
 
 The fixed cost of the interpreter and typed flow controls is about 2.3–3.5 KB gz in the JSX flavor (large relative share only in the two smallest apps); the no-JSX twins also ship `@solidjs/h`. Casts that remain are in code copied verbatim from the originals (data layers, markdown helpers), listed in each twin's README. Every twin commits its linker output and runs typecheck, lint (recommended rules + no explicit `any`) and `link:check` clean.
 
