@@ -1,4 +1,4 @@
-# HANDOFF — blocks-lib build-out (checkpoint 2026-10-04, macOS session; Phase 1A complete)
+# HANDOFF — blocks-lib build-out (checkpoint 2026-10-04, macOS session; Phases 1A and 1B complete)
 
 Supersedes the container-era handoff. Everything below is pushed to `fork` (git@github.com:devagrawal09/solid.git). Nothing is unpushed.
 
@@ -6,13 +6,13 @@ Supersedes the container-era handoff. Everything below is pushed to `fork` (git@
 
 | Branch | Head | Contents |
 | --- | --- | --- |
-| `blocks-lib` = `fork/blocks-lib` | `74bb968a` | baseline `dfe692cf` + reconstruction + **Phase 1A complete** (items 2–8, follow-ups 1–3: 30 code commits) + decisions D-001…D-067 |
+| `blocks-lib` = `fork/blocks-lib` | `30090c23` | baseline `dfe692cf` + reconstruction + **Phase 1A and 1B complete** (35 code commits) + decisions D-001…D-068 |
 | `bl/bootstrap` | = `blocks-lib` | docs-only branch where DECISIONS.md is edited; ff'd into `blocks-lib` per commit |
 | `bl/tighten` | = `blocks-lib` | Phase 1A, done; agent session continuable if a 1A regression appears |
-| `bl/colors` | = `blocks-lib`, 1B agent dispatched (brief: notebook `colorsBrief4`) | Phase 1B |
-| `bl/plugin` | provisioned at `b2ca5aad`, no commits (brief: `pluginBrief2`) | Phase 2, after 1B (D-057) |
+| `bl/colors` | = `blocks-lib` | Phase 1B, done |
+| `bl/plugin` | = `blocks-lib`, Phase 2 agent dispatched (brief: notebook `pluginBrief3`) | Phase 2 |
 
-Key documents, in reading order: `documentation/plans/blocks-library.md` (the reference), `documentation/plans/DECISIONS.md` (D-001…D-057, every decision with alternatives/reasoning; a "Phase 1A findings" section with the agent's verbatim stop-reports; reconstructed after the container loss — provenance note at the top), `documentation/plans/blocks-gate-baseline.md` (reference run `37 pass / 2 fail / 0 skip`, 39 steps, 8 twins; the two reds are the linker staleness tests and one `blocks-summary` compiler test, both pre-existing and removed by 1B).
+Key documents, in reading order: `documentation/plans/blocks-library.md` (the reference), `documentation/plans/DECISIONS.md` (D-001…D-057, every decision with alternatives/reasoning; a "Phase 1A findings" section with the agent's verbatim stop-reports; reconstructed after the container loss — provenance note at the top), `documentation/plans/blocks-gate-baseline.md` (reference run **`30 pass / 0 fail / 0 skip`**, 30 steps, 8 twins — the linker and `summarizeBlocks` are gone, and with them both pre-existing reds).
 
 ## What changed since the container handoff (one screen)
 
@@ -24,6 +24,10 @@ Key documents, in reading order: `documentation/plans/blocks-library.md` (the re
 
 D-058 no server components (notes/hackernews/chat twins removed, room reduced to its /live page, `$dynamic` removed); D-059/D-063 rows need not be settled (failures and pending propagate to the holding view through call form); D-060 `constant(value)`; D-061 migrating-element twin removed (an element is not a value); **D-062 block components are called, never tagged** — with its three rules D-065 (call-form props are sources/holes/settled values; no inline read in an argument), D-066 (children always a generator; `fallback` too), D-067 (JSX tags are DOM elements and foreign Solid components — 12 foreign tags remain: Router ×2, Reveal ×3, Portal, HydrationScript ×2, four context providers); D-064 `latest` removed. 104 block-component tags migrated to calls; lint rules `no-component-tag`, `no-read-in-prop`, `component-children-generator` in `recommended`; JSX types reject branded block components as tags.
 
+## Phase 1B result (D-023's own validation)
+
+`Props<{…}>` replaces `TypedProps`; colors are `Source<T, E = never, P = false>` (D-068; no `Async`); `TypedProps` keys, `solid-props.gen.d.ts`, `link:check`, `@solidjs/blocks-linker`, `typed-props-key`, `.prettierignore` and Rust `summarizeBlocks` are gone. Per-twin table (props / colored after / generic pass-through props (components) / boundaries added for typing): effect 4/2/0/0 · hackernews-spa 15/0/0/0 · rendering 19/8/2(2)/0 · room 37/11/6(5)/0 · sierpinski 10/2/0/0 · sierpinski-h 10/2/0/0 · todos 4/0/0/0 · todos-h 3/0/0/0 · **all 102 / 25 / 8 (7) / 0**. A quarter of props need a color, nearly all in the two async-data twins; no cast, `any` or boundary for typing: D-023 holds; `Inherit<T>` (D-029) not warranted at 7 generic components. Findings recorded under D-068: the call-site message cannot name the component (TS); the block-component mark sits on the returned view; `h(GenericComp, props)` erases type parameters; `render`/`hydrate` refuse only a pending root (a failure with no `Errored` re-throws, D-033).
+
 ## Open rulings for Dev — none at this checkpoint. Historical (resolved by D-058/D-059):
 
 - **F1 — D-042 vs server-component props in event/`ref` positions** (notes `AppView`, chat `Markdown`): hydration claims are keyed on the prop stub's identity; a setup may not read it, the transform refuses `yield*` in event/ref positions, wrapping it in an `$event` breaks the claim. Options: (A) event/ref positions accept a `Source` attached by value; (B) keep `$snapshot` for exactly this; (C) §7 limitation.
@@ -32,8 +36,8 @@ D-058 no server components (notes/hackernews/chat twins removed, room reduced to
 ## Work queue
 
 1. ~~**1A follow-up**~~ Done (D-041, D-042 `$untrack` — needed at 0 twin sites, D-005 candidate — D-048→D-064, D-052→D-060, D-054 `view()` only, D-055, D-058, D-059, D-061, D-062/065–067, D-063). Historical text: D-048 `latest` option; D-052 `createContext` constant default and revert the `undefined`+`$memo` workaround in room/rendering; D-054 `view()` wrapper (no `setup()`), lint `prefer-view-wrapper`; D-055 row-signature type test + in-place item change test; D-041 lint `jsx-only-in-view` + `[JSX_IN_SETUP]` (two twins build `<Router>` JSX in setup — report the sites); 4c per F1 (`$snapshot` → `$untrack`; 33 sites / 16 files surveyed in DECISIONS); 4d remainder per F2. Then full gate, ff, push.
-2. **Phase 1B** on `bl/colors` — DISPATCHED (brief `colorsBrief4`; adds: hole props typed by what they yield so declared colors flow through calls; `Errored.fallback` takes a lazy view; §9 bytes re-measured; D-056: `TypedProps` removed outright; removal list enumerated: 12 `solid-props.gen.d.ts`, 12 `link:check`, 13 linker dependents, `typed-props-key`; `summarizeBlocks` removal needs `RUSTUP_TOOLCHAIN=stable`). Report Async / generic-pass-through counts per twin (validates D-023/D-029).
-3. **Phase 2** on `bl/plugin` after 1B (D-057; brief = `pluginBrief2`, updated for 6 JSX + 2 h twins, D-047's lazy module-URL pass, and D-062/D-067 — the rule leaves block-component calls untouched): plugin lifted from `packages/babel-plugin/src/shared/blocks-rule.ts`; 5 fixtures / 5 refusal codes as oracle; `enforce: "pre"` so the compiler rule idles (no disable option, D-031 note); then D-043 removal (classify the non-blocks compiler hunks first); also give the library's `lazy` the module-URL pass the published Vite plugin only does for `solid-js`'s `lazy` (D-047 finding).
+2. ~~**Phase 1B**~~ Done (five commits `e1aba8f6`…`30090c23`). Historical text: D-056: `TypedProps` removed outright; removal list enumerated: 12 `solid-props.gen.d.ts`, 12 `link:check`, 13 linker dependents, `typed-props-key`; `summarizeBlocks` removal needs `RUSTUP_TOOLCHAIN=stable`). Report Async / generic-pass-through counts per twin (validates D-023/D-029).
+3. **Phase 2** on `bl/plugin` — DISPATCHED (brief `pluginBrief3`: 6 JSX + 2 h twins, D-047's lazy module-URL pass, D-062/D-067 — the rule leaves block-component calls untouched; clippy/rustfmt scoped to touched files because upstream already fails them): plugin lifted from `packages/babel-plugin/src/shared/blocks-rule.ts`; 5 fixtures / 5 refusal codes as oracle; `enforce: "pre"` so the compiler rule idles (no disable option, D-031 note); then D-043 removal (classify the non-blocks compiler hunks first); also give the library's `lazy` the module-URL pass the published Vite plugin only does for `solid-js`'s `lazy` (D-047 finding).
 4. **Phase 3** extraction per D-015; **Phase 4** conformance harness port (D-039), getting-started doc, `README`: "this is the strict dialect; the compiler route is the ergonomic one".
 
 ## Environment notes (this machine: macOS, /Users/devagr/solid)
@@ -49,3 +53,6 @@ D-058 no server components (notes/hackernews/chat twins removed, room reduced to
 
 - **After fast-forwarding a worktree over code commits, reinstall and rebuild before gating** (`pnpm install --frozen-lockfile --prefer-offline && pnpm exec turbo run build --filter=@solidjs/blocks --force`): a stale `dist/` produced a spurious RED on `bl/bootstrap` at `9b358663` (the same code was green on `bl/tighten`).
 - **Never chain a push after a gate with `;`**: the orchestrator's chain once pushed on a RED fast gate (the commit was docs-only and later verified green, but the chain was wrong). Use `node scripts/blocks-gate.mjs … | tail -1 | grep -q GREEN && git merge --ff-only … && git push …`.
+- **Sandbox limits found in 1B:** `pnpm install` that must change the lockfile stalls and empties `node_modules` inside an agent's sandbox — the orchestrator runs it (`pnpm install --prefer-offline`, not frozen) and resumes the agent; the napi CLI fails with `spawn EPERM` there — agents copy cargo's output by hand, the orchestrator re-runs `pnpm --filter @solidjs/compiler run build` outside the sandbox and copies `compiler.node` to every checkout; cargo's target dir must be under `$TMPDIR`, not `/tmp`.
+- **Upstream Rust lint state (not ours):** on a toolchain with clippy (1.97.1), `cargo clippy -- -D warnings` fails on `src/shared/validate.rs:101` and `src/tsrx/project.rs:168`; rustfmt flags `tests/tsrx_typecheck_projection.rs`. Left alone per D-043.
+- **Server restart (22:xx):** one execution was lost mid-run; nothing committed was lost. Notebook values and agent sessions survived; an interrupted agent is resumed with an instruction to inspect its uncommitted edits first.
