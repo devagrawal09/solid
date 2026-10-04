@@ -32,13 +32,13 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 | D-020 | decided | `$event` is always a transaction |
 | D-021 | decided | Dev-mode receipt tracking → `[UNYIELDED_WRITE]` |
 | D-022 | decided | Remove stray gitlink `async-reactivity-walkthrough` |
-| D-023 | decided | Type linker removed; prop colors declared with `Async<T, E>` |
-| D-024 | decided | Bare prop type = settled, never fails; async is opt-in |
+| D-023 | implemented (1B) | Type linker removed; prop colors declared (as `Source<T, E, P>`, D-068) |
+| D-024 | implemented (1B) | Bare prop type = settled, never fails; async is opt-in |
 | D-025 | **lost** | — |
 | D-026 | **lost** | — |
 | D-027 | decided | The gate pins `TZ=UTC` |
 | D-028 | decided | A setter called outside a block run throws in dev |
-| D-029 | decided | Pass-through props: explicit generics first; `Inherit<T>` only if the count is high |
+| D-029 | implemented (1B) | Pass-through props: explicit generics first; `Inherit<T>` only if the count is high (7 components: not yet) |
 | D-030 | decided | A row body is a setup |
 | D-031 | decided | The JSX transform stays (D-003 stands) |
 | D-032 | decided | A view has no body: reads only in JSX positions, structure only via flow controls |
@@ -49,7 +49,7 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 | D-037 | decided | D-008 amended: no Chromium clause; `oxlint` is a real gate step |
 | D-038 | decided | Flow controls accept holes as well as sources |
 | D-039 | decided | Conformance harness ported in Phase 4 |
-| D-040 | decided | `Async<T, E>` on a prop is permission only |
+| D-040 | implemented (1B) | A declared prop color is permission only |
 | D-041 | decided | JSX only in view / hole / row returns; a setup never creates elements |
 | D-042 | decided | All props are reactive; no static prop kind; `$snapshot` removed; `$untrack` in reactive scopes only |
 | D-043 | decided | After plugin parity, the fork's compiler and babel-plugin go back to pristine upstream |
@@ -65,7 +65,7 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 | D-053 | decided | `$effect` and `$settled` both stay: react vs run-once-after-settle |
 | D-054 | decided | `view()` zero-runtime typing wrapper for error locality (no `setup()`) |
 | D-055 | decided | A row receives `item: Source<T>` and `index: Source<number>` |
-| D-056 | amended | by D-068: a plain annotation cannot be remapped by `$component` (TS); `Props<>` does the mapping |
+| D-056 | amended, implemented (1B) | by D-068: a plain annotation cannot be remapped by `$component` (TS); `Props<>` does the mapping |
 | D-057 | decided | Phase 2 starts after Phase 1B lands (Q23 closed) |
 | D-058 | decided | No server-component support in the model; SC twins removed or converted; `$dynamic` removed; D-044 moot |
 | D-059 | decided | A row need not be settled: a row's failure propagates to the view holding the `<For>` |
@@ -77,7 +77,7 @@ Reading order with the rest of the plan: `blocks-library.md` (the reference), th
 | D-065 | decided | Call-form props take a source, a hole or a settled value; no inline read in an argument |
 | D-066 | decided | A component call's `children` is always a generator (lazy view; rows for lists) |
 | D-067 | decided | Tags are DOM elements and foreign Solid components; block components are called (brand check) |
-| D-068 | decided | D-056 amended: `Props<{…}>` wrapper; colors declared as `Source<T, E = never, P = false>`; no `Async` |
+| D-068 | implemented (1B) | D-056 amended: `Props<{…}>` wrapper; colors declared as `Source<T, E = never, P = false>`; no `Async` |
 
 ## Entries
 
@@ -219,10 +219,25 @@ The "before" column is from the last linker run. The first figure is the 16 prop
 
 No twin needed a boundary, a cast or an `any` for typing. A declared failure needs no boundary at any position: `render` / `hydrate` accept a root that may fail but not one that is pending.
 
+*Implemented (Phase 1B, `bl/colors`).*
+
+- `e1aba8f6`: the types (`Props<{ … }>`, `Source<T, E, P>`, call-site checking).
+- `45fdd477`: the twins' pass-through generics and the validation table above.
+- `45cdfdf9`: `@solidjs/blocks-linker` and everything it fed are removed: the 8 `solid-props.gen.d.ts`, each twin's `link` / `link:check` scripts, devDependency and `solidLink()`, `typed-props-key`, `.prettierignore`, and the gate's linker steps (39 → 30 steps).
+- `f00b389a`: `summarizeBlocks` is removed from the compiler. With it went the gate's last pre-existing red, so the baseline is 30 pass / 0 fail.
+
+The decision text's `Async<T, E>` is spelled `Source<T, E, true>` (D-068). D-018 (open components) has nothing left to dissolve into: no component's color depends on who calls it.
+
 ### D-024 — Bare prop type is settled
 **Decided.** A prop typed `T` is settled and never fails; `Async<T, E = never>` is the opt-in. Reads inside the child: bare → `Read<false, never>`, `Async<T, E>` → `Read<true, E>`. Pass-through carries the parent's declared color.
 *Alternatives:* bare = "unknown color" (what the linker inferred); bare = async.
 *Reasoning:* the common case must be the quiet one, and a settled default is the only one TS can enforce without inference across files. The call-site error should be readable via a branded `never` ("prop `todo` of TodoItem is settled; pass a settled value, or declare it `Async<Todo, FetchError>`").
+
+*Implemented (1B, `e1aba8f6`).* `Props<{ todo: Todo }>` reads are `Read<false, never>`. A `Source<T, E, P>` declaration reads `Read<P, E>`.
+
+At the call, a settled prop refuses a pending or failing source, path or hole. Hole props are now typed by what they yield (`HoleProp<T, E, P>`), so a pending hole no longer passes a settled prop, and `h(Comp, { children })` checks `children` like any prop (it was `unknown`). TypeScript prints the message in the expected type: `SettledProp<"[SETTLED_PROP] prop `todo` is settled: pass a settled value, or declare it Source<T, E, true>">`.
+
+The message cannot name the component, as the decision's example did ("of TodoItem"): a type has no access to a component's name. The call on the reported line is the component.
 
 ### D-025 — **lost**
 Not carried by the handoff. If you remember it, append it as a new entry naming D-025.
@@ -244,6 +259,12 @@ Not carried by the handoff. If you remember it, append it as a new entry naming 
 **Decided (Dev, 2026-10-04).** Under D-023 a component that forwards a prop it never reads (a `Card` handing `todo` to `TodoItem`) declares its color with an explicit type parameter: `type CardProps<P extends boolean = false, E = never> = { todo: Source<Todo, P, E> }` and `function* <P extends boolean, E>(props: CardProps<P, E>)`. The body is checked once for every color, so forwarding compiles only into a prop that accepts any color (`Async<…>`); forwarding into a bare (settled) prop is an error. Phase 1B's twin report counts these pass-through generics per twin next to the Async counts. An `Inherit<T>` marker — `$component` making the component implicitly generic over each `Inherit` prop, same rules, no type parameter to write — is added only if that count is high.
 *Alternatives:* `Inherit<T>` from the start (less noise, more type machinery and worse error messages); declare every pass-through prop `Async<T, E>` (no generics anywhere, but ready values read as maybe-loading downstream and the component names errors it never sees); fix a numeric failure threshold up front.
 *Reasoning:* options 1 and 2 have identical soundness — neither infers across files; 2 is sugar for 1 — so start with the one that has no machinery and makes the cost countable; the count decides whether the sugar earns its complexity.
+
+*Implemented (1B, `45fdd477`).* Generic components keep their type parameters because `Component<…>` is now a plain function type (D-068). Before, `$component` returned a function intersected with the component brand, and TypeScript propagates a generic argument's type parameters only into a single-signature function result. So the brand moved onto the returned view.
+
+The count is in D-023's validation. 3 components only forward a colored prop, and 4 components read what they forward. A generic body is checked for every color, so it forwards only into another generic: the readers became generic too, giving 7 generic components and 8 generic props. `Inherit<T>` would save 7 type-parameter lists, so it does not earn its machinery yet. One forwarder (rendering's `Profile`) shows the failure in its own `Errored` and needs `E extends Failure`.
+
+`h(GenericComp, props)` loses the parameters (TypeScript's `ReturnType` of a generic function erases them), so an `h` view calls a generic component directly.
 
 ### D-030 — A row body is a setup
 **Decided (Dev, 2026-10-04).** The bare `function*` of a `<For>`/row (D-013) is a setup: it runs once per item and returns the row's view generator, the same shape as `$component` (setup returns view). `yield* $memo` inside it is correct and owned by the row.
@@ -300,6 +321,8 @@ Consequences: (1) the whole-view read concept is deleted — `VY` is always `nev
 **Decided (Dev, 2026-10-04).** Declaring `todo: Async<Todo, FetchError>` says "I can be given unsettled data"; it creates no obligation to handle it. A pending read or a failure from that prop propagates to the nearest `<Loading>`/`<Errored>` wherever it is — possibly in the parent — exactly as a pending read propagates in Solid. A bare prop means "give me settled data; I am never the one that is pending". The declaration is a type permission, not a UI duty.
 *Alternatives:* duty — a component with an `Async` prop must contain the boundary for it (dev error when its pending escapes); permission plus a one-time dev hint when it escapes a component with no boundary.
 *Reasoning:* boundaries are placed by whoever owns the layout, not by whoever declares a type; a duty would force a boundary per component and fight Solid's propagation model. Doc: 1B's §6 ("Declared colors") states this in one sentence.
+
+*Implemented (1B, `e1aba8f6`).* A declared color adds no runtime obligation, and the types require a boundary only for pending. A declared failure joins the holding view at a call, at a row (D-059) and at the root. `render` / `hydrate` now take a root that may fail but not one that is pending (`() => View<false, any>`), since a failure with no `Errored` is re-thrown (D-033). No twin added a boundary for typing. §6 of `blocks-library.md` states it in one paragraph.
 
 ### D-041 — JSX only in view / hole / row returns
 **Decided (Dev, 2026-10-04).** JSX appears only as the return of a view, of a hole, or of a row's view. A setup never creates elements: `const header = <h1>{yield* title}</h1>` in a setup is an error. Elements are not values in a block. Enforcement: lint `jsx-only-in-view` (error, in `recommended`); the transform's `perform` asserts the host in dev — a hole performed while a setup is the host is `[JSX_IN_SETUP] <Component>: JSX in a setup`; Phase 2's plugin inherits the rule unchanged. Closes the design-review item "the JSX rule applies syntactically anywhere in a generator".
@@ -391,6 +414,8 @@ Implementation note (1A follow-up, `899e2899`): with `view(…)` a view's mistak
 *Alternatives:* keep a key-less `Props<>` wrapper as an explicit mapping step.
 *Reasoning:* D-005 — the wrapper existed for the linker key; without the key it is ceremony. *Implementation:* Phase 1B commit 1 (supersedes the "keys deprecated-but-accepted" step: `TypedProps` is deleted in commit 1 and the twins drop it in commit 2).
 
+*Implemented as amended by D-068 (1B, `e1aba8f6`).* `TypedProps`, `PropColor`, `PropColors` and `PropColorsOpen` are removed outright. 59 twin annotations moved to `Props<…>`.
+
 ### D-057 — Phase 2 starts after Phase 1B lands
 **Decided (Dev, 2026-10-04; Q23 closed).** Serial: Phase 2 (standalone plugin) begins once all of Phase 1B is fast-forwarded into `blocks-lib`. Both phases edit every twin's `vite.config` (1B removes `solidLink()`, Phase 2 adds `blocks()`); serial order avoids twelve guaranteed rebase conflicts and lets Phase 2 start from the linker-free twins.
 *Alternatives:* fully parallel; Phase 2's twin-free commits first, then wait for 1B's linker removal.
@@ -466,6 +491,13 @@ Consequences: F1 (server-component props in event/`ref` positions) disappears �
 **Decided (Dev, 2026-10-04; from the Phase 1B agent's finding).** D-056 asked for a plain object annotation with `$component` mapping each field to a Source; TypeScript gives a body exactly the parameter type written, and nothing the called function declares can change it (checked with tsc: `props.label` is `string` inside the body and `yield*` iterates its characters). The mapping must be visible in the annotation, so: (1) a key-less wrapper `Props<{ todo: Source<Todo, FetchError, true>; label: string }>` — today's `TypedProps<P, K>` with the linker's `ColorOf<K, N>` lookup replaced by each field's own declared color; it is the only spelling that also carries D-029's pass-through generics (`function* <E, P extends boolean>(props: Props<{ todo: Source<Todo, E, P> }>)`); ~67 annotation sites. (2) Colors are declared with the one general type, parameters reordered to `Source<T, E = never, P extends boolean = false>`: `E` carries information and reads like `Result<T, E>`, `P` is a flag and goes last; the forms are bare `T` (settled, D-024), `Source<T, E>` (sync, may fail — e.g. a validating `$memo`), `Source<T, E, true>` (may be pending, may fail — the common async case under D-034), `Source<T, never, true>` (pending, never fails — rare). (3) No `Async<T, E>` alias (D-005: a second spelling that named only one corner). Variance and the call-site message are unchanged. Implementation note: `Component<…>` becomes a plain function type so a generic component keeps its type parameters (today `$component` drops them); D-067's tag check recognises a block component by its `View` return type instead of the brand; `$component`'s no-JSX rest parameter is to be checked against that.
 *Alternatives:* a curried explicit type argument (cannot express D-029); annotating the variable with `Component<…>` (colors written twice); every field declared as a source type (breaks D-024's bare = settled).
 *Reasoning:* the wrapper is the one thing that can do the field→Source mapping; one type for all four color corners. *Implementation:* Phase 1B commit 1 (the `Source` reorder across the library is inside that commit; site count reported).
+
+*Implemented (1B, `e1aba8f6`).*
+
+- **The reorder** touched about 63 `Source` / `Path` sites: 35 in the library, 8 in the tests, 20 in the twins. Room's seven `Source<…, true, unknown>` became `Source<…, LiveError, true>`. Room's `Card` memo now routes its stream through `attempt(…, cause => new LiveError(cause))` instead of widening to `unknown`, and effect's `Results.results` declares `SearchError | TransientError`.
+- **Tag check.** "A function returning a `View`" could not tell a foreign component that returns blocks' `Element` (which includes a settled `View`) from a block component. The mark is therefore a `[COMPONENT]` brand on the returned view (`ComponentView<P, E>`): `TagType` refuses a function returning one, and `no-component-tag` looks for it with type information. The no-JSX rest parameter of `$component` (`NoJsxViewRule`) does not interfere with generic inference.
+- **New exports.** `Props`, `PropsArgs`, `PropsInput`, `HoleProp`, `SettledProp`, `ComponentView`, `ViewPending`, `ViewFails`, `ViewYield`, `ViewReturn`, `NoJsxViewRule`. The view helpers had to be exported because a generic higher-order component's inferred type names them (rendering's `RouteHOC`).
+- **D-034 at the declaration.** `Props<D extends PropsCheck<D>>` refuses a declared `E` that is not a `Failure` with a literal `kind`, at the annotation.
 
 ## Phase 1A findings (agent report, items 4c–8; verbatim, 2026-10-04)
 
