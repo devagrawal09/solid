@@ -14,7 +14,7 @@
 import solidH from "@solidjs/h";
 import type { JSX } from "@solidjs/blocks/jsx-runtime";
 import { toHole, toHoleProps, type Hole, type HViewOf, type OpsOfHole } from "./holes.js";
-import { READ } from "@solidjs/blocks";
+import { blockName, READ } from "@solidjs/blocks";
 import type {
   ChildView,
   Component,
@@ -107,7 +107,7 @@ export interface BlocksH {
  */
 const ELEMENT: symbol | undefined = Object.getOwnPropertySymbols((solidH as any)("div"))[0];
 
-function convert(args: any[]): any[] {
+function convert(args: any[], name: string | null): any[] {
   const out = new Array(args.length);
   out[0] = args[0];
   for (let i = 1; i < args.length; i++) {
@@ -121,8 +121,8 @@ function convert(args: any[]): any[] {
       !Array.isArray(v) &&
       !(v instanceof Node) &&
       (v as any)[READ] === undefined
-        ? toHoleProps(v)
-        : toHole(v);
+        ? toHoleProps(v, name)
+        : toHole(v, name);
   }
   return out;
 }
@@ -138,7 +138,9 @@ function convert(args: any[]): any[] {
  */
 export const h: BlocksH = ((...args: any[]) => {
   if (args.length === 1 && Array.isArray(args[0])) return args[0];
-  const thunk: any = () => (solidH as any)(...convert(args))();
+  // the holes are the block's that built this output (dev errors name it)
+  const name = blockName();
+  const thunk: any = () => (solidH as any)(...convert(args, name))();
   if (ELEMENT) thunk[ELEMENT] = true;
   return thunk;
 }) as any;

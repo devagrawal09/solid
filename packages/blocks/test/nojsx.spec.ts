@@ -21,11 +21,11 @@ import {
   type TypedProps
 } from "@solidjs/blocks";
 import { h } from "@solidjs/blocks/h";
+import { toFailed } from "./failed.js";
 
 const tick = () => new Promise<void>(r => setTimeout(r, 0));
 
-/** An attempt's handler in these tests: what failed, as an Error. */
-const fail = (e: unknown): Error => (e instanceof Error ? e : new Error(String(e)));
+const fail = toFailed;
 
 /** A write driven from plain test code (no block host): what `yield*` does in an $event. */
 const write = (receipt: Iterable<unknown>): void => void [...receipt];

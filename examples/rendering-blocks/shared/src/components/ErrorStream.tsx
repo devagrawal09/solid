@@ -11,6 +11,7 @@ import {
   type Source,
   type TypedProps
 } from "@solidjs/blocks";
+import { ItemError } from "./errors";
 
 interface Item {
   title: string;
@@ -31,7 +32,7 @@ function loadItem(id: string): Promise<Item> {
 
 /**
  * One item: its id is its own state, seeded from the prop (`$snapshot`), and
- * the load is an `attempt` that declares its failure (`Error`), so the
+ * the load is an `attempt` that declares its failure (`ItemError`), so the
  * boundaries' types know what they handle.
  */
 function* item(props: TypedProps<{ id: string }>) {
@@ -40,14 +41,14 @@ function* item(props: TypedProps<{ id: string }>) {
     const current = yield* id;
     return yield* attempt(
       () => loadItem(current),
-      cause => (cause instanceof Error ? cause : new Error(String(cause)))
+      cause => new ItemError(cause)
     );
   });
   return { item, setId };
 }
 
 const Title = $component(function* Title(
-  props: TypedProps<{ item: Source<Item, true, Error> }, "Title">
+  props: TypedProps<{ item: Source<Item, true, ItemError> }, "Title">
 ) {
   return function* () {
     return <div>{yield* props.item.title}</div>;
@@ -55,7 +56,7 @@ const Title = $component(function* Title(
 });
 
 function fallback(setId: BlockSetter<string>) {
-  return (error: () => Error, reset: () => void) => {
+  return (error: () => ItemError, reset: () => void) => {
     const retry = $event(function* () {
       yield* setId("1");
       reset();

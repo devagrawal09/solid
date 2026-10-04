@@ -434,3 +434,28 @@ type RowCheck<Y, VY, R> = [Y] extends [SetupOp]
     };
 
 export type ErrorClass<E = unknown> = abstract new (...args: any[]) => E;
+
+/**
+ * What a block may fail with (D-034): an `Error` with a literal `kind`.
+ * Failures are removed from a type structurally (TypeScript compares shapes)
+ * but matched at run time with `instanceof`, so two error classes with the
+ * same shape would be one type: the literal `kind` tells them apart. Every
+ * entry point of a failure type checks it — `attempt`, `until`, `raise`,
+ * `Errored`'s `catch`.
+ */
+export type Failure = Error & { readonly kind: string };
+/** The branded refusal of an error type without a literal `kind`. */
+export interface NeedsKind {
+  readonly '[FAILURE_KIND] an error class needs `readonly kind = "x" as const` so its failure can be told apart': never;
+}
+/** `unknown` when every member of `E` is a `Failure` with a literal `kind`; else `NeedsKind`. */
+export type KindCheck<E> = [E] extends [never]
+  ? unknown
+  : [KindBits<E>] extends [never]
+    ? unknown
+    : NeedsKind;
+type KindBits<E> = E extends Error & { readonly kind: infer K }
+  ? string extends K
+    ? true
+    : never
+  : true;

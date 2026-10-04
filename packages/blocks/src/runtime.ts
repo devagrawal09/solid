@@ -61,6 +61,7 @@ import type {
   EffectOp,
   ErrorClass,
   EventHandler,
+  KindCheck,
   EventOp,
   FailsOf,
   HoleOp,
@@ -96,6 +97,30 @@ export const COMPONENT_MARK: unique symbol = Symbol.for("solid.blocks.component"
 const OP: unique symbol = Symbol.for("solid.blocks.op") as any;
 const PATH_TARGET: unique symbol = Symbol.for("solid.blocks.path") as any;
 const PATH_READ = 1;
+
+/**
+ * Dev only: what a block may throw without it being a bug — the failures it
+ * types (`raise`'s error, an `attempt` handler's result), the library's own
+ * dev errors, and a plain throw already reported (so nested runs never wrap
+ * it twice). `NotReadyError` is pending, not a failure, and is never wrapped.
+ * Solid hands a failure on wrapped (its internal status error, the original
+ * as `cause`): the `cause` chain is followed.
+ */
+const KNOWN = new WeakSet<object>();
+function known<T>(e: T): T {
+  if (__DEV__ && e !== null && (typeof e === "object" || typeof e === "function"))
+    KNOWN.add(e as object);
+  return e;
+}
+
+function isKnown(e: unknown): boolean {
+  let x: any = e;
+  for (let i = 0; i < 8 && x !== null && (typeof x === "object" || typeof x === "function"); i++) {
+    if (KNOWN.has(x)) return true;
+    x = x.cause;
+  }
+  return false;
+}
 
 // --- one runtime per app -------------------------------------------------------------
 
@@ -161,13 +186,23 @@ interface HostState {
   readonly view: string | null;
   /** Dev only: a read from a JSX position (`perform`) is in progress, paths and getters included. */
   readonly jsx: boolean;
+  /** Dev only: the component (or row) the running block belongs to, for dev errors. */
+  readonly name: string | null;
 }
-let state: HostState = { host: NONE, sink: null, resumed: false, view: null, jsx: false };
+let state: HostState = {
+  host: NONE,
+  sink: null,
+  resumed: false,
+  view: null,
+  jsx: false,
+  name: null
+};
 
 /**
  * Run `run` as `host`, with a state of its own: every place the runtime
  * drives block code (a setup, a view, a hole, a memo's run and resumption,
- * an effect run, an event's steps, a snapshot) goes through here.
+ * an effect run, an event's steps, a snapshot) goes through here. In
+ * development a plain throw out of the run is `UNTYPED_THROW` (D-019).
  */
 function runAs<T>(
   host: Host,
@@ -175,19 +210,42 @@ function runAs<T>(
   sink: (() => void)[] | null = null,
   view: string | null = null,
   jsx = false,
-  resumed = false
+  resumed = false,
+  name: string | null = null
 ): T {
   const prev = state;
-  state = { host, sink, resumed, view, jsx };
+  state = { host, sink, resumed, view, jsx, name };
   try {
     return run();
+  } catch (e) {
+    if (__DEV__) throw untyped(e, host, name);
+    throw e;
   } finally {
     state = prev;
   }
 }
 
-function devError(code: string, message: string): Error {
-  return new Error(`[${code}] ${message}`);
+/**
+ * Dev only: a plain throw out of a block run (D-019) — not a typed failure,
+ * so a bug: re-thrown as `UNTYPED_THROW` naming the host and the component,
+ * with the original as its `cause`. It still goes to the nearest `Errored`,
+ * or with none it is re-thrown (D-033); production re-throws the original.
+ */
+function untyped(e: unknown, host: Host, name: string | null): unknown {
+  if (e instanceof NotReadyError) return e;
+  if (isKnown(e)) return e;
+  const message = e instanceof Error ? e.message : String(e);
+  return known(
+    new Error(
+      `[UNTYPED_THROW] ${HOST_NAMES[host]} in <${name ?? "anonymous"}>: ${message} — a block fails with yield* raise(error) or through an attempt's handler; a plain throw is a bug.`,
+      { cause: e }
+    )
+  );
+}
+
+/** @internal A development error of this library (`[CODE] message`). */
+export function devError(code: string, message: string): Error {
+  return known(new Error(`[${code}] ${message}`));
 }
 
 function checkRead(inJsx: boolean): void {
@@ -307,13 +365,21 @@ export function perform<T>(target: Yieldable<any, T> | (() => T) | T): T {
   if (x != null) {
     if (x[READ] !== undefined) {
       if (!__DEV__) return readOf(x) as T;
-      const { host, sink, view, resumed } = state;
-      return runAs(host, () => readOf(x) as T, sink, view, true, resumed);
+      const { host, sink, view, resumed, name } = state;
+      return runAs(host, () => readOf(x) as T, sink, view, true, resumed, name);
     }
     if (x[VIEW_MARK] === true) return x;
     if (typeof x === "function") return x();
     if (typeof x === "object" && !Array.isArray(x) && typeof x[Symbol.iterator] === "function")
-      return runAs(HOLE, () => drive(x[Symbol.iterator](), HOLE_RUN)) as T;
+      return runAs(
+        HOLE,
+        () => drive(x[Symbol.iterator](), HOLE_RUN),
+        null,
+        null,
+        false,
+        false,
+        state.name
+      ) as T;
   }
   return x;
 }
@@ -493,13 +559,13 @@ class Attempt {
       v = this.run();
     } catch (e) {
       if (e instanceof NotReadyError) throw e;
-      throw this.onError(e);
+      throw known(this.onError(e));
     }
     if (isThenable(v)) {
       try {
         v = yield new Wait_(v);
       } catch (e) {
-        throw this.onError(e);
+        throw known(this.onError(e));
       }
     }
     // a stream (or a promise's stream) is not waited for: its failures go
@@ -523,7 +589,7 @@ type Attempted<T> = Awaited<T> extends AsyncIterable<any> ? Awaited<T> & Handled
  */
 export function attempt<T, E extends Error>(
   fn: () => T,
-  onError: (error: unknown) => E
+  onError: (error: unknown) => E & KindCheck<E>
 ): Yieldable<AttemptOps<T, E>, Attempted<T>> {
   return new Attempt(fn, onError) as any;
 }
@@ -531,11 +597,11 @@ export function attempt<T, E extends Error>(
 class RaiseOp {
   constructor(readonly error: unknown) {}
   *[Symbol.iterator](): Generator<never, never, unknown> {
-    throw this.error;
+    throw known(this.error);
   }
 }
 /** `yield* raise(error)`: the typed replacement for `throw` in a block. */
-export function raise<E>(error: E): Yieldable<Raise<E>, never> {
+export function raise<E extends Error>(error: E & KindCheck<E>): Yieldable<Raise<E>, never> {
   return new RaiseOp(error) as any;
 }
 
@@ -727,7 +793,7 @@ export function refresh(
  */
 export function until<T, E extends Error>(
   source: Source<T, boolean, unknown>,
-  onError: (error: unknown) => E,
+  onError: (error: unknown) => E & KindCheck<E>,
   options?: Parameters<typeof solidUntil>[1]
 ): Yieldable<Wait | Raise<E>, T> {
   return attempt(() => solidUntil(accessor(source), options), onError) as any;
@@ -785,7 +851,7 @@ function mapStream(value: unknown, onError: (error: unknown) => unknown): unknow
           return {
             next: (v?: unknown) =>
               it.next(v).then(undefined, (e: unknown) => {
-                throw onError(e);
+                throw known(onError(e));
               }),
             return: it.return && ((v?: unknown) => it.return(v)),
             throw: it.throw && ((v?: unknown) => it.throw(v)),
@@ -812,15 +878,24 @@ export function memoCompute(
   body: (arg?: any) => Generator<unknown, unknown, unknown>
 ): (arg?: unknown) => unknown {
   let run = 0;
+  const name = state.name;
   return (arg?: unknown) => {
     const my = ++run;
     let gen!: Generator<unknown, unknown, unknown>;
-    const r = runAs(MEMO, () => {
-      gen = body(arg);
-      return gen.next();
-    });
+    const r = runAs(
+      MEMO,
+      () => {
+        gen = body(arg);
+        return gen.next();
+      },
+      null,
+      null,
+      false,
+      false,
+      name
+    );
     if (r.done) return r.value;
-    return resume(gen, r.value, MEMO, () => my === run);
+    return resume(gen, r.value, MEMO, () => my === run, name);
   };
 }
 
@@ -837,7 +912,8 @@ function resume(
   gen: Generator<unknown, unknown, unknown>,
   op: unknown,
   as: Host,
-  current: () => boolean
+  current: () => boolean,
+  name: string | null
 ): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const step = (value: unknown, failed: boolean) => {
@@ -855,7 +931,8 @@ function resume(
           null,
           null,
           false,
-          as === MEMO
+          as === MEMO,
+          name
         );
       } catch (e) {
         reject(e);
@@ -867,7 +944,15 @@ function resume(
     const wait = (next: unknown) => {
       if (!isWait(next)) {
         try {
-          runAs(as, () => drive({ next: () => ({ done: false, value: next }) } as any, SYNC_RUN));
+          runAs(
+            as,
+            () => drive({ next: () => ({ done: false, value: next }) } as any, SYNC_RUN),
+            null,
+            null,
+            false,
+            false,
+            name
+          );
         } catch (e) {
           reject(e);
         }
@@ -892,13 +977,17 @@ export function $effect<Y extends EffectOp = never>(
   options?: { name?: string }
 ): Yieldable<Create<"effect">, void> {
   return new CreateOp("effect", () => {
-    createTrackedEffect(() => runEffect(body), options as any);
+    const name = state.name;
+    createTrackedEffect(() => runEffect(body, name), options as any);
   }) as any;
 }
 
-function runEffect(body: () => Generator<unknown, unknown, unknown>): (() => void) | undefined {
+function runEffect(
+  body: () => Generator<unknown, unknown, unknown>,
+  name: string | null
+): (() => void) | undefined {
   const sink: (() => void)[] = [];
-  runAs(EFFECT, () => drive(body(), SYNC_RUN), sink);
+  runAs(EFFECT, () => drive(body(), SYNC_RUN), sink, null, false, false, name);
   return sink.length ? () => runCleanups(sink) : undefined;
 }
 function runCleanups(sink: (() => void)[]): void {
@@ -914,7 +1003,8 @@ export function $settled<Y extends EffectOp = never>(
   body: () => Generator<Y, void, any>
 ): Yieldable<Create<"settled">, void> {
   return new CreateOp("settled", () => {
-    onSettled(() => untrack(() => runEffect(body)));
+    const name = state.name;
+    onSettled(() => untrack(() => runEffect(body, name)));
   }) as any;
 }
 
@@ -939,7 +1029,15 @@ export function $cleanup(fn: () => void): Yieldable<Cleanup, void> {
 class SnapshotOp {
   constructor(readonly target: unknown) {}
   *[Symbol.iterator](): Generator<never, unknown, unknown> {
-    return runAs(NONE, () => untrack(() => through(this.target)));
+    return runAs(
+      NONE,
+      () => untrack(() => through(this.target)),
+      null,
+      null,
+      false,
+      false,
+      state.name
+    );
   }
 }
 /**
@@ -1005,20 +1103,35 @@ function reportError(owner: ReturnType<typeof getOwner>, error: unknown): void {
  * `yield` and is thrown into the body at the `yield*`.
  */
 function* eventSteps(
-  gen: Generator<unknown, unknown, unknown>
+  gen: Generator<unknown, unknown, unknown>,
+  name: string | null
 ): Generator<PromiseLike<unknown>, unknown, unknown> {
   let value: unknown;
   let failed = false;
   for (;;) {
-    const r = runAs(EVENT, () => (failed ? gen.throw(value) : gen.next(value)));
+    const r = runAs(
+      EVENT,
+      () => (failed ? gen.throw(value) : gen.next(value)),
+      null,
+      null,
+      false,
+      false,
+      name
+    );
     if (r.done) return r.value;
     const op = r.value;
     if (!isWait(op)) {
       try {
         gen.return(undefined);
       } catch {}
-      return runAs(EVENT, () =>
-        drive({ next: () => ({ done: false, value: op }) } as any, SYNC_RUN)
+      return runAs(
+        EVENT,
+        () => drive({ next: () => ({ done: false, value: op }) } as any, SYNC_RUN),
+        null,
+        null,
+        false,
+        false,
+        name
       );
     }
     try {
@@ -1050,6 +1163,7 @@ export function $event<Args extends unknown[] = [], Y extends EventOp = never, R
   body: (...args: Args) => Generator<Y, R, any>
 ): EventHandler<Args, FailsOf<Y>, R, ReadsPendingOf<Y>, WaitsOf<Y>> {
   const owner = getOwner();
+  const name = state.name;
   let boundary = false;
   if (owner) {
     try {
@@ -1058,7 +1172,7 @@ export function $event<Args extends unknown[] = [], Y extends EventOp = never, R
   }
   const run = action(function* (rec: CallRecord, ...args: Args) {
     try {
-      const value = yield* eventSteps(body(...args) as Generator<unknown, unknown, unknown>);
+      const value = yield* eventSteps(body(...args) as Generator<unknown, unknown, unknown>, name);
       rec.done = { ok: true, value };
       return value;
     } catch (error) {
@@ -1128,8 +1242,11 @@ function isGeneratorFunction(fn: unknown): fn is (...args: any[]) => Generator {
 }
 const GeneratorFunctionPrototype = Object.getPrototypeOf(function* () {});
 
-function runHole(body: () => Generator<unknown, unknown, unknown>): unknown {
-  return runAs(HOLE, () => drive(body(), HOLE_RUN));
+function runHole(
+  body: () => Generator<unknown, unknown, unknown>,
+  name: string | null = state.name
+): unknown {
+  return runAs(HOLE, () => drive(body(), HOLE_RUN), null, null, false, false, name);
 }
 
 /**
@@ -1137,11 +1254,19 @@ function runHole(body: () => Generator<unknown, unknown, unknown>): unknown {
  * attribute value of `h`, a flow control's source prop): one
  * computation's read, not memoized, readable as a source.
  */
-export function holeOf(body: () => Generator<unknown, unknown, unknown>): any {
-  const block: any = () => runHole(body);
+export function holeOf(
+  body: () => Generator<unknown, unknown, unknown>,
+  name: string | null = state.name
+): any {
+  const block: any = () => runHole(body, name);
   block[READ] = block;
   block[Symbol.iterator] = sourceIterator;
   return block;
+}
+
+/** @internal The component (or row) the running block belongs to (dev errors name it). */
+export function blockName(): string | null {
+  return state.name;
 }
 
 /**
@@ -1157,10 +1282,11 @@ export function throughHole(v: any): any {
 
 function runSetup(
   body: (...args: any[]) => Generator<unknown, unknown, unknown>,
-  args: unknown[]
+  args: unknown[],
+  name: string
 ): unknown {
   // a child's setup is not its parent view's top level, nor a JSX read
-  return runAs(SETUP, () => drive(body(...args), SYNC_RUN));
+  return runAs(SETUP, () => drive(body(...args), SYNC_RUN), null, null, false, false, name);
 }
 
 /**
@@ -1172,7 +1298,15 @@ export function renderView(
   viewFn: () => Generator<unknown, unknown, unknown>,
   name = "anonymous"
 ): unknown {
-  return runAs(VIEW, () => drive(viewFn(), SYNC_RUN), null, __DEV__ ? name : null);
+  return runAs(
+    VIEW,
+    () => drive(viewFn(), SYNC_RUN),
+    null,
+    __DEV__ ? name : null,
+    false,
+    false,
+    name
+  );
 }
 
 /**
@@ -1195,7 +1329,7 @@ export function $component<
 > {
   const component: any = function (props?: object) {
     return untrack(() => {
-      const view = runSetup(body as any, [typedProps(props || {})]);
+      const view = runSetup(body as any, [typedProps(props || {})], body.name || "anonymous");
       if (typeof view !== "function")
         throw devError(
           "COMPONENT_VIEW",
@@ -1275,7 +1409,8 @@ export function runRow(
   args: unknown[]
 ): unknown {
   return untrack(() => {
-    const view = runSetup(body, args);
+    const rowName = body.name ? `row ${body.name}` : "row";
+    const view = runSetup(body, args, rowName);
     if (
       typeof view !== "function" ||
       (view as any)[READ] !== undefined ||
@@ -1288,7 +1423,7 @@ export function runRow(
         );
       return view;
     }
-    return renderView(view as any, body.name ? `row ${body.name}` : "row");
+    return renderView(view as any, rowName);
   });
 }
 

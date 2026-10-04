@@ -25,7 +25,7 @@ import {
 } from "@solidjs/blocks";
 import { searchPackages, TransientNetworkError, type Package } from "./api";
 import { runEffect } from "./solid-effect";
-import { SearchError } from "./errors";
+import { SearchError, TransientError } from "./errors";
 
 function formatDownloads(n: number) {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
@@ -84,7 +84,8 @@ export const Typeahead = $component(function* Typeahead() {
     if (!q) return [] as Package[];
     return yield* attempt(
       () => runEffect(searchPackages(q)),
-      cause => (cause instanceof TransientNetworkError ? cause : new SearchError(cause))
+      cause =>
+        cause instanceof TransientNetworkError ? new TransientError(cause) : new SearchError(cause)
     );
   });
   const onInput = $event(function* (e: InputEvent & { currentTarget: HTMLInputElement }) {

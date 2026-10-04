@@ -14,7 +14,7 @@ declare module "@solidjs/blocks" {
     };
     "Results": {
       query: { pending: false; fails: never; live: true; static: false };
-      results: { pending: true; fails: unknown; live: true; static: false };
+      results: { pending: true; fails: import("./errors").SearchError | import("./errors").TransientError; live: true; static: false };
     };
   }
 }

@@ -31,6 +31,7 @@ import {
   Show,
   type TypedProps
 } from "@solidjs/blocks";
+import { Failed } from "../failed.js";
 
 const strip = (html: string) =>
   html
@@ -102,7 +103,7 @@ describe("server rendering", () => {
       const user = yield* $memo(function* () {
         return yield* attempt(
           () => Promise.resolve({ name: "Ada" }),
-          e => (e instanceof Error ? e : new Error(String(e)))
+          e => new Failed(e)
         );
       });
       return function* () {

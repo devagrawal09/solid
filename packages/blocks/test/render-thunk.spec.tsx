@@ -16,11 +16,11 @@ import {
   Loading,
   render
 } from "@solidjs/blocks";
+import { toFailed } from "./failed.js";
 
 const tick = () => new Promise<void>(r => setTimeout(r, 0));
 
-/** An attempt's handler in these tests: what failed, as an Error. */
-const fail = (e: unknown): Error => (e instanceof Error ? e : new Error(String(e)));
+const fail = toFailed;
 async function settle() {
   for (let i = 0; i < 4; i++) {
     await tick();

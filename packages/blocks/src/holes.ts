@@ -65,12 +65,12 @@ export type HViewOf<V> = HView<PendingOf<OpsOfHole<V>>, FailsOf<OpsOfHole<V>>>;
  * hole block; a generator with parameters is a render callback running a row
  * block; a path or a selection becomes an accessor; everything else passes.
  */
-export function toHole(value: any): any {
+export function toHole(value: any, name?: string | null): any {
   if (value == null) return value;
   if (typeof value === "function") {
     if (value[READ] !== undefined) return value;
     if (isGeneratorFunction(value)) {
-      if (value.length === 0) return holeOf(value);
+      if (value.length === 0) return holeOf(value, name);
       if (value.length === 1) return (a: unknown) => runRow(value, [a]);
       return (a: unknown, b: unknown) => runRow(value, [a, b]);
     }
@@ -79,14 +79,14 @@ export function toHole(value: any): any {
   if (typeof value === "object") {
     // a path or a selection: read in the hole, as the JSX transform's `perform`
     if (value[READ] !== undefined) return () => perform(value);
-    if (Array.isArray(value)) return value.map(toHole);
+    if (Array.isArray(value)) return value.map(v => toHole(v, name));
   }
   return value;
 }
 
 /** A prop value: converted like a hole, but arrays are not walked. */
-function toPropHole(value: any): any {
-  return Array.isArray(value) ? value : toHole(value);
+function toPropHole(value: any, name?: string | null): any {
+  return Array.isArray(value) ? value : toHole(value, name);
 }
 
 /**
@@ -94,7 +94,7 @@ function toPropHole(value: any): any {
  * the values themselves: a prop holding an array or an object (a context
  * value, a store) is passed as it is.
  */
-export function toHoleProps(props: any): any {
+export function toHoleProps(props: any, name?: string | null): any {
   if (props == null || typeof props !== "object" || Array.isArray(props)) return props;
   if (props instanceof Node) return props;
   if (props[READ] !== undefined) return props;
@@ -103,8 +103,11 @@ export function toHoleProps(props: any): any {
   for (const key in descriptors) {
     const d = descriptors[key];
     if (d.get)
-      Object.defineProperty(out, key, { get: () => toPropHole(props[key]), enumerable: true });
-    else out[key] = toPropHole(d.value);
+      Object.defineProperty(out, key, {
+        get: () => toPropHole(props[key], name),
+        enumerable: true
+      });
+    else out[key] = toPropHole(d.value, name);
   }
   return out;
 }

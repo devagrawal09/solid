@@ -652,3 +652,57 @@ export const tagPartly = (
 );
 // @ts-expect-error async data outside a Loading: the tree would suspend
 render(() => Errored({ fallback: "!", children: () => Fetches() }), root);
+
+// --- every failure type carries a literal kind (D-034) ------------------------------------------
+// two structurally identical classes would be one type to TypeScript, while
+// the runtime tells them apart with instanceof: a literal kind is required
+class PlainA extends Error {}
+class PlainB extends Error {}
+class StringKind extends Error {
+  readonly kind: string = "s";
+}
+class KindA extends Error {
+  readonly kind = "a" as const;
+}
+class KindB extends Error {
+  readonly kind = "b" as const;
+}
+const one = () => 1;
+const toPlainA = () => new PlainA();
+const toStringKind = () => new StringKind();
+export const failures = $memo(function* () {
+  // @ts-expect-error an error class needs `readonly kind = "x" as const`
+  yield* attempt(one, toPlainA);
+  // @ts-expect-error a plain-string kind cannot tell two classes apart
+  yield* attempt(one, toStringKind);
+  // @ts-expect-error raise is held to the same constraint
+  yield* raise(new PlainB());
+  // @ts-expect-error a plain Error has no kind
+  yield* raise(new Error("x"));
+  yield* attempt(
+    () => 1,
+    e => (e === "a" ? new KindA() : new KindB())
+  );
+  return 1;
+});
+// with literal kinds a catch removes only its own class
+const KindFails = $component(function* () {
+  const m = yield* $memo(function* () {
+    return yield* attempt(
+      () => Promise.resolve(1),
+      e => (e === "a" ? new KindA() : new KindB())
+    );
+  });
+  return function* () {
+    return <b>{yield* m}</b>;
+  };
+});
+const onlyA = Errored({
+  catch: [KindA],
+  fallback: "a",
+  children: () => Loading({ children: () => KindFails() })
+});
+const stillB: View<false, KindB> = onlyA;
+void stillB;
+// @ts-expect-error a catch list needs classes with a literal kind
+export const plainCatch = Errored({ catch: [PlainA], fallback: "!", children: () => KindFails() });

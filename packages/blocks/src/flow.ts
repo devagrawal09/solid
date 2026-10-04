@@ -23,11 +23,22 @@ import {
   untrack,
   type Accessor
 } from "solid-js";
-import { BOUNDARY, READ, VIEW_MARK, isRowBlock, rowArg, runRow, throughHole } from "./runtime.js";
+import {
+  BOUNDARY,
+  devError,
+  READ,
+  VIEW_MARK,
+  isRowBlock,
+  rowArg,
+  runRow,
+  throughHole
+} from "./runtime.js";
 import type { Element } from "./element.js";
 import type {
   ErrorClass,
   COMPONENT,
+  Failure,
+  KindCheck,
   FailsOf,
   HoleOp,
   HView,
@@ -338,8 +349,9 @@ function content(props: any, name: string): () => unknown {
   )
     return v;
   if (__DEV__ && isBuilt(v))
-    throw new Error(
-      `[BOUNDARY_CONTENT_BUILT] ${name}'s content was built before the boundary: pass it as a function (\`children: () => View()\`) or use the tag form.`
+    throw devError(
+      "BOUNDARY_CONTENT_BUILT",
+      `${name}'s content was built before the boundary: pass it as a function (\`children: () => View()\`) or use the tag form.`
     );
   return () => v;
 }
@@ -380,8 +392,8 @@ function LoadingBlocks(props: any): any {
  * its own color: give each class a member of its own (`readonly kind =
  * "not-found"`), or TypeScript cannot tell two of them apart.
  */
-function ErroredBlocks<P extends boolean, E, C extends readonly ErrorClass[]>(props: {
-  catch: C;
+function ErroredBlocks<P extends boolean, E, C extends readonly ErrorClass<Failure>[]>(props: {
+  catch: C & KindCheck<InstanceType<C[number]>>;
   fallback: Element | ((error: Accessor<InstanceType<C[number]>>, reset: () => void) => Element);
   children: View<P, E> | readonly View<P, E>[] | (() => View<P, E> | readonly View<P, E>[]);
 }): View<P, Exclude<E, InstanceType<C[number]>>>;

@@ -42,6 +42,8 @@ import {
 } from "@solidjs/blocks";
 import { createSignal as plainSignal } from "solid-js";
 import { INSTANCE, registerInstance } from "../src/runtime.js";
+import { h } from "@solidjs/blocks/h";
+import { Failed, toFailed } from "./failed.js";
 
 declare const __DEV__: boolean;
 /** Dev-only checks (warnings, dev errors) are skipped against production builds. */
@@ -49,8 +51,7 @@ const devIt = __DEV__ ? it : it.skip;
 
 const tick = () => new Promise<void>(r => setTimeout(r, 0));
 
-/** An attempt's handler in these tests: what failed, as an Error. */
-const toError = (e: unknown): Error => (e instanceof Error ? e : new Error(String(e)));
+const toError = toFailed;
 
 /** A write driven from plain test code (no block host): what `yield*` does in an $event. */
 const write = (receipt: Iterable<unknown>): void => void [...receipt];
@@ -749,7 +750,9 @@ describe("events", () => {
   });
 
   it("$event takes arguments, returns its result, and throws a rejection at the yield*", async () => {
-    class SaveError extends Error {}
+    class SaveError extends Error {
+      readonly kind = "save" as const;
+    }
     const caught: string[] = [];
     const save = $event(function* (id: string, times: number) {
       try {
@@ -771,7 +774,7 @@ describe("events", () => {
     let save!: () => Promise<unknown>;
     const App = $component(function* () {
       const failing = $event(function* () {
-        yield* raise(new Error("declined"));
+        yield* raise(new Failed("declined"));
       });
       save = () => failing().catch(e => (caught = e));
       return function* () {
@@ -817,7 +820,7 @@ describe("events", () => {
       return yield* attempt(() => new Promise<number>(r => (resolve = r)), toError);
     });
     const fail = $event(function* () {
-      yield* raise(new Error("no"));
+      yield* raise(new Failed("no"));
     });
     const outer = $event(function* () {
       const n = yield* fetchN();
@@ -879,13 +882,38 @@ describe("events", () => {
 
   it("a failing $event with no Errored rejects its promise", async () => {
     const fail = $event(function* () {
-      yield* raise(new Error("nope"));
+      yield* raise(new Failed("nope"));
     });
     await expect(fail()).rejects.toThrow("nope");
   });
 
+  it("a failing view with no Errored re-throws (D-033)", () => {
+    const Fails = $component(function* Fails() {
+      const m = yield* $memo(function* () {
+        yield* raise(new Failed("no boundary"));
+        return 1;
+      });
+      return function* () {
+        return <i>{perform(m)}</i>;
+      };
+    });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    let thrown: unknown;
+    try {
+      mount(Fails);
+    } catch (e) {
+      thrown = e;
+    }
+    error.mockRestore();
+    // no boundary installed by the library: the failure is re-thrown
+    expect(String(thrown)).toMatch(/no boundary/);
+    expect(root.querySelector("i")).toBe(null);
+  });
+
   it("a failing $event goes to the nearest Errored", async () => {
-    class SaveError extends Error {}
+    class SaveError extends Error {
+      readonly kind = "save" as const;
+    }
     const App = $component(function* () {
       const click = $event(function* () {
         yield* raise(new SaveError("nope"));
@@ -1018,7 +1046,9 @@ describe("events", () => {
   });
 
   it("a memo's raise reaches Errored", () => {
-    class Missing extends Error {}
+    class Missing extends Error {
+      readonly kind = "missing" as const;
+    }
     const App = $component(function* () {
       const m = yield* $memo(function* () {
         yield* raise(new Missing("missing"));
@@ -1570,7 +1600,7 @@ describe("boundaries in call form", () => {
   it("Errored({ children: () => View }) too", async () => {
     const Failing = $component(function* () {
       const v = yield* $memo(function* () {
-        return yield* raise(new Error("nope"));
+        return yield* raise(new Failed("nope"));
       });
       return function* () {
         return <b>{perform(v)}</b>;
@@ -1691,6 +1721,123 @@ describe("derivations", () => {
     flush();
     expect(root.textContent).toBe("10 11 10");
     expect(runs).toBe(2);
+  });
+});
+
+describe("untyped throws (D-019)", () => {
+  /** What a fallback shows of a failure: its message. */
+  const shown = (e: any) => <p>{String(e().message)}</p>;
+  const throwIn = (where: string) => {
+    throw new TypeError(`${where} broke`);
+  };
+
+  it("a plain throw in a block goes to the nearest Errored; in development it is UNTYPED_THROW naming the host and the component", async () => {
+    const InSetup = $component(function* InSetup() {
+      throwIn("setup");
+      return function* () {
+        return <i />;
+      };
+    });
+    const InView = $component(function* InView() {
+      return function* () {
+        throwIn("view");
+        return <i />;
+      };
+    });
+    const InMemo = $component(function* InMemo() {
+      const m = yield* $memo(function* () {
+        throwIn("memo");
+        return 1;
+      });
+      return function* () {
+        return <i>{perform(m)}</i>;
+      };
+    });
+    const InEffect = $component(function* InEffect() {
+      yield* $effect(function* () {
+        throwIn("effect");
+      });
+      return function* () {
+        return <i />;
+      };
+    });
+    const InHole = $component(function* InHole() {
+      return function* () {
+        return h("i", function* () {
+          throwIn("hole");
+          return 1;
+        });
+      };
+    });
+    const cases: [string, () => any, string][] = [
+      ["setup", InSetup, "a setup in <InSetup>"],
+      ["view", InView, "a view in <InView>"],
+      ["memo", InMemo, "a memo in <InMemo>"],
+      ["effect", InEffect, "an effect in <InEffect>"],
+      ["hole", InHole, "a hole in <InHole>"]
+    ];
+    for (const [where, C, host] of cases) {
+      dispose?.();
+      root.textContent = "";
+      mount(() => <Errored fallback={shown}>{C()}</Errored>);
+      flush();
+      const text = root.textContent!;
+      expect(text).toContain(`${where} broke`);
+      if (__DEV__) {
+        expect(text).toContain(`[UNTYPED_THROW] ${host}:`);
+        // reported once, however many runs it crossed
+        expect(text.match(/UNTYPED_THROW/g)!.length).toBe(1);
+      } else expect(text).not.toContain("UNTYPED_THROW");
+    }
+  });
+
+  it("an event's plain throw rejects its call; in development as UNTYPED_THROW", async () => {
+    let fire!: () => Promise<unknown>;
+    const App = $component(function* App() {
+      fire = $event(function* () {
+        throwIn("event");
+      });
+      return function* () {
+        return <i />;
+      };
+    });
+    mount(App);
+    const error = await fire().then(
+      () => null,
+      e => e
+    );
+    expect(String(error)).toContain("event broke");
+    if (__DEV__) expect(String(error)).toContain("[UNTYPED_THROW] an event in <App>:");
+  });
+
+  it("typed failures are not wrapped", () => {
+    const show = (e: any) => <b>{`${e() instanceof Failed}:${e().message}`}</b>;
+    const Raises = $component(function* Raises() {
+      const m = yield* $memo(function* () {
+        yield* raise(new Failed("typed"));
+        return 1;
+      });
+      return function* () {
+        return <p>{perform(m)}</p>;
+      };
+    });
+    mount(() => <Errored fallback={show}>{Raises()}</Errored>);
+    expect(root.textContent).toBe("true:typed");
+    dispose?.();
+    root.textContent = "";
+    // a plain throw an attempt catches is typed by its handler
+    const Attempts = $component(function* Attempts() {
+      const a = yield* $memo(function* () {
+        return yield* attempt(() => {
+          throw new Error("handled");
+        }, toError);
+      });
+      return function* () {
+        return <p>{perform(a)}</p>;
+      };
+    });
+    mount(() => <Errored fallback={show}>{Attempts()}</Errored>);
+    expect(root.textContent).toBe("true:handled");
   });
 });
 
