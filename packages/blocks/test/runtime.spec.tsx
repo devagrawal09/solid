@@ -962,6 +962,55 @@ describe("events", () => {
     await expect(fail()).rejects.toThrow("nope");
   });
 
+  it("$event(body, { latest: true }): typing fast into a search box, only the last call's writes land (D-048)", async () => {
+    for (const latest of [false, true]) {
+      const pending: Record<string, (v: string) => void> = {};
+      const closed: string[] = [];
+      let search!: (q: string) => Promise<unknown>;
+      const Box = $component(function* Box() {
+        const [results, setResults] = yield* $signal("");
+        search = $event(
+          function* (q: string) {
+            try {
+              const found = yield* attempt(
+                () => new Promise<string>(r => (pending[q] = r)),
+                toError
+              );
+              yield* setResults(found);
+            } finally {
+              closed.push(q);
+            }
+          },
+          { latest }
+        );
+        return function* () {
+          return <p>{perform(results)}</p>;
+        };
+      });
+      dispose?.();
+      root.textContent = "";
+      mount(Box);
+      // "s", then "so", then "sol", each before the previous answered
+      const calls = [search("s"), search("so"), search("sol")];
+      // the answers arrive out of order: the last query's first
+      pending["sol"]("results for sol");
+      await settle();
+      pending["s"]("results for s");
+      pending["so"]("results for so");
+      await settle();
+      const settled = await Promise.all(calls);
+      if (latest) {
+        // the earlier runs were closed (their finally blocks ran) and never wrote
+        expect(root.textContent).toBe("results for sol");
+        expect(settled).toEqual([undefined, undefined, undefined]);
+        expect(closed.sort()).toEqual(["s", "so", "sol"]);
+      } else {
+        // independent runs: the last answer to arrive wins
+        expect(root.textContent).toBe("results for so");
+      }
+    }
+  });
+
   it("a failing view with no Errored re-throws (D-033)", () => {
     const Fails = $component(function* Fails() {
       const m = yield* $memo(function* () {

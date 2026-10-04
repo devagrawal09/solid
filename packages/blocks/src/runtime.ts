@@ -1159,10 +1159,14 @@ function reportError(owner: ReturnType<typeof getOwner>, error: unknown): void {
  * before the body continues. A rejection comes back from the action's
  * `yield` and is thrown into the body at the `yield*`.
  */
+/** What a `latest` event's run settles with when a newer call closed it. */
+const SUPERSEDED = { superseded: true };
+
 function* eventSteps(
   gen: Generator<unknown, unknown, unknown>,
   name: string | null,
-  receipts: Receipt<unknown>[] | null
+  receipts: Receipt<unknown>[] | null,
+  current: () => boolean
 ): Generator<PromiseLike<unknown>, unknown, unknown> {
   let value: unknown;
   let failed = false;
@@ -1201,6 +1205,14 @@ function* eventSteps(
       value = e;
       failed = true;
     }
+    // `latest`: a newer call superseded this paused run — close it (its
+    // `finally` blocks run) instead of resuming it
+    if (!current()) {
+      try {
+        gen.return(undefined);
+      } catch {}
+      return SUPERSEDED;
+    }
   }
 }
 
@@ -1218,10 +1230,20 @@ function* eventSteps(
  * resolves `undefined`); with no boundary either, the promise rejects.
  * Like any action it is called from an event or other imperative code, not
  * synchronously inside a computation (ACTION_CALLED_IN_OWNED_SCOPE).
+ *
+ * Calls are independent runs. With `{ latest: true }` (D-048) a new call
+ * closes an earlier run that is still paused — on an async `attempt`,
+ * `until`, or a pending read — as a superseded memo run is closed: it never
+ * resumes, its `finally` blocks run, and its call resolves `undefined` (not a
+ * failure: the event's failure type is unchanged). Typing fast into a search
+ * box: only the last call's writes land.
  */
 export function $event<Args extends unknown[] = [], Y extends EventOp = never, R = void>(
-  body: (...args: Args) => Generator<Y, R, any>
+  body: (...args: Args) => Generator<Y, R, any>,
+  options?: { latest?: boolean }
 ): EventHandler<Args, FailsOf<Y>, R, ReadsPendingOf<Y>, WaitsOf<Y>> {
+  const latest = !!options?.latest;
+  let calls = 0;
   const owner = getOwner();
   const name = state.name;
   let boundary = false;
@@ -1235,11 +1257,17 @@ export function $event<Args extends unknown[] = [], Y extends EventOp = never, R
       // one list for the whole call: a receipt minted before an async
       // attempt and delegated to after it is not unyielded
       const receipts: Receipt<unknown>[] | null = __DEV__ ? [] : null;
+      const my = ++calls;
       const value = yield* eventSteps(
         body(...args) as Generator<unknown, unknown, unknown>,
         name,
-        receipts
+        receipts,
+        () => !latest || my === calls
       );
+      if (value === SUPERSEDED) {
+        rec.done = { ok: true, value: undefined };
+        return undefined;
+      }
       if (receipts !== null && receipts.length) checkReceipts(receipts, EVENT, name);
       rec.done = { ok: true, value };
       return value;
