@@ -4,7 +4,6 @@ import { memo as _$memo } from "@solidjs/web";
 import { effect as _$effect } from "@solidjs/web";
 var _tmpl$ = /* @__PURE__ */ _$template(`<ul class=inline><li></li><li></li><li></li><li></li><li></li><li></li><li>`);
 var _tmpl$2 = /* @__PURE__ */ _$template(`<div class=tab>`);
-import { perform as _$perform } from "@solidjs/blocks";
 // The routes (examples/rendering's App, as a block). The pages are `lazy()`
 // chunks, as in the original (the library's `lazy`: pending while its chunk
 // loads, and colored as the page's `$component`): a page may be pending (Profile)
@@ -13,6 +12,7 @@ import { perform as _$perform } from "@solidjs/blocks";
 // response, string SSR's entry wraps the app in a Loading). So the pages are
 // rendered in call form (`{yield* Profile()}`), which hands their pending /
 // failures on, and the app's type carries them.
+import { perform as _$perform } from "@solidjs/blocks";
 import { $component, isPendingOf, lazy, Match, Switch, view } from "@solidjs/blocks";
 import { Link, RouteHOC, useRouter } from "../router";
 import Profile from "./Profile";

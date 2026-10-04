@@ -4,8 +4,7 @@
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import babel from "@babel/core";
-import solid from "@solidjs/vite-plugin";
-import { createServer } from "vite";
+import { devServer } from "./server.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import blocks, { LAZY_PLACEHOLDER_PREFIX, babelPluginBlocks, transform } from "../src/index.js";
 
@@ -89,15 +88,7 @@ describe("which calls are annotated (the compiler's lazy pass, for the blocks mo
 describe("blocks() + solid(): the placeholder resolves to a module URL", () => {
   let server;
   beforeAll(async () => {
-    server = await createServer({
-      root: app,
-      configFile: false,
-      logLevel: "error",
-      appType: "custom",
-      server: { middlewareMode: true, hmr: false, ws: false },
-      optimizeDeps: { noDiscovery: true, include: [] },
-      plugins: [blocks(), solid({ ssr: true })]
-    });
+    server = await devServer(app);
   });
   afterAll(() => server?.close());
 
@@ -123,15 +114,7 @@ describe("blocks() + solid(): the placeholder resolves to a module URL", () => {
 describe.skipIf(!existsSync(renderingTwin))("rendering-blocks' pages get a moduleUrl", () => {
   let server;
   beforeAll(async () => {
-    server = await createServer({
-      root: renderingTwin,
-      configFile: false,
-      logLevel: "error",
-      appType: "custom",
-      server: { middlewareMode: true, hmr: false, ws: false },
-      optimizeDeps: { noDiscovery: true, include: [] },
-      plugins: [blocks(), solid({ ssr: true })]
-    });
+    server = await devServer(renderingTwin);
   });
   afterAll(() => server?.close());
 

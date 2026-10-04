@@ -20,7 +20,7 @@
     "eslint": ">=9"
   },
   "devDependencies": {
-    "@solidjs/compiler": "workspace:*",
+    "@solidjs/vite-plugin-blocks": "workspace:*",
     "@typescript-eslint/parser": "^8.0.0",
     "eslint": "^9.0.0"
   }

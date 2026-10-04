@@ -1,12 +1,14 @@
-// Fixture parity with the fork's Rust compiler rule (D-003, D-043). The
-// expected outputs under fixtures/ were generated once from the compiler while
-// it carried the rule (fixtures/generate.mjs); they are the oracle now.
+// Fixture parity (D-003, D-043). The expected outputs under fixtures/ were
+// generated once from the fork's Rust compiler while it carried the rule, and
+// the plugin's output, compiled, reproduced them byte for byte. D-043 removed
+// the rule and moved the plugin's `perform` import onto the first statement's
+// line; the compiled outputs were regenerated then, and differ from the Rust
+// rule's only in where that import line sits (fixtures/generate.mjs has the
+// details). They are the oracle now; the refusal messages are still the Rust
+// rule's.
 //
 // What is compared: the JSX compiler's output for the plugin's output, against
-// the JSX compiler's output for the original source when the compiler ran the
-// rule itself. Byte-equality, nothing normalized. The compiler that compiles
-// the plugin's output is the workspace one; after D-043 it has no rule, and
-// every `yield*` in JSX is already `perform(…)` when it runs either way.
+// the checked-in output. Byte-equality, nothing normalized.
 import { readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, join } from "node:path";
@@ -34,7 +36,7 @@ const compile = (code, filename, mode) =>
 // the rule alone: the compiler's rule had no lazy pass (that is tested in lazy.test.js)
 const throughPlugin = (code, filename) => transform(code, { filename, lazy: false })?.code ?? code;
 
-describe("fixture parity with the compiler's rule", () => {
+describe("fixture parity with the checked-in outputs", () => {
   it("the refusal list is the pinned list", () => {
     expect(Object.keys(REFUSALS).sort()).toEqual([...rule.refusals].sort());
   });
@@ -91,13 +93,15 @@ describe("transform()", () => {
     for (const [twin, file] of Object.entries(TWIN_SAMPLES)) {
       const source = readFileSync(join(fixtures, "twins", twin, basename(file)), "utf8");
       const out = transform(source, { filename: twinFilename(twin, file), lazy: false }).code;
-      const [first, ...rest] = out.split("\n");
-      expect(first).toBe('import { perform as _$perform } from "@solidjs/blocks";');
-      expect(rest.length).toBe(source.split("\n").length);
-      // apart from `yield* ` → `_$perform(` and its `)`, every character is
-      // the input's (the twins are prettier-formatted: always `yield* `)
+      // the import sits on the first statement's line: no line moves
+      const IMPORT = 'import { perform as _$perform } from "@solidjs/blocks"; ';
+      expect(out.split("\n").length).toBe(source.split("\n").length);
+      // (each sample's first statement is an import, after its leading comments)
+      expect(out.indexOf(IMPORT)).toBe(source.search(/^import /m));
+      // apart from that and `yield* ` → `_$perform(` and its `)`, every
+      // character is the input's (the twins are prettier-formatted: `yield* `)
       const holes = out.match(/_\$perform\(/g).length;
-      const body = rest.join("\n");
+      const body = out.replace(IMPORT, "");
       expect(body.length).toBe(
         source.length + holes * ("_$perform(".length + 1 - "yield* ".length)
       );
@@ -110,7 +114,7 @@ describe("transform()", () => {
     const source =
       "function* v() { return <ul>{yield* Card({ todo, children: function* () { return <b>{yield* todo.title}</b>; } })}</ul>; }";
     expect(transform(source, { filename: "a.tsx" }).code).toBe(
-      'import { perform as _$perform } from "@solidjs/blocks";\n' +
+      'import { perform as _$perform } from "@solidjs/blocks"; ' +
         "function* v() { return <ul>{_$perform(Card({ todo, children: function* () { return <b>{_$perform(todo.title)}</b>; } }))}</ul>; }"
     );
   });
@@ -129,13 +133,15 @@ describe("transform()", () => {
     expect(out).toContain("{_$perform((a, b))}");
   });
 
-  it("imports from the configured blocks module, after the directive prologue", () => {
-    const out = transform('"use client";\nfunction* v() { return <p>{yield* n}</p>; }', {
-      filename: "a.jsx",
-      blocksModule: "my-blocks"
-    }).code;
+  it("imports from the configured blocks module, before the first statement", () => {
+    const out = transform(
+      '#!/usr/bin/env node\n"use client";\n// a comment\nfunction* v() { return <p>{yield* n}</p>; }',
+      { filename: "a.jsx", blocksModule: "my-blocks" }
+    ).code;
+    // after the hashbang, the directive prologue and the leading comments;
+    // on the statement's own line, so no line moves
     expect(out).toBe(
-      '"use client";\nimport { perform as _$perform } from "my-blocks";\nfunction* v() { return <p>{_$perform(n)}</p>; }'
+      '#!/usr/bin/env node\n"use client";\n// a comment\nimport { perform as _$perform } from "my-blocks"; function* v() { return <p>{_$perform(n)}</p>; }'
     );
   });
 
@@ -197,7 +203,7 @@ describe("babelPluginBlocks", () => {
     });
 
   rule.accepted.forEach((source, i) => {
-    it(`accepted #${i} compiles as the compiler's rule did`, () => {
+    it(`accepted #${i} compiles to the checked-in output`, () => {
       const out = viaBabel(source);
       expect(out.metadata.blocks.holes).toBe(source.includes("<p>{x}</p>") ? false : true);
       expect(compile(out.code, "case.tsx", "dom")).toBe(expected(`accepted-${i}`, "dom"));

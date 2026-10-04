@@ -834,9 +834,9 @@ importers:
 
   packages/eslint-plugin-blocks:
     devDependencies:
-      '@solidjs/compiler':
+      '@solidjs/vite-plugin-blocks':
         specifier: workspace:*
-        version: link:../compiler
+        version: link:../vite-plugin-blocks
       '@typescript-eslint/parser':
         specifier: ^8.0.0
         version: 8.70.1(eslint@9.39.5)(typescript@6.0.3)

@@ -5,8 +5,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import solid from "@solidjs/vite-plugin";
-import { createServer } from "vite";
+import { devServer } from "./server.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import blocks, { transform } from "../src/index.js";
 
@@ -46,15 +45,7 @@ describe("blocks()", () => {
 describe("source maps through Vite", () => {
   let server;
   beforeAll(async () => {
-    server = await createServer({
-      root: app,
-      configFile: false,
-      logLevel: "error",
-      appType: "custom",
-      server: { middlewareMode: true, hmr: false, ws: false },
-      optimizeDeps: { noDiscovery: true, include: [] },
-      plugins: [blocks(), solid({ ssr: true })]
-    });
+    server = await devServer(app);
   });
   afterAll(() => server?.close());
 

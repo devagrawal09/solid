@@ -43,7 +43,6 @@ var _tmpl$32 = /* @__PURE__ */ _$template(`<p class=muted>summarizing…`);
 var _tmpl$33 = /* @__PURE__ */ _$template(`<section class=panel><div class=panel-head><h2>Archive</h2><span class=muted>slow, plain`);
 var _tmpl$34 = /* @__PURE__ */ _$template(`<p class=muted>counting the archive (4s)…`);
 var _tmpl$35 = /* @__PURE__ */ _$template(`<p> message<!> ever in #<!>`);
-import { perform as _$perform } from "@solidjs/blocks";
 // The live page (examples/room's `/live`, as blocks). Every panel is one
 // shape of answer from sources.ts, read through a `$memo` (or, for the
 // transcript, Solid's optimistic store), and the differences between them
@@ -62,6 +61,7 @@ import { perform as _$perform } from "@solidjs/blocks";
 //   until the first transcript lands) and posting is an `$event` (a Solid
 //   action) that writes the row optimistically and waits with `until`.
 // - Handlers are `$event`s.
+import { perform as _$perform } from "@solidjs/blocks";
 import { $component, $event, $memo, $optimistic, $optimisticStore, $signal, attempt, Errored, For, latestOf, Loading, readStore, Show, until, type EventHandler, type Path, type Source, type Props, view } from "@solidjs/blocks";
 import type { RouteSectionProps } from "@solidjs/router";
 import { useIdentity } from "~/lib/identity";

@@ -178,8 +178,8 @@ function buildSteps(twins) {
     }
   );
 
-  // The JSX transform's blocks rule (fixtures: packages/compiler/tests/blocks-rule-fixtures.json)
-  // is exercised by both compilers. Their `test` scripts build first (babel: tsc + rollup;
+  // Solid's two JSX compilers, which compile every twin after blocks() has run (since D-043
+  // they carry nothing of blocks). Their `test` scripts build first (babel: tsc + rollup;
   // compiler: cargo test + napi build), which the gate must not do, so these run the vitest
   // half of the script against the already-built artifact and SKIP when it is absent.
   const babelArtifact = "packages/babel-plugin/index.js";

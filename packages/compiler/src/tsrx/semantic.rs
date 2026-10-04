@@ -754,7 +754,11 @@ fn lower_try<'t>(node: Node<'t>) -> Result<ControlFlow<'t>, SemanticError> {
                     )),
                 })
                 .transpose()?;
-            let catch_body = required_node(handler, "body", "TSRX @catch is missing its block")?;
+            let catch_body = required_node(
+                handler,
+                "body",
+                "TSRX @catch is missing its block",
+            )?;
             Ok(TryCatch {
                 origin: Origin::new(handler, false)?,
                 binding,

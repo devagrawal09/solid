@@ -49,7 +49,6 @@ export type TsrxBabelAst = t.File & {
 
 export type BabelFileWithMetadata = {
   ast: TsrxBabelAst;
-  code?: string;
   metadata: {
     config?: PluginConfig;
     css?: string;

@@ -1,7 +1,6 @@
 import { RuleTester } from "eslint";
 import tsParser from "@typescript-eslint/parser";
 import { readFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { rules, REFUSALS } from "../src/index.js";
 
@@ -541,9 +540,11 @@ tester.run("no-foreign-reactive", rules["no-foreign-reactive"], {
 });
 
 // --- the lint's refusals ARE the transform's refusals --------------------------------------------------
+// The rule's cases, pinned by @solidjs/vite-plugin-blocks (generated from the fork's Rust rule
+// before D-043 removed it from the compiler).
 const fixtures = JSON.parse(
   readFileSync(
-    fileURLToPath(new URL("../../compiler/tests/blocks-rule-fixtures.json", import.meta.url)),
+    fileURLToPath(new URL("../../vite-plugin-blocks/test/fixtures/rule.json", import.meta.url)),
     "utf8"
   )
 );
@@ -557,17 +558,15 @@ tester.run("yield-in-jsx-hole", rules["yield-in-jsx-hole"], {
 });
 
 describe("transform refusals and lint refusals are the same list", () => {
-  const require = createRequire(import.meta.url);
-  const { transform } = require("@solidjs/compiler");
-
   it("the rule's codes are the shared list", () => {
     expect(Object.keys(REFUSALS).sort()).toEqual([...fixtures.refusals].sort());
   });
 
-  // Every case: the compiler throws code X exactly when the lint reports X.
+  // Every case: the transform throws code X exactly when the lint reports X.
   const cases = [...fixtures.accepted.map(source => ({ source, code: null })), ...fixtures.refused];
   for (const { source, code } of cases) {
     it(`${code ?? "accepted"}: ${source}`, async () => {
+      const { transform } = await import("@solidjs/vite-plugin-blocks");
       let compiled = null;
       try {
         transform(source, { filename: "case.tsx" });

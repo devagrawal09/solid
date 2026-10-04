@@ -5,8 +5,8 @@
 //
 //   node examples/blocks-harness/runtime-cost/measure.mjs [--reps N] [--wall]
 //
-// Each workload is bundled for production (vite + the solid plugin, the
-// native compiler), mounted in jsdom, and run under Valgrind (cachegrind,
+// Each workload is bundled for production (vite + the blocks plugin + the
+// solid plugin with the native compiler), mounted in jsdom, and run under Valgrind (cachegrind,
 // no cache simulation) with `node --jitless`: the instruction count of R
 // operations minus the count of the same process doing none, divided by R.
 // Jitless keeps counts reproducible (a JIT's compile timing is not); `--wall`
@@ -26,11 +26,15 @@ const OUT = process.env.OUT || join(ROOT, "node_modules/.cache/blocks-runtime-co
 const reps = Number(process.argv[process.argv.indexOf("--reps") + 1]) || 20;
 const wall = process.argv.includes("--wall");
 
-// Bundle with an example's toolchain (vite, @solidjs/vite-plugin).
+// Bundle with an example's toolchain (vite, the blocks plugin before
+// @solidjs/vite-plugin, as the twins do). The blocks plugin carries the JSX
+// transform's rule since D-043; it is imported by path, as packages/blocks'
+// test configs do.
 const require = createRequire(join(HARNESS, "package.json"));
 const { build } = await import(require.resolve("vite"));
 const pluginModule = await import(require.resolve("@solidjs/vite-plugin"));
 const solid = pluginModule.default?.default ?? pluginModule.default;
+const { default: blocks } = await import(join(ROOT, "packages/vite-plugin-blocks/src/index.js"));
 mkdirSync(OUT, { recursive: true });
 const entries = ["solid-todos", "blocks-todos", "solid-rows", "blocks-rows"];
 for (const name of entries) {
@@ -38,7 +42,7 @@ for (const name of entries) {
     configFile: false,
     logLevel: "silent",
     root: here,
-    plugins: [solid()],
+    plugins: [blocks(), solid()],
     resolve: { conditions: ["browser", "production"] },
     define: { "process.env.NODE_ENV": '"production"' },
     build: {

@@ -36,9 +36,8 @@ import {
 
 /**
  * The positions the JSX transform's block rule refuses — the same list as
- * `REFUSALS` in packages/compiler/src/blocks_rule.rs and
- * packages/babel-plugin/src/shared/blocks-rule.ts (pinned by
- * packages/compiler/tests/blocks-rule-fixtures.json).
+ * `REFUSALS` in @solidjs/vite-plugin-blocks (pinned by
+ * packages/vite-plugin-blocks/test/fixtures/rule.json).
  */
 export const REFUSALS = {
   BLOCKS_YIELD_IN_EVENT:

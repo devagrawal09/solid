@@ -156,17 +156,13 @@ function applyHoles(s, code, program, holes, blocksModule) {
     s.overwrite(start, start + keyword[0].length, `${local}(`);
     s.appendLeft(end, ")");
   }
-  // The first statement of the module, as the compiler's rule inserts it:
-  // after a hashbang and the directive prologue (a directive must stay
-  // first), on a line of its own. On the same line as what follows, a
-  // first-line comment would become the import's trailing comment and the
-  // compiled output would differ from the compiler's rule (D-043 parity);
-  // the one-line shift is carried by the source map.
+  // The first statement of the module: on the line of the module's first
+  // statement, just before it — after any hashbang, directive prologue and
+  // leading comments, which stay where they are. No line moves, so a compiler
+  // error further down still names the authored line (D-031 note; the
+  // compiler's rule, removed by D-043, gave the import a line of its own). A
+  // module with a hole has a statement: the hole is in one.
   const line = `import { perform as ${local} } from ${JSON.stringify(blocksModule)};`;
-  const directives = program.node.directives;
-  const after = directives.length
-    ? directives[directives.length - 1].end
-    : program.node.interpreter?.end;
-  if (after != null) s.appendLeft(after, "\n" + line);
-  else s.prependLeft(0, line + "\n");
+  const first = /** @type {number} */ (program.node.body[0].start);
+  s.prependLeft(first, line + " ");
 }

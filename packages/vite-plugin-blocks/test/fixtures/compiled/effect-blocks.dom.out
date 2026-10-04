@@ -17,7 +17,6 @@ var _tmpl$8 = /* @__PURE__ */ _$template(`<li>`);
 var _tmpl$9 = /* @__PURE__ */ _$template(`<p>`);
 var _tmpl$10 = /* @__PURE__ */ _$template(`<p class=error>Could not load orders: `);
 var _tmpl$11 = /* @__PURE__ */ _$template(`<p class=loading>Loading orders…`);
-import { perform as _$perform } from "@solidjs/blocks";
 // Action path: a cancellable checkout saga — examples/effect's checkout with
 // @solidjs/blocks.
 //
@@ -26,6 +25,7 @@ import { perform as _$perform } from "@solidjs/blocks";
 // The optimistic phase and the optimistic orders store are Solid primitives
 // created in the setup and read through `read` / `paths`; the cart, the
 // notice and the decline toggle are block state.
+import { perform as _$perform } from "@solidjs/blocks";
 import { $component, $event, $memo, $signal, $store, $optimistic, $optimisticStore, attempt, For, Errored, Loading, readStore, refresh, Show, type Source, type Props, view } from "@solidjs/blocks";
 import { CardDeclinedError, chargeCard, createOrder, fetchOrders, refundCharge, releaseReservation, reserveInventory, type CartItem, type Charge, type Order, type Reservation } from "./api";
 import { ActionInterruptedError, effectAction } from "./solid-effect";

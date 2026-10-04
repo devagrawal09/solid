@@ -54,13 +54,16 @@ A refusal throws a `BlocksRuleError` whose message lists each refusal as `[CODE]
 
 ## The `perform` import's line
 
-While the fork's Rust rule is the parity oracle, `import { perform as _$perform } from "@solidjs/blocks";` takes its own first line, as the compiler's rule inserts it. If it shared line 1 with the code, a first-line comment would become the import's trailing comment, and the compiled output would no longer be byte-identical to the rule's. So compiler error messages in files with holes are one line late. Runtime stack traces are exact, because the source map carries the shift. After D-043 removes the Rust rule, the import is placed without shifting lines and the checked-in outputs are regenerated.
+`import { perform as _$perform } from "@solidjs/blocks";` goes just before the module's first statement, on that statement's line. It comes after any hashbang, directive prologue and leading comments, which stay where they are. No line moves, so a compiler error in a file with holes names the authored line, and the source map covers the columns.
+
+While the fork's Rust rule was the parity oracle, the import took a line of its own, as the rule inserted it. That kept the compiled output byte-identical to the rule's, at the cost of compiler error messages one line late. D-043 removed the rule and the placement changed (D-031 note).
 
 ## Fixture parity
 
-`test/fixtures/` holds outputs generated once from the fork's Rust compiler while it carried the rule (`test/fixtures/generate.mjs`):
+`test/fixtures/` holds the oracle:
 
-- the rule's 15 cases (7 accepted, 8 refused) with their 5 refusal codes;
-- one source file per JSX twin, compiled in `dom` and `ssr` (hydratable) modes.
+- `rule.json`: the rule's 15 cases (7 accepted, 8 refused), its 5 refusal codes, and the compiler's message for each refusal;
+- `twins/`: one source file per JSX twin;
+- `compiled/`: the JSX compiler's output, in `dom` and `ssr` (hydratable) modes, for each accepted case and each twin file.
 
-The test compiles the plugin's output and compares it to those outputs byte for byte, with nothing normalized. Refusals must match the compiler's message, position included.
+They were generated once from the fork's Rust compiler while it carried the rule (D-043), and the plugin's output, compiled, reproduced every one byte for byte. When D-043 removed the rule, the compiled outputs were regenerated with the new import placement. 16 of the 26 are unchanged; in the other 10 the import line comes after the leading comments instead of before them. `test/fixtures/generate.mjs` records this. The tests compile the plugin's output with Solid's compiler and compare byte for byte, with nothing normalized. Refusals must match the Rust rule's message, position included.

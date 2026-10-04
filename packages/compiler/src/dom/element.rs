@@ -675,3 +675,4 @@ impl AstDomTransform<'_, '_> {
         crate::shared::classify::Classify::new(&self.bindings, self.source, &self.static_marker)
     }
 }
+

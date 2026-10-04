@@ -320,8 +320,7 @@ const nativeOptionKeys = new Set([
   "serverComponents",
   "hoistProps",
   "builtIns",
-  "renderers",
-  "blocksModule"
+  "renderers"
 ]);
 
 function validateOptions(code, options) {

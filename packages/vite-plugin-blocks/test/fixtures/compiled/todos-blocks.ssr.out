@@ -76,7 +76,6 @@ function _P$(_p, _p2) {
 	Object.defineProperty(this, "children", _d$);
 }
 _P$.prototype = Object.prototype;
-import { perform as _$perform } from "@solidjs/blocks";
 // TodoMVC from examples/todos with @solidjs/blocks (JSX flavor). The data
 // layer (`todos.ts`: an optimistic store over a projection, actions, the
 // error side-channel) and `filter.ts` are generator helpers the App's setup
@@ -90,6 +89,7 @@ import { perform as _$perform } from "@solidjs/blocks";
 //   until the first fetch lands); structural reads go through `readStore`;
 // - a view that reads a pending store is pending, so the loading boundary
 //   receives the two sections in its lazy view: `{yield* MainSection(…)}{yield* Footer(…)}`.
+import { perform as _$perform } from "@solidjs/blocks";
 import { $component, $event, $signal, $memo, createContext, Errored, For, Loading, readStore, Show, type Props, view } from "@solidjs/blocks";
 import { createTodos, type Todo } from "./todos";
 import { hashFilter, type Filter } from "./filter";

@@ -385,10 +385,7 @@ impl<'a> DirectivesTransform<'a> {
 
     // --- Module-level directive ------------------------------------------------
 
-    fn transform_module_level(
-        &mut self,
-        program: &mut Program<'a>,
-    ) -> Result<(), UnsupportedExport> {
+    fn transform_module_level(&mut self, program: &mut Program<'a>) -> Result<(), UnsupportedExport> {
         self.bubble_top_level_functions(program);
 
         let bindings = collect_top_level_bindings(program);
@@ -726,7 +723,11 @@ impl<'ctx, 'a> Bubbler<'ctx, 'a> {
         &mut self,
         mut function: oxc_allocator::Box<'a, oxc_ast::ast::Function<'a>>,
     ) -> Statement<'a> {
-        walk_mut::walk_function(self, &mut function, oxc_syntax::scope::ScopeFlags::Function);
+        walk_mut::walk_function(
+            self,
+            &mut function,
+            oxc_syntax::scope::ScopeFlags::Function,
+        );
         self.transform.function_declaration_to_const(function)
     }
 }
@@ -1252,15 +1253,11 @@ pub(crate) struct UnsupportedExport {
 }
 
 pub(crate) enum UnsupportedReason {
-    ReExport {
-        source: String,
-    },
+    ReExport { source: String },
     /// A declaration form with a runtime value that is not a binding the
     /// pass can register. `kind` carries its article, so the clause reads
     /// "is a class declaration" or "is an enum declaration".
-    Declaration {
-        kind: &'static str,
-    },
+    Declaration { kind: &'static str },
     NoInitializer,
     DestructuringPattern,
     NotABinding,
@@ -1310,12 +1307,7 @@ fn check_supported_exports(
     program: &Program<'_>,
     exports: &ExportedBindings,
 ) -> Result<(), UnsupportedExport> {
-    let is_traced = |name: &str| {
-        exports
-            .exported
-            .iter()
-            .any(|(exported, _)| exported == name)
-    };
+    let is_traced = |name: &str| exports.exported.iter().any(|(exported, _)| exported == name);
 
     for statement in &program.body {
         match statement {
@@ -1376,8 +1368,7 @@ fn check_supported_exports(
                 }
             }
             Statement::ExportDeclaration(export) => {
-                if let Some(unsupported) =
-                    check_exported_declaration(&export.declaration, &is_traced)
+                if let Some(unsupported) = check_exported_declaration(&export.declaration, &is_traced)
                 {
                     return Err(unsupported);
                 }
@@ -1466,17 +1457,14 @@ fn check_exported_declaration(
         Declaration::TSNamespaceDeclaration(declared) => Some(UnsupportedExport {
             span: declared.span,
             name: declared.id.name.to_string(),
-            reason: UnsupportedReason::Declaration {
-                kind: "a namespace",
-            },
+            reason: UnsupportedReason::Declaration { kind: "a namespace" },
         }),
-        Declaration::TSExternalModuleDeclaration(_) | Declaration::TSImportEqualsDeclaration(_) => {
-            Some(UnsupportedExport {
-                span: declaration.span(),
-                name: "this export".to_string(),
-                reason: UnsupportedReason::NotABinding,
-            })
-        }
+        Declaration::TSExternalModuleDeclaration(_)
+        | Declaration::TSImportEqualsDeclaration(_) => Some(UnsupportedExport {
+            span: declaration.span(),
+            name: "this export".to_string(),
+            reason: UnsupportedReason::NotABinding,
+        }),
         // Function declarations are bubbled away before this runs, and the
         // remaining forms (`type`, `interface`) are erased.
         _ => None,
