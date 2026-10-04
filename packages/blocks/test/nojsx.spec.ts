@@ -22,13 +22,12 @@ import {
 } from "@solidjs/blocks";
 import { h } from "@solidjs/blocks/h";
 import { toFailed } from "./failed.js";
+import { write } from "./write.js";
 
 const tick = () => new Promise<void>(r => setTimeout(r, 0));
 
 const fail = toFailed;
 
-/** A write driven from plain test code (no block host): what `yield*` does in an $event. */
-const write = (receipt: Iterable<unknown>): void => void [...receipt];
 async function settle() {
   for (let i = 0; i < 3; i++) {
     await tick();
@@ -54,7 +53,7 @@ describe("h", () => {
     let inc!: () => void;
     const Greeting = $component(function* () {
       const [n, setN] = yield* $signal(1);
-      inc = () => write(setN(v => v + 1));
+      inc = () => write(() => setN(v => v + 1));
       const user = yield* $memo(function* () {
         return yield* attempt(() => new Promise<{ name: string }>(r => (resolve = r)), fail);
       });
@@ -166,7 +165,7 @@ describe("h argument shapes", () => {
     let holeRuns = 0;
     const App = $component(function* () {
       const [n, setN] = yield* $signal(1);
-      set = v => write(setN(v));
+      set = v => write(() => setN(v));
       return function* () {
         return h(
           "p",

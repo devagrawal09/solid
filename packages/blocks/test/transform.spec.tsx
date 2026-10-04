@@ -19,13 +19,12 @@ import {
   type TypedProps
 } from "@solidjs/blocks";
 import { toFailed } from "./failed.js";
+import { write } from "./write.js";
 
 const tick = () => new Promise<void>(r => setTimeout(r, 0));
 
 const fail = toFailed;
 
-/** A write driven from plain test code (no block host): what `yield*` does in an $event. */
-const write = (receipt: Iterable<unknown>): void => void [...receipt];
 async function settle() {
   for (let i = 0; i < 3; i++) {
     await tick();
@@ -50,7 +49,7 @@ it("measured case: runs once, suspends to Loading, updates text and class indepe
   let inc!: () => void;
   const Greeting = $component(function* () {
     const [n, setN] = yield* $signal(1);
-    inc = () => write(setN(v => v + 1));
+    inc = () => write(() => setN(v => v + 1));
     const user = yield* $memo(function* () {
       return yield* attempt(() => new Promise<{ name: string }>(r => (resolve = r)), fail);
     });
@@ -111,7 +110,7 @@ it("props, stores, row blocks and hole blocks read with yield* in JSX", () => {
       ]
     });
     toggle = () =>
-      write(
+      write(() =>
         setTodos(s => {
           s.list[1].done = true;
         })

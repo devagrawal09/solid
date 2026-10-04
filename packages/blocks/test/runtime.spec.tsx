@@ -44,6 +44,7 @@ import { createSignal as plainSignal } from "solid-js";
 import { INSTANCE, registerInstance } from "../src/runtime.js";
 import { h } from "@solidjs/blocks/h";
 import { Failed, toFailed } from "./failed.js";
+import { write } from "./write.js";
 
 declare const __DEV__: boolean;
 /** Dev-only checks (warnings, dev errors) are skipped against production builds. */
@@ -53,8 +54,6 @@ const tick = () => new Promise<void>(r => setTimeout(r, 0));
 
 const toError = toFailed;
 
-/** A write driven from plain test code (no block host): what `yield*` does in an $event. */
-const write = (receipt: Iterable<unknown>): void => void [...receipt];
 async function settle(times = 3) {
   for (let i = 0; i < times; i++) {
     await tick();
@@ -85,7 +84,7 @@ describe("views are fine-grained", () => {
     let bump!: () => void;
     const Counter = $component(function* () {
       const [n, setN] = yield* $signal(0);
-      bump = () => write(setN(v => v + 1));
+      bump = () => write(() => setN(v => v + 1));
       return function* () {
         viewRuns++;
         return (
@@ -194,7 +193,7 @@ describe("views are fine-grained", () => {
     let set!: (v: boolean) => void;
     const Holes = $component(function* Holes() {
       const [open, setOpen] = yield* $signal(true);
-      set = v => write(setOpen(v));
+      set = v => write(() => setOpen(v));
       return function* () {
         return (
           <p>
@@ -237,7 +236,7 @@ describe("setup operations", () => {
     let set!: (v: number) => void;
     const App = $component(function* () {
       const [n, setN] = yield* $signal(1);
-      set = v => write(setN(v));
+      set = v => write(() => setN(v));
       const doubled = yield* $memo(function* () {
         return (yield* n) * 2;
       });
@@ -266,7 +265,7 @@ describe("setup operations", () => {
     const App = $component(function* () {
       const [n, setN] = yield* $signal(1);
       const [copy, setCopy] = yield* $signal(0);
-      set = v => write(setN(v));
+      set = v => write(() => setN(v));
       yield* $effect(function* () {
         const v = yield* n;
         const written = yield* setCopy(v * 10);
@@ -290,7 +289,7 @@ describe("setup operations", () => {
     const App = $component(function* () {
       const [todos, setTodos] = yield* $store({ list: [{ title: "a", done: false }] });
       toggle = () =>
-        write(
+        write(() =>
           setTodos(s => {
             s.list[0].done = !s.list[0].done;
           })
@@ -346,7 +345,8 @@ describe("setup operations", () => {
       const [n, setN] = yield* $signal(1);
       const m = yield* $memo(function* () {
         try {
-          write(setN(2));
+          // a memo's own write: the receipt delegated to right here
+          void [...setN(2)];
         } catch (e) {
           error = e;
         }
@@ -521,7 +521,7 @@ describe("props", () => {
     });
     const Parent = $component(function* () {
       const [user, setUser] = yield* $signal({ name: "a" });
-      setName = name => write(setUser({ name }));
+      setName = name => write(() => setUser({ name }));
       return function* () {
         return <Card user={user} tag="t" />;
       };
@@ -534,24 +534,81 @@ describe("props", () => {
     expect(childRuns).toBe(1);
   });
 
-  it("a setter call does nothing until it is delegated to", () => {
-    let poke!: () => void;
+  it("a setter call does nothing until it is delegated to; in development an undelegated receipt is UNYIELDED_WRITE", async () => {
+    let poke!: () => Promise<unknown>;
     let bump!: () => void;
-    const App = $component(function* () {
+    const App = $component(function* App() {
       const [n, setN] = yield* $signal(0);
-      poke = () => void setN(1);
-      bump = () => write(setN(2));
+      poke = $event(function* () {
+        void setN(1);
+      });
+      bump = () => write(() => setN(2));
       return function* () {
         return <i>{perform(n)}</i>;
       };
     });
     mount(App);
-    poke();
+    const failure = await poke().then(
+      () => null,
+      e => e
+    );
     flush();
     expect(root.textContent).toBe("0");
+    if (__DEV__) expect(String(failure)).toMatch(/UNYIELDED_WRITE\] a \$signal's setter in <App>/);
+    else expect(failure).toBe(null);
     bump();
     flush();
     expect(root.textContent).toBe("2");
+  });
+
+  devIt("an effect's undelegated receipt is UNYIELDED_WRITE", () => {
+    const App = $component(function* Effecting() {
+      const [n, setN] = yield* $signal(0);
+      yield* $effect(function* () {
+        if ((yield* n) === 0) void setN(1);
+      });
+      return function* () {
+        return <i>{perform(n)}</i>;
+      };
+    });
+    mount(() => <Errored fallback={(e: any) => <b>{e().message}</b>}>{App()}</Errored>);
+    flush();
+    expect(root.textContent).toMatch(/UNYIELDED_WRITE\] a \$signal's setter in <Effecting>/);
+  });
+
+  it("a receipt minted before an event's async attempt and delegated to after it is not unyielded", async () => {
+    let go!: () => Promise<unknown>;
+    const App = $component(function* App() {
+      const [n, setN] = yield* $signal(0);
+      go = $event(function* () {
+        const receipt = setN(7);
+        yield* attempt(() => Promise.resolve(), toError);
+        yield* receipt;
+      });
+      return function* () {
+        return <i>{perform(n)}</i>;
+      };
+    });
+    mount(App);
+    await go();
+    await settle();
+    expect(root.textContent).toBe("7");
+  });
+
+  devIt("a setter called outside a block run is SETTER_OUTSIDE_RUN (D-028)", () => {
+    let setter!: (v: number) => unknown;
+    const App = $component(function* App() {
+      const [n, setN] = yield* $signal(0);
+      setter = setN;
+      return function* () {
+        return <i>{perform(n)}</i>;
+      };
+    });
+    mount(App);
+    // handed to plain code (a DOM handler, a timer): it fails at the call
+    expect(() => setter(1)).toThrow(
+      /SETTER_OUTSIDE_RUN\] a \$signal's setter called outside a block run/
+    );
   });
 
   it("$optimistic / $optimisticStore: an $event's writes show at once and revert when it settles", async () => {
@@ -637,7 +694,7 @@ describe("props", () => {
     let setN!: (v: number) => void;
     const App = $component(function* () {
       const [n, set] = yield* $signal(1);
-      setN = v => write(set(v));
+      setN = v => write(() => set(v));
       const view = yield* $projection(
         function* (draft: { doubled: number }) {
           draft.doubled = (yield* n) * 2;
@@ -660,7 +717,7 @@ describe("props", () => {
     let done = false;
     const App = $component(function* () {
       const [ok, setOk] = yield* $signal(false);
-      ready = () => write(setOk(true));
+      ready = () => write(() => setOk(true));
       const go = $event(function* () {
         yield* until(ok, toError);
         done = true;
@@ -684,7 +741,7 @@ describe("props", () => {
     const B = () => <b>B</b>;
     const App = $component(function* () {
       const [which, set] = yield* $signal<"a" | "b">("a");
-      setWhich = v => write(set(v));
+      setWhich = v => write(() => set(v));
       const View = yield* $dynamic(function* () {
         return (yield* which) === "a" ? A : B;
       });
@@ -865,7 +922,7 @@ describe("events", () => {
     });
     const App = $component(function* () {
       const [n, set] = yield* $signal(1);
-      setN = v => write(set(v));
+      setN = v => write(() => set(v));
       yield* $effect(function* () {
         yield* record(yield* n);
       });
@@ -1074,8 +1131,8 @@ describe("row blocks", () => {
     const List = $component(function* () {
       const [items, set] = yield* $signal([a, b]);
       const [suffix, setSuffix] = yield* $signal("!");
-      setItems = v => write(set(v));
-      setText = v => write(setSuffix(v));
+      setItems = v => write(() => set(v));
+      setText = v => write(() => setSuffix(v));
       return function* () {
         return (
           <ul>
@@ -1149,7 +1206,7 @@ describe("row blocks", () => {
         { id: 1, text: "a" },
         { id: 2, text: "b" }
       ]);
-      setItems = v => write(set(v));
+      setItems = v => write(() => set(v));
       return function* () {
         return (
           <ul>
@@ -1208,7 +1265,7 @@ describe("row blocks", () => {
     });
     const App = $component(function* () {
       const [items, setItems] = yield* $signal(rows);
-      set = v => write(setItems(v));
+      set = v => write(() => setItems(v));
       return function* () {
         return (
           <ul>
@@ -1419,7 +1476,7 @@ describe("lazy", () => {
     const Inner = $component(function* (props: TypedProps<{ label: string }>) {
       setups++;
       const [n, setN] = yield* $signal(1);
-      bump = () => write(setN(v => v + 1));
+      bump = () => write(() => setN(v => v + 1));
       return function* () {
         return (
           <b>
@@ -1434,7 +1491,7 @@ describe("lazy", () => {
     let setLabel!: (v: string) => void;
     const App = $component(function* () {
       const [label, set] = yield* $signal("n=");
-      setLabel = v => write(set(v));
+      setLabel = v => write(() => set(v));
       return function* () {
         return <div>{perform(Page({ label }))}</div>;
       };
@@ -1529,7 +1586,7 @@ describe("Loading on a source", () => {
     const resolvers: Record<string, (v: string) => void> = {};
     const Page = $component(function* () {
       const [k, set] = yield* $signal("a");
-      setKey = v => write(set(v));
+      setKey = v => write(() => set(v));
       const v = yield* $memo(function* () {
         const at = yield* k;
         return yield* attempt(() => new Promise<string>(r => (resolvers[at] = r)), toError);
@@ -1643,7 +1700,7 @@ describe("flow controls take holes (D-038)", () => {
     let set!: (v: number) => void;
     const App = $component(function* () {
       const [n, setN] = yield* $signal(1);
-      set = v => write(setN(v));
+      set = v => write(() => setN(v));
       return function* () {
         return (
           <div>
@@ -1699,7 +1756,7 @@ describe("derivations", () => {
     let runs = 0;
     const App = $component(function* () {
       const [n, setN] = yield* $signal(2);
-      set = v => write(setN(v));
+      set = v => write(() => setN(v));
       const doubled = yield* $memo(function* () {
         runs++;
         return (yield* n) * 2;
@@ -1880,7 +1937,7 @@ describe("attempt / isPending interplay", () => {
     let set!: (v: number) => void;
     const App = $component(function* () {
       const [id, setId] = yield* $signal(1);
-      set = v => write(setId(v));
+      set = v => write(() => setId(v));
       const m = yield* $memo(function* () {
         const i = yield* id;
         const v = yield* attempt(() => new Promise<number>(r => resolvers.push(r)), toError);

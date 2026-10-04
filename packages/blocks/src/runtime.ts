@@ -188,6 +188,11 @@ interface HostState {
   readonly jsx: boolean;
   /** Dev only: the component (or row) the running block belongs to, for dev errors. */
   readonly name: string | null;
+  /**
+   * Dev only: the receipts setters returned in this run (an `$event` call's
+   * steps share one list), each to be delegated to before the run ends.
+   */
+  readonly receipts: Receipt<unknown>[] | null;
 }
 let state: HostState = {
   host: NONE,
@@ -195,7 +200,8 @@ let state: HostState = {
   resumed: false,
   view: null,
   jsx: false,
-  name: null
+  name: null,
+  receipts: null
 };
 
 /**
@@ -211,12 +217,18 @@ function runAs<T>(
   view: string | null = null,
   jsx = false,
   resumed = false,
-  name: string | null = null
+  name: string | null = null,
+  receipts: Receipt<unknown>[] | null = null
 ): T {
   const prev = state;
-  state = { host, sink, resumed, view, jsx, name };
+  // a run checks the receipts it minted when it ends (an `$event` call
+  // hands its own list to every step and checks it when the body ends)
+  const own = __DEV__ && receipts === null ? [] : null;
+  state = { host, sink, resumed, view, jsx, name, receipts: receipts ?? own };
   try {
-    return run();
+    const result = run();
+    if (own !== null && own.length) checkReceipts(own, host, name);
+    return result;
   } catch (e) {
     if (__DEV__) throw untyped(e, host, name);
     throw e;
@@ -365,8 +377,8 @@ export function perform<T>(target: Yieldable<any, T> | (() => T) | T): T {
   if (x != null) {
     if (x[READ] !== undefined) {
       if (!__DEV__) return readOf(x) as T;
-      const { host, sink, view, resumed, name } = state;
-      return runAs(host, () => readOf(x) as T, sink, view, true, resumed, name);
+      const { host, sink, view, resumed, name, receipts } = state;
+      return runAs(host, () => readOf(x) as T, sink, view, true, resumed, name, receipts);
     }
     if (x[VIEW_MARK] === true) return x;
     if (typeof x === "function") return x();
@@ -613,11 +625,34 @@ export function raise<E extends Error>(error: E & KindCheck<E>): Yieldable<Raise
  * error (`no-unyielded-write`).
  */
 class Receipt<T> {
-  constructor(readonly write: () => T) {}
+  /** Dev only: whether it was delegated to (`yield*`). */
+  delegated = false;
+  constructor(
+    readonly write: () => T,
+    readonly setter: string
+  ) {}
   *[Symbol.iterator](): Generator<never, T, unknown> {
-    if (__DEV__) checkWrite();
+    if (__DEV__) {
+      this.delegated = true;
+      checkWrite();
+    }
     return this.write();
   }
+}
+
+/**
+ * Dev only (D-021): a receipt not delegated to by the end of its run wrote
+ * nothing — the setter call was the bug (`setX(v)` where `yield* setX(v)`
+ * was meant). The lint `no-unyielded-write` sees the plain cases; this sees
+ * the rest (a setter handed to a helper, called in a callback).
+ */
+function checkReceipts(list: Receipt<unknown>[], host: Host, name: string | null): void {
+  for (let i = 0; i < list.length; i++)
+    if (!list[i].delegated)
+      throw devError(
+        "UNYIELDED_WRITE",
+        `${list[i].setter} in <${name ?? "anonymous"}>: its receipt was not delegated to by the end of ${HOST_NAMES[host]}'s run, so it wrote nothing. A setter writes at yield* setX(v).`
+      );
 }
 function checkWrite(): void {
   const host = state.host;
@@ -627,12 +662,23 @@ function checkWrite(): void {
       `${HOST_NAMES[host]} does not write: write in an $event or an $effect.`
     );
 }
-function receiptSetter(set: (v: any) => any, value?: () => any): any {
-  return (v: any) =>
-    new Receipt(() => {
+function receiptSetter(setter: string, set: (v: any) => any, value?: () => any): any {
+  return (v: any) => {
+    // D-028: with no block running there is no run to report an unyielded
+    // receipt at — the setter was handed to foreign code (`onClick={setX}`,
+    // a timer): fail at the call
+    if (__DEV__ && state.host === NONE)
+      throw devError(
+        "SETTER_OUTSIDE_RUN",
+        `${setter} called outside a block run: a setter writes when its receipt is delegated to (yield* setX(v)) in an $event or an $effect; handed to plain code it writes nothing.`
+      );
+    const receipt = new Receipt(() => {
       const r = set(v);
       return value ? value() : r;
-    });
+    }, setter);
+    if (__DEV__) state.receipts?.push(receipt);
+    return receipt;
+  };
 }
 
 function checkCreate(kind: string): void {
@@ -662,7 +708,7 @@ export function $signal<T>(
 ): Yieldable<Create<"signal">, [Source<T, false, never>, BlockSetter<T>]> {
   return new CreateOp("signal", () => {
     const [get, set] = createSignal(value as any, options as any);
-    return [asSource(get as Accessor<T>), receiptSetter(set as any)];
+    return [asSource(get as Accessor<T>), receiptSetter("a $signal's setter", set as any)];
   }) as any;
 }
 
@@ -672,7 +718,10 @@ export function $store<T extends object>(
 ): Yieldable<Create<"store">, [TypedStore<T>, BlockStoreSetter<T>]> {
   return new CreateOp("store", () => {
     const [store, set] = createStore(value as any);
-    return [makePath(store, false, []), receiptSetter(set as any, () => store)];
+    return [
+      makePath(store, false, []),
+      receiptSetter("a $store's setter", set as any, () => store)
+    ];
   }) as any;
 }
 
@@ -697,7 +746,7 @@ export function $optimistic<T>(
         "$optimistic takes a value (its scalar form, as $signal); an optimistic value derived from a body is $optimisticStore(function* (draft) { … }, seed)."
       );
     const [get, set] = createOptimistic(value as any, options as any);
-    return [asSource(get as Accessor<T>), receiptSetter(set as any)];
+    return [asSource(get as Accessor<T>), receiptSetter("an $optimistic's setter", set as any)];
   }) as any;
 }
 
@@ -740,7 +789,10 @@ export function $optimisticStore(first: any, seed?: any, options?: any): any {
       typeof first === "function"
         ? createOptimisticStore(memoCompute(first) as any, seed, options)
         : createOptimisticStore(first);
-    return [makePath(store, false, []), receiptSetter(set as any, () => store)];
+    return [
+      makePath(store, false, []),
+      receiptSetter("an $optimisticStore's setter", set as any, () => store)
+    ];
   });
 }
 
@@ -1104,7 +1156,8 @@ function reportError(owner: ReturnType<typeof getOwner>, error: unknown): void {
  */
 function* eventSteps(
   gen: Generator<unknown, unknown, unknown>,
-  name: string | null
+  name: string | null,
+  receipts: Receipt<unknown>[] | null
 ): Generator<PromiseLike<unknown>, unknown, unknown> {
   let value: unknown;
   let failed = false;
@@ -1116,7 +1169,8 @@ function* eventSteps(
       null,
       false,
       false,
-      name
+      name,
+      receipts
     );
     if (r.done) return r.value;
     const op = r.value;
@@ -1131,7 +1185,8 @@ function* eventSteps(
         null,
         false,
         false,
-        name
+        name,
+        receipts
       );
     }
     try {
@@ -1172,7 +1227,15 @@ export function $event<Args extends unknown[] = [], Y extends EventOp = never, R
   }
   const run = action(function* (rec: CallRecord, ...args: Args) {
     try {
-      const value = yield* eventSteps(body(...args) as Generator<unknown, unknown, unknown>, name);
+      // one list for the whole call: a receipt minted before an async
+      // attempt and delegated to after it is not unyielded
+      const receipts: Receipt<unknown>[] | null = __DEV__ ? [] : null;
+      const value = yield* eventSteps(
+        body(...args) as Generator<unknown, unknown, unknown>,
+        name,
+        receipts
+      );
+      if (receipts !== null && receipts.length) checkReceipts(receipts, EVENT, name);
       rec.done = { ok: true, value };
       return value;
     } catch (error) {
