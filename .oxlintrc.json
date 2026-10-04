@@ -6,7 +6,8 @@
         "examples/*-blocks/**",
         "examples/*-blocks-h/**",
         "examples/blocks-harness/**",
-        "packages/blocks/**"
+        "packages/blocks/**",
+        "packages/vite-plugin-blocks/test/fixtures/**"
       ],
       "rules": {
         "require-yield": "off"

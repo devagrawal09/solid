@@ -14,8 +14,9 @@
 //   --only <substring>  run only steps whose name contains the substring
 //                       (repeatable; a step matching any of them runs)
 //   --fast              run only the quick subset: twin:*:typecheck, twin:*:lint,
-//                       pkg:blocks:test and repo:prettier (skips twin tests,
-//                       the other package suites and oxlint)
+//                       pkg:blocks:test, pkg:vite-plugin-blocks:typecheck and
+//                       repo:prettier (skips twin tests, the other package
+//                       suites and oxlint)
 //   --json <path>       write machine-readable results to <path>
 //   --jobs <n>          steps run concurrently (default 3; vitest steps already
 //                       use 2 workers each, so keep this modest)
@@ -136,6 +137,7 @@ function resolveOxlint() {
 const LINT_DIRS = twins => [
   "packages/blocks",
   "packages/eslint-plugin-blocks",
+  "packages/vite-plugin-blocks",
   ...twins.map(t => `examples/${t}`)
 ];
 
@@ -160,6 +162,19 @@ function buildSteps(twins) {
       name: "pkg:eslint-plugin-blocks:test",
       cwd: root,
       ...pnpmRun("packages/eslint-plugin-blocks", "test")
+    },
+    // The JSX transform's rule as a standalone plugin (D-003): fixture parity with the
+    // compiler's rule, the Vite plugin, the lazy module-URL pass.
+    {
+      name: "pkg:vite-plugin-blocks:test",
+      cwd: root,
+      ...pnpmRun("packages/vite-plugin-blocks", "test")
+    },
+    {
+      name: "pkg:vite-plugin-blocks:typecheck",
+      cwd: root,
+      fast: true,
+      ...pnpmRun("packages/vite-plugin-blocks", "typecheck")
     }
   );
 
