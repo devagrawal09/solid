@@ -55,6 +55,7 @@ import type {
   BlockStoreSetter,
   Cleanup,
   Component,
+  ComponentView,
   ContextRead,
   Create,
   EffectOp,
@@ -67,6 +68,7 @@ import type {
   MemoOp,
   Path,
   PendingOf,
+  PropsArgs,
   PropsOf,
   Raise,
   Read,
@@ -342,7 +344,7 @@ function asSource<T>(get: Accessor<T>): Source<T, any, any> {
  * constant needs no owner): `createContext(constant<Identity | null>(null))`
  * is a context of sources whose default is the constant.
  */
-export function constant<T>(value: T): Source<T, false, never> {
+export function constant<T>(value: T): Source<T> {
   return asSource(() => value) as any;
 }
 
@@ -351,7 +353,7 @@ export function constant<T>(value: T): Source<T, false, never> {
  * one is pending, the previous one (Solid's `latest`: stale while
  * revalidating). Pending only until a first value exists.
  */
-export function latestOf<T, P extends boolean, E>(source: Source<T, P, E>): Source<T, P, E> {
+export function latestOf<T, E, P extends boolean>(source: Source<T, E, P>): Source<T, E, P> {
   const get = accessor(source);
   return asSource(() => solidLatest(get)) as any;
 }
@@ -360,9 +362,7 @@ export function latestOf<T, P extends boolean, E>(source: Source<T, P, E>): Sour
  * `yield* isPendingOf(results)`: whether a source has a newer value in
  * flight (Solid's `isPending`). Never pending itself.
  */
-export function isPendingOf(
-  source: Source<unknown, boolean, unknown>
-): Source<boolean, false, never> {
+export function isPendingOf(source: Source<unknown, unknown, boolean>): Source<boolean> {
   const get = accessor(source);
   return asSource(() => solidIsPending(get)) as any;
 }
@@ -371,7 +371,7 @@ export function isPendingOf(
  * @internal A plain accessor for a source, for the library's own hand-offs to
  * Solid (holes, `latestOf`, `until`). Not exported: block code reads with `yield*`.
  */
-export function accessor<T>(source: Source<T, boolean, any>): Accessor<T> {
+export function accessor<T>(source: Source<T, any, boolean>): Accessor<T> {
   return typeof source === "function" ? (source as any) : () => readOf(source) as T;
 }
 
@@ -531,10 +531,10 @@ class Selection {
  * tracked read of whatever the selector touches (a structural read that is
  * not one path).
  */
-export function readStore<T, P extends boolean, E, R>(
-  store: Source<T, P, E>,
+export function readStore<T, E, P extends boolean, R>(
+  store: Source<T, E, P>,
   select: (state: T) => R
-): Source<R, P, E>;
+): Source<R, E, P>;
 export function readStore(store: unknown, select: (state: any) => unknown): unknown {
   return new Selection(store, select);
 }
@@ -722,7 +722,7 @@ export class CreateOp<T> {
 export function $signal<T>(
   value: T,
   options?: SignalOptions<T>
-): Yieldable<Create<"signal">, [Source<T, false, never>, BlockSetter<T>]> {
+): Yieldable<Create<"signal">, [Source<T>, BlockSetter<T>]> {
   return new CreateOp("signal", () => {
     const [get, set] = createSignal(value as any, options as any);
     return [asSource(get as Accessor<T>), receiptSetter("a $signal's setter", set as any)];
@@ -755,7 +755,7 @@ export function $store<T extends object>(
 export function $optimistic<T>(
   value: Exclude<T, Function>,
   options?: SignalOptions<T>
-): Yieldable<Create<"optimistic">, [Source<T, false, never>, BlockSetter<T>]> {
+): Yieldable<Create<"optimistic">, [Source<T>, BlockSetter<T>]> {
   return new CreateOp("optimistic", () => {
     if (__DEV__ && typeof value === "function")
       throw devError(
@@ -768,9 +768,9 @@ export function $optimistic<T>(
 }
 
 /** A derived store's paths: pending and failing as its body is. */
-type ProjectionStore<T, Y, R, E = never> = Path<T, MemoPending<Y, R>, FailsOf<Y> | E>;
+type ProjectionStore<T, Y, R, E = never> = Path<T, FailsOf<Y> | E, MemoPending<Y, R>>;
 /** With `seedLoadingValue: true` the seed is commit #0: the store is never pending. */
-type SeededStore<T, Y, E = never> = Path<T, false, FailsOf<Y> | E>;
+type SeededStore<T, Y, E = never> = Path<T, FailsOf<Y> | E>;
 
 /**
  * `const [todos, setTodos] = yield* $optimisticStore(function* () { … }, [])`
@@ -849,7 +849,7 @@ class RefreshOp {
  * `refresh`). It is a write: an `$event` or an `$effect` refreshes.
  */
 export function refresh(
-  target: Source<unknown, boolean, unknown> | Path<any, boolean, unknown>
+  target: Source<unknown, unknown, boolean> | Path<any, unknown, boolean>
 ): Yieldable<Write, void> {
   return new RefreshOp(target) as any;
 }
@@ -861,7 +861,7 @@ export function refresh(
  * timeout) into the block's error.
  */
 export function until<T, E extends Error>(
-  source: Source<T, boolean, unknown>,
+  source: Source<T, unknown, boolean>,
   onError: (error: unknown) => E & KindCheck<E>,
   options?: Parameters<typeof solidUntil>[1]
 ): Yieldable<Wait | Raise<E>, T> {
@@ -890,7 +890,7 @@ export type SyncReturn<R> = R & ([UnhandledAsync<R>] extends [never] ? unknown :
 export function $memo<Y extends MemoOp = never, R = unknown>(
   body: () => Generator<Y, SyncReturn<R>, any>,
   options: MemoOptions<MemoValue<R>> & { loadingValue: MemoValue<R> }
-): Yieldable<Create<"memo">, Source<MemoValue<R>, false, FailsOf<Y>>>;
+): Yieldable<Create<"memo">, Source<MemoValue<R>, FailsOf<Y>>>;
 /**
  * `const doubled = yield* $memo(function* () { return (yield* n) * 2 })` in a setup.
  * A body over a promise or a stream returns it through `attempt`: `return
@@ -899,7 +899,7 @@ export function $memo<Y extends MemoOp = never, R = unknown>(
 export function $memo<Y extends MemoOp = never, R = unknown>(
   body: () => Generator<Y, SyncReturn<R>, any>,
   options?: MemoOptions<MemoValue<R>>
-): Yieldable<Create<"memo">, Source<MemoValue<R>, MemoPending<Y, R>, FailsOf<Y>>>;
+): Yieldable<Create<"memo">, Source<MemoValue<R>, FailsOf<Y>, MemoPending<Y, R>>>;
 export function $memo(body: () => Generator<any, any, any>, options?: any): any {
   return new CreateOp("memo", () => memoOf(body, options));
 }
@@ -1125,8 +1125,8 @@ class UntrackOp {
  * a hole, a `$memo`, an `$effect` or an `$event`; never in a setup, which
  * does not read (its pending / failures are the read's).
  */
-export function $untrack<T, P extends boolean, E>(
-  source: Source<T, P, E>
+export function $untrack<T, E, P extends boolean>(
+  source: Source<T, E, P>
 ): Yieldable<Read<P, E>, T> {
   return new UntrackOp(source) as any;
 }
@@ -1393,8 +1393,9 @@ export function $component<
 >(
   body: (props: TP) => Generator<Y, V, any>,
   ..._rule: NoJsxViewRule<ViewYield<V>, ViewReturn<V>>
-): Component<
-  PropsOf<TP>,
+): (
+  ...props: PropsArgs<PropsOf<TP>>
+) => ComponentView<
   ViewPending<ViewYield<V>, ViewReturn<V>>,
   ViewFails<ViewYield<V>, ViewReturn<V>>
 > {

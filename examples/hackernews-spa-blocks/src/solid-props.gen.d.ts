@@ -6,14 +6,5 @@
 export {};
 declare module "@solidjs/blocks" {
   interface PropColors {
-    "Comment": {
-      comment: { pending: false; fails: never; live: true; static: false };
-    };
-    "Story": {
-      story: { pending: false; fails: never; live: true; static: false };
-    };
-    "Toggle": {
-      children: { pending: false; fails: never; live: true; static: false };
-    };
   }
 }

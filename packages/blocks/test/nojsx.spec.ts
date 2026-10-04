@@ -19,7 +19,7 @@ import {
   readStore,
   render,
   Show,
-  type TypedProps
+  type Props
 } from "@solidjs/blocks";
 import { h } from "@solidjs/blocks/h";
 import { toFailed } from "./failed.js";
@@ -250,7 +250,7 @@ describe("h argument shapes", () => {
 
   it("a prop holding an array or a store is passed as it is", () => {
     let seen: unknown;
-    const Child = $component(function* (props: TypedProps<{ list: string[] }>) {
+    const Child = $component(function* (props: Props<{ list: string[] }>) {
       yield* $effect(function* () {
         seen = yield* $untrack(props.list);
       });

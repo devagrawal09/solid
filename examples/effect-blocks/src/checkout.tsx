@@ -22,7 +22,7 @@ import {
   refresh,
   Show,
   type Source,
-  type TypedProps,
+  type Props,
   view
 } from "@solidjs/blocks";
 import {
@@ -65,7 +65,7 @@ const INITIAL_CART: CartItem[] = [
  * list is its own component and the boundary receives it.
  */
 const Orders = $component(function* Orders(
-  props: TypedProps<{ orders: Source<Order[], true, OrdersError> }, "Orders">
+  props: Props<{ orders: Source<Order[], OrdersError, true> }>
 ) {
   return view(function* () {
     return (

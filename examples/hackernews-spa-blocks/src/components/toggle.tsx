@@ -1,8 +1,8 @@
-import { $component, $event, $signal, type Element, type TypedProps, view } from "@solidjs/blocks";
+import { $component, $event, $signal, type Element, type Props, view } from "@solidjs/blocks";
 
 // A comment's collapse toggle: its own state (a `$signal`), its handler an
 // `$event`.
-const Toggle = $component(function* Toggle(props: TypedProps<{ children: Element }, "Toggle">) {
+const Toggle = $component(function* Toggle(props: Props<{ children: Element }>) {
   const [open, setOpen] = yield* $signal(true);
   const toggle = $event(function* () {
     yield* setOpen(o => !o);

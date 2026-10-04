@@ -6,17 +6,5 @@
 export {};
 declare module "@solidjs/blocks" {
   interface PropColors {
-    "Footer": {
-      filter: { pending: false; fails: never; live: true; static: false };
-    };
-    "MainSection": {
-      filter: { pending: false; fails: never; live: true; static: false };
-    };
-    "TodoApp": {
-      filter: { pending: false; fails: never; live: true; static: false };
-    };
-    "TodoItem": {
-      todo: { pending: false; fails: never; live: true; static: false };
-    };
   }
 }

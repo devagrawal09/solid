@@ -18,19 +18,33 @@ function resolve(context, node) {
   return null;
 }
 
-/** Whether a TypeScript type carries the block component brand (`[COMPONENT]`). */
-function hasBrand(type, seen = new Set()) {
+/** Whether a TypeScript type is marked as a block component's view (`[COMPONENT]`). */
+function isComponentView(type, seen) {
   if (!type || seen.has(type)) return false;
   seen.add(type);
   if (type.isUnionOrIntersection && type.isUnionOrIntersection())
-    return type.types.some(t => hasBrand(t, seen));
+    return type.types.some(t => isComponentView(t, seen));
   const props = type.getProperties ? type.getProperties() : [];
   return props.some(p => String(p.escapedName).startsWith("__@COMPONENT@"));
 }
 
 /**
+ * Whether a TypeScript type is a block component: a function returning a
+ * view marked `[COMPONENT]` (D-068 — the mark is on the view it returns, so a
+ * component's own type stays a plain function and keeps its type parameters).
+ */
+function hasBrand(type, seen = new Set()) {
+  if (!type || seen.has(type)) return false;
+  seen.add(type);
+  if (type.isUnionOrIntersection && type.isUnionOrIntersection())
+    return type.types.some(t => hasBrand(t, seen));
+  const signatures = type.getCallSignatures ? type.getCallSignatures() : [];
+  return signatures.some(sig => isComponentView(sig.getReturnType(), new Set()));
+}
+
+/**
  * Whether `node` (an Identifier, a JSXIdentifier, a member expression) names a
- * block component. With type information: its type carries the brand. Without:
+ * block component. With type information: it returns a marked view. Without:
  * imported from `@solidjs/blocks` (the flow controls and boundaries), or bound
  * to `$component(…)` / `lazy(…)`. Unknown (a component imported from another
  * module, without types) is not reported.

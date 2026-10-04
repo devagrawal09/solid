@@ -1,7 +1,7 @@
-import { $component, Show, type TypedProps, view } from "@solidjs/blocks";
+import { $component, Show, type Props, view } from "@solidjs/blocks";
 import type { StoryDefinition } from "../types";
 
-const Story = $component(function* Story(props: TypedProps<{ story: StoryDefinition }, "Story">) {
+const Story = $component(function* Story(props: Props<{ story: StoryDefinition }>) {
   return view(function* () {
     return (
       <li class="news-item">

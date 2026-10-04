@@ -16,7 +16,7 @@ import {
   Loading,
   render,
   Show,
-  type TypedProps,
+  type Props,
   view
 } from "@solidjs/blocks";
 import { toFailed } from "./failed.js";
@@ -105,9 +105,7 @@ it("measured case: runs once, suspends to Loading, updates text and class indepe
 
 it("props, stores, row blocks and hole blocks read with yield* in JSX", () => {
   let views = 0;
-  const Item = $component(function* (
-    props: TypedProps<{ todo: { title: string; done: boolean } }>
-  ) {
+  const Item = $component(function* (props: Props<{ todo: { title: string; done: boolean } }>) {
     return function* () {
       views++;
       return <li class={{ done: yield* props.todo.done }}>{yield* props.todo.title}</li>;

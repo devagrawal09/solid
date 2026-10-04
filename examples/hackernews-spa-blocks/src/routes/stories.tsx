@@ -1,5 +1,5 @@
 import { type RoutePreloadFuncArgs, type RouteSectionProps } from "@solidjs/router";
-import { $component, $memo, attempt, For, Show, type TypedProps, view } from "@solidjs/blocks";
+import { $component, $memo, attempt, For, Show, type Props, view } from "@solidjs/blocks";
 import Story from "~/components/story";
 import { getStories } from "~/lib/api";
 import type { StoryTypes } from "~/types";
@@ -17,7 +17,7 @@ export const preload = ({ location }: RoutePreloadFuncArgs) => {
 // The page and the feed are hole blocks over the location (derived reads,
 // not memoized, as the original's plain functions); the stories are a
 // `$memo` over the query — pending until it lands, and it may fail.
-const Stories = $component(function* Stories(props: TypedProps<RouteSectionProps, "Stories">) {
+const Stories = $component(function* Stories(props: Props<RouteSectionProps>) {
   const page = yield* $memo(function* () {
     return Number(yield* props.location.query.page) || 1;
   });

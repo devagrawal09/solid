@@ -1,14 +1,17 @@
 /*
- * Mounting: the root must be settled — every pending and every failure
- * handled by a `Loading` / `Errored` above it. Every form behaves the same:
+ * Mounting: the root must not be pending — every pending read handled by a
+ * `Loading` above it. It may fail: a failure with no `Errored` above it is
+ * re-thrown (D-033), at the root as anywhere (D-059), so no boundary is
+ * required for it. Every form behaves the same:
  * `render(App, root)`, `render(() => <App />, root)`,
  * `render(() => jsx(App, {}), root)` and `render(() => h(App), root)`.
  */
 import { render as webRender, hydrate as webHydrate } from "@solidjs/web";
 import type { Element } from "./element.js";
-import type { SettledView } from "./types.js";
+import type { View } from "./types.js";
 
-type Root = (() => SettledView) | (() => Element);
+/** A root that is not pending; its failures, if any, are re-thrown (D-033). */
+type Root = (() => View<false, any>) | (() => Element);
 type MountableElement = Element & globalThis.Element;
 
 /** Whether a value is an `h` / automatic-`jsx` element thunk (Solid's `h` brands them). */
@@ -37,7 +40,7 @@ function rootOf(code: () => unknown): () => unknown {
   };
 }
 
-/** Mount a settled root. */
+/** Mount a root that is not pending. */
 export function render(
   code: Root,
   element: MountableElement | Document | ShadowRoot | DocumentFragment | HTMLElement,
@@ -47,7 +50,7 @@ export function render(
   return webRender(rootOf(code) as any, element as any, init as any, options);
 }
 
-/** Hydrate a settled root rendered on the server. */
+/** Hydrate a root (not pending) rendered on the server. */
 export function hydrate(
   code: Root,
   element: MountableElement | Document | HTMLElement,

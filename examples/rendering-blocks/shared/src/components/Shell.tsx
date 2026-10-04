@@ -1,4 +1,4 @@
-import { $component, type Element, type TypedProps, view } from "@solidjs/blocks";
+import { $component, type Element, type Props, view } from "@solidjs/blocks";
 import { HydrationScript } from "@solidjs/web";
 
 /**
@@ -10,9 +10,7 @@ import { HydrationScript } from "@solidjs/web";
  * `/client.tsx`); in production builds the server harness rewrites it to the
  * hashed asset from the Vite client manifest.
  */
-const Shell = $component(function* Shell(
-  props: TypedProps<{ clientEntry: string; children: Element }, "Shell">
-) {
+const Shell = $component(function* Shell(props: Props<{ clientEntry: string; children: Element }>) {
   return view(function* () {
     return (
       <html lang="en">

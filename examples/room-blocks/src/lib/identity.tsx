@@ -12,7 +12,7 @@ import {
   constant,
   createContext,
   type Element,
-  type TypedProps,
+  type Props,
   view
 } from "@solidjs/blocks";
 import { isServer } from "@solidjs/web";
@@ -42,7 +42,7 @@ const IdentityContext = createContext(constant<Identity | null>(null));
 
 /** Holds this tab's identity for the tree below; mints it on the client once settled. */
 export const IdentityProvider = $component(function* IdentityProvider(
-  props: TypedProps<{ children: Element }, "IdentityProvider">
+  props: Props<{ children: Element }>
 ) {
   const [me, setMe] = yield* $signal<Identity | null>(null);
   yield* $settled(function* () {

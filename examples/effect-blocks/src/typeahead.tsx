@@ -5,9 +5,10 @@
 // original's memo does, so Solid still closes a superseded flight's iterator
 // and `runEffect` interrupts the fiber. (`yield* attempt(…)` would not do: it
 // awaits a promise, and a superseded run is closed without telling the
-// producer, so the fiber and its retries would run on.) A memo returning an
-// async iterable may be pending and may fail with anything: `Source<…,
-// boolean, unknown>`.
+// producer, so the fiber and its retries would run on.) The memo's source
+// may be pending and fails as the stream's handler says; `Results` declares
+// that coloring on its prop: `Source<Package[], SearchError | TransientError,
+// true>`.
 import {
   $component,
   $event,
@@ -21,7 +22,7 @@ import {
   Loading,
   Show,
   type Source,
-  type TypedProps,
+  type Props,
   view
 } from "@solidjs/blocks";
 import { searchPackages, TransientNetworkError, type Package } from "./api";
@@ -35,7 +36,7 @@ function formatDownloads(n: number) {
 }
 
 const Results = $component(function* Results(
-  props: TypedProps<{ results: Source<Package[], boolean, unknown>; query: string }, "Results">
+  props: Props<{ results: Source<Package[], SearchError | TransientError, true>; query: string }>
 ) {
   // Solid's `latest` / `isPending`, as sources: stale while revalidating.
   const list = latestOf(props.results);

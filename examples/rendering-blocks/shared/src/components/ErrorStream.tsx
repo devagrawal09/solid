@@ -8,7 +8,7 @@ import {
   Loading,
   type BlockSetter,
   type Source,
-  type TypedProps,
+  type Props,
   view
 } from "@solidjs/blocks";
 import { ItemError } from "./errors";
@@ -36,7 +36,7 @@ function loadItem(id: string): Promise<Item> {
  * the load is an `attempt` that declares its failure (`ItemError`), so the
  * boundaries' types know what they handle.
  */
-function* item(props: TypedProps<{ id: string }>) {
+function* item(props: Props<{ id: string }>) {
   const [chosen, setId] = yield* $signal<string | undefined>(undefined);
   const item = yield* $memo(function* () {
     const current = (yield* chosen) ?? (yield* props.id);
@@ -48,9 +48,7 @@ function* item(props: TypedProps<{ id: string }>) {
   return { item, setId };
 }
 
-const Title = $component(function* Title(
-  props: TypedProps<{ item: Source<Item, true, ItemError> }, "Title">
-) {
+const Title = $component(function* Title(props: Props<{ item: Source<Item, ItemError, true> }>) {
   return view(function* () {
     return <div>{yield* props.item.title}</div>;
   });
@@ -73,9 +71,7 @@ function fallback(setId: BlockSetter<string | undefined>) {
 
 // A boundary tag hands on nothing it does not handle: the inner boundary of
 // each pair is a call whose content is built inside it.
-const InnerBoundaryItem = $component(function* InnerBoundaryItem(
-  props: TypedProps<{ id: string }, "InnerBoundaryItem">
-) {
+const InnerBoundaryItem = $component(function* InnerBoundaryItem(props: Props<{ id: string }>) {
   const { item: loaded, setId } = yield* item(props);
   return view(function* () {
     return (
@@ -104,9 +100,7 @@ const InnerBoundaryItem = $component(function* InnerBoundaryItem(
   });
 });
 
-const OuterBoundaryItem = $component(function* OuterBoundaryItem(
-  props: TypedProps<{ id: string }, "OuterBoundaryItem">
-) {
+const OuterBoundaryItem = $component(function* OuterBoundaryItem(props: Props<{ id: string }>) {
   const { item: loaded, setId } = yield* item(props);
   return view(function* () {
     return (

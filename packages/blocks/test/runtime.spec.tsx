@@ -39,7 +39,7 @@ import {
   until,
   type ChildView,
   type Element as BlocksElement,
-  type TypedProps,
+  type Props,
   view
 } from "@solidjs/blocks";
 import { createSignal as plainSignal } from "solid-js";
@@ -334,7 +334,7 @@ describe("setup operations", () => {
     let fire!: () => Promise<unknown>;
     const seen: number[] = [];
     let memoRuns = 0;
-    const App = $component(function* (props: TypedProps<{ start: number }>) {
+    const App = $component(function* (props: Props<{ start: number }>) {
       const [a, sa] = yield* $signal(1);
       const [b, sb] = yield* $signal(10);
       setA = v => write(() => sa(v));
@@ -370,7 +370,7 @@ describe("setup operations", () => {
 
   devIt("a setup does not read, tracked or not: READ_IN_SETUP, UNTRACK_IN_SETUP", () => {
     // @ts-expect-error a setup does not read (Read is not a SetupOp)
-    const Bad = $component(function* (props: TypedProps<{ start: number }>) {
+    const Bad = $component(function* (props: Props<{ start: number }>) {
       const v = yield* props.start;
       return function* () {
         return <i>{v}</i>;
@@ -378,7 +378,7 @@ describe("setup operations", () => {
     });
     expect(() => createRoot(() => Bad({ start: 1 }))).toThrow(/READ_IN_SETUP/);
     // @ts-expect-error $untrack is a read too: not a SetupOp
-    const Untracks = $component(function* Untracks(props: TypedProps<{ start: number }>) {
+    const Untracks = $component(function* Untracks(props: Props<{ start: number }>) {
       const v = yield* $untrack(props.start);
       return function* () {
         return <i>{v}</i>;
@@ -390,7 +390,7 @@ describe("setup operations", () => {
   devIt(
     "$untrack after a memo's async attempt is not READ_AFTER_ATTEMPT (it does not track)",
     async () => {
-      const App = $component(function* (props: TypedProps<{ label: string }>) {
+      const App = $component(function* (props: Props<{ label: string }>) {
         const m = yield* $memo(function* () {
           const n = yield* attempt(() => Promise.resolve(2), toError);
           return `${yield* $untrack(props.label)}${n}`;
@@ -591,7 +591,7 @@ describe("setups inside a parent's first view run", () => {
   it("a child's setup (and its memo's first pass) is not a read at the parent view's top level", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     let parentRuns = 0;
-    const Leaf = $component(function* (props: TypedProps<{ n: number }>) {
+    const Leaf = $component(function* (props: Props<{ n: number }>) {
       const n = yield* $memo(function* () {
         return yield* props.n;
       });
@@ -617,7 +617,7 @@ describe("props", () => {
   it("props are reads; forwarding a source forwards the read; paths walk deep", () => {
     let setName!: (v: string) => void;
     let childRuns = 0;
-    const Card = $component(function* (props: TypedProps<{ user: { name: string }; tag: string }>) {
+    const Card = $component(function* (props: Props<{ user: { name: string }; tag: string }>) {
       return function* () {
         childRuns++;
         return (
@@ -1584,7 +1584,7 @@ describe("row blocks", () => {
     const rows = [{ t: "a" }, { t: "b" }];
     let set!: (v: typeof rows) => void;
     let views = 0;
-    const Row = $component(function* (props: TypedProps<{ row: { t: string } }>) {
+    const Row = $component(function* (props: Props<{ row: { t: string } }>) {
       const [n] = yield* $signal(0);
       return function* () {
         views++;
@@ -1838,7 +1838,7 @@ describe("reads from JSX positions are never a view's or a setup's own", () => {
 describe("a view that is a function is a branch's content", () => {
   it("Show / Match render it (a lazy page's output) instead of calling it as a render callback", async () => {
     const [n, setN] = plainSignal(1);
-    const Whole = $component(function* (props: TypedProps<{ n: number }>) {
+    const Whole = $component(function* (props: Props<{ n: number }>) {
       return function* () {
         return <b>{perform(props.n)}</b>;
       };
@@ -1897,7 +1897,7 @@ describe("lazy", () => {
   it("a lazy block component in call form is built once; its chunk and its state land in place", async () => {
     let setups = 0;
     let bump!: () => void;
-    const Inner = $component(function* (props: TypedProps<{ label: string }>) {
+    const Inner = $component(function* (props: Props<{ label: string }>) {
       setups++;
       const [n, setN] = yield* $signal(1);
       bump = () => write(() => setN(v => v + 1));
@@ -1946,7 +1946,7 @@ describe("lazy", () => {
 describe("flow controls keep children lazy", () => {
   it("a hole prop is read in the child, as a source is: a change updates the hole, the child is not re-created (D-065)", () => {
     let setups = 0;
-    const Total = $component(function* (props: TypedProps<{ n: number }>) {
+    const Total = $component(function* (props: Props<{ n: number }>) {
       setups++;
       return view(function* () {
         return <b>{yield* props.n}</b>;
@@ -2021,6 +2021,50 @@ describe("flow controls keep children lazy", () => {
     expect(setups).toBe(1);
     dispose();
   });
+  it("Errored's fallback written as a function* is a lazy view, as other flow controls' (D-066)", () => {
+    let setups = 0;
+    const Oops = $component(function* () {
+      setups++;
+      return view(function* () {
+        return <i>oops</i>;
+      });
+    });
+    let set!: (v: boolean) => void;
+    const App = $component(function* () {
+      const [bad, setBad] = yield* $signal(false);
+      set = v => write(() => setBad(v));
+      const value = yield* $memo(function* () {
+        if (yield* bad) yield* raise(new Failed("bad"));
+        return "ok";
+      });
+      return view(function* () {
+        return (
+          <>
+            {
+              yield* Errored({
+                fallback: function* () {
+                  return <>{yield* Oops()}</>;
+                },
+                children: function* () {
+                  return <b>{yield* value}</b>;
+                }
+              })
+            }
+          </>
+        );
+      });
+    });
+    const root = document.createElement("div");
+    const dispose = render(App as any, root);
+    flush();
+    expect(root.textContent).toBe("ok");
+    expect(setups).toBe(0);
+    set(true);
+    flush();
+    expect(root.textContent).toBe("oops");
+    expect(setups).toBe(1);
+    dispose();
+  });
   it("element children are built when (and each time) the branch shows", () => {
     let built = 0;
     const node = document.createElement("b");
@@ -2078,7 +2122,7 @@ describe("flow controls keep children lazy", () => {
 
 describe("computations created in a setup", () => {
   it("read sources in their own pass (their reads are theirs, not the setup's)", () => {
-    const Child = $component(function* (props: TypedProps<{ n: number }>) {
+    const Child = $component(function* (props: Props<{ n: number }>) {
       const m = yield* $memo(function* () {
         return (yield* props.n) * 2;
       });
@@ -2102,7 +2146,7 @@ describe("computations created in a setup", () => {
   });
 
   devIt("the setup's own read is still an error", () => {
-    const Child = $component(function* (props: TypedProps<{ n: number }>) {
+    const Child = $component(function* (props: Props<{ n: number }>) {
       yield* props.n as unknown as Iterable<never>;
       return function* () {
         return <b />;
@@ -2512,7 +2556,7 @@ describe("untyped throws (D-019)", () => {
 describe("host state is per run (re-entrancy)", () => {
   it("an async $memo resuming while another view renders: the view's reads are its holes'", async () => {
     let cardViews = 0;
-    const Card = $component(function* Card(props: TypedProps<{ name: string }>) {
+    const Card = $component(function* Card(props: Props<{ name: string }>) {
       return function* () {
         cardViews++;
         return <b>{perform(props.name)}</b>;

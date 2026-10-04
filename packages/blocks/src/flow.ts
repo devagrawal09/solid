@@ -37,8 +37,8 @@ import {
 } from "./runtime.js";
 import type { Element } from "./element.js";
 import type {
+  ComponentView,
   ErrorClass,
-  COMPONENT,
   Failure,
   KindCheck,
   FailsOf,
@@ -68,7 +68,7 @@ type Ops<V> = V extends (...args: any[]) => infer R
     : OpsOfHole<R>
   : OpsOfHole<V>;
 /** A flow control's view: the colors of its sources and its content (D-059, D-063, D-062). */
-type FlowView<O> = View<PendingOf<O>, FailsOf<O>>;
+type FlowView<O> = ComponentView<PendingOf<O>, FailsOf<O>>;
 /** A row's colors: its view's yields and output's. */
 type RowOps<VY, R> = VY | HOps<R>;
 /**
@@ -86,9 +86,6 @@ type Children<A extends unknown[]> =
   | (() => Generator<any, Content, any>)
   | Content
   | ((...args: A) => Content);
-
-/** Flow controls are components (`h(For, …)`). */
-type Branded = { readonly [COMPONENT]: true };
 
 /** Forward every prop as a getter, replacing `children` (and `fallback` when given). */
 function forward(props: any, adaptChildren: (children: unknown) => unknown): any {
@@ -344,7 +341,7 @@ function LoadingBlocks<C, F = never>(props: {
   fallback?: F;
   on?: unknown;
   children: C;
-}): View<PendingOf<Ops<F>>, FailsOf<Ops<C> | Ops<F>>>;
+}): ComponentView<PendingOf<Ops<F>>, FailsOf<Ops<C> | Ops<F>>>;
 function LoadingBlocks(props: any): any {
   const children = content(props, "Loading");
   // `on` may be a source: every other prop is read through where it is read
@@ -357,8 +354,10 @@ function LoadingBlocks(props: any): any {
 }
 
 /**
- * Handles failures below it. The fallback receives the error (typed with the
- * failures of the children) and a `reset`. `$event` failures under it are
+ * Handles failures below it. The fallback is content, a lazy view
+ * (`fallback: function* () { return <…/>; }`, built when it shows, D-066), or
+ * a function receiving the error (typed with the failures of the children)
+ * and a `reset`. `$event` failures under it are
  * routed here.
  *
  * With `catch` it handles only those error types: `<Errored catch={[NotFound]}
@@ -370,21 +369,32 @@ function LoadingBlocks(props: any): any {
  */
 function ErroredBlocks<C, K extends readonly ErrorClass<Failure>[]>(props: {
   catch: K & KindCheck<InstanceType<K[number]>>;
-  fallback: Content | ((error: Accessor<InstanceType<K[number]>>, reset: () => void) => Content);
+  fallback:
+    | Content
+    | (() => Generator<any, Content, any>)
+    | ((error: Accessor<InstanceType<K[number]>>, reset: () => void) => Content);
   children: C;
-}): View<PendingOf<Ops<C>>, Exclude<FailsOf<Ops<C>>, InstanceType<K[number]>>>;
+}): ComponentView<PendingOf<Ops<C>>, Exclude<FailsOf<Ops<C>>, InstanceType<K[number]>>>;
 function ErroredBlocks<C>(props: {
-  fallback: Content | ((error: Accessor<FailsOf<Ops<C>>>, reset: () => void) => Content);
+  fallback:
+    | Content
+    | (() => Generator<any, Content, any>)
+    | ((error: Accessor<FailsOf<Ops<C>>>, reset: () => void) => Content);
   children: C;
-}): View<PendingOf<Ops<C>>, never>;
+}): ComponentView<PendingOf<Ops<C>>, never>;
 function ErroredBlocks(props: any): any {
   const children = content(props, "Errored");
   const fallback = props.fallback as any;
   const handles = props.catch as readonly ErrorClass[] | undefined;
+  // a zero-arity `function*` is a lazy view (D-066), built each time the
+  // fallback shows; a generator taking `(error, reset)` is a row
   const adapted =
-    typeof fallback === "function" && isRowBlock(fallback)
-      ? (err: Accessor<unknown>, reset: () => void) => runRow(fallback, [rowArg(err, true), reset])
-      : undefined;
+    typeof fallback !== "function" || !isRowBlock(fallback)
+      ? undefined
+      : fallback.length === 0
+        ? () => lazyView(fallback)
+        : (err: Accessor<unknown>, reset: () => void) =>
+            runRow(fallback, [rowArg(err, true), reset]);
   return SolidErrored({
     get fallback() {
       const render = adapted || props.fallback;
@@ -422,10 +432,10 @@ function untracked(fn: (props: any) => any): any {
   };
 }
 
-export const For: typeof ForBlocks & Branded = untracked(ForBlocks);
-export const Repeat: typeof RepeatBlocks & Branded = untracked(RepeatBlocks);
-export const Show: typeof ShowBlocks & Branded = untracked(ShowBlocks);
-export const Match: typeof MatchBlocks & Branded = untracked(MatchBlocks);
-export const Switch: typeof SwitchBlocks & Branded = untracked(SwitchBlocks);
-export const Loading: typeof LoadingBlocks & Branded = untracked(LoadingBlocks);
-export const Errored: typeof ErroredBlocks & Branded = untracked(ErroredBlocks);
+export const For: typeof ForBlocks = untracked(ForBlocks);
+export const Repeat: typeof RepeatBlocks = untracked(RepeatBlocks);
+export const Show: typeof ShowBlocks = untracked(ShowBlocks);
+export const Match: typeof MatchBlocks = untracked(MatchBlocks);
+export const Switch: typeof SwitchBlocks = untracked(SwitchBlocks);
+export const Loading: typeof LoadingBlocks = untracked(LoadingBlocks);
+export const Errored: typeof ErroredBlocks = untracked(ErroredBlocks);

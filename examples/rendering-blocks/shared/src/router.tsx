@@ -12,7 +12,7 @@ import {
   type Element,
   type Read,
   type Source,
-  type TypedProps,
+  type Props,
   view
 } from "@solidjs/blocks";
 import { isServer } from "@solidjs/web";
@@ -40,7 +40,7 @@ const RouterContext = createContext<RouterValue>({
 });
 
 function RouteHOC<P extends boolean, E>(Comp: Component<{}, P, E>) {
-  return $component(function* Router(props: TypedProps<{ url?: string }, "Router">) {
+  return $component(function* Router(props: Props<{ url?: string }>) {
     // The location the router navigated to, or none yet: then the URL a
     // server render starts from (a prop: read where the location is derived,
     // D-042), else the document's.
@@ -73,9 +73,7 @@ function* useRouter() {
   return yield* RouterContext;
 }
 
-const Link = $component(function* Link(
-  props: TypedProps<{ path: string; children: Element }, "Link">
-) {
+const Link = $component(function* Link(props: Props<{ path: string; children: Element }>) {
   const { setLocation } = yield* useRouter();
   const navigate = $event(function* (event: MouseEvent) {
     event.preventDefault();

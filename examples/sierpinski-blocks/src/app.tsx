@@ -22,16 +22,20 @@ import {
   Match,
   Switch,
   type Component,
-  type TypedProps,
+  type Props,
+  type Source,
   view
 } from "@solidjs/blocks";
 import { onCleanup } from "solid-js";
 
+// `children` is the seconds a dot shows: Container passes them settled, a
+// triangle passes its own idle-time memo down — pending, failing with an
+// IdleError — so the prop declares that coloring (D-068).
 type TriangleProps = {
   x: number;
   y: number;
   s: number;
-  children: number;
+  children: Source<number, IdleError, true>;
 };
 
 /** The idle-time work failed: the color of a slow child's failure. */
@@ -97,9 +101,7 @@ export const TriangleDemo = $component(function* TriangleDemo() {
   });
 });
 
-const Container = $component(function* Container(
-  props: TypedProps<{ scale: number; seconds: number }, "Container">
-) {
+const Container = $component(function* Container(props: Props<{ scale: number; seconds: number }>) {
   return view(function* () {
     return (
       <div
@@ -119,7 +121,7 @@ const Container = $component(function* Container(
 // branches read an async memo. Its setup is left unnamed: a named setup
 // (`function* Triangle`) would shadow the component inside its own body.
 const Triangle: Component<TriangleProps, true, IdleError> = $component(function* (
-  props: TypedProps<TriangleProps, "Triangle">
+  props: Props<TriangleProps>
 ) {
   // Created here, computed only when a branch reads it (`lazy`): a leaf
   // never starts the idle-time work.
@@ -245,7 +247,7 @@ const Triangle: Component<TriangleProps, true, IdleError> = $component(function*
   });
 });
 
-const Dot = $component(function* Dot(props: TypedProps<TriangleProps, "Dot">) {
+const Dot = $component(function* Dot(props: Props<TriangleProps>) {
   const [hover, setHover] = yield* $signal(false);
   const onEnter = $event(function* () {
     yield* setHover(true);

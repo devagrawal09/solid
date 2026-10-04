@@ -1,12 +1,4 @@
-import {
-  $component,
-  Errored,
-  For,
-  Loading,
-  type Source,
-  type TypedProps,
-  view
-} from "@solidjs/blocks";
+import { $component, Errored, For, Loading, type Source, type Props, view } from "@solidjs/blocks";
 import type { ProfileError } from "./errors";
 
 export interface User {
@@ -16,7 +8,7 @@ export interface User {
 
 // What a `<Loading>` covers is its own component: the facts list.
 const Facts = $component(function* Facts(
-  props: TypedProps<{ info: Source<string[], true, ProfileError> }, "Facts">
+  props: Props<{ info: Source<string[], ProfileError, true> }>
 ) {
   return view(function* () {
     return (
@@ -37,10 +29,10 @@ const Facts = $component(function* Facts(
 });
 
 const Profile = $component(function* Profile(
-  props: TypedProps<
-    { info: Source<string[], true, ProfileError>; user: Source<User, true, ProfileError> },
-    "Profile"
-  >
+  props: Props<{
+    info: Source<string[], ProfileError, true>;
+    user: Source<User, ProfileError, true>;
+  }>
 ) {
   return view(function* () {
     return (

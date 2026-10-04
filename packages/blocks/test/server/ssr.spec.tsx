@@ -29,7 +29,7 @@ import {
   Loading,
   perform,
   Show,
-  type TypedProps,
+  type Props,
   view
 } from "@solidjs/blocks";
 import { Failed } from "../failed.js";
@@ -43,7 +43,7 @@ const strip = (html: string) =>
 describe("server rendering", () => {
   it("renders setup state, props, row blocks and context", () => {
     const Theme = createContext("light");
-    const Item = $component(function* (props: TypedProps<{ text: string }>) {
+    const Item = $component(function* (props: Props<{ text: string }>) {
       const theme = yield* Theme;
       return function* () {
         return <li class={theme}>{perform(props.text)}</li>;

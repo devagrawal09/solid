@@ -26,26 +26,28 @@ import {
   Show,
   type Source,
   type Path,
-  type TypedProps,
+  type Props,
   type View,
   type ChildView,
   type Element,
   type EventHandler,
   type Read,
   lazy,
+  latestOf,
+  isPendingOf,
   view
 } from "@solidjs/blocks";
 
 declare const root: HTMLElement;
 declare function fetchUser(id: string): Promise<{ name: string }>;
 /** Pending until its first value, and never failing (as a server border states it). */
-declare const pendingUser: Source<{ name: string }, true, never>;
+declare const pendingUser: Source<{ name: string }, never, true>;
 class NotFound extends Error {
   readonly kind = "not-found";
 }
 
 // --- setup creates; views and memos read; reads only via yield* -------------------------
-export const Settled = $component(function* (props: TypedProps<{ label: string }>) {
+export const Settled = $component(function* (props: Props<{ label: string }>) {
   const [count, setCount] = yield* $signal(0);
   const [store] = yield* $store({ todos: [{ title: "a" }] });
   const doubled = yield* $memo(function* () {
@@ -83,14 +85,14 @@ export const ReadsInSetup = $component(function* () {
   };
 });
 // @ts-expect-error $untrack is not a SetupOp: a setup never reads, tracked or not (D-042)
-export const UntracksInSetup = $component(function* (props: TypedProps<{ start: number }>) {
+export const UntracksInSetup = $component(function* (props: Props<{ start: number }>) {
   const v = yield* $untrack(props.start);
   return function* () {
     return <p>{v}</p>;
   };
 });
 // it reads once in a memo, an effect, an event, a hole
-export const Untracks = $component(function* (props: TypedProps<{ start: number }>) {
+export const Untracks = $component(function* (props: Props<{ start: number }>) {
   const doubled = yield* $memo(function* () {
     return (yield* $untrack(props.start)) * 2;
   });
@@ -182,7 +184,7 @@ export const asyncInEffect = $effect(function* () {
 
 // --- only settled values render -------------------------------------------------------------
 // pending, and nothing it reads can fail
-export const Pending = $component(function* (props: TypedProps<{ id: string }>) {
+export const Pending = $component(function* (props: Props<{ id: string }>) {
   const user = yield* $memo(function* () {
     yield* props.id;
     return yield* pendingUser;
@@ -191,7 +193,7 @@ export const Pending = $component(function* (props: TypedProps<{ id: string }>) 
     return <h3>{(yield* user).name}</h3>;
   };
 });
-export const Fallible = $component(function* (props: TypedProps<{ id: string }>) {
+export const Fallible = $component(function* (props: Props<{ id: string }>) {
   const user = yield* $memo(function* () {
     const id = yield* props.id;
     const u = yield* attempt(
@@ -206,7 +208,7 @@ export const Fallible = $component(function* (props: TypedProps<{ id: string }>)
   };
 });
 // A memo with a loadingValue is never pending on read (commit #0 is the value)
-export const Seeded = $component(function* (props: TypedProps<{ id: string }>) {
+export const Seeded = $component(function* (props: Props<{ id: string }>) {
   const user = yield* $memo(
     function* () {
       const id = yield* props.id;
@@ -218,7 +220,7 @@ export const Seeded = $component(function* (props: TypedProps<{ id: string }>) {
     { loadingValue: { name: "…" } }
   );
   // never pending (commit #0 is the value); it fails as its attempt does
-  const seeded: Source<{ name: string }, false, NotFound> = user;
+  const seeded: Source<{ name: string }, NotFound> = user;
   void seeded;
   return function* () {
     return <h3>{(yield* user).name}</h3>;
@@ -297,7 +299,7 @@ export const ok5 = Errored({
   }
 });
 
-// the root must be settled
+// the root must not be pending (it may fail: re-thrown, D-033)
 const ok5Root = $component(function* () {
   return function* () {
     return <>{yield* Settled({ label: "x" })}</>;
@@ -707,18 +709,18 @@ const readsInRowSetup = function* (c: Path<Comment>) {
 export const badRowSetup = For({ each: comments, children: readsInRowSetup });
 
 // --- paths through nullable values and nested sources --------------------------------------------
-export const Nullable = $component(function* (props: TypedProps<{ me: { name: string } | null }>) {
+export const Nullable = $component(function* (props: Props<{ me: { name: string } | null }>) {
   return function* () {
     // through a nullable object a key may read `undefined`
     const name: Source<string | undefined> = props.me.name;
     return <b>{yield* name}</b>;
   };
 });
-declare const wire: { status: Source<"on" | "off", true, NotFound> };
+declare const wire: { status: Source<"on" | "off", NotFound, true> };
 // a key holding a source reads through it, with its coloring
-export const Through = $component(function* (props: TypedProps<{ wire: typeof wire }>) {
+export const Through = $component(function* (props: Props<{ wire: typeof wire }>) {
   return function* () {
-    const status: Source<"on" | "off", boolean, NotFound> = props.wire.status;
+    const status: Source<"on" | "off", NotFound, boolean> = props.wire.status;
     return <b>{yield* status}</b>;
   };
 });
@@ -727,7 +729,7 @@ export const bad6: View<false, never> = Through({ wire: wire });
 
 // --- a prop declared as a source states the coloring its readers handle ----------------------------
 export const Declared = $component(function* (
-  props: TypedProps<{ user: Source<{ name: string }, true, unknown> }>
+  props: Props<{ user: Source<{ name: string }, NotFound, true> }>
 ) {
   return function* () {
     return <b>{(yield* props.user).name}</b>;
@@ -780,7 +782,7 @@ export const Streamed = $component(function* () {
     );
   });
   // pending (a stream), failing as its attempt's handler says
-  const typed: Source<number, true, NotFound> = n;
+  const typed: Source<number, NotFound, true> = n;
   return function* () {
     return <b>{yield* typed}</b>;
   };
@@ -966,7 +968,8 @@ export const partlyHandled = Errored({
     );
   }
 });
-// @ts-expect-error ForbiddenE is unhandled: the tree may fail
+// ForbiddenE is unhandled: the tree may fail, and a failure with no boundary is re-thrown
+// (D-033) — the root needs no Errored; it must not be pending (D-059, 1B)
 render(() => partlyHandled, root);
 export const tagHandled = Errored({
   catch: [NotFoundE, ForbiddenE],
@@ -1089,7 +1092,7 @@ export const plainCatch = Errored({
 
 // --- constant(value): a settled source that never fails (D-060) ---------------------------------
 const nobody = constant<{ name: string } | null>(null);
-const nobodyIs: Source<{ name: string } | null, false, never> = nobody;
+const nobodyIs: Source<{ name: string } | null> = nobody;
 void nobodyIs;
 export const ConstantContext = createContext(constant<{ name: string } | null>(null));
 export const ReadsConstant = $component(function* () {
@@ -1103,7 +1106,7 @@ export const readsConstantOk = <div>{ReadsConstant()}</div>;
 
 // --- the call form: tags are DOM elements and foreign components; a block component is called,
 // its props are sources, holes or values, its children a generator (D-065, D-066, D-067) --------
-const Total = $component(function* (props: TypedProps<{ n: number; label: string }>) {
+const Total = $component(function* (props: Props<{ n: number; label: string }>) {
   return view(function* () {
     return (
       <p>
@@ -1157,3 +1160,270 @@ export const lazyFallback: View<true, never> = Show({
     return <b />;
   }
 });
+
+// --- declared prop colors (D-023, D-024, D-029, D-034, D-040, D-056, D-068) ------------------------
+type Todo = { title: string; done: boolean };
+class FetchError extends Error {
+  readonly kind = "fetch" as const;
+}
+class SaveError extends Error {
+  readonly kind = "save" as const;
+}
+/** The same shape as FetchError, its own literal kind (D-034). */
+class FetchErrorTwin extends Error {
+  readonly kind = "fetch-twin" as const;
+}
+declare const settledTodo: Source<Todo>;
+declare const settledTodoPath: Path<Todo>;
+declare const pendingTodo: Source<Todo, never, true>;
+declare const failingTodo: Source<Todo, FetchError>;
+declare const asyncTodo: Source<Todo, FetchError, true>;
+declare const saveTodo: Source<Todo, SaveError, true>;
+declare const twinTodo: Source<Todo, FetchErrorTwin, true>;
+type ReadOf<S> = S extends { [Symbol.iterator](): Generator<infer Y, any, any> } ? Y : never;
+
+// a bare prop is settled and never fails (D-024): its reads are Read<false, never>
+const TodoItem = $component(function* TodoItem(props: Props<{ todo: Todo; label: string }>) {
+  const reads: [
+    Is<ReadOf<typeof props.todo>, Read<false, never>>,
+    Is<ReadOf<typeof props.todo.title>, Read<false, never>>
+  ] = [true, true];
+  void reads;
+  return view(function* () {
+    return (
+      <li>
+        {yield* props.label}: {yield* props.todo.title}
+      </li>
+    );
+  });
+});
+// a prop declared Source<T, E, true> may be pending and fail: its reads are Read<true, E>
+const AsyncItem = $component(function* AsyncItem(
+  props: Props<{ todo: Source<Todo, FetchError, true> }>
+) {
+  const reads: Is<ReadOf<typeof props.todo.title>, Read<true, FetchError>> = true;
+  void reads;
+  // latestOf / isPendingOf take a declared prop
+  const latest = latestOf(props.todo);
+  const refreshing = isPendingOf(props.todo);
+  return view(function* () {
+    return (
+      <li>
+        {(yield* latest).title} {String(yield* refreshing)}
+      </li>
+    );
+  });
+});
+// Source<T, E> may fail, never pending; Source<T, never, true> pending, never fails
+const FailingItem = $component(function* (props: Props<{ todo: Source<Todo, FetchError> }>) {
+  const reads: Is<ReadOf<typeof props.todo>, Read<false, FetchError>> = true;
+  void reads;
+  return view(function* () {
+    return <li>{yield* props.todo.title}</li>;
+  });
+});
+const PendingItem = $component(function* (props: Props<{ todo: Source<Todo, never, true> }>) {
+  const reads: Is<ReadOf<typeof props.todo>, Read<true, never>> = true;
+  void reads;
+  return view(function* () {
+    return <li>{yield* props.todo.title}</li>;
+  });
+});
+// the component's view carries its declared colors (Async is permission only, D-040)
+export const asyncView: View<true, FetchError> = AsyncItem({ todo: asyncTodo });
+export const failingView: View<false, FetchError> = FailingItem({ todo: failingTodo });
+export const pendingItemView: View<true, never> = PendingItem({ todo: pendingTodo });
+export const settledView: View<false, never> = TodoItem({ todo: settledTodo, label: "a" });
+
+// call-site acceptance of a bare prop: a value, a settled source, a settled path, a settled hole
+export const bare1 = TodoItem({ todo: { title: "a", done: false }, label: "a" });
+export const bare2 = TodoItem({ todo: settledTodo, label: constant("a") });
+export const bare3 = TodoItem({ todo: settledTodoPath, label: settledTodoPath.title });
+export const bare4 = TodoItem({
+  todo: function* () {
+    return yield* settledTodo;
+  },
+  label: "a"
+});
+// … and it refuses a pending or failing source
+// @ts-expect-error [SETTLED_PROP] prop `todo` is settled: a pending source
+export const bareBad1 = TodoItem({ todo: pendingTodo, label: "a" });
+// @ts-expect-error [SETTLED_PROP] prop `todo` is settled: a failing source
+export const bareBad2 = TodoItem({ todo: failingTodo, label: "a" });
+// @ts-expect-error [SETTLED_PROP] prop `todo` is settled: a pending and failing path
+export const bareBad3 = TodoItem({ todo: asyncTodo, label: "a" });
+// a pending hole does not pass a settled prop
+export const bareBad4 = TodoItem({
+  // @ts-expect-error the hole reads a pending source
+  todo: function* () {
+    return yield* pendingTodo;
+  },
+  label: "a"
+});
+// nor does a failing one
+export const bareBad5 = TodoItem({
+  // @ts-expect-error the hole reads a failing source
+  todo: function* () {
+    return yield* failingTodo;
+  },
+  label: "a"
+});
+export const bareBad6 = TodoItem({
+  // @ts-expect-error the hole raises
+  todo: function* () {
+    yield* raise(new FetchError());
+    return { title: "a", done: false };
+  },
+  label: "a"
+});
+
+// a declared Source<T, E, true> takes anything within its coloring: settled ⊂ pending, never ⊂ E
+export const async1 = AsyncItem({ todo: { title: "a", done: false } });
+export const async2 = AsyncItem({ todo: settledTodo });
+export const async3 = AsyncItem({ todo: pendingTodo });
+export const async4 = AsyncItem({ todo: failingTodo });
+export const async5 = AsyncItem({ todo: asyncTodo });
+export const async6 = AsyncItem({
+  todo: function* () {
+    return yield* asyncTodo;
+  }
+});
+// … but not a failure it did not declare
+// @ts-expect-error SaveError is not FetchError
+export const asyncBad1 = AsyncItem({ todo: saveTodo });
+// two error classes of one shape are two colors: their literal kinds differ (D-034)
+// @ts-expect-error FetchErrorTwin is not FetchError
+export const asyncBad2 = AsyncItem({ todo: twinTodo });
+// a prop declared sync (Source<T, E>) refuses a pending source
+// @ts-expect-error Source<Todo, FetchError> is never pending
+export const failingBad = FailingItem({ todo: asyncTodo });
+// a prop declared pending-never-failing refuses a failing source
+// @ts-expect-error Source<Todo, never, true> never fails
+export const pendingBad = PendingItem({ todo: asyncTodo });
+
+// a declared failure is a Failure with a literal kind (D-034)
+class Untagged extends Error {}
+class LooseKind extends Error {
+  readonly kind: string = "loose";
+}
+// @ts-expect-error [FAILURE_KIND] Untagged has no literal kind
+export type UntaggedProps = Props<{ todo: Source<Todo, Untagged, true> }>;
+// @ts-expect-error [FAILURE_KIND] a plain string kind
+export type LooseProps = Props<{ todo: Source<Todo, LooseKind, true> }>;
+// @ts-expect-error [FAILURE_KIND] unknown is not a failure type
+export type UnknownProps = Props<{ todo: Source<Todo, unknown, true> }>;
+
+// a pass-through component declares its color with type parameters (D-029):
+// the body is checked once for every color, and its view carries each caller's
+const Card = $component(function* Card<E, P extends boolean>(
+  props: Props<{ todo: Source<Todo, E, P>; label: string }>
+) {
+  return view(function* () {
+    return <section>{yield* AsyncThrough({ todo: props.todo })}</section>;
+  });
+});
+const AsyncThrough = $component(function* <E, P extends boolean>(
+  props: Props<{ todo: Source<Todo, E, P> }>
+) {
+  return view(function* () {
+    return <p>{yield* props.todo.title}</p>;
+  });
+});
+export const cardSettled: View<false, never> = Card({ todo: settledTodo, label: "a" });
+export const cardAsync: View<true, FetchError> = Card({ todo: asyncTodo, label: "a" });
+// the component keeps its type parameters (D-068: a plain function type)
+type CardOut = ReturnType<typeof Card<FetchError, true>>;
+type ColorsOfView<V> = V extends View<infer P, infer E> ? [P, E] : never;
+export const cardColors: Is<ColorsOfView<CardOut>, [true, FetchError]> = true;
+// @ts-expect-error the caller's colors: a pending, failing Card is not settled
+export const cardBad: View<false, never> = Card({ todo: asyncTodo, label: "a" });
+// forwarding into a bare (settled) prop is an error: the body is checked for every color
+export const ForwardsToBare = $component(function* <E, P extends boolean>(
+  props: Props<{ todo: Source<Todo, E, P> }>
+) {
+  return view(function* () {
+    // @ts-expect-error TodoItem's todo is settled; the forwarded prop may be pending or fail
+    return <ul>{yield* TodoItem({ todo: props.todo, label: "a" })}</ul>;
+  });
+});
+// forwarding into a declared prop that takes the color compiles
+export const ForwardsToAsync = $component(function* <P extends boolean>(
+  props: Props<{ todo: Source<Todo, FetchError, P> }>
+) {
+  return view(function* () {
+    return <ul>{yield* AsyncItem({ todo: props.todo })}</ul>;
+  });
+});
+
+// a declared prop's failure needs no boundary at any position (D-059, D-033): it joins the
+// holding view — a row's, a call's in a hole — and is re-thrown at the root with no Errored
+declare const asyncTodos: Source<Todo[]>;
+export const InRows = $component(function* () {
+  return view(function* () {
+    return (
+      <ul>
+        {
+          yield* For({
+            each: asyncTodos,
+            children: function* (todo) {
+              return view(function* () {
+                return (
+                  <>
+                    {
+                      yield* FailingItem({
+                        todo: function* () {
+                          return yield* todo;
+                        }
+                      })
+                    }
+                  </>
+                );
+              });
+            }
+          })
+        }
+      </ul>
+    );
+  });
+});
+export const inRowsColors: View<false, FetchError> = InRows();
+render(InRows, root);
+// only pending needs a position that admits it
+// @ts-expect-error the root would suspend
+render(() => AsyncItem({ todo: asyncTodo }), root);
+render(
+  () =>
+    Loading({
+      children: function* () {
+        return <>{yield* AsyncItem({ todo: asyncTodo })}</>;
+      }
+    }),
+  root
+);
+
+// a prop that may be undefined takes a hole returning undefined; with every prop optional the
+// props object is too
+const Note = $component(function* (props: Props<{ note?: string; children: Element }>) {
+  return view(function* () {
+    return (
+      <p>
+        {yield* props.note}
+        {yield* props.children}
+      </p>
+    );
+  });
+});
+export const noteHole = Note({
+  note: function* () {
+    return undefined;
+  },
+  children: function* () {
+    return undefined;
+  }
+});
+const OnlyOptional = $component(function* (props: Props<{ note?: string }>) {
+  return view(function* () {
+    return <p>{yield* props.note}</p>;
+  });
+});
+export const onlyOptional = OnlyOptional();

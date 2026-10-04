@@ -17,7 +17,7 @@ import {
   Loading,
   readStore,
   Show,
-  type TypedProps,
+  type Props,
   view
 } from "@solidjs/blocks";
 import { h } from "@solidjs/blocks/h";
@@ -64,7 +64,7 @@ const Header = $component(function* Header() {
   });
 });
 
-const TodoItem = $component(function* TodoItem(props: TypedProps<{ todo: Todo }, "TodoItem">) {
+const TodoItem = $component(function* TodoItem(props: Props<{ todo: Todo }>) {
   const [, { toggleTodo, removeTodo, retryTodo }] = yield* useTodos();
   const toggle = $event(function* (e: Input) {
     yield* toggleTodo(yield* props.todo.id, e.currentTarget.checked);
@@ -119,9 +119,7 @@ const TodoItem = $component(function* TodoItem(props: TypedProps<{ todo: Todo },
   });
 });
 
-const MainSection = $component(function* MainSection(
-  props: TypedProps<{ filter: Filter }, "MainSection">
-) {
+const MainSection = $component(function* MainSection(props: Props<{ filter: Filter }>) {
   const [todos, { toggleAll }] = yield* useTodos();
   const filtered = yield* $memo(function* () {
     const f = yield* props.filter;
@@ -166,7 +164,7 @@ const MainSection = $component(function* MainSection(
   });
 });
 
-const Footer = $component(function* Footer(props: TypedProps<{ filter: Filter }, "Footer">) {
+const Footer = $component(function* Footer(props: Props<{ filter: Filter }>) {
   const [todos, { clearCompleted }] = yield* useTodos();
   const remaining = yield* $memo(function* () {
     return yield* readStore(todos, t => t.filter(x => !x.completed).length);

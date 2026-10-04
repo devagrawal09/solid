@@ -43,7 +43,19 @@ export type Element =
  * What a JSX tag may name (D-067; the JSX namespace's `ElementType`): a DOM
  * element, or a foreign (plain-Solid) component — the router, `Portal`,
  * `HydrationScript`, a context provider. A block component (`$component`,
- * `lazy`, the library's flow controls and boundaries — they carry the
- * component brand) is called, never tagged (D-062): `{yield* Card({ todo })}`.
+ * `lazy`, the library's flow controls and boundaries) returns a
+ * `ComponentView` and is called, never tagged (D-062): `{yield* Card({ todo
+ * })}`. The mark is on what it returns, so a block component's own type stays
+ * a plain function and keeps its type parameters (D-068).
  */
-export type TagType = string | (((props: any) => any) & { readonly [COMPONENT]?: never });
+export type TagType = string | ((props: any) => NotAComponentView);
+/** Anything a foreign component may return (blocks' `Element` included). */
+type NotAComponentView =
+  | (object & { readonly [COMPONENT]?: never })
+  | string
+  | number
+  | bigint
+  | boolean
+  | symbol
+  | null
+  | undefined;

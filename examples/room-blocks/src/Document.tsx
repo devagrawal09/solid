@@ -1,10 +1,8 @@
 import { HydrationScript } from "@solidjs/web";
-import { $component, type Element, type TypedProps, view } from "@solidjs/blocks";
+import { $component, type Element, type Props, view } from "@solidjs/blocks";
 
 // The document shell `start` renders the app into (a block like the rest).
-const Document = $component(function* Document(
-  props: TypedProps<{ children?: Element }, "Document">
-) {
+const Document = $component(function* Document(props: Props<{ children?: Element }>) {
   return view(function* () {
     return (
       <html lang="en">

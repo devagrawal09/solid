@@ -50,6 +50,7 @@ export { For, Show, Switch, Match, Repeat, Loading, Errored } from "./flow.js";
 export { render, hydrate } from "./render.js";
 export { lazy } from "./lazy.js";
 export type { Element, ArrayElement, RenderedObject, TagType } from "./element.js";
+export type { ViewYield, ViewReturn, NoJsxViewRule } from "./runtime.js";
 export type {
   AnyOp,
   BlockSetter,
@@ -57,6 +58,7 @@ export type {
   ChildView,
   Cleanup,
   Component,
+  ComponentView,
   ContextRead,
   Create,
   EffectOp,
@@ -77,9 +79,9 @@ export type {
   MemoOp,
   Path,
   PendingOf,
-  PropColor,
-  PropColors,
-  PropColorsOpen,
+  HoleProp,
+  Props,
+  PropsArgs,
   PropsInput,
   PropsOf,
   Raise,
@@ -93,10 +95,12 @@ export type {
   SettledView,
   SetupOp,
   Source,
-  TypedProps,
+  SettledProp,
   TypedStore,
   View,
+  ViewFails,
   ViewOp,
+  ViewPending,
   Wait,
   Write,
   Yieldable

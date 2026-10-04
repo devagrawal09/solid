@@ -12,7 +12,6 @@ import { holeOf, perform, READ, isGeneratorFunction, runRow } from "@solidjs/blo
 import type { Element } from "./element.js";
 import type {
   ChildView,
-  COMPONENT,
   EventHandler,
   FailsOf,
   HView,
@@ -35,28 +34,29 @@ export type Hole =
   | boolean
   | null
   | undefined
-  | Source<any, boolean, any>
+  | Source<any, any, boolean>
   | HView<boolean, any>
   | View<boolean, any>
   | readonly Hole[]
   | ((...args: any[]) => Generator<any, any, any>);
 
-export type OpsOfHole<V> = V extends { readonly [COMPONENT]: true } | EventHandler<any, any>
-  ? never
-  : // a JSX element is settled by construction (and recursive: not walked)
-    V extends Element
+export type OpsOfHole<V> =
+  V extends EventHandler<any, any>
     ? never
-    : V extends Source<any, infer P, infer E>
-      ? Read<P, E>
-      : V extends HView<infer P, infer E>
-        ? ChildView<P, E>
-        : V extends View<infer P, infer E>
+    : // a JSX element is settled by construction (and recursive: not walked)
+      V extends Element
+      ? never
+      : V extends Source<any, infer E, infer P>
+        ? Read<P, E>
+        : V extends HView<infer P, infer E>
           ? ChildView<P, E>
-          : V extends (...args: any[]) => Generator<infer Y, infer R, any>
-            ? GeneratorOps<Y, R>
-            : V extends readonly (infer U)[]
-              ? OpsOfHole<U>
-              : never;
+          : V extends View<infer P, infer E>
+            ? ChildView<P, E>
+            : V extends (...args: any[]) => Generator<infer Y, infer R, any>
+              ? GeneratorOps<Y, R>
+              : V extends readonly (infer U)[]
+                ? OpsOfHole<U>
+                : never;
 type GeneratorOps<Y, R> = R extends () => Generator<infer VY, infer VR, any>
   ? VY | OpsOfHole<VR>
   : Y | OpsOfHole<R>;

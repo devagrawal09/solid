@@ -7,7 +7,8 @@ import {
   attempt,
   For,
   isPendingOf,
-  type TypedProps,
+  type Props,
+  type Source,
   view
 } from "@solidjs/blocks";
 
@@ -55,7 +56,7 @@ async function fetchFeed(): Promise<Feed> {
   };
 }
 
-const FeedCard = $component(function* FeedCard(props: TypedProps<{ feed: Feed }, "FeedCard">) {
+const FeedCard = $component(function* FeedCard(props: Props<{ feed: Source<Feed, FeedError> }>) {
   return view(function* () {
     return (
       <div

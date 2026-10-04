@@ -6,7 +6,7 @@ import {
   Errored,
   For,
   Show,
-  type TypedProps,
+  type Props,
   view
 } from "@solidjs/blocks";
 import { Typeahead } from "./typeahead";
@@ -21,7 +21,7 @@ type Tab = "typeahead" | "checkout";
 // write it through `log()`); the panel reads its entries and clears it. The
 // prop is read where it is used (D-042): its entries in a memo and holes,
 // its `clear` event inside the event that calls it.
-const LogPanel = $component(function* LogPanel(props: TypedProps<{ log: Log }, "LogPanel">) {
+const LogPanel = $component(function* LogPanel(props: Props<{ log: Log }>) {
   const entries = props.log.entries;
   const newestFirst = yield* $memo(function* () {
     return [...(yield* entries)].reverse();

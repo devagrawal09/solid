@@ -687,3 +687,34 @@ typedTester.run("no-unyielded-write (with types)", rules["no-unyielded-write"], 
     }
   ]
 });
+
+// a block component is a function returning a view marked [COMPONENT] (D-067, D-068)
+const componentDecls = `
+declare const COMPONENT: unique symbol;
+interface View<P extends boolean, E> { readonly __view: [P, E] }
+type ComponentView<P extends boolean, E> = View<P, E> & { readonly [COMPONENT]: true };
+declare const Card: (props: { title: string }) => ComponentView<false, never>;
+declare const Through: <E, P extends boolean>(props: { todo: E }) => ComponentView<P, E>;
+declare const Foreign: (props: { title: string }) => Node | string | null;
+`;
+typedTester.run("no-component-tag (with types)", rules["no-component-tag"], {
+  valid: [
+    { filename, code: componentDecls + 'const a = <Foreign title="t" />;' },
+    { filename, code: componentDecls + 'const a = <div title="t" />;' }
+  ],
+  invalid: [
+    {
+      filename,
+      code: componentDecls + 'function* v() { return <p><Card title="t" /></p>; }',
+      output: componentDecls + 'function* v() { return <p>{yield* Card({ title: "t" })}</p>; }',
+      errors: 1
+    },
+    {
+      // a generic (pass-through) component keeps its type parameters and is still one
+      filename,
+      code: componentDecls + "function* v() { return <p><Through todo={1} /></p>; }",
+      output: componentDecls + "function* v() { return <p>{yield* Through({ todo: 1 })}</p>; }",
+      errors: 1
+    }
+  ]
+});

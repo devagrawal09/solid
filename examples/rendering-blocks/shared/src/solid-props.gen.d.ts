@@ -6,39 +6,5 @@
 export {};
 declare module "@solidjs/blocks" {
   interface PropColors {
-    "AsyncCard": {
-      delay: { pending: false; fails: never; live: false; static: true };
-      title: { pending: false; fails: never; live: false; static: true };
-    };
-    "CardBody": {
-      title: { pending: false; fails: never; live: false; static: true };
-      value: { pending: true; fails: import("./components/Reveal").RevealError; live: true; static: false };
-    };
-    "Facts": {
-      info: { pending: false; fails: never; live: true; static: false };
-    };
-    "FeedCard": {
-      feed: { pending: true; fails: import("./components/Skeleton").FeedError; live: true; static: false };
-    };
-    "InnerBoundaryItem": {
-      id: { pending: false; fails: never; live: false; static: true };
-    };
-    "Link": {
-      children: { pending: false; fails: never; live: true; static: false };
-      path: { pending: false; fails: never; live: false; static: true };
-    };
-    "MemoList": {
-      items: { pending: true; fails: import("./components/errors").StreamError; live: true; static: false };
-    };
-    "OuterBoundaryItem": {
-      id: { pending: false; fails: never; live: false; static: true };
-    };
-    "ProjList": {
-      count: { pending: false; fails: never; live: true; static: false };
-      rows: { pending: false; fails: never; live: true; static: false };
-    };
-    "Title": {
-      item: { pending: false; fails: never; live: true; static: false };
-    };
   }
 }

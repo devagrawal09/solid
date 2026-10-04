@@ -13,6 +13,7 @@ import {
   Show,
   type HView,
   type Path,
+  type Props,
   type View,
   type Source,
   view
@@ -22,7 +23,7 @@ import { h } from "@solidjs/blocks/h";
 declare const root: HTMLElement;
 declare function fetchUser(): Promise<{ name: string }>;
 /** Pending until its first value, and never failing (as a server border states it). */
-declare const pendingUser: Source<{ name: string }, true, never>;
+declare const pendingUser: Source<{ name: string }, never, true>;
 
 export const Settled = $component(function* () {
   const [n] = yield* $signal(1);
@@ -173,3 +174,55 @@ export const HRowSignature = $component(function* () {
     });
   };
 });
+
+// --- declared prop colors at h(Comp, props) (D-024, D-029, D-068) ------------------------------
+class FetchError extends Error {
+  readonly kind = "fetch" as const;
+}
+type Todo = { title: string };
+declare const settledTodo: Source<Todo>;
+declare const asyncTodo: Source<Todo, FetchError, true>;
+const Item = $component(function* (props: Props<{ todo: Todo }>) {
+  return view(function* () {
+    return h("li", props.todo.title);
+  });
+});
+const AsyncItem = $component(function* (props: Props<{ todo: Source<Todo, FetchError, true> }>) {
+  return view(function* () {
+    return h("li", props.todo.title);
+  });
+});
+const Through = $component(function* <E, P extends boolean>(
+  props: Props<{ todo: Source<Todo, E, P> }>
+) {
+  return view(function* () {
+    // a generic component is called in an h view: h(Comp, props) reads Comp's return type,
+    // which TypeScript erases to its constraints for a generic function
+    return h("ul", AsyncItemOf({ todo: props.todo }));
+  });
+});
+const AsyncItemOf = $component(function* <E, P extends boolean>(
+  props: Props<{ todo: Source<Todo, E, P> }>
+) {
+  return view(function* () {
+    return h("li", props.todo.title);
+  });
+});
+export const hSettled: HView<false, never> = h("ul", h(Item, { todo: settledTodo }));
+// @ts-expect-error [SETTLED_PROP] Item's todo is settled
+export const hBad = h("ul", h(Item, { todo: asyncTodo }));
+export const hAsync: HView<true, FetchError> = h("ul", h(AsyncItem, { todo: asyncTodo }));
+export const hAsyncSettled = h("ul", h(AsyncItem, { todo: settledTodo }));
+// a pass-through component keeps its type parameters through h
+export const hThrough: View<true, FetchError> = Through({ todo: asyncTodo });
+export const hThroughSettled: View<false, never> = Through({ todo: settledTodo });
+// children given in the props object are checked like any prop
+const Shows = $component(function* (props: Props<{ children: number }>) {
+  return view(function* () {
+    return h("b", props.children);
+  });
+});
+declare const pendingCount: Source<number, FetchError, true>;
+export const hChildrenOk = h(Shows, { children: 1 });
+// @ts-expect-error [SETTLED_PROP] Shows' children are settled
+export const hChildrenBad = h(Shows, { children: pendingCount });

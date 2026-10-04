@@ -1,4 +1,4 @@
-import { $component, For, Show, type Component, type TypedProps, view } from "@solidjs/blocks";
+import { $component, For, Show, type Component, type Props, view } from "@solidjs/blocks";
 import type { CommentDefinition } from "~/types";
 import Toggle from "./toggle";
 
@@ -6,7 +6,7 @@ import Toggle from "./toggle";
 // view, which renders this component), and the setup is unnamed (a name
 // would shadow the component inside it).
 const Comment: Component<{ comment: CommentDefinition }, false, never> = $component(function* (
-  props: TypedProps<{ comment: CommentDefinition }, "Comment">
+  props: Props<{ comment: CommentDefinition }>
 ) {
   return view(function* () {
     return (

@@ -24,7 +24,9 @@ export declare const KIND: unique symbol;
 export declare const SOURCE: unique symbol;
 /** Phantom brand of component views. */
 export declare const VIEW: unique symbol;
-/** Phantom brand of typed props (carries the declared props type). */
+/** Phantom brand of the view a block component returns (D-067). */
+export declare const COMPONENT: unique symbol;
+/** Phantom brand of `Props` (carries the declared props type). */
 export declare const PROPS: unique symbol;
 /** Phantom brand of no-JSX (`h`) output. */
 export declare const HVIEW: unique symbol;
@@ -40,8 +42,6 @@ export declare const HANDLED: unique symbol;
 export interface Handled {
   readonly [HANDLED]: true;
 }
-/** Phantom brand of `$component`s (a plain function is not one). */
-export declare const COMPONENT: unique symbol;
 
 // --- operations ------------------------------------------------------------------
 
@@ -187,21 +187,23 @@ export interface Yieldable<Y, R> {
 // --- sources -------------------------------------------------------------------------
 
 /**
- * A readable source: `yield* source` is a tracked read. `P` / `E` say whether
- * the read may be pending and what it may fail with. Deliberately not
- * callable at the type level: inside a block, a read is a `yield*` (a call
- * would be a hidden read). Block code reads it with `yield*`.
+ * A readable source: `yield* source` is a tracked read. `E` is what the read
+ * may fail with and `P` whether it may be pending — the order of a `Result<T,
+ * E>`, the flag last (D-068): `Source<T>` is settled, `Source<T, E>` may fail,
+ * `Source<T, E, true>` may also be pending. Deliberately not callable at the
+ * type level: inside a block, a read is a `yield*` (a call would be a hidden
+ * read).
  */
-export interface Source<T, P extends boolean = false, E = never> {
+export interface Source<T, E = never, P extends boolean = false> {
   readonly [SOURCE]: T;
   readonly [PENDING]: P;
   readonly [FAILS]: E;
   [Symbol.iterator](): Generator<Read<P, E>, T, any>;
 }
 /** A source with nothing left to handle. */
-export type SettledSource<T = unknown> = Source<T, false, never>;
+export type SettledSource<T = unknown> = Source<T, never, false>;
 /** Any source (for constraints). */
-export type AnySource = Source<any, boolean, any>;
+export type AnySource = Source<any, any, boolean>;
 
 type Primitive = string | number | boolean | bigint | symbol | null | undefined;
 type Opaque =
@@ -219,112 +221,131 @@ type Opaque =
  * Arrays are walked by index and `length`; functions, DOM nodes and other
  * opaque values stop the path.
  */
-export type Path<T, P extends boolean = false, E = never> = Source<T, P, E> &
-  PathKeys<NonNullable<T>, Nullish<T>, P, E>;
+export type Path<T, E = never, P extends boolean = false> = Source<T, E, P> &
+  PathKeys<NonNullable<T>, Nullish<T>, E, P>;
 /**
  * The keys of a path. Through a nullable value a key may read `undefined`
  * (the read stops at the `null`); a key holding a source reads through it
  * and takes on its coloring (a context value `{ status: Source<Status> }`).
  */
-type PathKeys<T, N, P extends boolean, E> = [T] extends [Opaque]
+type PathKeys<T, N, E, P extends boolean> = [T] extends [Opaque]
   ? unknown
   : T extends readonly (infer U)[]
-    ? { readonly [n: number]: Path<U | N, P, E>; readonly length: Source<number | N, P, E> }
+    ? { readonly [n: number]: Path<U | N, E, P>; readonly length: Source<number | N, E, P> }
     : T extends object
-      ? { readonly [K in keyof T]-?: PathThrough<T[K], N, P, E> }
+      ? { readonly [K in keyof T]-?: PathThrough<T[K], N, E, P> }
       : unknown;
 type Nullish<T> = [Extract<T, null | undefined>] extends [never] ? never : undefined;
-type PathThrough<V, N, P extends boolean, E> = [V] extends [Source<infer U, infer P2, infer E2>]
-  ? Path<U | N, P | P2, E | E2>
-  : Path<V | N, P, E>;
+type PathThrough<V, N, E, P extends boolean> = [V] extends [Source<infer U, infer E2, infer P2>]
+  ? Path<U | N, E | E2, P | P2>
+  : Path<V | N, E, P>;
 
 /** A value read through: a source's value, else the value itself. */
 export type ReadThrough<V> = V extends Source<infer T, any, any> ? T : V;
-type ThroughPending<V> = V extends Source<any, infer P, any> ? P : false;
-type ThroughFails<V> = V extends Source<any, any, infer E> ? E : never;
 
 /** A store as blocks see it: every path is a read. */
-export type TypedStore<T> = Path<T, false, never>;
+export type TypedStore<T> = Path<T>;
 
 // --- props ---------------------------------------------------------------------------
 
 /**
- * Coloring the type linker (or an explicit declaration) attaches to a prop:
- * what callers may pass. `pending` / `fails` join into the prop's reads.
+ * Props as a block sees them (D-056, D-068): `Props<{ todo: Todo; label:
+ * string }>` declares each prop and maps it to a read — `yield* props.todo`,
+ * `yield* props.todo.title` — and forwarding `props.todo` to a child forwards
+ * the read. A bare type is settled and never fails (D-024): its reads are
+ * `Read<false, never>`. A prop that may fail or be pending declares it with
+ * the one general type, `Source<T, E, P>` (`Source<Todo, FetchError, true>`):
+ * its reads are `Read<P, E>`, and callers may pass anything within that
+ * coloring (settled ⊂ pending, `never` ⊂ `E`). Declaring it is permission,
+ * not a duty (D-040): its pending and failures reach the nearest `Loading` /
+ * `Errored` wherever that is, or are re-thrown at the root (D-033, D-059).
+ *
+ * A component that only forwards a prop declares its color with type
+ * parameters (D-029): `function* <E, P extends boolean>(props: Props<{ todo:
+ * Source<Todo, E, P> }>)`; its view then carries each caller's colors.
+ *
+ * Every declared failure type is a `Failure` (D-034); `[FAILURE_KIND]` here
+ * names the declaration that is not.
  */
-export interface PropColor {
-  readonly pending: boolean;
-  readonly fails: unknown;
-}
-/**
- * Registry the type linker fills by declaration merging (the generated
- * `*.gen.d.ts`): `PropColors["UserCard"]["user"]` is the joined color of
- * every known caller's `user` prop. A component opts in by naming its key in
- * `TypedProps<P, "UserCard">`.
- */
-export interface PropColors {}
-/**
- * Components whose coloring the linker could not close over every caller
- * (exported beyond the project, passed as a value, rendered by `<Dynamic>`):
- * their props keep the declared (settled) type unless declared explicitly.
- */
-export interface PropColorsOpen {}
-
-type ColorOf<K extends string, Name extends PropertyKey> = [K] extends [never]
-  ? { pending: false; fails: never }
-  : K extends keyof PropColors
-    ? Name extends keyof PropColors[K]
-      ? PropColors[K][Name] extends PropColor
-        ? PropColors[K][Name]
-        : { pending: false; fails: never }
-      : { pending: false; fails: never }
-    : { pending: false; fails: never };
-
-type PropPath<V, P extends boolean, E, Name> = Name extends "children"
-  ? Source<V, P, E>
-  : Path<ReadThrough<V>, P | ThroughPending<V>, E | ThroughFails<V>>;
-
-/**
- * Props as a block sees them: every prop is a read (`yield* props.id`), and
- * forwarding `props.id` to a child forwards the read. `K` names the
- * component for the type linker (`TypedProps<{ user: User }, "UserCard">`):
- * the linker's `PropColors[K]` colors each prop with what its callers pass.
- */
-export type TypedProps<P, K extends string = never> = {
-  readonly [N in keyof P]-?: PropPath<
-    Exclude<P[N], undefined> | (undefined extends P[N] ? undefined : never),
-    ColorOf<K, N>["pending"] extends true ? true : false,
-    ColorOf<K, N>["fails"],
+export type Props<D extends PropsCheck<D>> = {
+  readonly [N in keyof D]-?: PropRead<
+    Exclude<D[N], undefined>,
+    undefined extends D[N] ? undefined : never,
     N
   >;
-} & { readonly [PROPS]?: (props: P) => P };
+} & { readonly [PROPS]?: (props: D) => D };
+
+/** D-034 at the declaration: a prop's declared failures are `Failure`s with a literal `kind`. */
+export type PropsCheck<D> = {
+  [N in keyof D]: [Exclude<D[N], undefined>] extends [Source<any, infer E, any>]
+    ? KindCheck<E> extends NeedsKind
+      ? NeedsKind
+      : unknown
+    : unknown;
+};
+
+/** The read a declared prop is: a path (a source with keys), `children` a source. */
+type PropRead<V, U, N> = [V] extends [Source<infer T, infer E, infer P>]
+  ? N extends "children"
+    ? Source<T | U, E, P>
+    : Path<T | U, E, P>
+  : N extends "children"
+    ? Source<V | U>
+    : Path<V | U>;
 
 /**
- * What callers may pass for each prop: the value, or a source of it. A prop
- * declared as a source (`who: Source<Presence, true, unknown>`) states the
- * coloring its readers handle: callers pass its value or any source within
- * that coloring (a settled one included).
+ * What callers may pass for each prop (D-065): a value, a source or a hole
+ * within its declared coloring. A bare prop takes a settled value, a settled
+ * source or path, or a hole that reads only settled sources; a pending or
+ * failing one is refused (`[SETTLED_PROP]`). A prop declared `Source<T, E,
+ * P>` takes `T`, any source of `T` failing with part of `E` (pending too when
+ * `P` is `true`), or a hole within that; with `E` / `P` type parameters (a
+ * pass-through component) they are the caller's.
  */
-export type PropsInput<P> = {
-  [N in keyof P]: [P[N]] extends [Source<infer T, infer Pd, infer E>]
-    ? T | Source<T, Pd extends true ? boolean : false, E> | HoleProp<T>
-    : P[N] | Source<P[N], boolean, any> | HoleProp<P[N]>;
+export type PropsInput<D> = {
+  [N in keyof D]: PropInput<
+    Exclude<D[N], undefined>,
+    undefined extends D[N] ? undefined : never,
+    N
+  >;
 };
+type PropInput<V, U, N> = [V] extends [Source<infer T, infer E, infer P>]
+  ? T | U | Source<T | U, E, Widen<P>> | HoleProp<T | U, E, Widen<P>>
+  : V | U | Source<V | U> | HoleProp<V | U> | SettledProp<SettledMessage<N>>;
+/** A declared pending prop also takes a settled source (settled ⊂ pending). */
+type Widen<P extends boolean> = [P] extends [true] ? boolean : P;
 /**
  * A prop in call form may be a hole (D-065): a zero-arity `function*` the
  * child reads with `yield*` like a source — the read happens inside the
  * child, as a JSX tag's getter did (`Card({ total: function* () { return
- * (yield* n) * 2; } })`). `children` is always one (D-066): a lazy view,
- * `function* () { return <…/>; }`, built where the child reads it.
+ * (yield* n) * 2; } })`). Its colors are what it reads (and what the
+ * components it calls render), so a pending hole does not pass a settled
+ * prop. `children` is always one (D-066): a lazy view, `function* () {
+ * return <…/>; }`, built where the child reads it.
  */
-export type HoleProp<T> = () => Generator<any, T, any>;
+export type HoleProp<T, E = never, P extends boolean = false> = () => Generator<
+  Read<P, E> | ChildView<P, E> | Raise<E>,
+  T,
+  any
+>;
+/**
+ * The call-site refusal of a pending or failing value for a settled prop
+ * (D-024): TypeScript prints the alias with its message, `Todo | Source<Todo>
+ * | … | SettledProp<"[SETTLED_PROP] prop `todo` is settled: …">`.
+ */
+export type SettledProp<M extends string> = { readonly [K in M]: never };
+type SettledMessage<N> =
+  `[SETTLED_PROP] prop \`${N & string}\` is settled: pass a settled value, or declare it Source<T, E, true>`;
 
-/** The props type a `TypedProps` annotation declares. */
+/** The props type a `Props` annotation declares. */
 export type PropsOf<TP> = unknown extends TP
   ? {}
-  : TP extends { readonly [PROPS]?: (props: infer P) => any }
-    ? P
+  : TP extends { readonly [PROPS]?: (props: infer D) => any }
+    ? D
     : {};
+
+/** A component's arguments: the props object, optional when every prop is. */
+export type PropsArgs<D> = {} extends D ? [props?: PropsInput<D>] : [props: PropsInput<D>];
 
 // --- views and components ---------------------------------------------------------
 
@@ -341,10 +362,23 @@ export interface View<P extends boolean = boolean, E = unknown> {
 }
 export type SettledView = View<false, never>;
 
-/** A component built by `$component`: calling it renders it and returns its view. */
-export type Component<P = {}, Pd extends boolean = boolean, E = unknown> = ({} extends P
-  ? (props?: PropsInput<P>) => View<Pd, E>
-  : (props: PropsInput<P>) => View<Pd, E>) & { readonly [COMPONENT]: true };
+/**
+ * What calling a block component returns: its view, marked as a component's
+ * — a JSX tag refuses a function returning one (D-067), and the mark sits on
+ * the view, not the function, so a component stays a plain function type.
+ */
+export type ComponentView<P extends boolean = boolean, E = unknown> = View<P, E> & {
+  readonly [COMPONENT]: true;
+};
+
+/**
+ * A component built by `$component`: calling it renders it and returns its
+ * view. A plain function type, so a component whose props are generic in
+ * their colors (D-029) keeps its type parameters (D-068).
+ */
+export type Component<D = {}, Pd extends boolean = boolean, E = unknown> = (
+  ...props: PropsArgs<D>
+) => ComponentView<Pd, E>;
 
 /** A view generator's pending: its reads' and, for a no-JSX view, its output's. */
 export type ViewPending<VY, R> = PendingOf<VY | HOps<R>>;

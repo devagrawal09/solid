@@ -9,7 +9,7 @@ import {
   Loading,
   Show,
   type Source,
-  type TypedProps,
+  type Props,
   view
 } from "@solidjs/blocks";
 
@@ -18,7 +18,7 @@ function delayedValue<T>(ms: number, value: T): Promise<T> {
 }
 
 const CardBody = $component(function* CardBody(
-  props: TypedProps<{ title: string; value: Source<string, true, RevealError> }, "CardBody">
+  props: Props<{ title: string; value: Source<string, RevealError, true> }>
 ) {
   return view(function* () {
     return (
@@ -38,9 +38,7 @@ export class RevealError extends Error {
   }
 }
 
-const AsyncCard = $component(function* AsyncCard(
-  props: TypedProps<{ delay: number; title: string }, "AsyncCard">
-) {
+const AsyncCard = $component(function* AsyncCard(props: Props<{ delay: number; title: string }>) {
   const value = yield* $memo(function* () {
     const delay = yield* props.delay;
     const title = yield* props.title;

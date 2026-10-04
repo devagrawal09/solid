@@ -8,7 +8,7 @@ import {
   Repeat,
   type Path,
   type Source,
-  type TypedProps,
+  type Props,
   view
 } from "@solidjs/blocks";
 import { StreamError } from "./errors";
@@ -44,7 +44,7 @@ async function* accumulate(): AsyncIterable<StreamItem[]> {
 // What each `<Loading>` covers is its own component (a view that reads a
 // pending source is pending).
 const MemoList = $component(function* MemoList(
-  props: TypedProps<{ items: Source<StreamItem[], true, unknown> }, "MemoList">
+  props: Props<{ items: Source<StreamItem[], StreamError, true> }>
 ) {
   return view(function* () {
     return (
@@ -69,7 +69,7 @@ const MemoList = $component(function* MemoList(
 });
 
 const ProjList = $component(function* ProjList(
-  props: TypedProps<{ count: Source<number, true, unknown>; rows: Path<StreamItem[]> }, "ProjList">
+  props: Props<{ count: Source<number, StreamError, true>; rows: Path<StreamItem[]> }>
 ) {
   return view(function* () {
     return (

@@ -36,17 +36,22 @@ type HAttr<K, V> = K extends `on${string}`
     ? V
     :
         | V
-        | Source<Exclude<V, undefined>, boolean, any>
+        | Source<Exclude<V, undefined>, any, boolean>
         | (() => Generator<any, Exclude<V, undefined>, any>);
 export type HAttributes<Tag extends keyof Intrinsic> = {
   [K in keyof Intrinsic[Tag]]?: HAttr<K, Intrinsic[Tag][K]>;
 };
 
 type NotCallable = { readonly call?: never; readonly apply?: never };
-/** A component's props in `h`: its children come as the rest arguments. */
+/**
+ * A component's props in `h`: its children may come as the rest arguments
+ * (their colors join the output), or in the props object, checked against
+ * the declared `children` like any prop (D-024).
+ */
 type PropsOfComponent<C> = C extends (props: infer P) => any
-  ? Omit<NonNullable<P>, "children"> & { children?: unknown }
+  ? Omit<NonNullable<P>, "children"> & { children?: ChildrenOf<NonNullable<P>> }
   : never;
+type ChildrenOf<P> = "children" extends keyof P ? P["children"] : unknown;
 /** What a component's output (a view or `h` output) contributes. */
 type OpsOfOutput<R> = R extends View<infer P, infer E> | HView<infer P, infer E>
   ? ChildView<P, E>

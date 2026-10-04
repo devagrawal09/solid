@@ -1,5 +1,5 @@
 import { type RouteParams, type RoutePreloadFuncArgs, type RouteProps } from "@solidjs/router";
-import { $component, $memo, attempt, Show, type TypedProps, view } from "@solidjs/blocks";
+import { $component, $memo, attempt, Show, type Props, view } from "@solidjs/blocks";
 import { getUser } from "~/lib/api";
 import { ApiError } from "~/lib/errors";
 
@@ -9,7 +9,7 @@ export const preload = ({ params }: RoutePreloadFuncArgs<RouteParams<Path>>) => 
   void getUser(params.id);
 };
 
-const User = $component(function* User(props: TypedProps<RouteProps<Path>, "User">) {
+const User = $component(function* User(props: Props<RouteProps<Path>>) {
   const user = yield* $memo(function* () {
     const id2 = yield* props.params.id;
     return yield* attempt(

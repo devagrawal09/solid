@@ -6,15 +6,5 @@
 export {};
 declare module "@solidjs/blocks" {
   interface PropColors {
-    "LogPanel": {
-      log: { pending: false; fails: never; live: true; static: false };
-    };
-    "Orders": {
-      orders: { pending: false; fails: never; live: true; static: false };
-    };
-    "Results": {
-      query: { pending: false; fails: never; live: true; static: false };
-      results: { pending: true; fails: import("./errors").SearchError | import("./errors").TransientError; live: true; static: false };
-    };
   }
 }
