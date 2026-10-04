@@ -7,7 +7,6 @@ import { flush, createRoot, isPending, Reveal, untrack } from "solid-js";
 import {
   $cleanup,
   $component,
-  $dynamic,
   $effect,
   $event,
   $memo,
@@ -732,31 +731,6 @@ describe("props", () => {
     ready();
     await settle();
     expect(done).toBe(true);
-  });
-
-  it("$dynamic renders what its body returns and re-runs on its reads", () => {
-    let setWhich!: (v: "a" | "b") => void;
-    const A = () => <i>A</i>;
-    const B = () => <b>B</b>;
-    const App = $component(function* () {
-      const [which, set] = yield* $signal<"a" | "b">("a");
-      setWhich = v => write(() => set(v));
-      const View = yield* $dynamic(function* () {
-        return (yield* which) === "a" ? A : B;
-      });
-      return function* () {
-        return (
-          <div>
-            <View />
-          </div>
-        );
-      };
-    });
-    mount(App);
-    expect(root.textContent).toBe("A");
-    setWhich("b");
-    flush();
-    expect(root.textContent).toBe("B");
   });
 });
 

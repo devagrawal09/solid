@@ -336,7 +336,9 @@ export const FOREIGN_REACTIVE = {
     createAsync: "`$memo`",
     createAsyncStore: "`$optimisticStore` or `$projection`"
   },
-  "@solidjs/web": { dynamic: "`$dynamic`" }
+  // no block form: a server-component call has no place in the model (D-058);
+  // a component chosen at run time is a `<Switch>` / `<Show>` over components
+  "@solidjs/web": { dynamic: "`<Switch>` / `<Show>` over the components" }
 };
 
 const noForeignReactive = {

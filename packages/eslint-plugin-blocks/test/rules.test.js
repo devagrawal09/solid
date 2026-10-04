@@ -293,7 +293,11 @@ tester.run("no-foreign-reactive", rules["no-foreign-reactive"], {
       errors: [
         {
           messageId: "foreign",
-          data: { name: "dynamic", source: "@solidjs/web", hint: " Use `$dynamic`." }
+          data: {
+            name: "dynamic",
+            source: "@solidjs/web",
+            hint: " Use `<Switch>` / `<Show>` over the components."
+          }
         }
       ]
     },

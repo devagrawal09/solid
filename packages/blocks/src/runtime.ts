@@ -688,7 +688,7 @@ function checkCreate(kind: string): void {
     );
 }
 
-/** @internal shared with the entries that create (`$dynamic`). */
+/** @internal A creation: `make` runs only in a setup (`CREATE_OUTSIDE_SETUP`). */
 export class CreateOp<T> {
   constructor(
     readonly kind: string,
