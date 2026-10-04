@@ -6,7 +6,7 @@
 // What the library's rules change here:
 // - A view that reads a pending source is pending, so what a <Loading>
 //   covers is its own component, handed to the boundary as a view
-//   (`<Loading>{Members({ who, me })}</Loading>`).
+//   (`Loading({ children: function* () { return <>{yield* Members({ who, me })}</>; } })`).
 // - A memo over a stream or a promise may fail with anything, and the types
 //   make that visible: the page's failures are handled at its root
 //   (`Errored` around the page), each directory row handles its own (a row

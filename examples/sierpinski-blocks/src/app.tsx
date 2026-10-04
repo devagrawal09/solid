@@ -4,9 +4,9 @@
 // What the library's rules change in the source (see the README):
 // - A setup does not read (D-042) and a view does not branch (D-032): the
 //   leaf-or-branch choice the original makes from its destructured props is
-//   a `<Switch>` over holes, and the positions are read in the holes that
+//   a `Switch` call over holes, and the positions are read in the holes that
 //   create the children (the props never change, so each runs once).
-// - `<Loading><div class="container">…<Triangle/></div></Loading>`: a view
+// - `Loading({ children: function* () { return <div class="container">…</div>; } })`: a view
 //   that reads a pending child is pending itself, so the container moves
 //   into its own component and the boundary receives it as a pending view.
 // - Timer and frame callbacks are `$event`s.
@@ -144,7 +144,7 @@ const Triangle: Component<TriangleProps, true, IdleError> = $component(function*
 
   // The original destructures its position once (`let { x, y, s } = props`)
   // and returns the leaf or the branch. A setup does not read (D-042) and a
-  // view does not branch (D-032): the choice is a `<Switch>` over holes, and
+  // view does not branch (D-032): the choice is a `Switch` call over holes, and
   // the children's positions are read where they are created — in the holes
   // (the props never change, so each hole runs once).
   return view(function* () {

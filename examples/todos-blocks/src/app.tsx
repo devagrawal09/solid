@@ -10,7 +10,7 @@
 // - the todos store is an `$optimisticStore` whose body fetches (pending
 //   until the first fetch lands); structural reads go through `readStore`;
 // - a view that reads a pending store is pending, so the loading boundary
-//   receives the two sections as views: `<Loading>{MainSection(…)}{Footer(…)}</Loading>`.
+//   receives the two sections in its lazy view: `{yield* MainSection(…)}{yield* Footer(…)}`.
 import {
   $component,
   $event,
