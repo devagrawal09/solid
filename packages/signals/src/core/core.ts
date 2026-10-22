@@ -99,7 +99,16 @@ import {
 } from "./dev.js";
 import { attrHooks } from "./attribution-hooks.js";
 import { devTrackHeldPending } from "./invariants.js";
-import { cleanup, disposeChildren, inheritId, linkChild, markDisposal } from "./owner.js";
+import {
+  cleanup,
+  cleanupAtSupersede,
+  disposeChildren,
+  inheritId,
+  linkChild,
+  markDisposal,
+  runDetachedCleanups,
+  splitUserCleanups
+} from "./owner.js";
 import {
   notifyEpoch,
   bumpNotifyEpoch,
@@ -137,6 +146,7 @@ import {
 import type { Transaction } from "./scheduler.js";
 import type {
   Computed,
+  Disposable,
   Link,
   NodeExtension,
   NodeOptions,
@@ -350,6 +360,9 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
   }
   // CARVE 2: lane posture resolution (OPTIMISTIC_DIRTY, derived-override
   // re-derivation, lane adoption through deps) went with the optimistic engine.
+  // EXPERIMENT "after-sync": the visible frame's user cleanups, detached at
+  // park, run once this pass's synchronous body is over.
+  let supersededCleanups: Disposable[] | null = null;
   if (!create) {
     deleteFromHeap(el, dirtyQueue);
     if (el._x !== null) {
@@ -413,7 +426,8 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
       deferReleases((released = []));
       disposeChildren(el);
       deferReleases(prev);
-    } else if (el._firstChild !== null || el._disposal !== null) parkChildren(el);
+    } else if (el._firstChild !== null || el._disposal !== null)
+      supersededCleanups = parkChildren(el);
     // An error a pass staged (D-41) is replaced by this pass's answer: a
     // value, a flight, or an error of its own (#4109, #4145).
     if (el._config & CONFIG_STAGED_ERROR) {
@@ -590,6 +604,44 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
     if (el._x !== null) el._x._reask = reask && (el._statusFlags & STATUS_PENDING) !== 0;
   }
 
+  // EXPERIMENT "after-sync": the superseding body has returned (a value, a
+  // promise, an iterable) or thrown (an error, NotReadyError): whatever it
+  // acquired synchronously is held, so the superseded frame's user cleanups
+  // release theirs now — acquire-before-release, before any continuation and
+  // before the commit. Children and internal registrations stay parked.
+  if (supersededCleanups !== null) runDetachedCleanups(supersededCleanups);
+  // EXPERIMENT "after-sync-held": as after-sync, but only for a pass whose
+  // frame outlives this flush — in flight, pending, or a transaction's pass.
+  // A plain sync re-run commits in this same flush, where the parked frame
+  // unwinds children-first (#3572), so it is left to the commit.
+  if (
+    !create &&
+    el._x !== null &&
+    el._x._pendingDisposal !== null &&
+    cleanupAtSupersede() === "after-sync-held" &&
+    (el._x._inFlight != null ||
+      el._statusFlags & STATUS_PENDING ||
+      flushTransaction !== null ||
+      passTx !== null ||
+      el._config & CONFIG_HELD)
+  ) {
+    const [run, keep] = splitUserCleanups(el._x._pendingDisposal);
+    el._x._pendingDisposal = keep;
+    runDetachedCleanups(run);
+  }
+  // EXPERIMENT "async" middle ground: the replacing pass went in flight, so
+  // the visible frame's user cleanups run now instead of at its commit.
+  if (
+    !create &&
+    el._x !== null &&
+    el._x._inFlight != null &&
+    el._x._pendingDisposal !== null &&
+    cleanupAtSupersede() === "async"
+  ) {
+    const [run, keep] = splitUserCleanups(el._x._pendingDisposal);
+    el._x._pendingDisposal = keep;
+    runDetachedCleanups(run);
+  }
   // A node that died during its own pass (#3621) is dead at the end of it,
   // and the pass is void. Its owner's teardown already unlinked its deps,
   // removed it from the heap and ran its cleanups; what remains is what the
@@ -1185,14 +1237,28 @@ function creatorPass(owner: Owner | null): Computed<any> | null {
  * (already allocated — nothing new) and the `_disposal` list move to the
  * extension, keep reacting from the heap, and die when the commit publishes
  * the frame that replaces them (`commitPendingNode`) or when the owner does. */
-function parkChildren(el: Computed<unknown>): void {
+function parkChildren(el: Computed<unknown>): Disposable[] | null {
   markDisposal(el);
   const x = ext(el);
-  x._pendingDisposal = el._disposal;
+  // EXPERIMENT: with the flag, the frame's user cleanups run now; the rest
+  // (owned children, internal registrations) park as before. Parked first,
+  // so a cleanup that disposes an owner finds a consistent frame (#3601).
+  // "after-sync": detached here, handed back to `recompute`, which runs them
+  // once this pass's body has returned or thrown.
+  let run: Disposable[] | null = null;
+  let parked = el._disposal;
+  const mode = parked !== null ? cleanupAtSupersede() : false;
+  if (mode === true || mode === "after-sync") [run, parked] = splitUserCleanups(parked!);
+  x._pendingDisposal = parked;
   x._pendingFirstChild = el._firstChild;
   el._disposal = null;
   el._firstChild = null;
   el._childCount = 0;
+  if (run !== null && mode === true) {
+    runDetachedCleanups(run);
+    return null;
+  }
+  return run !== null && run.length ? run : null;
 }
 
 /**

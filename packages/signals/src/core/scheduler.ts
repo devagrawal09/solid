@@ -43,8 +43,13 @@ import {
 import { sweepDormant, trimStaleDeps } from "./graph.js";
 import { deleteFromHeap, enqueueSub, runHeap, type Heap } from "./heap.js";
 import { devCheckQuiescent } from "./invariants.js";
-import { rethrowCleanupError } from "./owner.js";
-import type { Computed, Owner, Signal } from "./types.js";
+import {
+  cleanupAtSupersede,
+  rethrowCleanupError,
+  runDetachedCleanups,
+  splitUserCleanups
+} from "./owner.js";
+import type { Computed, Disposable, Owner, Signal } from "./types.js";
 
 // Optional-module hooks: module bindings, not `GlobalQueue` statics, so a
 // bundle that never imports the installing module never assigns them — its
@@ -901,6 +906,7 @@ export class GlobalQueue implements IQueue {
       // `t._nodes` grows under the walk (holdFrame pushes); the bound is
       // this flush's list, which does not.
       const count = pendingNodes.length;
+      let heldRuns: Disposable[][] | null = null;
       for (let i = 0; i < count; i++) {
         const n = pendingNodes[i];
         // Already held: the pass that re-staged it joined its transaction,
@@ -949,8 +955,16 @@ export class GlobalQueue implements IQueue {
         // created are the transaction's — they compute, and a pass over them
         // or a write that reaches them joins; they effect at the landing.
         if (n._config & CONFIG_STAGED) holdFrame(n as unknown as Owner, t);
+        // EXPERIMENT "after-sync-held": the frame is held past this flush —
+        // its user cleanups run at the hold, not the commit.
+        if (n._x?._pendingDisposal != null && cleanupAtSupersede() === "after-sync-held") {
+          const [run, keep] = splitUserCleanups(n._x._pendingDisposal);
+          n._x._pendingDisposal = keep;
+          if (run.length) (heldRuns ??= []).push(run);
+        }
       }
       pendingNodes.length = 0;
+      if (heldRuns !== null) for (const run of heldRuns) runDetachedCleanups(run);
       storeParkHook?.(t);
 
       // (This flush's runs are stashed with `t` below — after the landings,

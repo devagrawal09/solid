@@ -328,6 +328,45 @@ export function getOwner(): Owner | null {
  * (internal) targets a specific owner's disposal list instead of the ambient
  * one.
  */
+// EXPERIMENT (__SOLID_CLEANUP_AT_SUPERSEDE__): callbacks registered through
+// user-facing `onCleanup`. With the flag on, `parkChildren` runs these at
+// supersede instead of parking them for the commit; internal registrations
+// (boundaries, iterator close, from(), external sources) and owned children
+// stay on the commit schedule.
+export const userCleanups: WeakSet<Function> = new WeakSet();
+/**
+ * `true`: at every supersede; `"async"`: only once the replacing pass is in
+ * flight; `"after-sync"`: right after the superseding pass's body returns
+ * (or throws), before any continuation and before the commit.
+ */
+const envFlag: string | undefined =
+  typeof process !== "undefined" ? process.env?.SOLID_CLEANUP_AT_SUPERSEDE : undefined;
+export function cleanupAtSupersede(): boolean | "async" | "after-sync" | "after-sync-held" {
+  return (
+    (globalThis as any).__SOLID_CLEANUP_AT_SUPERSEDE__ ??
+    (envFlag === "async" || envFlag === "after-sync" || envFlag === "after-sync-held"
+      ? envFlag
+      : envFlag === "1")
+  );
+}
+/** Splits `disposal` into the user cleanups (to run now) and the rest (to park). */
+export function splitUserCleanups(
+  disposal: Disposable | Disposable[]
+): [Disposable[], Disposable | Disposable[] | null] {
+  const list = Array.isArray(disposal) ? disposal : [disposal];
+  const keep: Disposable[] = [];
+  const run: Disposable[] = [];
+  for (const fn of list) (userCleanups.has(fn) ? run : keep).push(fn);
+  return [run, keep.length === 0 ? null : keep.length === 1 ? keep[0] : keep];
+}
+/** Runs already-detached cleanups, LIFO (#3601: detach before running). */
+export function runDetachedCleanups(run: Disposable[]): void {
+  if (!run.length) return;
+  if (__DEV__) enterDisposal();
+  for (let i = run.length - 1; i >= 0; i--) runCleanup(run[i]);
+  if (__DEV__) exitDisposal();
+}
+
 export function cleanup(fn: Disposable, owner: Owner | null = context): Disposable {
   if (!owner) return fn;
   if (!owner._disposal) owner._disposal = fn;

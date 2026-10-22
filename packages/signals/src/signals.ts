@@ -28,6 +28,7 @@ import {
   CONFIG_AUTHORITATIVE
 } from "./core/index.js";
 import { emitDiagnostic, registerGraph, reportDiagnostic } from "./core/dev.js";
+import { userCleanups } from "./core/owner.js";
 import {
   dirtyQueue,
   flushTransaction,
@@ -117,6 +118,7 @@ export function onCleanup(fn: Disposable): Disposable {
       throw new Error(message);
     }
   }
+  userCleanups.add(fn);
   return cleanup(fn);
 }
 
