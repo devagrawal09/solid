@@ -1,5 +1,7 @@
 # @solidjs/compiler
 
+## 2.0.0-rc.20
+
 ## 2.0.0-rc.19
 
 ### Patch Changes

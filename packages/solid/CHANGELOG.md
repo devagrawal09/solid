@@ -1,5 +1,16 @@
 # solid-js
 
+## 2.0.0-rc.20
+
+### Patch Changes
+
+- 38e0c49: `<For>` / `mapArray` over a shallow store diffs the store's backing array instead of reading every slot through the proxy. A one-row write on a 1,000-row shallow store spent ~1.3 ms in per-slot trap reads; the list's diff now costs what it does over a plain array (~0.05 ms). Optimistic shallow stores, accessor slots and reads inside a setter keep the per-slot path.
+- 56a982c: The first draft write to a plain store array clones it with `slice()` instead of copying one property descriptor per element. A push into a 10,000-row store drops from ~10.7 ms to ~0.15 ms per write. Arrays with accessors, named keys or a non-Array prototype keep the descriptor copy.
+- Updated dependencies [ac28157]
+- Updated dependencies [38e0c49]
+- Updated dependencies [56a982c]
+  - @solidjs/signals@2.0.0-rc.20
+
 ## 2.0.0-rc.19
 
 ### Patch Changes

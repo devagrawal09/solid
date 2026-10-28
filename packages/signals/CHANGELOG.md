@@ -1,5 +1,16 @@
 # @solidjs/signals
 
+## 2.0.0-rc.20
+
+### Patch Changes
+
+- ac28157: A per-key guess on `createOptimisticStore` stays on screen through a re-ask that lands while its action is pending (D-34, #4329). When the derive writes a keyed list through its draft (`d.length = 0; d.push(...rows)`, or `d.issues = rows`) under a row that carries a guess, the new object at that row's slot is reconciled into the guessed row, as a returned landing is: the row keeps its proxy and the screen shows the guess until the action commits.
+
+  On both landing paths, a guessed key is judged against its guess, so `latest()` answers the truth even when the truth equals the value the guess covered. A correction or confirmation no longer joins the whole landing to the guess's hold. When one re-ask answers guesses from two actions, they stay independent (D-33): each row reverts or commits when its own action settles, and rows with no guess show their new truth at the landing.
+
+- 38e0c49: `<For>` / `mapArray` over a shallow store diffs the store's backing array instead of reading every slot through the proxy. A one-row write on a 1,000-row shallow store spent ~1.3 ms in per-slot trap reads; the list's diff now costs what it does over a plain array (~0.05 ms). Optimistic shallow stores, accessor slots and reads inside a setter keep the per-slot path.
+- 56a982c: The first draft write to a plain store array clones it with `slice()` instead of copying one property descriptor per element. A push into a 10,000-row store drops from ~10.7 ms to ~0.15 ms per write. Arrays with accessors, named keys or a non-Array prototype keep the descriptor copy.
+
 ## 2.0.0-rc.19
 
 ### Patch Changes
