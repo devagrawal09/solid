@@ -118,6 +118,7 @@ import {
   isOwned,
   lookupTarget,
   markDescendants,
+  plainDefault,
   setLookup,
   storeLookup,
   storeOwners,
@@ -164,7 +165,8 @@ function TargetShape(
   value: Record<PropertyKey, any>,
   parent: StoreTarget | null,
   parentKey: PropertyKey | null,
-  fam: StoreFamily | null
+  fam: StoreFamily | null,
+  plain: boolean
 ) {
   // Direct field assignment in one fixed order (no Object.assign literal
   // copy): every target shares a hidden-class transition chain — createTarget
@@ -181,6 +183,7 @@ function TargetShape(
   this.u = parent;
   this.pk = parentKey;
   this.px = null;
+  this.pd = plain;
   this.d = false;
   this.a = false;
   this.sc = 0;
@@ -199,9 +202,18 @@ function createTarget(
   value: Record<PropertyKey, any>,
   parent: StoreTarget | null,
   parentKey: PropertyKey | null,
-  fam: StoreFamily | null = parent?._fam ?? null
+  fam: StoreFamily | null = parent?._fam ?? null,
+  plain: boolean = parent !== null ? parent.pd : fam !== null && fam._plain === true
 ): StoreTarget {
-  const t: StoreTarget = new (TargetShape as any)(value, parent, parentKey, fam);
+  // A plain-data target of no family answers through the traps with the
+  // family, optimistic, shallow and accessor arms removed (`plainTraps`).
+  const t: StoreTarget = new ((plain && fam === null ? PlainShape : TargetShape) as any)(
+    value,
+    parent,
+    parentKey,
+    fam,
+    plain
+  );
   // Empty: V8 checks trap results against the proxy target's own keys.
   t.px = new Proxy(Array.isArray(value) ? [] : {}, t as ProxyHandler<object>);
   setLookup(value, t);
@@ -213,7 +225,8 @@ export function wrap<T extends Record<PropertyKey, any>>(
   value: T,
   parent: StoreTarget | null = null,
   parentKey: PropertyKey | null = null,
-  fam: StoreFamily | null = parent?._fam ?? null
+  fam: StoreFamily | null = parent?._fam ?? null,
+  plain?: boolean
 ): T {
   // markRaw'd values never wrap through ANY store (R42; sticky raw-marking
   // is one half of the never-both-wrapped-and-raw invariant, RUL-12).
@@ -227,7 +240,7 @@ export function wrap<T extends Record<PropertyKey, any>>(
     if (fam === null || t._fam === fam) return value;
     return createTarget(value as any, parent, parentKey, fam).px;
   }
-  return createTarget(value, parent, parentKey, fam).px;
+  return createTarget(value, parent, parentKey, fam, plain).px;
 }
 
 /** Unwrap our own proxies to their current backing; leave everything else.
@@ -386,7 +399,7 @@ export function getNode(
       slotNodeEquals,
       target,
       key,
-      accKnown === -1 ? isAccessorKey(pb ?? target.v, key) : accKnown === 1
+      accKnown === -1 ? !target.pd && isAccessorKey(pb ?? target.v, key) : accKnown === 1
     ));
     if (pb !== null && !(created as any).acc)
       bornStaged(target, created, target.del?.has(key) ? undefined : pb[key as any], key);
@@ -650,6 +663,12 @@ function copyOwn(to: object, from: object, key: PropertyKey): void {
 function scanAccessorsOnce(target: StoreTarget): boolean {
   const src = target.v;
   const keys = Reflect.ownKeys(src);
+  if (target.pd) {
+    // Declared plain data: every own key is an enumerable data property.
+    target.sc = protoOf(src) === Object.prototype ? 2 : 1;
+    target.kc = keys.length;
+    return true;
+  }
   let plain = protoOf(src) === Object.prototype;
   for (const key of keys) {
     if (isOwnAccessor(src, key)) {
@@ -1179,7 +1198,7 @@ function notifyWrites(t: StoreTarget): void {
         // falls through so the cleared-acc hot read serves it (#3949);
         // an own getter's descriptor has no `value`, so the compare below
         // would otherwise keep the getter's result (or FORCE) for `undefined`.
-        (node as any).acc = isAccessorKey(pb, key);
+        (node as any).acc = !t.pd && isAccessorKey(pb, key);
         const od = Object.getOwnPropertyDescriptor(old, key);
         const nd = Object.getOwnPropertyDescriptor(pb, key);
         if (!nd || nd.get || nd.set) {
@@ -1345,7 +1364,7 @@ export function notifyKeyDiff(
     (node as any).acc === true ||
     (probe && hasOwn.call(neu, key) && lookupGetter.call(neu, key) !== undefined)
   ) {
-    (node as any).acc = isAccessorKey(neu, key);
+    (node as any).acc = !(node as any)._host.pd && isAccessorKey(neu, key);
     const od = Object.getOwnPropertyDescriptor(old, key);
     const nd = Object.getOwnPropertyDescriptor(neu, key);
     // Data descriptors fall through, as in notifyWrites (#3949).
@@ -2292,7 +2311,7 @@ const traps: ProxyHandler<object> & ThisType<StoreTarget> = {
       let acc: boolean;
       if (node0 !== undefined) acc = (node0 as any).acc === true;
       else if (!inDraft(target) && getObserver() !== null) {
-        acc = isAccessorKey(src, key);
+        acc = !target.pd && isAccessorKey(src, key);
         if (src === (target.pb ?? target.v)) accProbe = acc ? 1 : 0;
       } else acc = false;
       if (acc) {
@@ -2553,6 +2572,108 @@ const traps: ProxyHandler<object> & ThisType<StoreTarget> = {
 };
 TargetShape.prototype = traps;
 
+/** The traps of a plain-data target of no family (`StoreOptions.plainData`):
+ * `get` with the arms a plain store never takes removed — the family pull,
+ * the optimistic carrier, the shallow serve and the accessor probe. Every
+ * other trap is the store's. */
+const plainTraps: ProxyHandler<object> & ThisType<StoreTarget> = {
+  ...traps,
+  get(_, key, receiver) {
+    const target = this;
+    if (typeof key !== "string") return traps.get!.call(target, _, key, receiver);
+    if (__DEV__ && getObserver() === null) checkForeignRead();
+    if (verdict !== null && affectsHooks !== null && getObserver() === null)
+      affectsHooks._witness(target, key);
+    const node0 = target.n?.[key as any];
+    if (writeScopes === null && !writeOverride) {
+      if (node0 !== undefined && !target.ch) {
+        const nv = readNode(node0);
+        if (nv === null || typeof nv !== "object") return nv;
+        if ((node0 as any).pxv === nv) return (node0 as any).px;
+        if (isWrappable(nv)) {
+          const p = wrap(nv, target, key);
+          (node0 as any).px = p;
+          (node0 as any).pxv = nv;
+          return p;
+        }
+        return nv;
+      }
+    }
+    const src = readSource(target, key);
+    if (src === target.pb && target.del?.has(key)) {
+      if (!inDraft(target) && getObserver() !== null) readNode(getNode(target, key));
+      return undefined;
+    }
+    if (
+      __DEV__ &&
+      asyncTailFlights !== 0 &&
+      untrackDepth === 0 &&
+      !inDraft(target) &&
+      key !== "then" &&
+      getObserver() === null &&
+      (hasOwn.call(src, key) || hasOwn.call(target.v, key))
+    )
+      checkPostAwaitRead(target.n?.[key as any], storeRoot(target), undefined, key, false);
+    if (
+      __DEV__ &&
+      strictRead &&
+      !inDraft(target) &&
+      key !== "then" &&
+      getObserver() === null &&
+      strictReadActive()
+    ) {
+      warnStrictReadUntracked(strictRead, {
+        nodeName: key,
+        data: { strictRead, property: key, source: "store" }
+      });
+    }
+    const viewOvl = target.ovl && src === target.pb;
+    if (
+      (key === "constructor"
+        ? writeOverride || inDraft(target)
+        : key === "__proto__" || key === "prototype") &&
+      !hasOwn.call(src, key) &&
+      !(viewOvl && hasOwn.call(target.v, key))
+    )
+      return undefined;
+    let v = (src as any)[key];
+    if (
+      v === undefined ? !hasOwn.call(src, key) && !(viewOvl && hasOwn.call(target.v, key)) : false
+    ) {
+      v = Reflect.get(src, key, receiver);
+      if (typeof v === "function") return v; // proto methods untracked
+      if (target.ch && src === target.v) return serveDataKey(target, key, v, src, node0, 0);
+      if (v === undefined && !inDraft(target)) {
+        if (getObserver() !== null) getNode(target, key, 0);
+        const node = target.n?.[key];
+        if (node) {
+          const nv = nodeValue(node, undefined, target);
+          return isWrappable(nv) ? draftServe(target, wrap(nv, target, key)) : nv;
+        }
+      }
+      return isWrappable(v) ? draftServe(target, wrap(v, target, key)) : v;
+    }
+    if (
+      typeof v === "function" &&
+      !hasOwn.call(src, key) &&
+      !(viewOvl && hasOwn.call(target.v, key))
+    )
+      return v; // proto method
+    return serveDataKey(target, key, v, src, node0, 0);
+  }
+};
+function PlainShape(
+  this: StoreTarget,
+  value: Record<PropertyKey, any>,
+  parent: StoreTarget | null,
+  parentKey: PropertyKey | null,
+  fam: StoreFamily | null,
+  plain: boolean
+) {
+  (TargetShape as any).call(this, value, parent, parentKey, fam, plain);
+}
+PlainShape.prototype = plainTraps;
+
 /** Is `obs` subscribed to the container BY THIS PASS (its enumerator holds
  * it)? A link left from a previous pass is stale — the reader must subscribe
  * to the key's presence node or a later add never re-runs it. */
@@ -2709,6 +2830,8 @@ export function createStore<T extends Record<PropertyKey, any>>(
   options?: StoreOptions
 ): [T, SetStoreFunction<T>] {
   const shallow = options?.shallow === true;
+  if (__DEV__ && shallow && options?.plainData)
+    throw new Error("createStore({ plainData }): a shallow store serves its values raw");
   if (shallow && __DEV__) {
     // Never both deep-wrapped and raw (R41/R44): a value already tracked as
     // a DEEP store cannot be ingested shallow.
@@ -2718,7 +2841,13 @@ export function createStore<T extends Record<PropertyKey, any>>(
     if ((initialValue as any)[$TARGET])
       throw new Error("createStore({ shallow }): value is already a store proxy");
   }
-  const proxy = wrap(initialValue);
+  const proxy = wrap(
+    initialValue,
+    null,
+    null,
+    null,
+    !shallow && (options?.plainData ?? plainDefault) === true
+  );
   // Dependency edges (store/edges.ts): the root is named like a plain signal.
   if (signalHook !== null) signalHook((proxy as any)[$TARGET]);
   if (shallow) {
