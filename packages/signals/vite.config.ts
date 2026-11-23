@@ -46,6 +46,17 @@ function newestSource(dir: string): { path: string; mtimeMs: number } {
   return newest;
 }
 
+function storeSwitches(off = ""): Record<string, string> {
+  const dropped = off.toUpperCase().split(",").filter(Boolean);
+  if (dropped.includes("FAMILIES")) dropped.push("OPTIMISTIC");
+  return Object.fromEntries(
+    ["ACCESSORS", "GUARDS", "SHALLOW", "FAMILIES", "OPTIMISTIC", "DELETE"].map(f => [
+      `__STORE_${f}__`,
+      String(!dropped.includes(f))
+    ])
+  );
+}
+
 export default defineConfig(({ mode }) => {
   const benchmark = mode === "benchmark";
   const dist = benchmark && process.env.SIGNALS_BENCH !== "source";
@@ -81,6 +92,9 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [codspeedPlugin()],
     define: {
+      // Store feature switches (src/globals.d.ts): `SOLID_STORE_OFF=families,delete`
+      // runs the suite on the store with those features compiled out.
+      ...storeSwitches(process.env.SOLID_STORE_OFF),
       __DEV__: String(tier === "dev"),
       __OBSERVE__: String(tier !== "prod"),
       __TEST__: benchmark || tier !== "dev" ? "false" : "true"

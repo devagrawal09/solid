@@ -42,11 +42,23 @@ import prettier from "rollup-plugin-prettier";
 // (documentation/archive/plans/reader-seat-rebuild.md §3.4); never for measuring
 // or publishing.
 const testDefine = process.env.SIGNALS_TEST_DEFINE === "true";
-const flags = (dev, observe) =>
+// Store feature switches (src/globals.d.ts): on in every tier but
+// `dist/select`, which leaves each to the consuming bundler's `define`
+// (`__SOLID_STORE_<NAME>__`; undefined reads as on). The expression is
+// written at every site so any bundler folds it, with no constant to inline
+// across modules.
+const STORE_SWITCHES = ["ACCESSORS", "GUARDS", "SHALLOW", "FAMILIES", "OPTIMISTIC", "DELETE"];
+const flags = (dev, observe, select = false) =>
   replace({
     __DEV__: String(dev),
     __OBSERVE__: String(observe),
     __TEST__: String(dev && testDefine),
+    ...Object.fromEntries(
+      STORE_SWITCHES.map(f => [
+        `__STORE_${f}__`,
+        select ? `(typeof __SOLID_STORE_${f}__ === "undefined" || __SOLID_STORE_${f}__)` : "true"
+      ])
+    ),
     preventAssignment: true
   });
 
@@ -68,10 +80,10 @@ const pretty = prettier({ parser: "typescript" });
 // anyway (and must run terser with preserve_annotations).
 const engine = observe => (observe ? "src/attribution.ts" : "src/attribution.prod.ts");
 
-const tree = (dir, dev, observe) => ({
+const tree = (dir, dev, observe, select = false) => ({
   input: { index: "src/index.ts", attribution: engine(observe) },
   output: { dir, format: "esm", preserveModules: true, preserveModulesRoot: "src" },
-  plugins: [flags(dev, observe), ts(dir)]
+  plugins: [flags(dev, observe, select), ts(dir)]
 });
 
 // `name` is the stem: dist/<name>.js (core), dist/<name>.attribution.js
@@ -94,5 +106,8 @@ export default [
   // edge counters, the diagnostics channel), every check folds out. Selected
   // by the `observe` export condition. Gets its own size scenario (scripts/size/scenarios.js); the
   // prod tree's caps must not move because of it.
-  tree("dist/observe", false, true)
+  tree("dist/observe", false, true),
+  // Select tier: prod with the store feature switches left open. Selected by
+  // the `store-select` export condition.
+  tree("dist/select", false, false, true)
 ];

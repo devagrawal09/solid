@@ -110,7 +110,8 @@ export function createStore<T extends object = {}>(
   options?: ProjectionOptions
 ): ProjectionStoreReturn<T>;
 export function createStore(first: any, second?: any, third?: any): any {
-  if (typeof first === "function") return createStoreDerived(first, second, third);
+  if (__STORE_FAMILIES__ && typeof first === "function")
+    return createStoreDerived(first, second, third);
   return createPlainStore(first, second) as [Store<any>, StoreSetter<any>];
 }
 

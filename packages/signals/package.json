@@ -33,6 +33,7 @@
       "test": "./dist/dev.js",
       "development": "./dist/dev.js",
       "observe": "./dist/observe/index.js",
+      "store-select": "./dist/select/index.js",
       "default": "./dist/prod/index.js"
     },
     "./attribution": {
@@ -40,14 +41,15 @@
       "test": "./dist/dev.attribution.js",
       "development": "./dist/dev.attribution.js",
       "observe": "./dist/observe/attribution.js",
+      "store-select": "./dist/select/attribution.js",
       "default": "./dist/prod/attribution.js"
     },
     "./package.json": "./package.json"
   },
   "scripts": {
     "build": "npm-run-all -nl build:* && pnpm types",
-    "build:clean": "rimraf dist/dev dist/prod dist/observe dist/*.js",
-    "build:js": "rollup -c && node ./scripts/mangle-props.mjs dist/prod dist/observe && node ./scripts/check-pure.mjs dist/prod && node ./scripts/check-pure.mjs dist/observe",
+    "build:clean": "rimraf dist/dev dist/prod dist/observe dist/select dist/*.js",
+    "build:js": "rollup -c && node ./scripts/mangle-props.mjs dist/prod dist/observe dist/select && node ./scripts/check-pure.mjs dist/prod && node ./scripts/check-pure.mjs dist/observe && node ./scripts/check-pure.mjs dist/select",
     "types": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "test:watch": "vitest watch tests",

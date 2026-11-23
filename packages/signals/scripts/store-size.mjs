@@ -11,7 +11,17 @@ import { minify } from "terser";
 import { gzipSync } from "node:zlib";
 import { writeFileSync } from "node:fs";
 
+// `SOLID_STORE_OFF=families,delete`: the store with those features compiled out.
+const dropped = (process.env.SOLID_STORE_OFF ?? "").toUpperCase().split(",").filter(Boolean);
+if (dropped.includes("FAMILIES")) dropped.push("OPTIMISTIC");
+const OFF = Object.fromEntries(
+  ["ACCESSORS", "GUARDS", "SHALLOW", "FAMILIES", "OPTIMISTIC", "DELETE"].map(f => [
+    `__STORE_${f}__`,
+    String(!dropped.includes(f))
+  ])
+);
 const DEFINE = {
+  ...OFF,
   __DEV__: "false",
   __OBSERVE__: "false",
   __TEST__: "false",
