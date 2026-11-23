@@ -26,7 +26,7 @@
 import { GlobalQueue, releaseMarksHook } from "../core/scheduler.js";
 import type { Computed, Signal } from "../core/types.js";
 import { installAffectsHooks, optHooks, type AffectsHooks } from "./hooks.js";
-import { $OWNER, lookupTarget, type StoreFamily, type StoreTarget } from "./target.js";
+import { $OWNER, lookupTarget, proxyOf, type StoreFamily, type StoreTarget } from "./target.js";
 import { $TARGET } from "./types.js";
 
 type Marked = Signal<any> | Computed<any>;
@@ -59,7 +59,7 @@ export function storeMarks(t: StoreTarget, key: PropertyKey | undefined): Marked
   const entry = scopeOf(node, key);
   if (key === undefined) {
     const found: Marked[] = [node];
-    walk(t.px, entry, found, t._fam, new Set());
+    walk(proxyOf(t), entry, found, t._fam, new Set());
     return found;
   }
   entry._scope.add(t.v);
@@ -95,7 +95,7 @@ function walk(
     for (const k of Reflect.ownKeys(raw)) {
       const v = Object.getOwnPropertyDescriptor(raw, k)!.value;
       const ot = GlobalQueue._storeWrappable!(v) ? lookupTarget(v, t._fam) : undefined;
-      if (ot !== undefined) walk(ot.px, entry, found, fam, visited);
+      if (ot !== undefined) walk(proxyOf(ot), entry, found, fam, visited);
     }
     return;
   }

@@ -13,7 +13,7 @@ import {
 } from "./core/index.js";
 import { accessor, type Accessor } from "./signals.js";
 import { attrHooks } from "./core/attribution-hooks.js";
-import { $TARGET, $TRACK, shallowView } from "./store/types.js";
+import { $TARGET, $TRACK, shallowView, targetList } from "./store/types.js";
 
 export type Maybe<T> = T | void | null | undefined | false;
 
@@ -403,11 +403,20 @@ function updateKeyedMap<Item, MappedItem>(this: MapData<Item, MappedItem>): any[
   // the node exists to the caller.
   (this._owner as Root)._parentComputed = getOwner() as Root["_parentComputed"];
   let newItems = this._list() || [];
-  (newItems as any)[$TRACK]; // top level tracking (a store array's container node)
-  // A shallow store array diffs its backing: its slots are raw records, and
-  // a trap per slot read was most of a one-row write on a 1k-row list.
-  newItems = shallowView?.((newItems as any)[$TARGET]) ?? newItems;
-  const newLen = newItems.length;
+  let newLen: number;
+  if (targetList !== null && targetList._is(newItems)) {
+    // A store list given as its target: the same reads, with no proxy.
+    targetList._get(newItems, $TRACK);
+    const view = shallowView?.(newItems);
+    if (view) newLen = (newItems = view).length;
+    else newLen = targetList._get(newItems, "length");
+  } else {
+    (newItems as any)[$TRACK]; // top level tracking (a store array's container node)
+    // A shallow store array diffs its backing: its slots are raw records, and
+    // a trap per slot read was most of a one-row write on a 1k-row list.
+    newItems = shallowView?.((newItems as any)[$TARGET]) ?? newItems;
+    newLen = newItems.length;
+  }
 
   runWithOwner(this._owner, (updateKeyedRows<Item, MappedItem>).bind(this, newItems, newLen));
 
@@ -421,7 +430,8 @@ function updateKeyedRows<Item, MappedItem>(
   newLen: number
 ): void {
   // The next pass's `_items`, taken first: a store list answers each read of a slot through a trap.
-  const newItems = list.slice(0);
+  const newItems =
+    targetList !== null && targetList._is(list) ? targetList._slice(list) : list.slice(0);
   let i: number,
     j: number,
     // The stage slot a mapper writes its row/index signal into: `j` on the

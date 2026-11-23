@@ -86,7 +86,7 @@ import {
   unwrapValue
 } from "./store.js";
 import { installOptHooks } from "./hooks.js";
-import { $OWNER, lookupTarget, type StoreFamily, type StoreTarget } from "./target.js";
+import { $OWNER, lookupTarget, proxyOf, type StoreFamily, type StoreTarget } from "./target.js";
 import {
   $PATCH,
   $TARGET,
@@ -742,7 +742,7 @@ GlobalQueue._laneRebase = (el: any, truth: unknown, older: boolean) => {
       // guessed ones (`pairRows`).
       const gt = isWrappable(g) ? lookupTarget(unwrapValue(g), t._fam!) : undefined;
       if (gt !== undefined && lookupTarget(tr, t._fam!) === undefined)
-        reconcileState(tr, gt.px, keyFn, true);
+        reconcileState(tr, proxyOf(gt), keyFn, true);
       rows.push(tr);
       used.add(k);
     } else if (!removed.has(k) && !by?.includes(g)) rows.push(g);
@@ -874,7 +874,7 @@ function pairRows(t: StoreTarget, pb: Record<PropertyKey, any>, viewed?: boolean
   // A guessed row, or its ancestor directly under `t`.
   for (let c of fam._overlaid ?? []) {
     while (c.u !== t) if ((c = c.u!) === null) break;
-    if (c !== null) pair(list ? keyFn?.(c.v) : c.pk, c.px);
+    if (c !== null) pair(list ? keyFn?.(c.v) : c.pk, proxyOf(c));
   }
   if (!keyFn || !list) return;
   // While guesses are out, every committed row, not only a guessed one
@@ -883,7 +883,7 @@ function pairRows(t: StoreTarget, pb: Record<PropertyKey, any>, viewed?: boolean
   if (fam._overlaid?.size)
     for (const ov of committed(t) as any[]) {
       const rt = isWrappable(ov) ? lookupTarget(ov, fam) : undefined;
-      if (rt !== undefined) pair(keyFn(ov), rt.px);
+      if (rt !== undefined) pair(keyFn(ov), proxyOf(rt));
     }
   // A row another store's guess added as it is (that store's proxy, not a
   // copy): a guess of that store's still out on the row shows on through

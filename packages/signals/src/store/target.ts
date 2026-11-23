@@ -97,8 +97,11 @@ export interface StoreTarget {
   u: StoreTarget | null;
   /** Property key of this target in the parent's backing. */
   pk: PropertyKey | null;
-  /** The proxy for this target (stable outward identity). */
+  /** The proxy for this target (stable outward identity), made when the
+   * target first leaves as a value (store.ts `proxyOf`). */
   px: any;
+  /** The proxy's shell is an array. */
+  ar: boolean;
   /** Sticky descendants flag (§6d). */
   /** An optimistic family's target (S2): the guess carrier arms apply
    * (store.ts reads the hooks behind this one field test — a plain store's
@@ -171,6 +174,22 @@ export function isOwned(raw: object): boolean {
 export function lookupTarget(raw: object, fam: StoreFamily | null): StoreTarget | undefined {
   const owner: StoreTarget | undefined = (raw as any)[$OWNER];
   return owner !== undefined && owner._fam === fam ? owner : (fam?.map ?? storeLookup).get(raw);
+}
+
+/** The proxy of a target, made when the target first leaves as a value: a
+ * target read through `storeGet` never has one (one Proxy and its shell
+ * fewer per record). */
+export function proxyOf(t: StoreTarget): any {
+  if (__TEST__ && viaTarget !== null) return (t.px ??= viaTarget(t));
+  // Empty shell: V8 checks trap results against the proxy target's own keys.
+  return (t.px ??= new Proxy(t.ar ? [] : {}, t as unknown as ProxyHandler<object>));
+}
+
+/** Test tier: every proxy answers through the target entry points
+ * (`storeGet` and the rest), so the suite's expectations run on them. */
+export let viaTarget: ((t: StoreTarget) => any) | null = null;
+export function installViaTarget(make: (t: StoreTarget) => any): void {
+  viaTarget = make;
 }
 
 /** Test-tier oracle (INTERNALS §5): no write path ever mutates a

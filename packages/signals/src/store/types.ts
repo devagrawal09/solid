@@ -199,3 +199,15 @@ export let shallowView: ((t: any) => any[] | undefined) | null = null;
 export function installShallowView(view: (t: any) => any[] | undefined): void {
   shallowView = view;
 }
+
+/** The list driver's reads of a list given as its target (store.ts
+ * `storeGet`): installed with the store, as `shallowView` is. */
+export interface TargetList {
+  _is(v: any): boolean;
+  _get(t: any, key: PropertyKey): any;
+  _slice(t: any): any[];
+}
+export let targetList: TargetList | null = null;
+export function installTargetList(ops: TargetList): void {
+  targetList = ops;
+}

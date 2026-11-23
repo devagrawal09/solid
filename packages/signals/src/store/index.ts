@@ -17,6 +17,15 @@ export type {
 } from "./types.js";
 export { $PROXY, $RECORD, $TARGET, $TRACK, isWrappable, markRaw } from "./types.js";
 export { storeIsShallow, storeHasFamily, storeHasOptimisticFamily } from "./store.js";
+export {
+  isTarget as isStoreTarget,
+  storeDelete,
+  storeGet,
+  storeHas,
+  storeKeys,
+  storeSet
+} from "./store.js";
+export { proxyOf as storeProxy } from "./target.js";
 export { storePath } from "./storePath.js";
 export type {
   StorePathRange,
