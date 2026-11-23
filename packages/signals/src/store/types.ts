@@ -47,6 +47,16 @@ export interface StoreOptions {
   loc?: string;
   /** Single-layer store: root keys reactive, values raw records replaced by reference */
   shallow?: boolean;
+  /**
+   * The store holds plain data only — objects with `Object.prototype` (or
+   * none), arrays, and primitives; no getters or setters, no class
+   * instances, no symbol keys — and stays that way through every write. The
+   * store then skips the accessor probes it makes on a key's first read and
+   * a record's first write. Meant for compilers that know the data's shape;
+   * behavior with data that breaks the promise is undefined. Not with
+   * `shallow`.
+   */
+  plainData?: boolean;
 }
 
 /**

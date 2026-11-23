@@ -51,7 +51,13 @@ import type { Refreshable } from "../core/index.js";
 import { optHooks } from "./hooks.js";
 import { reconcileState } from "./reconcile.js";
 import { nameStore, protoOf, runDirect, storeSetter, wrap } from "./store.js";
-import { setLookup, storeOwners, type StoreFamily, type StoreTarget } from "./target.js";
+import {
+  plainDefault,
+  setLookup,
+  storeOwners,
+  type StoreFamily,
+  type StoreTarget
+} from "./target.js";
 import {
   $TARGET,
   isWrappable,
@@ -416,6 +422,7 @@ export function createProjectionInternal<T extends object = {}>(
     live: new Set(),
     st: familyStatus,
     _shallow: !!options?.shallow,
+    _plain: !!(options?.plainData ?? plainDefault) && !options?.shallow,
     opt,
     // The row key, for a child paired after the adoption (store.ts
     // `adoptChild`, #3712) as the adoption pairs them.

@@ -43,6 +43,8 @@ export interface StoreFamily {
   /** A source's status reaching the derive by propagation (`familyStatus`). */
   st?: (status: number, error?: unknown) => void;
   _shallow?: boolean;
+  /** `StoreOptions.plainData`: the family's targets skip the accessor probes. */
+  _plain?: boolean;
   /** Derive run counter (proj R37): the run whose draft is live. */
   run?: number;
   /** The derive's pending reached the leaves' readers (`wakeFamily`) and no
@@ -102,6 +104,9 @@ export interface StoreTarget {
   px: any;
   /** The proxy's shell is an array. */
   ar: boolean;
+  /** Declared plain data (`StoreOptions.plainData`): no accessor is probed
+   * for, and a target of no family answers through `plainTraps`. */
+  pd: boolean;
   /** Sticky descendants flag (§6d). */
   /** An optimistic family's target (S2): the guess carrier arms apply
    * (store.ts reads the hooks behind this one field test — a plain store's
@@ -220,3 +225,8 @@ export function markDescendants(target: StoreTarget): void {
 export const storeOwners: WeakMap<StoreTarget, Owner | null> | null = __OBSERVE__
   ? new WeakMap()
   : null;
+
+/** Test tier: every store is declared plain data, so the suite runs on the
+ * specialized traps (its accessor and class tests then break the promise). */
+export const plainDefault: boolean =
+  __TEST__ && !!(globalThis as any).process?.env?.SOLID_STORE_PLAIN_DATA;
