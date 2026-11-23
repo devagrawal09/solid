@@ -2610,6 +2610,8 @@ export function storeKeys(t: StoreTarget): string[] {
 }
 /** `draft[key] = value` (inside the store's setter). */
 export function storeSet(t: StoreTarget, key: PropertyKey, value: any): void {
+  // A target is no value outside the store: written, it is its proxy.
+  if (isTarget(value)) value = proxyOf(value);
   traps.set!.call(t, HANDLE, propKey(key) as any, value, undefined);
 }
 /** `delete draft[key]` (inside the store's setter). */

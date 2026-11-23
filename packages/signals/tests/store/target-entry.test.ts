@@ -176,6 +176,19 @@ describe("store targets", () => {
     expect(rows.length).toBe(3);
   });
 
+  it("writes a target as the value it stands for", () => {
+    const [s, set] = createStore({ rows: [{ id: 1 }, { id: 2 }] });
+    const rows = storeGet(targetOf(s), "rows");
+    set(() => {
+      const a = storeGet(rows, 0);
+      const b = storeGet(rows, 1);
+      storeSet(rows, 0, b);
+      storeSet(rows, 1, a);
+    });
+    flush();
+    expect(s.rows.map(r => r.id)).toEqual([2, 1]);
+  });
+
   it("reads a projection and an optimistic store on their targets", () => {
     const [src, setSrc] = createStore({ list: [{ id: 1, n: 1 }] });
     let seenP = 0;
