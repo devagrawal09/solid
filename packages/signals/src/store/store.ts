@@ -322,6 +322,9 @@ function releaseSlot(node: any): void {
     if (t.dk === node) t.dk = null;
   } else if (t.n?.[key as any] === node) {
     delete t.n![key as any];
+    // No longer the key's node: a read site that kept it must look again
+    // (`storeGetAt`). Only a node `acc === false` is served from a site.
+    node.acc = null;
     // An emptied dictionary is dropped (#5024): the target outlives its
     // readers while the app holds the raw object.
     if (--t.nc === 0) t.n = null;
@@ -2592,6 +2595,58 @@ const ARRAY_SHELL: any[] = [];
 export function storeGet(t: StoreTarget, key: PropertyKey): any {
   return traps.get!.call(t, HANDLE, propKey(key) as any, undefined);
 }
+/** A read site's memory of the node it last resolved: the compiler makes
+ * one per site with a fixed key (per instance of the scope the site is in),
+ * and `storeGetAt` skips the key lookup while it still holds. */
+export interface StoreSite {
+  t: StoreTarget | null;
+  n: Signal<any> | null;
+}
+export function storeSite(): StoreSite {
+  return { t: null, n: null };
+}
+
+/** `storeGet(t, key)` from a site that reads this one key. The site serves
+ * exactly the get trap's existing-plain-node case (same conditions, same
+ * `read()`), for a target of no family: any other read is the trap's. */
+export function storeGetAt(site: StoreSite, t: StoreTarget, key: PropertyKey): any {
+  const node: any = site.n;
+  if (
+    site.t === t &&
+    node.acc === false &&
+    writeScopes === null &&
+    !writeOverride &&
+    verdict === null &&
+    !t.ch &&
+    !t.s
+  ) {
+    if (__DEV__ && getObserver() === null) checkForeignRead();
+    // (`nodeValue` for a target of no family: a key that was an accessor's holds
+    // the sentinel until its next write.)
+    let nv = readNode(node);
+    if (nv === (FORCE as any)) nv = undefined;
+    if (nv === null || typeof nv !== "object") return nv;
+    if (node.pxv === nv) return node.px;
+    if (isWrappable(nv)) {
+      const p = wrapTarget(nv, t, key);
+      node.px = p;
+      node.pxv = nv;
+      return p;
+    }
+    return nv;
+  }
+  const v = traps.get!.call(t, HANDLE, (key = propKey(key)) as any, undefined);
+  // Remember the node the read used, if the trap's inline case would serve it.
+  if (t._fam === null) {
+    const n: any = t.n?.[key as any];
+    if (n !== undefined && n.acc === false) {
+      site.t = t;
+      site.n = n;
+    } else site.t = null;
+  } else site.t = null;
+  return v;
+}
+
 /** `key in proxy`. */
 export function storeHas(t: StoreTarget, key: PropertyKey): boolean {
   return traps.has!.call(t, HANDLE, propKey(key) as any);
@@ -2633,10 +2688,19 @@ installTargetList({ _is: isTarget, _get: storeGet, _slice: storeSlice });
 if (__TEST__ && (globalThis as any).process?.env?.SOLID_STORE_VIA_TARGET) {
   installViaTarget(t => {
     const out = (r: any) => (isTarget(r) ? proxyOf(r) : r);
+    // SOLID_STORE_VIA_TARGET=site: every string-key read goes through a read
+    // site kept per key of this proxy (`storeGetAt`).
+    const sites: Map<string, StoreSite> | null =
+      (globalThis as any).process.env.SOLID_STORE_VIA_TARGET === "site" ? new Map() : null;
+    const siteOf = (key: string): StoreSite => {
+      let site = sites!.get(key);
+      if (site === undefined) sites!.set(key, (site = storeSite()));
+      return site;
+    };
     return new Proxy(t.ar ? [] : {}, {
       get: (shell, key, receiver) =>
         typeof key === "string" && receiver === t.px
-          ? out(storeGet(t, key))
+          ? out(sites !== null ? storeGetAt(siteOf(key), t, key) : storeGet(t, key))
           : traps.get!.call(t, shell, key, receiver),
       has: (_, key) => storeHas(t, key),
       ownKeys: shell => traps.ownKeys!.call(t, shell),
