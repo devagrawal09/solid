@@ -2764,10 +2764,13 @@ function setterOn<T>(
     // dependencies.
     if (fn !== null) result = fn(proxy!);
     else {
+      // A step that is no store record (absent, raw-marked) reads and writes
+      // as it would through the draft proxy: natively, a TypeError on nothing.
       let t: any = target;
       const last = path!.length - 1;
-      for (let i = 0; i < last; i++) t = storeGet(t, path![i]);
-      storeSet(t, path![last], value);
+      for (let i = 0; i < last; i++) t = isTarget(t) ? storeGet(t, path![i]) : t[path![i]];
+      if (isTarget(t)) storeSet(t, path![last], value);
+      else t[path![last]] = value;
     }
     // A returned replacement on an optimistic family is a user's edit, and
     // its slot is the point of write (S-59): written into the draft as the

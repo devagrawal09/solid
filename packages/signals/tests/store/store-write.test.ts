@@ -51,6 +51,32 @@ describe("storeWrite", () => {
     expect(b).toEqual(a);
   });
 
+  it("throws as the setter does on a path through nothing", () => {
+    const [a, setA] = createStore<{ rows: { n: number }[] }>({ rows: [] });
+    const viaSetter = (() => {
+      try {
+        setA(d => {
+          d.rows[3].n = 1;
+        });
+      } catch (e) {
+        return (e as Error).constructor;
+      }
+    })();
+    const viaWrite = (() => {
+      try {
+        storeWrite((a as any)[$TARGET], ["rows", 3, "n"], 1);
+      } catch (e) {
+        return (e as Error).constructor;
+      }
+    })();
+    expect(viaSetter).toBe(TypeError);
+    expect(viaWrite).toBe(TypeError);
+    // The scope closed: the next write lands.
+    storeWrite((a as any)[$TARGET], ["rows", 0], { n: 2 });
+    flush();
+    expect(a.rows[0].n).toBe(2);
+  });
+
   it("writes a guess on an optimistic store, reverted with its action", async () => {
     const [src] = createStore({ list: [{ id: 1, n: 1 }] });
     let seen: number[] = [];
