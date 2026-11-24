@@ -2702,14 +2702,14 @@ export function storeGetAt(site: StoreSite, t: StoreTarget, key: PropertyKey): a
     writeScopes === null &&
     !writeOverride &&
     verdict === null &&
-    !t.ch &&
-    !t.s
+    !(__STORE_FAMILIES__ && t.ch) &&
+    !(__STORE_SHALLOW__ && t.s)
   ) {
     if (__DEV__ && getObserver() === null) checkForeignRead();
     // (`nodeValue` for a target of no family: a key that was an accessor's holds
     // the sentinel until its next write.)
     let nv = readNode(node);
-    if (nv === (FORCE as any)) nv = undefined;
+    if (__STORE_ACCESSORS__ && nv === (FORCE as any)) nv = undefined;
     if (nv === null || typeof nv !== "object") return nv;
     if (node.pxv === nv) return node.px;
     if (isWrappable(nv)) {
@@ -2722,7 +2722,7 @@ export function storeGetAt(site: StoreSite, t: StoreTarget, key: PropertyKey): a
   }
   const v = traps.get!.call(t, HANDLE, (key = propKey(key)) as any, undefined);
   // Remember the node the read used, if the trap's inline case would serve it.
-  if (t._fam === null) {
+  if (!__STORE_FAMILIES__ || t._fam === null) {
     const n: any = t.n?.[key as any];
     if (n !== undefined && n.acc === false) {
       site.t = t;
