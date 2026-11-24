@@ -570,7 +570,8 @@ export function recompute(el: Computed<any>, create: boolean = false): void {
       // Dev: a body that returned after a read threw into it caught the throw,
       // unless it returned the flight the throw became (D-42).
       if (__DEV__) checkCaughtRead(el, selfRegistered ? el._x!._inFlight : fnResult);
-      value = selfRegistered || !isAsyncResult ? fnResult : handleAsync(el, fnResult);
+      value =
+        selfRegistered || !isAsyncResult || !__CORE_ASYNC__ ? fnResult : handleAsync(el, fnResult);
       if (!selfRegistered && !isAsyncResult) {
         if (el._x !== null) {
           el._x._inFlight = null;

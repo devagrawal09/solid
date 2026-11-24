@@ -53,6 +53,9 @@ const flags = (dev, observe, select = false) =>
     __DEV__: String(dev),
     __OBSERVE__: String(observe),
     __TEST__: String(dev && testDefine),
+    __CORE_ASYNC__: select
+      ? `(typeof __SOLID_CORE_ASYNC__ === "undefined" || __SOLID_CORE_ASYNC__)`
+      : "true",
     ...Object.fromEntries(
       STORE_SWITCHES.map(f => [
         `__STORE_${f}__`,

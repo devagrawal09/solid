@@ -22,6 +22,7 @@ const OFF = Object.fromEntries(
 );
 const DEFINE = {
   ...OFF,
+  __CORE_ASYNC__: String(!dropped.includes("ASYNC")),
   __DEV__: "false",
   __OBSERVE__: "false",
   __TEST__: "false",

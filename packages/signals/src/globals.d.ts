@@ -33,6 +33,13 @@ declare global {
   const __STORE_FAMILIES__: boolean;
   /** `createOptimisticStore` (needs `__STORE_FAMILIES__`). */
   const __STORE_OPTIMISTIC__: boolean;
+  /**
+   * Core feature switch, delivered as the store's are (`__SOLID_CORE_ASYNC__`
+   * in `dist/select`): a computation's result may be a promise or an async
+   * iterable. Off: every computation is as if made with `sync: true` — a
+   * returned object is its value and is never awaited.
+   */
+  const __CORE_ASYNC__: boolean;
   /** `delete draft[key]`, and so `pop`/`shift`/`splice` on a draft proxy. */
   const __STORE_DELETE__: boolean;
 }

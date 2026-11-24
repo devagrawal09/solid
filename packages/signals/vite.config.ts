@@ -49,12 +49,13 @@ function newestSource(dir: string): { path: string; mtimeMs: number } {
 function storeSwitches(off = ""): Record<string, string> {
   const dropped = off.toUpperCase().split(",").filter(Boolean);
   if (dropped.includes("FAMILIES")) dropped.push("OPTIMISTIC");
-  return Object.fromEntries(
-    ["ACCESSORS", "GUARDS", "SHALLOW", "FAMILIES", "OPTIMISTIC", "DELETE"].map(f => [
+  return Object.fromEntries([
+    ["__CORE_ASYNC__", String(!dropped.includes("ASYNC"))],
+    ...["ACCESSORS", "GUARDS", "SHALLOW", "FAMILIES", "OPTIMISTIC", "DELETE"].map(f => [
       `__STORE_${f}__`,
       String(!dropped.includes(f))
     ])
-  );
+  ]);
 }
 
 export default defineConfig(({ mode }) => {
