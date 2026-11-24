@@ -2721,9 +2721,26 @@ function devGuardStoreSetterResult(result: unknown): void {
 }
 
 export function storeSetter<T>(proxy: T, fn: (draft: T) => T | void, guard = true): void {
-  if (writeHook !== null) writeHook(proxy as object);
+  setterOn((proxy as any)[$TARGET], proxy, fn, guard, null, undefined);
+}
+
+/** A user's write of one path, as `setStore(d => { d[k0][k1]… = value })`
+ * makes it: the setter's scope around the same draft reads and the same
+ * `set`, with no callback and no draft proxy. */
+export function storeWrite(target: StoreTarget, path: readonly PropertyKey[], value: any): void {
+  setterOn(target, null, null, true, path, value);
+}
+
+function setterOn<T>(
+  target: StoreTarget,
+  proxy: T | null,
+  fn: ((draft: T) => T | void) | null,
+  guard: boolean,
+  path: readonly PropertyKey[] | null,
+  value: any
+): void {
+  if (writeHook !== null) writeHook((proxy ??= proxyOf(target)) as object);
   if (__DEV__ && guard) devGuardStoreSetterWrite();
-  const target: StoreTarget = (proxy as any)[$TARGET];
   const prevScopes = writeScopes;
   writeScopes = new Set();
   writeScopes.add(scopeKey(target));
@@ -2745,7 +2762,13 @@ export function storeSetter<T>(proxy: T, fn: (draft: T) => T | void, guard = tru
     // (draft reads never self-track, proj R2), while EXTERNAL reads (signals
     // inside a projection derive) must keep tracking — they are the derive's
     // dependencies.
-    result = fn(proxy);
+    if (fn !== null) result = fn(proxy!);
+    else {
+      let t: any = target;
+      const last = path!.length - 1;
+      for (let i = 0; i < last; i++) t = storeGet(t, path![i]);
+      storeSet(t, path![last], value);
+    }
     // A returned replacement on an optimistic family is a user's edit, and
     // its slot is the point of write (S-59): written into the draft as the
     // keyed diff — a same-key row recurses into its own draft — so it makes
