@@ -102,6 +102,9 @@ export interface StoreTarget {
   px: any;
   /** The proxy's shell is an array. */
   ar: boolean;
+  /** The record's declared shape (store.ts `storeShape`), or null: its node
+   * map `n` is then the shape's slots object instead of a keyed map. */
+  sh: { _nodes: new () => Record<PropertyKey, any> } | null;
   /** Sticky descendants flag (§6d). */
   /** An optimistic family's target (S2): the guess carrier arms apply
    * (store.ts reads the hooks behind this one field test — a plain store's

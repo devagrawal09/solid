@@ -226,7 +226,8 @@ function applyAdopt(t: StoreTarget, incoming: any, keyFn: KeyFn | null, proj = f
     if (nodes !== null && nodesHit < t.nc) {
       for (const key of Reflect.ownKeys(nodes)) {
         const idx = typeof key === "string" ? +key : NaN;
-        if (!(idx >= 0 && idx < incoming.length))
+        // (A shaped record's released slot is empty.)
+        if (nodes[key as any] !== undefined && !(idx >= 0 && idx < incoming.length))
           notifyKeyDiff(nodes[key as any], key, old, incoming, false);
       }
     }
@@ -283,7 +284,8 @@ function applyAdopt(t: StoreTarget, incoming: any, keyFn: KeyFn | null, proj = f
     for (const key of Reflect.ownKeys(nodes)) {
       // A removed `__proto__` reads absent, not the prototype (core R30,
       // #4672).
-      if (!hasOwnP.call(incoming, key))
+      // (A shaped record's released slot is empty.)
+      if (nodes[key as any] !== undefined && !hasOwnP.call(incoming, key))
         notifyKeyDiff(
           nodes[key as any],
           key,

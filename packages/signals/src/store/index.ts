@@ -23,8 +23,11 @@ export {
   storeGet,
   storeHas,
   storeKeys,
-  storeSet
+  storeSet,
+  storeGetShaped,
+  storeShape
 } from "./store.js";
+export type { StoreShape } from "./store.js";
 export { proxyOf as storeProxy } from "./target.js";
 export { storePath } from "./storePath.js";
 export type {

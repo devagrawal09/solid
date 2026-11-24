@@ -234,7 +234,10 @@ function familyStatus(this: StoreFamily, status: number, error?: unknown): void 
 function forEachFamilyNode(fam: StoreFamily, fn: (n: Signal<any>) => void): void {
   for (const t of fam.live) {
     const nodes = t.n;
-    if (nodes !== null) for (const key of Reflect.ownKeys(nodes)) fn(nodes[key as any]);
+    if (nodes !== null)
+      for (const key of Reflect.ownKeys(nodes))
+        // (A shaped record's released slot is empty.)
+        if (nodes[key as any] !== undefined) fn(nodes[key as any]);
     const has = t.h;
     if (has !== null) for (const key of Reflect.ownKeys(has)) fn(has[key as any]);
     if (t.k !== null) fn(t.k);

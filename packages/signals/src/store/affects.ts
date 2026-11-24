@@ -125,7 +125,8 @@ function nodesOf(t: StoreTarget, found: Marked[]): void {
     for (const k of Reflect.ownKeys(nodes))
       // Another mark's carrier is its own channel: counting it here would
       // extend that scope's lifetime to this declaration's.
-      if (k !== $AFFECTS) found.push(nodes[k as any]);
+      // (A shaped record's released slot is empty.)
+      if (k !== $AFFECTS && nodes[k as any] !== undefined) found.push(nodes[k as any]);
   const has = t.h;
   if (has !== null) for (const k of Reflect.ownKeys(has)) found.push(has[k as any]);
   if (t.k !== null) found.push(t.k);
