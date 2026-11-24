@@ -650,10 +650,12 @@ export function cloneRaw(
   // rows: ~10 ms per push).
   let clone: any;
   if (!__STORE_ACCESSORS__)
-    // Plain data: an array's slots, a record's enumerable keys.
-    clone = Array.isArray(source)
-      ? source.slice()
-      : Object.assign(Object.create(protoOf(source)), source);
+    // Plain data: an array's slots (and any named keys), a record's enumerable keys.
+    clone = !Array.isArray(source)
+      ? Object.assign(Object.create(protoOf(source)), source)
+      : t.kc <= source.length + 1
+        ? source.slice()
+        : Object.assign(source.slice(), source);
   else if (!t.a && t.kc <= source.length + 1 && protoOf(source) === Array.prototype)
     clone = source.slice();
   else {
