@@ -644,6 +644,156 @@ describe("time travel: stores", () => {
       timeTravel.resume();
       expect(log.at(-1)).toBe("c,b,a");
     });
+
+    describe("guessed over across an await", () => {
+      // The optimistic store chained to the list guesses; the action awaits,
+      // then writes the list. While the guess shows, the list's own nodes lose
+      // their readers, so the landing's change to them is not recorded: the
+      // view reads them from the list's pinned container, and the guess from
+      // its pinned carrier (F-1).
+      function guessed(initial: string[]) {
+        const [truth, setTruth] = createStore(initial.map(row), { name: "rows" });
+        const [source] = createSignal(truth, { name: "source" });
+        const [rows, setRows] = createOptimisticStore(() => source(), [] as Row[], {
+          name: "view"
+        });
+        const log = mount(show => {
+          const items = mapArray(
+            () => rows,
+            (r: Row) => () => r.label
+          );
+          show(() =>
+            items()
+              .map(i => i())
+              .join(",")
+          );
+        });
+        const write = (fn: (rows: Row[]) => Row[]) => {
+          setTruth(fn);
+          flush();
+        };
+        /** Guesses `guess`, awaits `gate`, then writes `answer` to the list. */
+        const act = action(function* act(
+          guess: (rows: Row[]) => void,
+          gate: Promise<void>,
+          answer: (rows: Row[]) => Row[]
+        ) {
+          setRows(guess);
+          yield gate;
+          setTruth(answer);
+        });
+        return { rows, log, write, act };
+      }
+      const labels = (rs: Row[]) => rs.map(r => r.label).join(",");
+
+      it("a filter guess, confirmed: every step shows its rows", async () => {
+        const { log, write, act } = guessed([]);
+        for (const l of ["a", "b", "c"]) write(r => [row(l), ...r]);
+        const done = act(
+          r => void r.splice(1, 1),
+          tick(),
+          r => r.filter(x => x.label !== "b")
+        );
+        flush();
+        expect(log.at(-1)).toBe("c,a");
+        await done;
+        await settle();
+        expect(log.at(-1)).toBe("c,a");
+        const n = timeTravel.steps().length;
+        expect(viewAll(log)).toEqual([
+          `${n - 1}:c,a`,
+          `${n - 2}:c,a`,
+          "2:c,b,a",
+          "1:b,a",
+          "0:a",
+          "-1:"
+        ]);
+        timeTravel.resume();
+        expect(log.at(-1)).toBe("c,a");
+      });
+
+      it("a prepend guess, confirmed", async () => {
+        const { log, write, act } = guessed(["a"]);
+        write(r => [row("b"), ...r]);
+        const done = act(
+          r => void r.unshift(row("c")),
+          tick(),
+          r => [row("c"), ...r]
+        );
+        flush();
+        expect(log.at(-1)).toBe("c,b,a");
+        await done;
+        await settle();
+        const n = timeTravel.steps().length;
+        expect(viewAll(log)).toEqual([`${n - 1}:c,b,a`, `${n - 2}:c,b,a`, "0:b,a", "-1:a"]);
+        timeTravel.resume();
+        expect(log.at(-1)).toBe("c,b,a");
+      });
+
+      it("an append guess the answer replaces", async () => {
+        const { rows, log, act } = guessed(["a", "b"]);
+        const done = act(
+          r => void r.push(row("c")),
+          tick(),
+          () => [row("x"), row("y")]
+        );
+        flush();
+        expect(log.at(-1)).toBe("a,b,c");
+        await done;
+        await settle();
+        expect(log.at(-1)).toBe("x,y");
+        const n = timeTravel.steps().length;
+        expect(viewAll(log)).toEqual([`${n - 1}:x,y`, `${n - 2}:a,b,c`, "-1:a,b"]);
+        timeTravel.resume();
+        expect(log.at(-1)).toBe("x,y");
+        expect(labels(rows)).toBe("x,y");
+      });
+
+      it("viewed during the hold, then after it lands; the store guesses again after resume", async () => {
+        const { rows, log, write, act } = guessed(["a"]);
+        write(r => [row("b"), ...r]);
+        let open!: () => void;
+        const done = act(
+          r => void r.splice(0, 1),
+          new Promise<void>(r => (open = r)),
+          r => r.slice(1)
+        );
+        flush();
+        expect(log.at(-1)).toBe("a");
+        // During the hold: the past, and the guess.
+        timeTravel.view(-1);
+        expect(log.at(-1)).toBe("a");
+        timeTravel.view(0);
+        expect(log.at(-1)).toBe("b,a");
+        timeTravel.view(1);
+        expect(log.at(-1)).toBe("a");
+        // The landing waits on the action; the view stays until it lands.
+        expect(timeTravel.resume()).toBe(false);
+        expect(log.at(-1)).toBe("a");
+        open();
+        await done;
+        await settle();
+        expect(timeTravel.landing()).toBe(false);
+        expect(log.at(-1)).toBe("a");
+        // After it landed.
+        timeTravel.view(0);
+        expect(log.at(-1)).toBe("b,a");
+        timeTravel.resume();
+        expect(log.at(-1)).toBe("a");
+        // The carrier the view pinned does not outlive the view.
+        const again = act(
+          r => void r.push(row("z")),
+          tick(),
+          r => [...r, row("z")]
+        );
+        flush();
+        expect(log.at(-1)).toBe("a,z");
+        await again;
+        await settle();
+        expect(log.at(-1)).toBe("a,z");
+        expect(labels(rows)).toBe("a,z");
+      });
+    });
   });
 
   it("known gap: an index removed since stays absent in the view", () => {

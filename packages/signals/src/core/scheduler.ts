@@ -394,6 +394,12 @@ export function setView(hold: Transaction | null, skip: typeof viewSkip = null):
   viewHold = hold;
   viewSkip = skip;
 }
+/** Observe tier (store.ts): told of each node the open view pins, so a
+ * store can tell its pinned frames from its committed ones. */
+export let viewPinHook: ((n: Signal<any> | Computed<any>) => void) | null = null;
+export function setViewPinHook(hook: typeof viewPinHook): void {
+  viewPinHook = hook;
+}
 /** Live transactions — opened, unmerged, not landed. Scanned at every seam
  * while non-empty; nothing on the plain path. */
 export const transactions: Transaction[] = [];

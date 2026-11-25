@@ -956,7 +956,20 @@ function noteShape(t: StoreTarget, key?: PropertyKey): void {
     }
 }
 
+/** A carrier an open view pins: listed again until the pin lifts, so the
+ * keys it guessed read it; the sweep drops it once no lane holds it (F-1). */
+function relist(g: Signal<any>): void {
+  const t: StoreTarget = (g as any)._host;
+  let kg = kgOf(t);
+  if (kg === null) carriers.set(t, (kg = []));
+  if (!kg.includes(g)) {
+    kg.unshift(g);
+    markOverlaid(t);
+  }
+}
+
 installOptHooks({
+  pin: __OBSERVE__ ? relist : undefined,
   pair: pairRows,
   draft: optimisticDraft,
   writes: notifyOptimisticWrites,
