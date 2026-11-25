@@ -52,8 +52,6 @@ export interface OptHooks {
   /** The derive's draft wrote `pb` on `t`: the new object at a guessed
    * row's slot (by key in a keyed list) is adopted by that row's target. */
   pair(t: StoreTarget, pb: Record<PropertyKey, any>, viewed?: boolean): void;
-  /** Observe tier: an open view pins guess carrier `g` (`openView`). */
-  pin?: (g: Signal<any>) => void;
   /** The derive of `fam` went in flight (#4336): a new question asked over
    * the family's guesses is judged by its reads (`stands`) and at the seam
    * (`park`). Returns, for a `refresh()`, the leaves its wake skips. */
@@ -84,4 +82,11 @@ export interface AffectsHooks {
 export let affectsHooks: AffectsHooks | null = null;
 export function installAffectsHooks(hooks: AffectsHooks): void {
   affectsHooks = hooks;
+}
+
+/** Observe tier (optimistic.ts): an open view pins guess carrier `g`
+ * (core/view.ts). Never set in the prod tier. */
+export let optPin: ((g: Signal<any>) => void) | null = null;
+export function setOptPin(pin: (g: Signal<any>) => void): void {
+  optPin = pin;
 }

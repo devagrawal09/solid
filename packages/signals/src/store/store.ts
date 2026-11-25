@@ -128,7 +128,7 @@ import {
   type StoreTarget,
   type WrittenKeys
 } from "./target.js";
-import { affectsHooks, optHooks } from "./hooks.js";
+import { affectsHooks, optHooks, optPin } from "./hooks.js";
 import {
   $PROXY,
   $RECORD,
@@ -367,19 +367,6 @@ function bornStaged(target: StoreTarget, node: Signal<any>, staged: any, key: Pr
   if (k._config & CONFIG_PROMOTED) notePromotedWrite(node);
 }
 
-/** The frame a node is born from: committed — but a container an open view
- * pinned shows the pin, and a node born under it, or at the landing that
- * lifts it, is born from the truth beneath (openView). */
-function bornFrame(t: StoreTarget): Record<PropertyKey, any> {
-  const k = t.k;
-  if (__OBSERVE__ && k !== null && (k as any).vp) {
-    if (k._config & (CONFIG_OVERRIDE | CONFIG_HELD) || k._pendingValue !== NOT_PENDING)
-      return t.pb !== null ? preBatch(t) : t.v;
-    (k as any).vp = 0;
-  }
-  return committed(t);
-}
-
 export function getNode(
   target: StoreTarget,
   key: PropertyKey,
@@ -397,7 +384,7 @@ export function getNode(
     // receiver.
     const pb = target.pb;
     const created: Signal<any> = (node = slotSignal(
-      bornFrame(target)[key as any],
+      (__OBSERVE__ ? viewBornFrame(target) : committed(target))[key as any],
       slotNodeEquals,
       target,
       key,
@@ -428,7 +415,13 @@ export function getHasNode(target: StoreTarget, key: PropertyKey): Signal<boolea
   const nodes = (target.h ??= Object.create(null));
   let node: Signal<boolean> | undefined = nodes[key];
   if (node === undefined) {
-    const created = (node = slotSignal(key in bornFrame(target), isEqual, target, key, false));
+    const created = (node = slotSignal(
+      key in (__OBSERVE__ ? viewBornFrame(target) : committed(target)),
+      isEqual,
+      target,
+      key,
+      false
+    ));
     const pb = target.pb;
     if (pb !== null) bornStaged(target, created, key in pb && !target.del?.has(key), key);
     if (__OBSERVE__ && attrHooks !== null) stampNodeOwner(created, target);
@@ -438,16 +431,63 @@ export function getHasNode(target: StoreTarget, key: PropertyKey): Signal<boolea
   return node;
 }
 
-// Observe tier: the nodes an open view pins (view.ts). A container's pin is
-// its screen, not its committed frame (`committed`); a guess carrier's is a
-// guess its store reads again (optimistic.ts).
+// --- Observe tier: an open view's pins (core/view.ts, openView) -------------
+//
+// None of this is reached from the prod tier: every call site is behind
+// `__OBSERVE__`, and the bundler drops these with it.
+
+// The view says which nodes it pins. A container's pin is the frame its keys
+// show, not its committed frame; a guess carrier's is a guess its store reads
+// again (optimistic.ts).
 if (__OBSERVE__)
   setViewPinHook(n => {
     if (!(n._config & CONFIG_SLOT_NODE)) return;
     const key = (n as any)._key;
     if (key === $TRACK) (n as any).vp = 1;
-    else if (key === $PATCH) optHooks?.pin?.(n as Signal<any>);
+    else if (key === $PATCH) optPin?.(n as Signal<any>);
   });
+
+/** The container `t`'s keys read through while a view pins it — for a
+ * reader, not a setter, which composes on the truth beneath (F-10) — unless
+ * `node`, the key's own node, is pinned itself. */
+function viewPin(t: StoreTarget, node?: Signal<any>): Signal<any> | null {
+  const k = t.k;
+  return viewHold !== null &&
+    k !== null &&
+    (k as any).vp &&
+    k._config & CONFIG_OVERRIDE &&
+    k !== node &&
+    !(node && (node._config & CONFIG_OVERRIDE || (node as any).acc)) &&
+    !writeOverride &&
+    !inDraft(t)
+    ? k
+    : null;
+}
+
+/** The pinned frame: a key with no node, or a node the view did not pin,
+ * missed the change the frame holds (released across a guess, or born
+ * after it), so it reads the frame (F-1). */
+function viewFrame(t: StoreTarget): Record<PropertyKey, any> {
+  const k = t.k!;
+  return untrack(() => readNode(k)) as Record<PropertyKey, any>;
+}
+
+function viewNodeValue(t: StoreTarget, node: Signal<any>): any {
+  readNode(node);
+  return viewFrame(t)[(node as any)._key];
+}
+
+/** A node born under a pinned container, or at the landing that lifts the
+ * pin, starts from the truth beneath, not from the pin (F-10). */
+function viewBornFrame(t: StoreTarget): Record<PropertyKey, any> {
+  const k = t.k;
+  if (k !== null && (k as any).vp) {
+    if (k._config & (CONFIG_OVERRIDE | CONFIG_HELD) || k._pendingValue !== NOT_PENDING)
+      return t.pb !== null ? preBatch(t) : t.v;
+    (k as any).vp = 0;
+  }
+  return committed(t);
+}
 
 export function nameCarrier(g: Signal<any>, t: StoreTarget): void {
   if (__OBSERVE__ && attrHooks !== null) {
@@ -1558,23 +1598,7 @@ function readSource(
     return draft;
   }
   const pb = target.pb;
-  if (pb === null) {
-    // A view's pin on the container is the frame its keys show: a key with no
-    // node of its own (a `mapArray` row) reads it, as a pinned leaf would (F-1).
-    // A setter composes on the truth beneath the pin (F-10).
-    const k = target.k;
-    if (
-      __OBSERVE__ &&
-      viewHold !== null &&
-      k !== null &&
-      (k as any).vp &&
-      k._config & CONFIG_OVERRIDE &&
-      !writeOverride &&
-      !inDraft(target)
-    )
-      return untrack(() => readNode(k));
-    return target.v;
-  }
+  if (pb === null) return __OBSERVE__ && viewPin(target) ? viewFrame(target) : target.v;
   if (inDraft(target) || writeOverride) {
     // The derive reads its own store through its draft: a key (or the
     // container) a transaction holds — a user's write inside an action,
@@ -1791,24 +1815,7 @@ function changedBetween(
  * verdict reader, #4355) is served the staging, as for a memo born staged
  * (core `serve`). */
 function nodeValue(node: Signal<any>, backing: any, target: StoreTarget): any {
-  // A node the open view did not pin reads its container's pin: the change it
-  // missed (born after it, or released across a guess) is in that frame (F-1).
-  const k = target.k;
-  if (
-    __OBSERVE__ &&
-    viewHold !== null &&
-    k !== null &&
-    k !== node &&
-    (k as any).vp &&
-    k._config & CONFIG_OVERRIDE &&
-    !(node._config & CONFIG_OVERRIDE) &&
-    !(node as any).acc &&
-    !writeOverride &&
-    !inDraft(target)
-  ) {
-    readNode(node);
-    return (untrack(() => readNode(k)) as Record<PropertyKey, any>)[(node as any)._key];
-  }
+  if (__OBSERVE__ && viewPin(target, node)) return viewNodeValue(target, node);
   let v;
   if (
     node._pendingValue !== NOT_PENDING &&
