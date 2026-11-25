@@ -11,7 +11,7 @@ import {
   NOT_PENDING,
   REACTIVE_DISPOSED
 } from "./constants.js";
-import { optimisticWrite } from "./guesses.js";
+import { optimisticWrite, pinCarrier } from "./guesses.js";
 import { enqueueSub } from "./heap.js";
 import { dissolveLane, landBeneath, lanes } from "./lanes.js";
 import {
@@ -193,7 +193,8 @@ export function openView(options?: ViewOptions): View {
         if (!present.has(n)) present.set(n, n._value);
         pins.set(n, next.get(n));
         viewPinHook?.(n);
-        optimisticWrite(n, next.get(n));
+        if ((n as { guess?: boolean }).guess) pinCarrier(n as Signal<any>, next.get(n));
+        else optimisticWrite(n, next.get(n));
       }
       schedule();
       flush();
