@@ -108,7 +108,8 @@ import {
   resolveTx,
   txOf,
   type Transaction,
-  installStoreHooks
+  installStoreHooks,
+  viewHold
 } from "../core/scheduler.js";
 import type { Computed, Owner, Signal } from "../core/types.js";
 import {
@@ -1536,7 +1537,22 @@ function readSource(
     return draft;
   }
   const pb = target.pb;
-  if (pb === null) return target.v;
+  if (pb === null) {
+    // A view's pin on the container is the frame its keys show: a key with no
+    // node of its own (a `mapArray` row) reads it, as a pinned leaf would (F-1).
+    // A setter composes on the truth beneath the pin (F-10).
+    const k = target.k;
+    if (
+      __OBSERVE__ &&
+      viewHold !== null &&
+      k !== null &&
+      k._config & CONFIG_OVERRIDE &&
+      !writeOverride &&
+      !inDraft(target)
+    )
+      return untrack(() => readNode(k));
+    return target.v;
+  }
   if (inDraft(target) || writeOverride) {
     // The derive reads its own store through its draft: a key (or the
     // container) a transaction holds — a user's write inside an action,
