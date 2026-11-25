@@ -8,6 +8,7 @@ import {
   createEffect,
   createMemo,
   createOptimistic,
+  createOptimisticStore,
   createRenderEffect,
   createRoot,
   createSignal,
@@ -15,6 +16,7 @@ import {
   flush,
   isPending,
   latest,
+  mapArray,
   OBSERVE,
   snapshot,
   untrack
@@ -541,6 +543,107 @@ describe("time travel: stores", () => {
     expect(log.at(-1)).toBe("3c,2b,1a");
     timeTravel.resume();
     expect(log.at(-1)).toBe("3C,2b,1a");
+  });
+
+  describe("a list rewritten whole, its rows read through `mapArray`", () => {
+    // `mapArray` reads its rows untracked: the record names the list's
+    // container (its backing before and after) and its length, no index has
+    // a node, and the rows come from the pinned container (F-1).
+    type Row = { label: string };
+    const row = (label: string): Row => ({ label });
+    function list(initial: Row[]) {
+      const [rows, setRows] = createStore(initial, { name: "rows" });
+      const log = mount(show => {
+        const items = mapArray(
+          () => rows,
+          (r: Row) => () => r.label
+        );
+        show(() =>
+          items()
+            .map(i => i())
+            .join(",")
+        );
+      });
+      const write = (fn: (rows: Row[]) => Row[]) => {
+        setRows(fn);
+        flush();
+      };
+      return { rows, log, write };
+    }
+    /** What each step shows, viewed from the last step back to before the first. */
+    function viewAll(log: string[]): string[] {
+      const shown: string[] = [];
+      for (let k = timeTravel.steps().length - 1; k >= -1; k--) {
+        timeTravel.view(k);
+        shown.push(`${k}:${log.at(-1)}`);
+      }
+      return shown;
+    }
+
+    it("prepends: each step shows its rows", () => {
+      const { log, write } = list([]);
+      for (const l of ["a", "b", "c"]) write(r => [row(l), ...r]);
+      expect(log.at(-1)).toBe("c,b,a");
+      expect(timeTravel.steps()[0].map(c => c.key)).toEqual(expect.arrayContaining(["length"]));
+      expect(
+        timeTravel
+          .steps()
+          .flat()
+          .some(c => /^\d+$/.test(c.key ?? ""))
+      ).toBe(false);
+      expect(viewAll(log)).toEqual(["2:c,b,a", "1:b,a", "0:a", "-1:"]);
+      timeTravel.resume();
+      expect(log.at(-1)).toBe("c,b,a");
+    });
+
+    it("appends, splices and replaces", () => {
+      const { log, write } = list([row("a"), row("b")]);
+      write(r => [...r, row("c")]);
+      write(r => [r[0], r[2]]);
+      write(() => [row("x"), row("y"), row("z")]);
+      expect(log.at(-1)).toBe("x,y,z");
+      expect(viewAll(log)).toEqual(["2:x,y,z", "1:a,c", "0:a,b,c", "-1:a,b"]);
+      timeTravel.resume();
+      expect(log.at(-1)).toBe("x,y,z");
+    });
+
+    it("a rewrite beneath the view stays hidden until resume", () => {
+      const { log, write } = list([row("a")]);
+      write(r => [row("b"), ...r]);
+      timeTravel.view(-1);
+      expect(log.at(-1)).toBe("a");
+      write(r => [row("c"), ...r]);
+      expect(log.at(-1)).toBe("a");
+      timeTravel.view(0);
+      expect(log.at(-1)).toBe("b,a");
+      timeTravel.resume();
+      expect(log.at(-1)).toBe("c,b,a");
+    });
+
+    it("through an optimistic store chained to the list", () => {
+      const [truth, setTruth] = createStore([] as Row[], { name: "rows" });
+      const [source] = createSignal(truth, { name: "source" });
+      const [rows] = createOptimisticStore(() => source(), [] as Row[], { name: "view" });
+      const log = mount(show => {
+        const items = mapArray(
+          () => rows,
+          (r: Row) => () => r.label
+        );
+        show(() =>
+          items()
+            .map(i => i())
+            .join(",")
+        );
+      });
+      for (const l of ["a", "b", "c"]) {
+        setTruth(r => [row(l), ...r]);
+        flush();
+      }
+      expect(log.at(-1)).toBe("c,b,a");
+      expect(viewAll(log)).toEqual(["2:c,b,a", "1:b,a", "0:a", "-1:"]);
+      timeTravel.resume();
+      expect(log.at(-1)).toBe("c,b,a");
+    });
   });
 
   it("known gap: an index removed since stays absent in the view", () => {

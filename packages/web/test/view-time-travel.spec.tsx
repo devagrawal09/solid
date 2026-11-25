@@ -147,7 +147,7 @@ describe("time travel through the DOM", () => {
     expect(root.querySelectorAll("li")[2]).toBe(c);
   });
 
-  test("known gap: a keyed <For> reads the list's items from the store's backing, so a reorder does not rewind", () => {
+  test("a keyed <For> reads the list's items through the pinned list, so a reorder rewinds", () => {
     const [state, setState] = createStore({ rows: [{ id: 1 }, { id: 2 }] });
     dispose = render(
       () => (
@@ -169,9 +169,13 @@ describe("time travel through the DOM", () => {
     });
     flush();
     expect(root.textContent).toBe("321");
+    const [three, two, one] = root.querySelectorAll("li");
     timeTravel.view(-1);
-    // The length rewinds (2); the items are the present's first two.
-    expect(root.textContent).toBe("32");
+    expect(root.textContent).toBe("12");
+    timeTravel.view(0);
+    expect(root.textContent).toBe("123");
+    // Keyed rows keep their elements in the view's order.
+    expect([...root.querySelectorAll("li")]).toEqual([one, two, three]);
     timeTravel.resume();
     expect(root.textContent).toBe("321");
   });

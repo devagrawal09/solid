@@ -1475,7 +1475,7 @@ function branch(k: number) {
 - `isPending(x)` under a view reports the live program: a live write beneath the view makes a pinned async memo read as pending.
 - A flight already in flight when the view opens lands beneath the pin, and its memo asks once more at `resume()`.
 - A reader the view moved away from the present and back runs once more at `resume()`, with the same value.
-- Stores: a property nothing read when it changed has no node and cannot be pinned; an array index removed since stays absent in the view; `<For>` over a store list reads the list's items from the store's backing, so a reorder does not rewind (the length does); `snapshot(store)` reads the backing, which is the present; `branch()` lands the nodes, not the store's backing.
+- Stores: a property nothing read when it changed has no node and cannot be pinned; an array index removed since stays absent in the view; `snapshot(store)` reads the backing, which is the present; `branch()` lands the nodes, not the store's backing.
 - State created inside a branch the view remounts starts over: its history is not replayed.
 - "Asked" is detected from the question an async flight stamps on its node, and a guess stamps the same field: a synchronous `createOptimistic(fn)` memo that once carried a guess is pinned like an async memo (its pass held back) instead of re-deriving.
 - A click whose only write went to a pinned node is recorded with `writes: 0` (`outcome: "idle"`); the engine also does not judge a guess the page itself shows while a view is open.
