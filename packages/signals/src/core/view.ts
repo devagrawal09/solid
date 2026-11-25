@@ -24,6 +24,7 @@ import {
   schedule,
   setView,
   txOf,
+  viewPinHook,
   type Transaction
 } from "./scheduler.js";
 import type { Computed, Signal } from "./types.js";
@@ -191,6 +192,7 @@ export function openView(options?: ViewOptions): View {
       for (const n of order) {
         if (!present.has(n)) present.set(n, n._value);
         pins.set(n, next.get(n));
+        viewPinHook?.(n);
         optimisticWrite(n, next.get(n));
       }
       schedule();

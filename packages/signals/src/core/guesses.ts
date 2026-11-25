@@ -78,7 +78,16 @@ export function optimisticWrite<T>(n: Signal<T> | Computed<T>, v: T | ((prev: T)
   const prev = guessedValueOf(n);
   if (typeof v === "function") v = (v as (prev: T) => T)(prev);
   // Equal is no guess, unless the node carries one: re-asking renews its question (#3347).
-  if (n._equals && n._equals(prev, v) && !(n._config & CONFIG_GUESS)) return v;
+  // A view's pin on a store's guess carrier is written as given: the carrier
+  // judges its frame against its store's live backing, which the view may
+  // have pinned to another frame (F-1).
+  if (
+    n._equals &&
+    n._equals(prev, v) &&
+    !(n._config & CONFIG_GUESS) &&
+    !(__OBSERVE__ && viewHold !== null && (n as { guess?: boolean }).guess)
+  )
+    return v;
   pendingGuesses.push(n, v, question || nextQuestion());
   if (__OBSERVE__ && attrHooks !== null) attrHooks.staged(n);
   for (let i = 0; i < readGuesses.length; i += 2)

@@ -37,6 +37,7 @@ import {
   CONFIG_MANUAL_WRITE,
   CONFIG_OVERRIDE,
   CONFIG_PROMOTED,
+  CONFIG_SLOT_NODE,
   CONFIG_STAGED_ERROR,
   CONFIG_VERDICT,
   EFFECT_RENDER,
@@ -109,6 +110,7 @@ import {
   txOf,
   type Transaction,
   installStoreHooks,
+  setViewPinHook,
   viewHold
 } from "../core/scheduler.js";
 import type { Computed, Owner, Signal } from "../core/types.js";
@@ -366,6 +368,19 @@ function bornStaged(target: StoreTarget, node: Signal<any>, staged: any, key: Pr
   if (k._config & CONFIG_PROMOTED) notePromotedWrite(node);
 }
 
+/** The frame a node is born from: committed — but a container an open view
+ * pinned shows the pin, and a node born under it, or at the landing that
+ * lifts it, is born from the truth beneath (openView). */
+function bornFrame(t: StoreTarget): Record<PropertyKey, any> {
+  const k = t.k;
+  if (__OBSERVE__ && k !== null && (k as any).vp) {
+    if (k._config & (CONFIG_OVERRIDE | CONFIG_HELD) || k._pendingValue !== NOT_PENDING)
+      return t.pb !== null ? preBatch(t) : t.v;
+    (k as any).vp = 0;
+  }
+  return committed(t);
+}
+
 export function getNode(
   target: StoreTarget,
   key: PropertyKey,
@@ -383,7 +398,7 @@ export function getNode(
     // receiver.
     const pb = target.pb;
     const created: Signal<any> = (node = slotSignal(
-      committed(target)[key as any],
+      bornFrame(target)[key as any],
       slotNodeEquals,
       target,
       key,
@@ -414,7 +429,7 @@ export function getHasNode(target: StoreTarget, key: PropertyKey): Signal<boolea
   const nodes = (target.h ??= Object.create(null));
   let node: Signal<boolean> | undefined = nodes[key];
   if (node === undefined) {
-    const created = (node = slotSignal(key in committed(target), isEqual, target, key, false));
+    const created = (node = slotSignal(key in bornFrame(target), isEqual, target, key, false));
     const pb = target.pb;
     if (pb !== null) bornStaged(target, created, key in pb && !target.del?.has(key), key);
     if (__OBSERVE__ && attrHooks !== null) stampNodeOwner(created, target);
@@ -424,6 +439,17 @@ export function getHasNode(target: StoreTarget, key: PropertyKey): Signal<boolea
   }
   return node;
 }
+
+// Observe tier: the nodes an open view pins (view.ts). A container's pin is
+// its screen, not its committed frame (`committed`); a guess carrier's is a
+// guess its store reads again (optimistic.ts).
+if (__OBSERVE__)
+  setViewPinHook(n => {
+    if (!(n._config & CONFIG_SLOT_NODE)) return;
+    const key = (n as any)._key;
+    if (key === $TRACK) (n as any).vp = 1;
+    else if (key === $PATCH) optHooks?.pin?.(n as Signal<any>);
+  });
 
 export function nameCarrier(g: Signal<any>, t: StoreTarget): void {
   if (__OBSERVE__ && attrHooks !== null) {
@@ -1546,6 +1572,7 @@ function readSource(
       __OBSERVE__ &&
       viewHold !== null &&
       k !== null &&
+      (k as any).vp &&
       k._config & CONFIG_OVERRIDE &&
       !writeOverride &&
       !inDraft(target)
@@ -1769,6 +1796,24 @@ function changedBetween(
  * verdict reader, #4355) is served the staging, as for a memo born staged
  * (core `serve`). */
 function nodeValue(node: Signal<any>, backing: any, target: StoreTarget): any {
+  // A node the open view did not pin reads its container's pin: the change it
+  // missed (born after it, or released across a guess) is in that frame (F-1).
+  const k = target.k;
+  if (
+    __OBSERVE__ &&
+    viewHold !== null &&
+    k !== null &&
+    k !== node &&
+    (k as any).vp &&
+    k._config & CONFIG_OVERRIDE &&
+    !(node._config & CONFIG_OVERRIDE) &&
+    !(node as any).acc &&
+    !writeOverride &&
+    !inDraft(target)
+  ) {
+    readNode(node);
+    return (untrack(() => readNode(k)) as Record<PropertyKey, any>)[(node as any)._key];
+  }
   let v;
   if (
     node._pendingValue !== NOT_PENDING &&
